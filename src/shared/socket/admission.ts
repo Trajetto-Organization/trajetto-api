@@ -2,9 +2,10 @@
  * Who gets a socket on this replica, and what a refused handshake costs the
  * address it came from (plano-escala U-01, F2.19).
  *
- * Every handshake costs three round trips to Postgres (the user, the
- * driver's eligibility, the refresh-token family) and Socket.IO took them
- * all at once: a deploy that moved 1,000 sockets to the replicas left over
+ * Every handshake cost three round trips to Postgres (the user, the
+ * driver's eligibility, the refresh-token family; one statement since
+ * plano-escala F4-05, unless SESSION_LOOKUP_MODE=legacy) and Socket.IO took
+ * them all at once: a deploy that moved 1,000 sockets to the replicas left over
  * sent 1,000 handshakes into their pools in the same second, and nothing
  * bounded how many sockets one replica held. Two ceilings, checked before
  * the credential is read:

@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { PrismaClient } from "@prisma/client";
 
+import { env } from "@/env";
 import { seedFleetDriver } from "./support/fleet-driver-seed";
 import { createPrismaClient } from "@/shared/database/database-client";
 
@@ -19,6 +20,11 @@ import { createPrismaClient } from "@/shared/database/database-client";
  *   - the module gate re-read the entitlements the session had just loaded;
  *   - the use case loaded the whole route — driver, vehicle, every stop and
  *     every delivery — to read two fields, its id and its status.
+ *
+ * With the session in one statement (SESSION_LOOKUP_MODE=single, the
+ * default since plano-escala F4-05) the flush is four: the session, the
+ * running route and the two writes. `legacy`, the rollback, keeps the nine
+ * it had.
  *
  * The statements are counted on the app's own client: a logging client is put
  * in place of the singleton BEFORE the app is imported, so every repository
@@ -39,6 +45,15 @@ const CARRIER = "018fdd30-0000-7000-8000-00000000000a";
 const statements: string[] = [];
 
 let driverToken = "";
+
+const initialMode = env.SESSION_LOOKUP_MODE;
+
+/** The ceiling of each mode: what one flush may cost, BEGIN/COMMIT aside. */
+const CEILING = { single: 4, legacy: 9 } as const;
+
+/** The one statement of SessionRepository.loadSession. */
+const isSessionStatement = (sql: string) =>
+  sql.includes('AS "hasActiveFamily"');
 
 function pings(count: number) {
   const now = Date.now();
@@ -117,76 +132,103 @@ beforeAll(async () => {
 }, 180_000);
 
 afterAll(async () => {
+  env.SESSION_LOOKUP_MODE = initialMode;
+
   await app?.close();
   await prisma.$disconnect();
   await counted.$disconnect();
 });
 
-describe("one flush of positions from the driver's phone", () => {
-  it("stores the points without reloading what the session already knows", async () => {
-    statements.length = 0;
-
-    const response = await app.inject({
-      method: "POST",
-      url: "/route/positions",
-      headers: { authorization: `Bearer ${driverToken}` },
-      payload: { pings: pings(20) },
+describe.each(["single", "legacy"] as const)(
+  "one flush of positions from the driver's phone, SESSION_LOOKUP_MODE=%s",
+  (mode) => {
+    beforeAll(() => {
+      env.SESSION_LOOKUP_MODE = mode;
     });
 
-    expect(response.statusCode, response.body).toBe(200);
-    expect(response.json().data).toMatchObject({ stored: 20, tracking: true });
+    it("stores the points without reloading what the session already knows", async () => {
+      statements.length = 0;
 
-    const trace = statements.join("\n");
+      const response = await app.inject({
+        method: "POST",
+        url: "/route/positions",
+        headers: { authorization: `Bearer ${driverToken}` },
+        payload: { pings: pings(20) },
+      });
 
-    // The route is asked for its id, not rebuilt with every stop and
-    // delivery.
-    expect(readsOf("route_stop"), trace).toEqual([]);
-    expect(readsOf("delivery"), trace).toEqual([]);
-    expect(readsOf("vehicle"), trace).toEqual([]);
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json().data).toMatchObject({
+        stored: 20,
+        tracking: true,
+      });
 
-    // The session's own snapshot answers the module gate and the driver's
-    // eligibility: each is read once per request, not twice.
-    expect(readsOf("business_entitlement"), trace).toHaveLength(1);
-    expect(readsOf("driver"), trace).toHaveLength(1);
+      const trace = statements.join("\n");
 
-    // user, business, entitlements, driver, branch, the refresh-token
-    // family, the running route, and the two writes (the points and the
-    // driver's last position). Nine; it was sixteen. The BEGIN/COMMIT Prisma
-    // wraps around the createMany are not work of their own.
-    const work = statements.filter(
-      (sql) => !/^\s*(BEGIN|COMMIT|ROLLBACK)\b/i.test(sql),
-    );
+      // The route is asked for its id, not rebuilt with every stop and
+      // delivery.
+      expect(readsOf("route_stop"), trace).toEqual([]);
+      expect(readsOf("delivery"), trace).toEqual([]);
+      expect(readsOf("vehicle"), trace).toEqual([]);
 
-    expect(work.length, trace).toBeLessThanOrEqual(9);
-  });
+      if (mode === "single") {
+        // The user, the company and its modules, the driver and its branch,
+        // and the refresh-token family: one statement, and nobody after it
+        // reads any of them again — the module gate, the driver's
+        // eligibility and the use case answer from what it loaded.
+        expect(statements.filter(isSessionStatement), trace).toHaveLength(1);
+        expect(readsOf("user"), trace).toEqual([]);
+        expect(readsOf("business_entitlement"), trace).toEqual([]);
+        expect(readsOf("driver"), trace).toEqual([]);
+        expect(readsOf("refresh_token"), trace).toEqual([]);
+      } else {
+        // The session's own snapshot answers the module gate and the driver's
+        // eligibility: each is read once per request, not twice.
+        expect(readsOf("business_entitlement"), trace).toHaveLength(1);
+        expect(readsOf("driver"), trace).toHaveLength(1);
+      }
 
-  // The answer says when to flush next (plano-escala F2-26), read from the
-  // replica's event loop in memory: the same flush, the same nine
-  // statements, and the hint inside the app's 15 s – 5 min range — 60 s on
-  // a replica that is not pressed.
-  it("says when to flush next without a statement more", async () => {
-    statements.length = 0;
+      // single: the session, the running route, and the two writes (the
+      // points and the driver's last position). Four. legacy: user, business,
+      // entitlements, driver, branch, the refresh-token family, the running
+      // route and the two writes. Nine; it was sixteen. The BEGIN/COMMIT
+      // Prisma wraps around the createMany are not work of their own.
+      const work = statements.filter(
+        (sql) => !/^\s*(BEGIN|COMMIT|ROLLBACK)\b/i.test(sql),
+      );
 
-    const response = await app.inject({
-      method: "POST",
-      url: "/route/positions",
-      headers: { authorization: `Bearer ${driverToken}` },
-      payload: { pings: pings(20) },
+      expect(work.length, trace).toBeLessThanOrEqual(CEILING[mode]);
     });
 
-    expect(response.statusCode, response.body).toBe(200);
+    // The answer says when to flush next (plano-escala F2-26), read from the
+    // replica's event loop in memory: the same flush, the same statements,
+    // and the hint inside the app's 15 s – 5 min range — 60 s on a replica
+    // that is not pressed.
+    it("says when to flush next without a statement more", async () => {
+      statements.length = 0;
 
-    const { nextFlushAfterMs } = response.json().data;
+      const response = await app.inject({
+        method: "POST",
+        url: "/route/positions",
+        headers: { authorization: `Bearer ${driverToken}` },
+        payload: { pings: pings(20) },
+      });
 
-    expect(Number.isInteger(nextFlushAfterMs), response.body).toBe(true);
-    expect(nextFlushAfterMs).toBeGreaterThanOrEqual(60_000);
-    expect(nextFlushAfterMs).toBeLessThanOrEqual(300_000);
-    expect([60_000, 120_000, 300_000]).toContain(nextFlushAfterMs);
+      expect(response.statusCode, response.body).toBe(200);
 
-    const work = statements.filter(
-      (sql) => !/^\s*(BEGIN|COMMIT|ROLLBACK)\b/i.test(sql),
-    );
+      const { nextFlushAfterMs } = response.json().data;
 
-    expect(work.length, statements.join("\n")).toBeLessThanOrEqual(9);
-  });
-});
+      expect(Number.isInteger(nextFlushAfterMs), response.body).toBe(true);
+      expect(nextFlushAfterMs).toBeGreaterThanOrEqual(60_000);
+      expect(nextFlushAfterMs).toBeLessThanOrEqual(300_000);
+      expect([60_000, 120_000, 300_000]).toContain(nextFlushAfterMs);
+
+      const work = statements.filter(
+        (sql) => !/^\s*(BEGIN|COMMIT|ROLLBACK)\b/i.test(sql),
+      );
+
+      expect(work.length, statements.join("\n")).toBeLessThanOrEqual(
+        CEILING[mode],
+      );
+    });
+  },
+);

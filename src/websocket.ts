@@ -14,6 +14,7 @@ import { UserTokensRepository } from "@/modules/user/repositories/user-tokens-re
 
 import { DriverRepository } from "@/modules/driver/repositories/driver-repository";
 import { assertSessionEligible } from "@/modules/user/services/session-eligibility";
+import { lookUpSession } from "@/modules/user/services/session-lookup";
 
 import { SessionJwtPayload } from "@/modules/user/services/session-service";
 import { AppError } from "@/shared/errors/AppError";
@@ -915,11 +916,12 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
       /**
        * Counted by user before the queries start.
        *
-       * From here the handshake costs three round trips — the user, the
-       * driver eligibility and the refresh-token family. That is the work a
-       * caller holding one valid token could ask for in a loop, and the
-       * address budget above does not bound it: the same account reconnecting
-       * from many places is many addresses.
+       * From here the handshake costs the session lookup — one round trip
+       * with SESSION_LOOKUP_MODE=single (plano-escala F4-05), the user, the
+       * driver eligibility and the refresh-token family with `legacy`. That
+       * is the work a caller holding one valid token could ask for in a
+       * loop, and the address budget above does not bound it: the same
+       * account reconnecting from many places is many addresses.
        */
       if (
         !(await handshakeLimiter.allow(
@@ -935,9 +937,11 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
         );
       }
 
-      // Check if user exists
-      const userRepository = new UserRepository();
-      const user = await userRepository.findUserById(userId);
+      // The user and the refresh-token family, in one statement by default.
+      // The checks below keep their order and codes in both modes; the
+      // family is asked last, as it always was.
+      const session = await lookUpSession(userId, payload.familyId);
+      const { user } = session;
 
       if (!user) {
         return next(new Error("Usuário não encontrado"));
@@ -964,15 +968,8 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
         );
       }
 
-      const driverRepository = new DriverRepository();
-      const tokenRepository = new UserTokensRepository();
-
-      await assertSessionEligible(user, driverRepository);
-      const hasActiveSession =
-        await tokenRepository.hasActiveRefreshTokenFamily(
-          userId,
-          payload.familyId,
-        );
+      await assertSessionEligible(user, new DriverRepository());
+      const hasActiveSession = await session.familyActive();
 
       if (!hasActiveSession) {
         return next(

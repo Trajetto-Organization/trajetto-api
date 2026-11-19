@@ -26,6 +26,23 @@ const repositories = vi.hoisted(() => ({
   hasActiveRefreshTokenFamily: vi.fn(),
 }));
 
+// The one-statement session lookup (SESSION_LOOKUP_MODE=single, the
+// default) answers from the same stand-ins the old path reads.
+vi.mock("@/modules/user/repositories/session-repository", () => ({
+  SessionRepository: class {
+    async loadSession(userId: string, familyId: string) {
+      const user = await repositories.findUserById(userId);
+
+      return {
+        user,
+        hasActiveFamily: user
+          ? await repositories.hasActiveRefreshTokenFamily(userId, familyId)
+          : false,
+      };
+    }
+  },
+}));
+
 vi.mock("@/modules/user/repositories/user-repository", async (original) => {
   const actual =
     await original<

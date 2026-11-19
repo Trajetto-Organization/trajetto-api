@@ -235,6 +235,22 @@ const envSchema = z
     JWT_SECRET: z.string(),
     JWT_SECRET_REFRESH_TOKEN: z.string(),
 
+    /**
+     * How ensureAuthenticated and the socket handshake read the session
+     * (plano-escala F4-05, modules/user/services/session-lookup.ts).
+     * `single` (the default) asks SessionRepository.loadSession: the user
+     * with its company, profile and driver, and the refresh-token family,
+     * in one statement where the old path ran two to six on every
+     * authenticated request. `legacy` is the old path, kept for two
+     * releases as the rollback (U-10 removes it): same checks, same order,
+     * same codes in both. Read on every request, so a test can flip it;
+     * in a deployment, changing it is a redeploy. Empty counts as absent.
+     */
+    SESSION_LOOKUP_MODE: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.enum(["single", "legacy"]).default("single"),
+    ),
+
     // Meta WhatsApp Cloud API. Optional so environments without WhatsApp
     // still boot: the provider reports itself unconfigured and sends fail
     // with a clear error instead of blocking startup.
@@ -1826,8 +1842,9 @@ const envSchema = z
      * shared/socket/admission.ts): past it, the next is refused with
      * SOCKET_UNAVAILABLE and `retryAfterMs` (5 to 10 s), which the web and
      * the app wait out, and the address is not charged. Each handshake is
-     * three Postgres round trips, and a deploy moves a replica's sockets to
-     * the others within seconds. 0 turns the ceiling off, the rollback.
+     * one Postgres round trip (three with SESSION_LOOKUP_MODE=legacy), and
+     * a deploy moves a replica's sockets to the others within seconds. 0
+     * turns the ceiling off, the rollback.
      * Empty counts as absent.
      */
     SOCKET_HANDSHAKE_MAX_INFLIGHT: z.preprocess(

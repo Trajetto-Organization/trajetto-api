@@ -1,10 +1,9 @@
 import { FastifyReply, FastifyRequest } from "fastify";
 
 import { DriverRepository } from "../driver/repositories/driver-repository";
-import { UserRepository } from "../user/repositories/user-repository";
 
-import { UserTokensRepository } from "../user/repositories/user-tokens-repository";
 import { assertSessionEligible } from "../user/services/session-eligibility";
+import { lookUpSession } from "../user/services/session-lookup";
 
 import { AppError } from "@/shared/errors/AppError";
 import { isDatabaseUnavailable } from "@/shared/errors/database-unavailable";
@@ -85,11 +84,15 @@ async function ensureAuthenticated(
   await chargePanelUser(request, payload);
 
   try {
-    const userRepository = new UserRepository();
-    const tokenRepository = new UserTokensRepository();
-
-    const driverRepository = new DriverRepository();
-    const user = await userRepository.findUserById(payload.sub);
+    /**
+     * The user with its company, profile and driver, and the refresh-token
+     * family: one statement by default (SESSION_LOOKUP_MODE=single,
+     * plano-escala F4-05), the old two to six with `legacy`. The checks
+     * below run in the same order and answer the same codes either way; the
+     * family is asked last, as it always was.
+     */
+    const session = await lookUpSession(payload.sub, payload.familyId);
+    const { user } = session;
 
     if (!user) {
       throw new AppError("Sessão inválida.", 401, "AUTH_SESSION_INVALID");
@@ -103,11 +106,14 @@ async function ensureAuthenticated(
       );
     }
 
-    const { driver } = await assertSessionEligible(user, driverRepository);
-    const hasActiveSession = await tokenRepository.hasActiveRefreshTokenFamily(
-      user.id,
-      payload.familyId,
+    // The driver came with the session (findUserById's include or the one
+    // statement), so this repository is only the fallback the rule keeps
+    // for callers that load the user without it.
+    const { driver } = await assertSessionEligible(
+      user,
+      new DriverRepository(),
     );
+    const hasActiveSession = await session.familyActive();
 
     if (!hasActiveSession) {
       throw new AppError(

@@ -145,10 +145,18 @@ describe("a handshake the database could not answer", () => {
   it("is refused as unavailable, not as a bad token", async () => {
     const { UserRepository } =
       await import("@/modules/user/repositories/user-repository");
+    const { SessionRepository } =
+      await import("@/modules/user/repositories/session-repository");
 
     const original = UserRepository.prototype.findUserById;
+    const originalSession = SessionRepository.prototype.loadSession;
 
+    // Both paths of the lookup (SESSION_LOOKUP_MODE, plano-escala F4-05):
+    // the one statement by default, the user read with `legacy`.
     UserRepository.prototype.findUserById = async () => {
+      throw new Error("Can't reach database server");
+    };
+    SessionRepository.prototype.loadSession = async () => {
       throw new Error("Can't reach database server");
     };
 
@@ -159,6 +167,7 @@ describe("a handshake the database could not answer", () => {
       expect(outcome.code).toBe("SOCKET_UNAVAILABLE");
     } finally {
       UserRepository.prototype.findUserById = original;
+      SessionRepository.prototype.loadSession = originalSession;
     }
   });
 });

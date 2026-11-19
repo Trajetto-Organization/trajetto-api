@@ -3981,8 +3981,8 @@ de dois ambientes que dividam um Redis (Pub/Sub ignora o número do banco).
 
 - **Dois tetos por réplica**, conferidos antes de ler a credencial: no
   máximo `SOCKET_HANDSHAKE_MAX_INFLIGHT` handshakes ao mesmo tempo (64; cada
-  um faz três idas ao Postgres) e `SOCKET_MAX_CONNECTIONS` sockets seguros
-  (5.000, ou o teto efetivo mais abaixo, contando as conexões do engine,
+  um faz uma ida ao Postgres, ou três com `SESSION_LOOKUP_MODE=legacy`) e
+  `SOCKET_MAX_CONNECTIONS` sockets seguros (5.000, ou o teto efetivo mais abaixo, contando as conexões do engine,
   inclusive a que está sendo julgada). Passou de um deles, a recusa sai do middleware como
   `SOCKET_UNAVAILABLE` com `data.retryAfterMs` de 5 a 10 s, que a web e o app
   esperam antes de tentar de novo. Não sai do `allowRequest` de propósito: a
@@ -5098,8 +5098,21 @@ do usuário são escritas à mão e conferidas contra o modelo do Prisma
 (`tests/unitaires/user/session-lookup-one-statement.test.ts`). A equivalência
 com o caminho de hoje, em toda a matriz de sessões e num statement só, está em
 `tests/E2E/session-lookup-equivalence.test.ts`, e o contrato com o gêmeo
-in-memory em `tests/E2E/session-repository-contract.test.ts`. Por enquanto
-ninguém a chama: o middleware e o handshake passam a usá-la na F4-05.
+in-memory em `tests/E2E/session-repository-contract.test.ts`.
+
+Desde a F4-05, o `ensureAuthenticated` e o handshake do socket a chamam por
+`lookUpSession` (`src/modules/user/services/session-lookup.ts`), conforme
+`SESSION_LOOKUP_MODE`: `single` (o padrão) faz a ida única; `legacy` é o
+caminho antigo, guardado por duas releases como rollback (a U-10 o remove). As
+conferências são as mesmas, na mesma ordem e com os mesmos códigos nos dois
+modos: usuário inexistente, `session_version`, elegibilidade e, por último, a
+família do refresh token (com `legacy` ela só é perguntada quando a requisição
+chega até ali). O motorista vem com a sessão, então a elegibilidade não lê o
+motorista de novo. O `POST /route/positions` cai de nove statements para
+quatro: a sessão, a rota em andamento e as duas escritas. Os orçamentos estão
+em `tests/E2E/session-statement-budget.test.ts` (a sessão do HTTP e do
+handshake, e cada motivo de recusa com o mesmo código nos dois modos) e em
+`tests/E2E/driver-positions-statement-budget.test.ts`.
 
 **Plano com os valores a cada execução**: o `pg` manda statements sem nome, e
 o Postgres planeja cada execução com os valores; o Prisma 6 nomeava os

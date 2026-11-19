@@ -1,7 +1,8 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { PrismaClient } from "@prisma/client";
 
+import { env } from "@/env";
 import { seedFleetDriver } from "./support/fleet-driver-seed";
 import { createPrismaClient } from "@/shared/database/database-client";
 
@@ -37,6 +38,8 @@ const statements: string[] = [];
 let managerToken = "";
 let fuelTypeId = "";
 
+const initialMode = env.SESSION_LOOKUP_MODE;
+
 /** Statements that read FROM a table, by its quoted name. */
 function readsOf(table: string): string[] {
   return statements.filter(
@@ -63,40 +66,77 @@ beforeAll(async () => {
 }, 180_000);
 
 afterAll(async () => {
+  env.SESSION_LOOKUP_MODE = initialMode;
+
   await app?.close();
   await prisma.$disconnect();
   await counted.$disconnect();
 });
 
-describe("a write that names its own company", () => {
-  it("reads the company once, in the session, not again in the gate", async () => {
-    statements.length = 0;
-
-    const response = await app.inject({
-      method: "PATCH",
-      url: `/fuel-type/update-fuel-type/${fuelTypeId}/business/${CARRIER}`,
-      headers: { authorization: `Bearer ${managerToken}` },
-      payload: { description: "Diesel" },
+describe.each(["single", "legacy"] as const)(
+  "a write that names its own company, SESSION_LOOKUP_MODE=%s",
+  (mode) => {
+    beforeAll(() => {
+      env.SESSION_LOOKUP_MODE = mode;
     });
 
-    const trace = statements.join("\n");
+    it("reads the company once, in the session, not again in the gate", async () => {
+      statements.length = 0;
 
-    expect(response.statusCode, response.body).toBe(200);
+      const response = await app.inject({
+        method: "PATCH",
+        url: `/fuel-type/update-fuel-type/${fuelTypeId}/business/${CARRIER}`,
+        headers: { authorization: `Bearer ${managerToken}` },
+        // One of the allowed fuels per mode: each run is a real change.
+        payload: {
+          description: { single: "Diesel", legacy: "Biodiesel" }[mode],
+        },
+      });
 
-    // The session's include reads (id, is_active); a whole row is what
-    // findBusinessById reads. This use case reads its company once itself —
-    // the one full row left. Before: two full rows, the gate's being a
-    // company the session had loaded milliseconds earlier.
-    const business = readsOf("business");
+      // The activity line of the change is written after the answer, with
+      // its own short read of the company (id, corporate_reason). Waited
+      // for, so that it lands here and not inside the next measurement.
+      await vi.waitFor(
+        () =>
+          expect(
+            statements.some((sql) =>
+              sql.startsWith('INSERT INTO "public"."activity"'),
+            ),
+          ).toBe(true),
+        { timeout: 10_000 },
+      );
 
-    expect(
-      business.filter((sql) => !sql.includes('"corporate_reason"')),
-      trace,
-    ).toHaveLength(1);
+      const trace = statements.join("\n");
 
-    expect(
-      business.filter((sql) => sql.includes('"corporate_reason"')),
-      trace,
-    ).toHaveLength(1);
-  });
-});
+      expect(response.statusCode, response.body).toBe(200);
+
+      // A whole row is what findBusinessById reads. This use case reads its
+      // company once itself: the one full row left. Before: two full rows,
+      // the gate's being a company the session had loaded milliseconds
+      // earlier.
+      const business = readsOf("business");
+
+      expect(
+        business.filter((sql) => sql.includes('"fantasy_name"')),
+        trace,
+      ).toHaveLength(1);
+
+      // The session's own read of the company (id, is_active): inside the
+      // one statement with single (plano-escala F4-05), the include's read
+      // with legacy. Once either way, and never again in the gate.
+      const sessionReads =
+        mode === "single"
+          ? statements.filter((sql) => sql.includes('AS "hasActiveFamily"'))
+          : business.filter((sql) => !sql.includes('"corporate_reason"'));
+
+      expect(sessionReads, trace).toHaveLength(1);
+
+      if (mode === "single") {
+        expect(
+          business.filter((sql) => !sql.includes('"corporate_reason"')),
+          trace,
+        ).toEqual([]);
+      }
+    });
+  },
+);

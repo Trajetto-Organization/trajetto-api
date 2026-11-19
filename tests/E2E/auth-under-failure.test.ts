@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 
 import { sign } from "jsonwebtoken";
 import auth from "@/config/auth";
+import { env } from "@/env";
 import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
@@ -33,6 +34,12 @@ const USER = "018fb000-0000-7000-8000-0000000000a1";
 let app: Awaited<typeof import("@/http")>["app"];
 
 let token: string;
+
+const MODES = ["single", "legacy"] as const;
+
+type Mode = (typeof MODES)[number];
+
+const initialMode = env.SESSION_LOOKUP_MODE;
 
 beforeAll(async () => {
   await prisma.business.create({
@@ -86,6 +93,8 @@ beforeAll(async () => {
 }, 90_000);
 
 afterAll(async () => {
+  env.SESSION_LOOKUP_MODE = initialMode;
+
   await prisma.refreshToken.deleteMany({ where: { userId: USER } });
   await prisma.user.deleteMany({ where: { id: USER } });
   await prisma.business.deleteMany({ where: { id: CARRIER } });
@@ -148,97 +157,151 @@ describe("a token the caller got wrong", () => {
   });
 });
 
-describe("a database the API cannot reach", () => {
-  it("is 503, never 401", async () => {
-    const { UserRepository } =
-      await import("@/modules/user/repositories/user-repository");
+/**
+ * Where the session is read, by SESSION_LOOKUP_MODE (plano-escala F4-05):
+ * one statement through SessionRepository with `single`, the default; the
+ * user, then the refresh-token family, with `legacy`, the rollback. The
+ * failure is put where the mode reads, so each mode is proved on its own
+ * path.
+ */
+async function failSessionRead(
+  mode: Mode,
+  part: "user" | "family",
+  error: Error,
+): Promise<() => void> {
+  if (mode === "single") {
+    const { SessionRepository } =
+      await import("@/modules/user/repositories/session-repository");
 
-    const original = UserRepository.prototype.findUserById;
+    const original = SessionRepository.prototype.loadSession;
 
-    // What Prisma raises when it cannot get a connection. The real class and
-    // code: a plain Error is now (rightly) a bug, answered 500.
-    UserRepository.prototype.findUserById = async () => {
-      throw new Prisma.PrismaClientKnownRequestError(
-        "Can't reach database server at localhost:5432",
-        { code: "P1001", clientVersion: Prisma.prismaVersion.client },
-      );
+    SessionRepository.prototype.loadSession = async () => {
+      throw error;
     };
 
-    try {
-      const response = await call({ authorization: `Bearer ${token}` });
+    return () => {
+      SessionRepository.prototype.loadSession = original;
+    };
+  }
 
-      // The assertion this whole file exists for. A 401 here is every driver
-      // in the field being logged out because a database restarted.
-      expect(response.statusCode).toBe(503);
-      expect(response.json().code).toBe("AUTH_SESSION_UNAVAILABLE");
-      expect(response.headers["retry-after"]).toBe("5");
-    } finally {
-      UserRepository.prototype.findUserById = original;
-    }
-  });
-
-  it("answers 200 again once the stub is gone", async () => {
-    // This only proves the stub above was undone. Recovery from connections
-    // Postgres really dropped is proved in database-reconnect.test.ts.
-    const response = await call({ authorization: `Bearer ${token}` });
-
-    expect(response.statusCode).toBe(200);
-  });
-
-  it("is 503 when the session store is the part that is unreachable", async () => {
+  if (part === "family") {
     const { UserTokensRepository } =
       await import("@/modules/user/repositories/user-tokens-repository");
 
     const original = UserTokensRepository.prototype.hasActiveRefreshTokenFamily;
 
     UserTokensRepository.prototype.hasActiveRefreshTokenFamily = async () => {
-      throw new Prisma.PrismaClientKnownRequestError(
-        "Server has closed the connection.",
-        { code: "P1017", clientVersion: Prisma.prismaVersion.client },
-      );
+      throw error;
     };
 
-    try {
-      const response = await call({ authorization: `Bearer ${token}` });
-
-      // The second lookup, and the same rule: unreachable is not invalid.
-      expect(response.statusCode).toBe(503);
-    } finally {
+    return () => {
       UserTokensRepository.prototype.hasActiveRefreshTokenFamily = original;
-    }
-  });
-});
-
-describe("a bug in the session check", () => {
-  /**
-   * Not every exception in the middleware is the database (GAP6-10).
-   *
-   * The catch used to turn ANY non-AppError into 503 AUTH_SESSION_UNAVAILABLE.
-   * A regression in the eligibility or tenant check that threw a TypeError
-   * for one profile then answered "come back later" to every request of that
-   * user, forever: the app keeps a 5xx in its outbox and retries, the log
-   * had only a console.error without the request id, and nothing alerted.
-   */
-  it("is a 500 with the stack in the log, not a transient 503", async () => {
-    const { UserRepository } =
-      await import("@/modules/user/repositories/user-repository");
-
-    const original = UserRepository.prototype.findUserById;
-
-    UserRepository.prototype.findUserById = async () => {
-      throw new TypeError(
-        "Cannot read properties of undefined (reading 'role')",
-      );
     };
+  }
 
-    try {
+  const { UserRepository } =
+    await import("@/modules/user/repositories/user-repository");
+
+  const original = UserRepository.prototype.findUserById;
+
+  UserRepository.prototype.findUserById = async () => {
+    throw error;
+  };
+
+  return () => {
+    UserRepository.prototype.findUserById = original;
+  };
+}
+
+describe.each(MODES)("SESSION_LOOKUP_MODE=%s", (mode) => {
+  beforeAll(() => {
+    env.SESSION_LOOKUP_MODE = mode;
+  });
+
+  describe("a database the API cannot reach", () => {
+    it("is 503, never 401", async () => {
+      // What Prisma raises when it cannot get a connection. The real class
+      // and code: a plain Error is now (rightly) a bug, answered 500.
+      const restore = await failSessionRead(
+        mode,
+        "user",
+        new Prisma.PrismaClientKnownRequestError(
+          "Can't reach database server at localhost:5432",
+          { code: "P1001", clientVersion: Prisma.prismaVersion.client },
+        ),
+      );
+
+      try {
+        const response = await call({ authorization: `Bearer ${token}` });
+
+        // The assertion this whole file exists for. A 401 here is every
+        // driver in the field being logged out because a database restarted.
+        expect(response.statusCode).toBe(503);
+        expect(response.json().code).toBe("AUTH_SESSION_UNAVAILABLE");
+        expect(response.headers["retry-after"]).toBe("5");
+      } finally {
+        restore();
+      }
+    });
+
+    it("answers 200 again once the stub is gone", async () => {
+      // This only proves the stub above was undone. Recovery from
+      // connections Postgres really dropped is proved in
+      // database-reconnect.test.ts.
       const response = await call({ authorization: `Bearer ${token}` });
 
-      expect(response.statusCode).toBe(500);
-      expect(response.json().code).toBe("INTERNAL_ERROR");
-      expect(response.headers["retry-after"]).toBeUndefined();
-    } finally {
-      UserRepository.prototype.findUserById = original;
-    }
+      expect(response.statusCode).toBe(200);
+    });
+
+    it("is 503 when the session store is the part that is unreachable", async () => {
+      // With legacy, the second lookup; with single, the same statement.
+      // The same rule either way: unreachable is not invalid.
+      const restore = await failSessionRead(
+        mode,
+        "family",
+        new Prisma.PrismaClientKnownRequestError(
+          "Server has closed the connection.",
+          { code: "P1017", clientVersion: Prisma.prismaVersion.client },
+        ),
+      );
+
+      try {
+        const response = await call({ authorization: `Bearer ${token}` });
+
+        expect(response.statusCode).toBe(503);
+      } finally {
+        restore();
+      }
+    });
+  });
+
+  describe("a bug in the session check", () => {
+    /**
+     * Not every exception in the middleware is the database (GAP6-10).
+     *
+     * The catch used to turn ANY non-AppError into 503
+     * AUTH_SESSION_UNAVAILABLE. A regression in the eligibility or tenant
+     * check that threw a TypeError for one profile then answered "come back
+     * later" to every request of that user, forever: the app keeps a 5xx in
+     * its outbox and retries, the log had only a console.error without the
+     * request id, and nothing alerted.
+     */
+    it("is a 500 with the stack in the log, not a transient 503", async () => {
+      const restore = await failSessionRead(
+        mode,
+        "user",
+        new TypeError("Cannot read properties of undefined (reading 'role')"),
+      );
+
+      try {
+        const response = await call({ authorization: `Bearer ${token}` });
+
+        expect(response.statusCode).toBe(500);
+        expect(response.json().code).toBe("INTERNAL_ERROR");
+        expect(response.headers["retry-after"]).toBeUndefined();
+      } finally {
+        restore();
+      }
+    });
   });
 });

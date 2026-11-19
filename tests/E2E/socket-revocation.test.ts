@@ -83,6 +83,15 @@ let two: Replica;
 let sweeper: Replica;
 let isolated: Replica;
 
+/** The handshakes held at their family read (see that describe). */
+let held: Replica;
+
+// Pub/Sub ignores the database number: this suite's replicas are kept
+// apart from any other process on the same Redis by the channel prefix.
+const SOCKET_ADAPTER_KEY = `socket.io-e2e-${randomUUID()}`;
+
+const REDIS = process.env.REDIS_URL ?? "redis://localhost:6379";
+
 interface TestSocket {
   id: string;
   on: Function;
@@ -343,24 +352,18 @@ beforeAll(async () => {
     })),
   });
 
-  const redis = process.env.REDIS_URL ?? "redis://localhost:6379";
-
-  // Pub/Sub ignores the database number: this suite's replicas are kept
-  // apart from any other process on the same Redis by the channel prefix.
-  const SOCKET_ADAPTER_KEY = `socket.io-e2e-${randomUUID()}`;
-
   one = await startReplica({
-    REDIS_URL: redis,
+    REDIS_URL: REDIS,
     SOCKET_ADAPTER_KEY,
     SOCKET_REVALIDATE_MS: NEVER_MS,
   });
   two = await startReplica({
-    REDIS_URL: redis,
+    REDIS_URL: REDIS,
     SOCKET_ADAPTER_KEY,
     SOCKET_REVALIDATE_MS: NEVER_MS,
   });
   sweeper = await startReplica({
-    REDIS_URL: redis,
+    REDIS_URL: REDIS,
     SOCKET_ADAPTER_KEY,
     SOCKET_REVALIDATE_MS: String(SWEEP_MS),
   });
@@ -587,13 +590,37 @@ describe("a revocation while Redis is down", () => {
 });
 
 describe("a revocation between the handshake's reads and its joins", () => {
+  /**
+   * The window is opened by holding the handshake's family read, so the
+   * sockets here go to a replica on the old path (SESSION_LOOKUP_MODE=legacy,
+   * plano-escala F4-05), which reads the family on its own, after the user.
+   * The default path reads both in one statement, under one snapshot: a
+   * lock taken before it delays the whole read, and a revocation committed
+   * meanwhile is refused at the handshake itself
+   * (session-statement-budget.test.ts proves each refusal in both modes).
+   * What this proves, the recheck right after the joins, is the same code
+   * in both modes; it covers the window that is left there, between the
+   * read and the joins.
+   */
+  beforeAll(async () => {
+    held = await startReplica({
+      REDIS_URL: REDIS,
+      SOCKET_ADAPTER_KEY,
+      SOCKET_REVALIDATE_MS: NEVER_MS,
+      SESSION_LOOKUP_MODE: "legacy",
+    });
+
+    replicas.push(held);
+  }, 300_000);
+
   it("is caught right after the join, on a replica that never sweeps", async () => {
-    // Replica 2's own socket in the operation, connected before the hold.
+    // The held replica's own socket in the operation, connected before the
+    // hold.
     const witness = await connectTo(
-      two.port,
+      held.port,
       (await sessionFor(WITNESS, "BUSINESS_USER", CARRIER)).token,
     );
-    await two.waitForRoom(witness.id, operationsRoom(CARRIER), true);
+    await held.waitForRoom(witness.id, operationsRoom(CARRIER), true);
 
     // Before the lock: a session is a refresh_token row.
     const bumpedSession = await sessionFor(
@@ -617,9 +644,9 @@ describe("a revocation between the handshake's reads and its joins", () => {
     let untouched!: ReturnType<typeof openSocket>;
 
     await holdingTheFamilyReads(async () => {
-      bumped = openSocket(two.port, bumpedSession.token);
-      lost = openSocket(two.port, lostSession.token);
-      untouched = openSocket(two.port, untouchedSession.token);
+      bumped = openSocket(held.port, bumpedSession.token);
+      lost = openSocket(held.port, lostSession.token);
+      untouched = openSocket(held.port, untouchedSession.token);
 
       // Each has read its user (version 0, delivery_manage) and waits.
       await handshakesAtTheFamilyRead(3);
@@ -644,7 +671,7 @@ describe("a revocation between the handshake's reads and its joins", () => {
         payload: { reason: "permissions_changed" },
       });
 
-      // Replica 2's Redis subscription delivers in publish order: once its
+      // The held replica's Redis subscription delivers in publish order: once its
       // witness hears a position published after both, both were handled
       // there — with the held sockets in no room to hear them.
       const witnessed = waitFor(witness, "driverPosition", 8_000);
@@ -655,7 +682,7 @@ describe("a revocation between the handshake's reads and its joins", () => {
       });
       expect(
         await witnessed,
-        "os avisos não passaram pela réplica 2 antes do join",
+        "os avisos não passaram pela réplica retida antes do join",
       ).not.toBeNull();
     });
 
@@ -673,7 +700,7 @@ describe("a revocation between the handshake's reads and its joins", () => {
     expect(bumped.socket.connected, "a sessão encerrada continuou").toBe(false);
 
     // The permission loss is authorization: out of the room, still connected.
-    await two.waitForRoom(lost.socket.id, operationsRoom(CARRIER), false);
+    await held.waitForRoom(lost.socket.id, operationsRoom(CARRIER), false);
 
     const lostHears = waitFor(lost.socket, "driverPosition");
     const untouchedHears = waitFor(untouched.socket, "driverPosition");

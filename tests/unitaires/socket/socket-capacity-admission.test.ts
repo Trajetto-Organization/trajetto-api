@@ -99,6 +99,35 @@ const fake = vi.hoisted(() => {
   return { CARRIER, families, gates, limiter, perUser, familyOf, sessionUser };
 });
 
+// The one-statement session lookup (SESSION_LOOKUP_MODE=single, the
+// default) answers through the two stand-ins below, in the order the old
+// path asked them: the family's gate holds the handshake between its reads
+// and its joins in either mode.
+vi.mock("@/modules/user/repositories/session-repository", async () => {
+  const { UserRepository } =
+    await import("@/modules/user/repositories/user-repository");
+  const { UserTokensRepository } =
+    await import("@/modules/user/repositories/user-tokens-repository");
+
+  return {
+    SessionRepository: class {
+      async loadSession(userId: string, familyId: string) {
+        const user = await new UserRepository().findUserById(userId);
+
+        return {
+          user,
+          hasActiveFamily: user
+            ? await new UserTokensRepository().hasActiveRefreshTokenFamily(
+                userId,
+                familyId,
+              )
+            : false,
+        };
+      }
+    },
+  };
+});
+
 vi.mock("@/modules/user/repositories/user-repository", () => ({
   UserRepository: class {
     async findUserById(userId: string) {
