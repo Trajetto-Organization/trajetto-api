@@ -43,6 +43,7 @@ import {
   type SocketAdmissionLimits,
 } from "@/shared/socket/admission";
 import { startGradualClose } from "@/shared/socket/gradual-close";
+import { createSocketEmitter, type Broadcaster } from "@/shared/socket/emitter";
 import {
   createPresenceStore,
   createPresenceTracker,
@@ -118,6 +119,7 @@ import {
   applyWhatsAppTemplateLaneChange,
   type TemplateLaneChange,
 } from "@/shared/providers/whatsapp-provider/template-lane";
+import { publishTemplateLaneChange } from "@/shared/providers/whatsapp-provider/template-lane-bus";
 import { env } from "./env";
 
 import database from "@/../infra/database";
@@ -182,6 +184,17 @@ function reportAdapterPublishFailure(error: unknown): void {
 
 // Socket.IO instance
 let io: SocketIOServer | null = null;
+
+/**
+ * Where the emit helpers below send: `io` itself where this process takes
+ * sockets (its adapter crosses replicas), the Redis emitter where it does
+ * not (SOCKETS_ENABLED=false, plano-escala U-07, shared/socket/emitter.ts):
+ * the same frames, with no subscription to the cluster's.
+ */
+let out: Broadcaster | null = null;
+
+/** The emitter's connection, in a process that takes no sockets. */
+let emitterRedis: Redis | null = null;
 
 /** Every MASTER socket, joined at connect (see sendCatalogChangedEvent). */
 const MASTERS_ROOM = "masters";
@@ -659,6 +672,101 @@ function stopRevalidation(): void {
   revalidationTimer = null;
 }
 
+/**
+ * The Redis adapter, for a process that takes sockets.
+ *
+ * Plugged in BEFORE any `io.use`/`io.on` so that every later `emit` routes
+ * via pub/sub. Without it, an `emit` on one replica doesn't reach the
+ * sockets connected to another — the real-time events (pushNotification,
+ * securityAction, aiVerification) are lost between instances when scaling
+ * horizontally.
+ *
+ * Installed WHETHER OR NOT Redis answers right now. The boot used to refuse
+ * to finish in production without Redis, which turned a Redis restart into
+ * a fleet that could not start: every recreated replica exited, and the
+ * restart policy could run out before Redis came back. The HTTP API and the
+ * workers do not need Redis to be correct; realtime across replicas does.
+ * So the replica starts, logs that realtime is degraded, and the adapter
+ * starts delivering across replicas the moment Redis answers — the sub
+ * connection waits for it, and ioredis re-subscribes on every reconnect.
+ *
+ * From the pub/sub factory (plano-escala F5-01): the pub/sub's own Redis
+ * when there is one, REDIS_URL otherwise, as before.
+ */
+async function installAdapter(server: SocketIOServer): Promise<void> {
+  const adapterClients = createPubSubAdapterClients((error) =>
+    reportAdapterPublishFailure(error),
+  );
+
+  adapterPubClient = adapterClients.pub;
+  adapterSubClient = adapterClients.sub;
+
+  // Persistent handlers: an ioredis `error` event with no listener is
+  // rethrown by the EventEmitter and takes the process down.
+  attachRedisConnectionLog(adapterPubClient, "socket.io/pub");
+  attachRedisConnectionLog(adapterSubClient, "socket.io/sub");
+
+  server.adapter(
+    createAdapter(
+      adapterPubClient,
+      adapterSubClient,
+      socketAdapterOptions(env),
+    ),
+  );
+
+  out = server as unknown as Broadcaster;
+
+  if (await waitForAdapterRedis(adapterClients, ADAPTER_BOOT_WAIT_MS)) {
+    log.info("Redis adapter connected: realtime crosses replicas");
+  } else {
+    log.error(
+      "Redis unavailable at boot: realtime across replicas is DEGRADED until " +
+        "Redis answers. The adapter reconnects by itself; HTTP, queues and " +
+        "workers are unaffected.",
+    );
+  }
+}
+
+/**
+ * The Redis emitter, for a process that takes no sockets (plano-escala
+ * U-07, shared/socket/emitter.ts): what it emits reaches the sockets of the
+ * realtime processes without it subscribing to every frame they publish.
+ * The Socket.IO server stays, on its in-memory adapter, only to refuse the
+ * upgrades with SOCKET_UNAVAILABLE. Same as the adapter: installed whether
+ * or not Redis answers, and the frames emitted while it is away are lost.
+ */
+async function installEmitter(): Promise<void> {
+  const emitter = createSocketEmitter(env, reportAdapterPublishFailure);
+
+  emitterRedis = emitter.client;
+  attachRedisConnectionLog(emitterRedis, "socket.io/emitter");
+  out = emitter.broadcaster;
+
+  const client = emitterRedis;
+  const ready = await new Promise<boolean>((resolve) => {
+    if (client.status === "ready") return resolve(true);
+
+    const timer = setTimeout(() => resolve(false), ADAPTER_BOOT_WAIT_MS);
+
+    client.once("ready", () => {
+      clearTimeout(timer);
+      resolve(true);
+    });
+  });
+
+  if (ready) {
+    log.info(
+      "Redis emitter connected: this process emits to the realtime " +
+        "processes without subscribing (SOCKETS_ENABLED=false)",
+    );
+  } else {
+    log.error(
+      "Redis unavailable at boot: events from this process do not reach " +
+        "the sockets until Redis answers. The emitter reconnects by itself.",
+    );
+  }
+}
+
 // Function to initialize Socket.IO with HTTP server
 async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
   const trustedProxy = (env.RATE_LIMIT_TRUSTED_PROXY ??
@@ -816,51 +924,10 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
     },
   );
 
-  // Plug in the Redis adapter BEFORE any `io.use`/`io.on` to ensure
-  // that all subsequent `emit` operations route via pub/sub. Without it, an
-  // `emit` on one replica doesn't reach the sockets connected to another — the
-  // real-time events (pushNotification, securityAction, aiVerification)
-  // are lost between instances when scaling horizontally.
-  //
-  // Installed WHETHER OR NOT Redis answers right now. The boot used to refuse
-  // to finish in production without Redis, which turned a Redis restart into
-  // a fleet that could not start: every recreated replica exited, and the
-  // restart policy could run out before Redis came back. The HTTP API and the
-  // workers do not need Redis to be correct; realtime across replicas does.
-  // So the replica starts, logs that realtime is degraded, and the adapter
-  // starts delivering across replicas the moment Redis answers — the sub
-  // connection waits for it, and ioredis re-subscribes on every reconnect.
-  //
-  // From the pub/sub factory (plano-escala F5-01): the pub/sub's own Redis
-  // when there is one, REDIS_URL otherwise, as before.
-  const adapterClients = createPubSubAdapterClients((error) =>
-    reportAdapterPublishFailure(error),
-  );
-
-  adapterPubClient = adapterClients.pub;
-  adapterSubClient = adapterClients.sub;
-
-  // Persistent handlers: an ioredis `error` event with no listener is
-  // rethrown by the EventEmitter and takes the process down.
-  attachRedisConnectionLog(adapterPubClient, "socket.io/pub");
-  attachRedisConnectionLog(adapterSubClient, "socket.io/sub");
-
-  io.adapter(
-    createAdapter(
-      adapterPubClient,
-      adapterSubClient,
-      socketAdapterOptions(env),
-    ),
-  );
-
-  if (await waitForAdapterRedis(adapterClients, ADAPTER_BOOT_WAIT_MS)) {
-    log.info("Redis adapter connected: realtime crosses replicas");
+  if (env.SOCKETS_ENABLED) {
+    await installAdapter(io);
   } else {
-    log.error(
-      "Redis unavailable at boot: realtime across replicas is DEGRADED until " +
-        "Redis answers. The adapter reconnects by itself; HTTP, queues and " +
-        "workers are unaffected.",
-    );
+    await installEmitter();
   }
 
   /**
@@ -870,15 +937,20 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
    * immediate error the limiter swallows — it fails open — rather than a
    * connection attempt that hangs waiting for a counter.
    */
+  //
+  // Only where sockets connect: a process without them refuses every
+  // upgrade before any budget is read, and opens no connection for it.
   try {
-    handshakeRedis = new Redis(
-      env.REDIS_URL,
-      redisClientOptions("socket-handshake"),
-    );
+    if (env.SOCKETS_ENABLED) {
+      handshakeRedis = new Redis(
+        env.REDIS_URL,
+        redisClientOptions("socket-handshake"),
+      );
 
-    attachRedisConnectionLog(handshakeRedis, "socket.io/handshake");
+      attachRedisConnectionLog(handshakeRedis, "socket.io/handshake");
 
-    handshakeLimiter = createHandshakeLimiter(handshakeRedis);
+      handshakeLimiter = createHandshakeLimiter(handshakeRedis);
+    }
   } catch {
     // Without counters the handshake still works; it is simply not capped.
     handshakeLimiter = unlimitedHandshakes;
@@ -1712,8 +1784,8 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
 
 // Function to send notification to a specific user
 const sendNotificationToUser = (userId: string, notification: any) => {
-  if (io) {
-    io.to(`user:${userId}`).emit("pushNotification", notification);
+  if (out) {
+    out.to(`user:${userId}`).emit("pushNotification", notification);
   } else {
     log.error("Socket.IO is not initialized yet");
   }
@@ -1732,15 +1804,15 @@ const sendNotificationsReadToUser = (
   userId: string,
   payload: { notificationId: string | null },
 ) => {
-  if (!io) return;
+  if (!out) return;
 
-  io.to(`user:${userId}`).emit("notificationsRead", payload);
+  out.to(`user:${userId}`).emit("notificationsRead", payload);
 };
 
 // Function to send notification to all users of a company
 const sendNotificationToBusiness = (businessId: string, notification: any) => {
-  if (io) {
-    io.to(`business:${businessId}`).emit("pushNotification", notification);
+  if (out) {
+    out.to(`business:${businessId}`).emit("pushNotification", notification);
   } else {
     log.error("Socket.IO is not initialized yet");
   }
@@ -1748,8 +1820,8 @@ const sendNotificationToBusiness = (businessId: string, notification: any) => {
 
 // Function to send AI verification event to a specific user
 const sendAIVerificationEvent = (userId: string, event: any) => {
-  if (io) {
-    io.to(`user:${userId}`).emit("aiVerification", event);
+  if (out) {
+    out.to(`user:${userId}`).emit("aiVerification", event);
 
     // The end of an analysis, as a data-free hint to the company's screens
     // (AI-6): the admin on the web is rarely the requester.
@@ -1761,7 +1833,8 @@ const sendAIVerificationEvent = (userId: string, event: any) => {
           ? operationsRoom(hint.payload.businessId)
           : `business:${hint.payload.businessId}`;
 
-      io.to(room)
+      out
+        .to(room)
         .to(MASTERS_ROOM)
         .emit(AI_ANALYSIS_CHANGED_EVENT, hint.payload);
     }
@@ -1783,16 +1856,16 @@ const sendAIVerificationEvent = (userId: string, event: any) => {
  * lost one.
  */
 function endSessionsIn(room: string): void {
-  if (!io) return;
+  if (!out) return;
 
-  io.local.in(room).disconnectSockets(true);
-  io.in(room).disconnectSockets(true);
+  io?.local.in(room).disconnectSockets(true);
+  out.in(room).disconnectSockets(true);
 }
 
 // Function to send security event to a specific user
 const sendSecurityEventToUser = (userId: string, event: { reason: string }) => {
-  if (io) {
-    io.to(`user:${userId}`).emit("securityAction", event);
+  if (out) {
+    out.to(`user:${userId}`).emit("securityAction", event);
 
     if (endsSession(event.reason)) {
       endSessionsIn(`user:${userId}`);
@@ -1805,8 +1878,8 @@ const sendSecurityEventToSession = (
   sessionId: string,
   event: { reason: string },
 ) => {
-  if (io) {
-    io.to(`session:${sessionId}`).emit("securityAction", event);
+  if (out) {
+    out.to(`session:${sessionId}`).emit("securityAction", event);
 
     if (endsSession(event.reason)) {
       endSessionsIn(`session:${sessionId}`);
@@ -1838,10 +1911,10 @@ function adoptLocalSessionVersion(sessionId: string, version: number): void {
 }
 
 const adoptSessionVersion = (sessionId: string, version: number): void => {
-  if (!io) return;
+  if (!out) return;
 
   try {
-    io.serverSideEmit(ADOPT_SESSION_VERSION_EVENT, { sessionId, version });
+    out.serverSideEmit(ADOPT_SESSION_VERSION_EVENT, { sessionId, version });
   } catch (error) {
     // No cluster to tell: this replica is the only one, and it runs below.
     log.warn(
@@ -1877,10 +1950,10 @@ const REFRESH_DELIVERY_ROOMS_EVENT = "trajetto:refresh-delivery-rooms";
  * "staff" and walked back in with the next subscribe on the same connection.
  */
 const refreshDeliveryRooms = async (businessId: string): Promise<void> => {
-  if (!io) return;
+  if (!out) return;
 
   try {
-    io.serverSideEmit(REFRESH_DELIVERY_ROOMS_EVENT, businessId);
+    out.serverSideEmit(REFRESH_DELIVERY_ROOMS_EVENT, businessId);
   } catch (error) {
     // No cluster to tell: this replica is the only one, and it runs below.
     log.error(
@@ -1896,19 +1969,27 @@ const refreshDeliveryRooms = async (businessId: string): Promise<void> => {
 const WHATSAPP_TEMPLATE_LANE_EVENT = "trajetto:whatsapp-template-lane";
 
 /**
- * Tells the other replicas that Meta paused or reinstated a template, so
+ * Tells the other processes that Meta paused or reinstated a template, so
  * their WhatsApp sender stops (or resumes) before a send is refused
- * (template-lane.ts). The caller has already applied it here. At-most-once,
- * like every adapter frame (ADR 0002): a replica that misses it learns the
- * pause from its own first refused send, as it always did.
+ * (template-lane.ts). The caller has already applied it here.
+ *
+ * Two ways, each to whoever hears it (plano-escala U-07): the adapter's
+ * `serverSideEmit` reaches the processes with the adapter (the `all` role,
+ * and the image before during a rolling deploy), and the lane's own channel
+ * (template-lane-bus.ts) reaches the ones that drain `external` without it,
+ * which no longer hear a `serverSideEmit`. Neither process applies it
+ * twice. At-most-once, like every frame (ADR 0002): a process that misses
+ * it learns the pause from its own first refused send, as it always did.
  */
 const broadcastWhatsAppTemplateLaneChange = (
   change: TemplateLaneChange,
 ): void => {
-  if (!io) return;
+  void publishTemplateLaneChange(change);
+
+  if (!out) return;
 
   try {
-    io.serverSideEmit(WHATSAPP_TEMPLATE_LANE_EVENT, change);
+    out.serverSideEmit(WHATSAPP_TEMPLATE_LANE_EVENT, change);
   } catch (error) {
     log.warn(
       { err: error, ...change },
@@ -1984,8 +2065,8 @@ const sendSecurityEventToBusiness = (
   businessId: string,
   event: { reason: string },
 ) => {
-  if (io) {
-    io.to(`business:${businessId}`).emit("securityAction", event);
+  if (out) {
+    out.to(`business:${businessId}`).emit("securityAction", event);
 
     if (endsSession(event.reason)) {
       endSessionsIn(`business:${businessId}`);
@@ -2018,8 +2099,8 @@ const sendEntitlementsChangedEvent = (
   businessId: string,
   event: { module: string; enabled: boolean },
 ) => {
-  if (io) {
-    io.to(`business:${businessId}`).emit("entitlementsChanged", event);
+  if (out) {
+    out.to(`business:${businessId}`).emit("entitlementsChanged", event);
   }
 };
 
@@ -2050,13 +2131,14 @@ type CatalogEntity =
  * the "Revalidar" button is needed. Call it after the transaction commits.
  */
 const sendCatalogChangedEvent = (businessId: string, entity: CatalogEntity) => {
-  if (io) {
+  if (out) {
     // Also the MASTER sockets (REV-22): they belong to no company, so they
     // are never in `business:<id>` and their /admin tabs never heard it. The
     // payload names the company and the web keeps only the one it shows; a
     // MASTER may read every company anyway. Two rooms in one emit: a socket
     // in both hears it once.
-    io.to(`business:${businessId}`)
+    out
+      .to(`business:${businessId}`)
       .to(MASTERS_ROOM)
       .emit("catalogChanged", { businessId, entity });
   }
@@ -2072,12 +2154,12 @@ const sendChatMessageEvent = (
   driverUserId: string | null,
   message: unknown,
 ) => {
-  if (!io) return;
+  if (!out) return;
 
-  io.to(chatStaffRoom(businessId)).emit("chatMessage", message);
+  out.to(chatStaffRoom(businessId)).emit("chatMessage", message);
 
   if (driverUserId) {
-    io.to(`user:${driverUserId}`).emit("chatMessage", message);
+    out.to(`user:${driverUserId}`).emit("chatMessage", message);
   }
 };
 
@@ -2167,11 +2249,11 @@ const sendRouteEventToBusiness = (
   businessId: string,
   event: RouteRealtimeEvent,
 ) => {
-  if (io) {
+  if (out) {
     // The operations room, not the company room. What a route is doing is the
     // dispatcher's view of the whole fleet; the driver's own copy goes to
     // their user room through `sendRouteEventToDriver`.
-    io.to(operationsRoom(businessId)).emit("routeEvent", event);
+    out.to(operationsRoom(businessId)).emit("routeEvent", event);
   }
 };
 
@@ -2203,8 +2285,8 @@ const sendDeliveryStatusToBusiness = (
   businessId: string,
   event: Omit<DeliveryStatusRealtimeEvent, "type">,
 ) => {
-  if (io) {
-    io.to(operationsRoom(businessId)).emit("routeEvent", {
+  if (out) {
+    out.to(operationsRoom(businessId)).emit("routeEvent", {
       type: "delivery.status_changed",
       ...event,
     } satisfies DeliveryStatusRealtimeEvent);
@@ -2236,8 +2318,8 @@ const sendRouteStopsLocatedToBusiness = (
   businessId: string,
   event: RouteStopsLocatedEvent,
 ) => {
-  if (io) {
-    io.to(operationsRoom(businessId)).emit("routeStopsLocated", event);
+  if (out) {
+    out.to(operationsRoom(businessId)).emit("routeStopsLocated", event);
   }
 };
 
@@ -2247,8 +2329,8 @@ const sendRouteEventToDriver = (
 ) => {
   // Null is ordinary, not an error: operations register drivers before handing
   // out phones, and that driver simply has no room to reach.
-  if (io && driverUserId) {
-    io.to(`user:${driverUserId}`).emit("routeEvent", event);
+  if (out && driverUserId) {
+    out.to(`user:${driverUserId}`).emit("routeEvent", event);
   }
 };
 
@@ -2284,7 +2366,7 @@ const sendDriverPositionToBusiness = (
   businessId: string,
   event: DriverPositionEvent,
 ) => {
-  if (io) {
+  if (out) {
     // Where a named person physically is, every few seconds, for a whole
     // shift. It goes only to rooms with a permission check on them: the
     // positions room, and the operations room while
@@ -2293,9 +2375,14 @@ const sendDriverPositionToBusiness = (
     // socket cannot take now (its previous frame still being written, a
     // slow tab) is dropped rather than queued behind the others; the
     // tower's own cadence read and the next point redraw it.
-    io.to(
-      driverPositionRooms(businessId, env.SOCKET_POSITIONS_ON_OPERATIONS_ROOM),
-    ).volatile.emit("driverPosition", event);
+    out
+      .to(
+        driverPositionRooms(
+          businessId,
+          env.SOCKET_POSITIONS_ON_OPERATIONS_ROOM,
+        ),
+      )
+      .volatile.emit("driverPosition", event);
   }
 };
 
@@ -2317,8 +2404,8 @@ const sendDeliveryEventToDriver = (
 ) => {
   // Null is ordinary, not an error: operations register drivers before handing
   // out phones, and that driver simply has no room to reach.
-  if (io && driverUserId) {
-    io.to(`user:${driverUserId}`).emit("deliveryEvent", event);
+  if (out && driverUserId) {
+    out.to(`user:${driverUserId}`).emit("deliveryEvent", event);
   }
 };
 
@@ -2350,8 +2437,8 @@ const sendOccurrenceAuthorizationToBusiness = (
   businessId: string,
   event: OccurrenceAuthorizationRealtimeEvent,
 ) => {
-  if (io) {
-    io.to(operationsRoom(businessId)).emit("occurrenceAuthorization", event);
+  if (out) {
+    out.to(operationsRoom(businessId)).emit("occurrenceAuthorization", event);
   }
 };
 
@@ -2378,8 +2465,8 @@ const sendOccurrenceDecisionToDriver = (
   driverUserId: string | null,
   event: OccurrenceDecisionDriverEvent,
 ) => {
-  if (io && driverUserId) {
-    io.to(`user:${driverUserId}`).emit("deliveryEvent", event);
+  if (out && driverUserId) {
+    out.to(`user:${driverUserId}`).emit("deliveryEvent", event);
   }
 };
 
@@ -2423,12 +2510,12 @@ const sendSupportTicketEvent = (
   event: SupportTicketRealtimeEvent,
   driverTicket: Record<string, unknown> | null,
 ): void => {
-  if (!io) return;
+  if (!out) return;
 
-  io.to(chatStaffRoom(businessId)).emit("supportTicket", event);
+  out.to(chatStaffRoom(businessId)).emit("supportTicket", event);
 
   if (driverUserId && driverTicket && DRIVER_TICKET_EVENTS.has(event.type)) {
-    io.to(`user:${driverUserId}`).emit("supportTicket", {
+    out.to(`user:${driverUserId}`).emit("supportTicket", {
       type: event.type,
       ticket: driverTicket,
     });
@@ -2447,12 +2534,12 @@ const sendChatReadEvent = (
     ticketId?: string;
   },
 ) => {
-  if (!io) return;
+  if (!out) return;
 
-  io.to(chatStaffRoom(businessId)).emit("chatRead", event);
+  out.to(chatStaffRoom(businessId)).emit("chatRead", event);
 
   if (driverUserId) {
-    io.to(`user:${driverUserId}`).emit("chatRead", event);
+    out.to(`user:${driverUserId}`).emit("chatRead", event);
   }
 };
 
@@ -2475,16 +2562,16 @@ const sendChatDeliveredEvent = (
     delivered_at: string;
   },
 ): void => {
-  if (!io) return;
+  if (!out) return;
 
   if (event.side === "DRIVER") {
-    io.to(chatStaffRoom(businessId)).emit("chatDelivered", event);
+    out.to(chatStaffRoom(businessId)).emit("chatDelivered", event);
     return;
   }
 
   // A staff receipt is news for exactly one phone.
   if (event.driverUserId) {
-    io.to(`user:${event.driverUserId}`).emit("chatDelivered", event);
+    out.to(`user:${event.driverUserId}`).emit("chatDelivered", event);
   }
 };
 
@@ -2585,6 +2672,7 @@ async function shutdownSocketIO(): Promise<void> {
   try {
     await adapterPubClient?.quit();
     await adapterSubClient?.quit();
+    await emitterRedis?.quit();
     await handshakeRedis?.quit();
     await closeSocketTicketStore();
 
@@ -2596,6 +2684,7 @@ async function shutdownSocketIO(): Promise<void> {
   } finally {
     adapterPubClient = null;
     adapterSubClient = null;
+    emitterRedis = null;
     handshakeRedis = null;
     handshakeLimiter = unlimitedHandshakes;
   }
@@ -2623,6 +2712,7 @@ function realtimeMetrics(): {
   local_connections: number;
   adapter: "redis" | "local" | "off";
   adapter_status: string | null;
+  emitter: boolean;
   dropped_frames_unreported: number;
   handshakes_in_flight: number;
   handshakes: HandshakeWindow;
@@ -2633,8 +2723,15 @@ function realtimeMetrics(): {
 
   return {
     local_connections: io?.engine.clientsCount ?? 0,
-    adapter: !io ? "off" : adapterPubClient ? "redis" : "local",
-    adapter_status: adapterPubClient?.status ?? null,
+    // A process without sockets crosses replicas through the emitter
+    // (U-07): its events still go through Redis, publish-only.
+    adapter: !io
+      ? "off"
+      : (adapterPubClient ?? emitterRedis)
+        ? "redis"
+        : "local",
+    adapter_status: (adapterPubClient ?? emitterRedis)?.status ?? null,
+    emitter: emitterRedis !== null,
     dropped_frames_unreported: droppedFrames.unreported(),
     // The admission (plano-escala U-01): since the last ops_sample row.
     handshakes_in_flight: socketAdmission.inflight(),

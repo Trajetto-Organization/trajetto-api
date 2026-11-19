@@ -25,10 +25,10 @@ import { createPrismaClient } from "@/shared/database/database-client";
  * A worker takes no sockets (SOCKETS_ENABLED=false in its preset): its
  * upgrades are refused at the engine. But it still EMITS — a notification
  * expanded, an AI reading finished — and those events must reach the
- * dispatcher connected to the API. They do because the Socket.IO server and
- * its Redis adapter stay up in the worker; the only thing switched off is
- * the admission. Two processes, as in production: a worker and an `all`
- * replica, one Redis, one database, one adapter key.
+ * dispatcher connected to the API. They do through the Redis emitter
+ * (plano-escala U-07), which publishes the adapter's frames without
+ * subscribing to the cluster's. Two processes, as in production: a worker
+ * and an `all` replica, one Redis, one database, one adapter key.
  *
  * And the wake between processes (F3-04): an `api` replica that enqueues
  * work it does not claim publishes the hint on Redis, and the process that

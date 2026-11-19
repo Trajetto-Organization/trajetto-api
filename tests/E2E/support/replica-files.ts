@@ -27,6 +27,7 @@ const REPLICA_E2E_FILES = [
   "resilience-redis-loss.test.ts",
   "resilience-replica-drain.test.ts",
   "socket-chat-replicas.test.ts",
+  "socket-emitter-replicas.test.ts",
   "socket-revocation.test.ts",
   "socket-support-ticket-replicas.test.ts",
 ] as const;

@@ -4647,9 +4647,11 @@ os workers). Sem `PROCESS_ROLE`, tudo fica como antes (`all`; com
 existe em todo processo (o `/health/metrics` lista os jobs em qualquer
 réplica); só o `CRON_ENABLED` os agenda. Sem sockets
 (`SOCKETS_ENABLED=false`), o processo recusa o upgrade com
-`SOCKET_UNAVAILABLE`, sem cobrar o endereço, mas mantém o servidor Socket.IO
-e o adapter: o que o worker emite chega ao socket conectado na API
-(`tests/E2E/process-roles-replicas.test.ts`). Cada pool se identifica no
+`SOCKET_UNAVAILABLE`, sem cobrar o endereço, e emite pelo
+`@socket.io/redis-emitter` em vez do adapter (plano de escala U-07): o que
+o worker emite chega ao socket conectado na API ou no realtime, sem ele
+assinar os frames do cluster (`tests/E2E/process-roles-replicas.test.ts`,
+`tests/E2E/socket-emitter-replicas.test.ts`). Cada pool se identifica no
 `pg_stat_activity` pelo papel: `trajetto-<papel>` no principal,
 `-read`, `-batch` e `-probe` nos laterais e na readiness (um
 `application_name` na URL ganha).
@@ -5146,8 +5148,23 @@ passa ao papel `api` (subseção acima).
 - **GitHub**: `DOKPLOY_REALTIME_APPLICATION_ID`, `SWARM_REALTIME_SERVICE`
   e `realtime` no `ROLLOUT_ROLES_EXPECTED`. É o último do deploy.
 - **Corte**: com a _Domain_ e o LOAD-05 aprovado, `SOCKETS_ENABLED=false`
-  na `trajetto-api`. **Reversão**: `SOCKETS_ENABLED=true` na
-  `trajetto-api` PRIMEIRO, depois apague a _Domain_ e _Replicas_ 0.
+  na `trajetto-api`. A partir daí a api emite pelo emissor do Redis, sem
+  assinar nada do adapter (U-07). Meça antes e depois, no console do
+  Redis do Dokploy, `redis-cli INFO stats | grep total_net_output_bytes`
+  duas vezes com 5 minutos entre elas, no mesmo horário de dois dias
+  úteis: a diferença por minuto é a saída do Redis, e ela cai com cada
+  processo que deixa de assinar. Confira também a pausa de template sem
+  esperar a Meta: no mesmo console, publique uma pausa de 1 s de um
+  template que não existe (troque `socket.io` pela `SOCKET_ADAPTER_KEY`
+  do ambiente, se houver) e procure `whatsapp template lane changed` com
+  esse nome no log de cada processo que drena `external`, em até 5 s:
+
+  ```sh
+  redis-cli PUBLISH socket.io:lane '{"v":1,"replica":"teste-do-dono","change":{"template":"teste_inexistente","action":"pause","seconds":1}}'
+  ```
+
+  **Reversão**: `SOCKETS_ENABLED=true` na `trajetto-api` PRIMEIRO, depois
+  apague a _Domain_ e _Replicas_ 0.
 
 #### `ingest`
 

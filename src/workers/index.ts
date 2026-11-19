@@ -19,6 +19,7 @@ import {
   consumesQueue,
 } from "../shared/lifecycle/process-role";
 import { startWakeListener } from "../shared/wake/wake-listener";
+import { startTemplateLaneListener } from "../shared/providers/whatsapp-provider/template-lane-bus";
 import { wakeBus } from "../shared/wake/wake-bus";
 
 const log = logger.child({ component: "workers" });
@@ -28,6 +29,9 @@ let stopHeartbeatFlush: (() => void) | null = null;
 
 /** Stops listening for the other processes' wake hints (F3-04). */
 let stopWakeListener: (() => void) | null = null;
+
+/** Stops listening for the WhatsApp template lane (plano-escala U-07). */
+let stopLaneListener: (() => void) | null = null;
 
 /**
  * Initializes the worker system and other related services
@@ -105,6 +109,12 @@ export async function initializeWorkers(): Promise<void> {
       jobs: () => JobRunner.getInstance().wake(),
     });
 
+    // A template Meta paused, announced by the process that got the
+    // callback (plano-escala U-07): heard here only when this process
+    // drains `external` without the Socket.IO adapter, which carries it
+    // to the others.
+    stopLaneListener = startTemplateLaneListener();
+
     // Every replica writes where its workers were last seen, so a cycle hung
     // on one replica shows on /health/metrics whichever replica answers.
     stopHeartbeatFlush = startHeartbeatFlush();
@@ -169,6 +179,8 @@ export async function shutdownWorkers(
   // hints are dropped: the processes that stay sweep.
   stopWakeListener?.();
   stopWakeListener = null;
+  stopLaneListener?.();
+  stopLaneListener = null;
   wakeBus.stop();
 
   try {

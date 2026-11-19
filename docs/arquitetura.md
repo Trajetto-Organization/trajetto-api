@@ -645,12 +645,24 @@ claim: o boot recusa a que não cabe (F3-05).
 
 ### Tempo real por papel
 
-O servidor Socket.IO e o adapter Redis existem em todo processo, de
-qualquer papel: o que o `worker` emite (o fim de uma notificação, uma
-leitura de IA) atravessa o Redis e chega ao socket conectado na `api` ou no
-`realtime`. Só o `SOCKETS_ENABLED` decide quem aceita conexões: sem ele, o
-processo recusa o upgrade com `SOCKET_UNAVAILABLE`, sem cobrar o orçamento
-do endereço (F3-02). O papel `realtime` recebe o `/socket.io` por uma
+Só o `SOCKETS_ENABLED` decide quem aceita conexões: sem ele, o processo
+recusa o upgrade com `SOCKET_UNAVAILABLE`, sem cobrar o orçamento do
+endereço (F3-02). Quem aceita instala o adapter Redis. Quem não aceita (o
+`worker`, o `scheduler`, o `worker-external`, o `ingest` e a `api` depois
+do corte) emite pelo `@socket.io/redis-emitter`, na versão fixada ao lado
+do adapter, numa conexão só de publicação da fábrica de pub/sub
+(`src/shared/socket/emitter.ts`, plano de escala U-07): o que ele emite (o
+fim de uma notificação, uma leitura de IA, uma revogação por sala com
+`disconnectSockets`, um `serverSideEmit`) chega ao socket conectado na
+`api` ou no `realtime`, e o Redis deixa de mandar a ele cada frame do
+cluster, que o `PSUBSCRIBE` do adapter pedia. Sem assinatura, ele também
+não ouve um `serverSideEmit`: a pausa de template do WhatsApp, o único que
+um worker precisa, vai também pelo canal `<SOCKET_ADAPTER_KEY>:lane`
+(`src/shared/providers/whatsapp-provider/template-lane-bus.ts`), que os
+processos que drenam `external` sem o adapter assinam. O frame do adapter
+continua para quem tem o adapter (o `all` e a imagem anterior durante o
+rolling), e ninguém aplica a mesma pausa duas vezes. Com
+`SOCKETS_ENABLED=true` (o `all` de hoje), nada disso roda. O papel `realtime` recebe o `/socket.io` por uma
 _Domain_ com _Path_ no mesmo host da API; depois do corte, a `api` passa a
 `SOCKETS_ENABLED=false`. A sala `positions:<businessId>` não muda com o
 papel: o `driverPosition` sai `volatile` do processo que recebeu o

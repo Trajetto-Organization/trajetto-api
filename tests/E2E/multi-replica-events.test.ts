@@ -493,6 +493,7 @@ describe("presence across three replicas", () => {
     for (const replica of replicas) {
       expect(await replica.adapter()).toEqual({
         requestsTimeout: ADAPTER_REQUESTS_TIMEOUT_MS,
+        emitter: false,
       });
     }
   });

@@ -8,8 +8,8 @@ import { describe, expect, it } from "vitest";
  *
  * The counters (rate limits, handshakes, tickets, the geocoder's budget,
  * the providers' rate bucket, the cache of /health) live on REDIS_URL;
- * the pub/sub (the Socket.IO adapter, the wake between processes, later
- * the WhatsApp lane and the emitter) may get a Redis of its own, PUBSUB_REDIS_URL, by the trigger of
+ * the pub/sub (the Socket.IO adapter, the wake between processes, the
+ * WhatsApp lane and the emitter) may get a Redis of its own, PUBSUB_REDIS_URL, by the trigger of
  * the plan's section 7. That split only holds while every pub/sub client
  * comes from src/shared/redis/pubsub-redis.ts: one built anywhere else on
  * REDIS_URL would keep subscribing to the old Redis after the switch, and
@@ -36,8 +36,13 @@ const CLIENT_MAP: Record<string, string[]> = {
   // The adapter's pair, built from the URL the factory hands it.
   "src/shared/socket/adapter-redis.ts": ["url", "url"],
 
-  // The pub/sub's hints, on the pub/sub's Redis.
-  "src/shared/redis/pubsub-redis.ts": ["pubsubRedisUrl()", "pubsubRedisUrl()"],
+  // The emitter of a process without sockets (plano-escala U-07) and the
+  // pub/sub's hints, on the pub/sub's Redis.
+  "src/shared/redis/pubsub-redis.ts": [
+    "pubsubRedisUrl()",
+    "pubsubRedisUrl()",
+    "pubsubRedisUrl()",
+  ],
 };
 
 const FACTORY = "src/shared/redis/pubsub-redis.ts";

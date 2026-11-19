@@ -1039,13 +1039,18 @@ const healthResponses = {
         adapter: z
           .enum(["redis", "local", "off"])
           .describe(
-            "redis: events cross replicas; off: Socket.IO not started on this process.",
+            "redis: events cross replicas (through the adapter, or through the emitter in a process that takes no sockets); off: Socket.IO not started on this process.",
           ),
         adapter_status: z
           .string()
           .nullable()
           .describe(
-            "ioredis status of the adapter's publisher (ready, reconnecting…).",
+            "ioredis status of the adapter's publisher, or of the emitter's connection (ready, reconnecting…).",
+          ),
+        emitter: z
+          .boolean()
+          .describe(
+            "true in a process that takes no sockets (SOCKETS_ENABLED=false, plano-escala U-07): it publishes through the Redis emitter and subscribes to none of the cluster's frames.",
           ),
         dropped_frames_unreported: z
           .number()

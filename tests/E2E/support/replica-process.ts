@@ -17,7 +17,9 @@ interface ReplicaCommand {
     | "driverPosition"
     | "securityToBusiness"
     | "securityToUser"
-    | "wake";
+    | "wake"
+    | "lane"
+    | "refreshRooms";
   businessId: string;
   payload: Record<string, unknown>;
 }
@@ -32,11 +34,14 @@ interface Replica {
   /** The ids of THIS replica's sockets in a room, from its own room index. */
   members: (room: string) => Promise<string[]>;
 
-  /** Which of these users the CLUSTER has connected, asked from here. */
+  /** Which of these users the CLUSTER has connected (the presence beats). */
   online: (userIds: string[]) => Promise<string[]>;
 
-  /** How this replica's adapter was built (plano-escala F4-51). */
-  adapter: () => Promise<{ requestsTimeout: number | null }>;
+  /**
+   * How this replica's adapter was built (plano-escala F4-51), and whether
+   * it emits through the Redis emitter instead (no sockets, U-07).
+   */
+  adapter: () => Promise<{ requestsTimeout: number | null; emitter: boolean }>;
 
   /**
    * Until a socket connected to this replica is in (or out of) a room. What
@@ -164,7 +169,8 @@ async function startReplica(env: Record<string, string>): Promise<Replica> {
     process: child,
     port,
     online: (userIds) => ask<string[]>("online", { userIds }),
-    adapter: () => ask<{ requestsTimeout: number | null }>("adapter", {}),
+    adapter: () =>
+      ask<{ requestsTimeout: number | null; emitter: boolean }>("adapter", {}),
     run: async (command) => {
       child.stdin.write(`${JSON.stringify(command)}\n`);
 

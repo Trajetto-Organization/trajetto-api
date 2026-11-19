@@ -5,8 +5,11 @@ import "reflect-metadata";
 import { createServer } from "node:http";
 
 import {
+  broadcastWhatsAppTemplateLaneChange,
   getOnlineUserIds,
   initializeSocketIO,
+  realtimeMetrics,
+  refreshDeliveryRooms,
   sendDriverPositionToBusiness,
   sendRouteEventToBusiness,
   sendSecurityEventToBusiness,
@@ -31,9 +34,10 @@ import {
  * sockets are in a room (`MEMBERS <id> <json>`), read from its own room
  * index. The tests wait on that instead of sleeping while the replica reads
  * the database before a join or a leave. `online` asks the CLUSTER which of
- * these users are connected, through the adapter (`ONLINE <id> <json>`), and
- * `adapter` says how the replica's adapter was built (`ADAPTER <id> <json>`;
- * plano-escala F4-51).
+ * these users are connected, from the presence beats (`ONLINE <id> <json>`;
+ * plano-escala U-05), and `adapter` says how the replica's adapter was
+ * built and whether it emits through the Redis emitter instead
+ * (`ADAPTER <id> <json>`; F4-51, U-07).
  */
 const port = Number(process.argv[2]);
 
@@ -49,6 +53,14 @@ interface Command {
     // Work committed on a queue, as an enqueue on THIS replica announces it
     // (plano-escala F3-04); `payload` is { queue }.
     | "wake"
+
+    // Meta paused a template, as the callback on THIS replica announces it
+    // (plano-escala U-07); `payload` is the change.
+    | "lane"
+
+    // A permission of `businessId` changed on THIS replica: every replica
+    // re-evaluates its dispatch rooms (a serverSideEmit).
+    | "refreshRooms"
 
     // Questions, not emits: `payload` is { id, room }, { id, userIds } and
     // { id }.
@@ -135,6 +147,9 @@ function run(line: string): void {
     process.stdout.write(
       `ADAPTER ${String(command.payload.id)} ${JSON.stringify({
         requestsTimeout: adapter?.requestsTimeout ?? null,
+        // A replica without sockets publishes through the Redis emitter
+        // instead of the adapter (plano-escala U-07).
+        emitter: realtimeMetrics().emitter,
       })}\n`,
     );
 
@@ -146,6 +161,21 @@ function run(line: string): void {
       announceWake(command.payload.queue as never);
       process.stdout.write(`SENT ${command.kind}\n`);
     });
+
+    return;
+  }
+
+  if (command.kind === "refreshRooms") {
+    void refreshDeliveryRooms(command.businessId).then(() =>
+      process.stdout.write(`SENT ${command.kind}\n`),
+    );
+
+    return;
+  }
+
+  if (command.kind === "lane") {
+    broadcastWhatsAppTemplateLaneChange(command.payload as never);
+    process.stdout.write(`SENT ${command.kind}\n`);
 
     return;
   }

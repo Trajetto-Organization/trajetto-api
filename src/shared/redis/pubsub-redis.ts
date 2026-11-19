@@ -5,6 +5,7 @@ import { env } from "@/env";
 import { logger } from "@/shared/logging/logger";
 import { attachRedisConnectionLog } from "@/shared/services/redis-connection-log";
 import {
+  absorbPublishFailures,
   createAdapterRedisClients,
   type AdapterRedisClients,
 } from "@/shared/socket/adapter-redis";
@@ -17,7 +18,7 @@ const log = logger.child({ component: "pubsub" });
  * Two kinds of traffic share the Redis today and grow at different speeds:
  * the counters (rate limits, handshakes, tickets, the geocoder's budget),
  * which are commands, and the pub/sub (the Socket.IO adapter's frames, the
- * wake between processes, later the WhatsApp lane and the emitter of a
+ * wake between processes, the WhatsApp lane and the emitter of a
  * process without sockets), which is fan-out. At the scale of the plan the
  * fan-out is the first to need a Redis of its own. So every pub/sub client
  * comes from here, on PUBSUB_REDIS_URL when it is set and on REDIS_URL
@@ -31,6 +32,12 @@ const log = logger.child({ component: "pubsub" });
  *
  *  - `adapterClients()`: the adapter's own pair, as before (its subscriber
  *    belongs to the adapter, and its publisher reports dropped frames);
+ *  - `emitterClient()`: the one connection of a process that takes no
+ *    sockets (SOCKETS_ENABLED=false, plano-escala U-07): it publishes the
+ *    Socket.IO frames through @socket.io/redis-emitter and subscribes to
+ *    nothing, so it no longer receives every frame of the cluster through
+ *    the adapter's PSUBSCRIBE. Publish-only, like the adapter's publisher:
+ *    no offline queue, and a failure is reported, never thrown;
  *  - `publisher()`: one connection for the hints (the wake, F3-04), with no
  *    offline queue: a hint waits up to a second for the connection to be
  *    ready (the first one after boot, opened by that very hint, and one
@@ -62,6 +69,23 @@ function adapterClients(
   onPublishFailure: (error: unknown) => void,
 ): AdapterRedisClients {
   return createAdapterRedisClients(pubsubRedisUrl(), onPublishFailure);
+}
+
+/**
+ * The emitter's connection, on the pub/sub's Redis. Its failures are
+ * absorbed as the adapter's publisher's are (adapter-redis.ts): the
+ * emitter publishes without looking at the promise, and an unhandled
+ * rejection would take the process down on Node 22.
+ */
+function emitterClient(onPublishFailure: (error: unknown) => void): Redis {
+  const client = new Redis(pubsubRedisUrl(), {
+    ...redisClientOptions("socket-pub"),
+    connectionName: "trajetto-socket-emitter",
+  });
+
+  absorbPublishFailures(client, onPublishFailure);
+
+  return client;
 }
 
 let hintPublisher: Redis | null = null;
@@ -259,6 +283,7 @@ export {
   HINT_READY_WAIT_MS,
   adapterClients,
   closePubSub,
+  emitterClient,
   generation,
   isReady,
   publisher,
