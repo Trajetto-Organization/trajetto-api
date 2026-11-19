@@ -44,6 +44,13 @@ import {
 } from "@/shared/socket/admission";
 import { startGradualClose } from "@/shared/socket/gradual-close";
 import {
+  createPresenceStore,
+  createPresenceTracker,
+  readOnlineUserIds,
+  type PresenceSubject,
+  type PresenceTracker,
+} from "@/shared/socket/presence";
+import {
   effectiveSocketCap,
   readOpenFilesSoftLimit,
   type SocketCap,
@@ -479,6 +486,53 @@ async function socketsOfUser(userId: string): Promise<unknown[]> {
   } catch {
     return io.local.in(room).fetchSockets();
   }
+}
+
+/**
+ * Chat presence in Postgres (plano-escala U-05, shared/socket/presence.ts):
+ * this process beats the logins whose sockets it holds, and a login is
+ * offline only once its last socket in the cluster stayed gone for
+ * PRESENCE_GRACE_MS. Null in a process that takes no sockets.
+ */
+let presence: PresenceTracker | null = null;
+
+function presenceSubjectOf(socket: Socket): PresenceSubject {
+  return {
+    userId: String(socket.data.userId),
+    businessId: (socket.data.businessId as string | null) ?? null,
+    driverId: (socket.data.driverId as string | null) ?? null,
+  };
+}
+
+/** A driver came online or went offline: the SAC of their company hears it. */
+function announcePresence(
+  subject: PresenceSubject,
+  online: boolean,
+  lastSeenAt: Date | null,
+): void {
+  if (!subject.businessId || !subject.driverId) return;
+
+  io?.to(chatStaffRoom(subject.businessId)).emit("chatPresence", {
+    driverId: subject.driverId,
+    userId: subject.userId,
+    online,
+    last_seen_at: lastSeenAt ? lastSeenAt.toISOString() : null,
+  });
+}
+
+function startPresence(): void {
+  presence?.stop();
+
+  presence = createPresenceTracker({
+    store: createPresenceStore(),
+    graceMs: env.PRESENCE_GRACE_MS,
+    stillConnected: async (userId) => (await socketsOfUser(userId)).length > 0,
+    localSubjects: () =>
+      io ? [...io.of("/").sockets.values()].map(presenceSubjectOf) : [],
+    announce: announcePresence,
+  });
+
+  presence.start();
 }
 
 /** This replica's sockets in a room — real ones, never adapter copies. */
@@ -1205,23 +1259,11 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
     // added below this line would be a room joined after the read.
     admission.admit(socket);
 
-    // A driver coming online is chat presence the SAC cares about. Announce
-    // only the offline→online transition: fetchSockets goes through the
-    // Redis adapter, so the answer is cluster-wide, not per-replica.
-    if (socket.data.driverId && businessId && io) {
-      socketsOfUser(userId)
-        .then((sockets) => {
-          if (sockets.length === 1) {
-            io?.to(chatStaffRoom(businessId)).emit("chatPresence", {
-              driverId: socket.data.driverId,
-              userId,
-              online: true,
-              last_seen_at: null,
-            });
-          }
-        })
-        .catch(() => undefined);
-    }
+    // Presence (plano-escala U-05): the login's beat, batched. A driver
+    // whose row was missing or stale went online, and that write is what
+    // tells the SAC; one back within PRESENCE_GRACE_MS never went offline,
+    // so nothing is announced. No cluster-wide question per connection.
+    presence?.arrive(presenceSubjectOf(socket));
 
     // Explicit company subscription. This is the one place where a socket
     // asks for another tenant's data, so the decision is taken only from
@@ -1619,36 +1661,12 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
     socket.on("disconnect", (reason) => {
       log.debug({ userId, socketId: socket.id, reason }, "socket disconnected");
 
-      // Chat presence: when the driver's LAST socket in the whole cluster is
-      // gone, stamp "visto por último" and tell the SAC. By the time
-      // "disconnect" fires this socket already left its rooms, so the
-      // adapter answer no longer includes it.
-      if (socket.data.driverId && businessId && io) {
-        socketsOfUser(userId)
-          .then(async (sockets) => {
-            if (sockets.length > 0) return;
-
-            const lastSeenAt = new Date();
-
-            // Transport-layer bookkeeping, stamped straight on the column:
-            // best-effort on purpose — presence must never crash a
-            // disconnect.
-            await database.user
-              .update({
-                where: { id: userId },
-                data: { last_seen_at: lastSeenAt },
-              })
-              .catch(() => undefined);
-
-            io?.to(chatStaffRoom(businessId)).emit("chatPresence", {
-              driverId: socket.data.driverId,
-              userId,
-              online: false,
-              last_seen_at: lastSeenAt.toISOString(),
-            });
-          })
-          .catch(() => undefined);
-      }
+      // Chat presence (plano-escala U-05): offline only when the login's
+      // LAST socket in the whole cluster stayed gone for PRESENCE_GRACE_MS;
+      // then "visto por último" is stamped with the moment it went and the
+      // SAC hears it. A signal drop the driver comes back from changes
+      // nothing. Best-effort: presence never fails a disconnect.
+      presence?.leave(presenceSubjectOf(socket));
     });
   });
 
@@ -1685,6 +1703,9 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
 
   revalidationStopped = false;
   scheduleRevalidation();
+
+  // Only where sockets connect: the beat is of the logins held here.
+  if (env.SOCKETS_ENABLED) startPresence();
 
   return io;
 }
@@ -2471,42 +2492,32 @@ const sendChatDeliveredEvent = (
  * Which of these users are connected right now, cluster-wide. Feeds the
  * thread list's presence dots.
  *
- * Asks for the users' own rooms, never the company's. The company room held
- * every socket of the tenant, and each replica answered with the handshake of
- * every one of them through Redis — on every GET of the thread list, which
- * the unread badge refetches on every chat message. A page names at most a
- * page of drivers, and that is all the dots need.
+ * From Postgres since plano-escala U-05 (shared/socket/presence.ts): a
+ * beat younger than 90 s, which every process holding sockets writes, so
+ * any process answers, one that takes no sockets included (the api once
+ * the realtime role holds them, U-07). It used to ask every replica for
+ * its sockets through Redis on every GET of the thread list, which the
+ * unread badge refetches on every chat message. A login that dropped its
+ * signal is still online for PRESENCE_GRACE_MS. This process's own
+ * sockets are online too, before their first beat lands. Presence is
+ * decoration: a failed read answers what this process can see, never a
+ * failed request.
  */
 async function getOnlineUserIds(userIds: readonly string[]): Promise<string[]> {
-  if (!io || userIds.length === 0) return [];
+  if (userIds.length === 0) return [];
 
-  const wanted = new Set(userIds);
-  const rooms = [...wanted].map((userId) => `user:${userId}`);
-
-  let sockets: Array<{ data: { userId?: unknown } }>;
+  const wanted = [...new Set(userIds)];
+  const online = new Set(
+    wanted.filter((userId) => localSocketsIn(`user:${userId}`).length > 0),
+  );
 
   try {
-    sockets = await io.in(rooms).fetchSockets();
-  } catch {
-    // Presence is decoration. Redis away, or a replica that did not answer
-    // in time, degrades to what THIS replica can see — never to a failed
-    // request, and no longer to "nobody online".
-    sockets = await io.local
-      .in(rooms)
-      .fetchSockets()
-      .catch(() => []);
+    for (const userId of await readOnlineUserIds(wanted)) online.add(userId);
+  } catch (error) {
+    log.warn({ err: error }, "presence could not be read: local view only");
   }
 
-  return [
-    ...new Set(
-      sockets
-        .map((socket) => socket.data.userId)
-        .filter(
-          (userId): userId is string =>
-            typeof userId === "string" && wanted.has(userId),
-        ),
-    ),
-  ];
+  return wanted.filter((userId) => online.has(userId));
 }
 
 /**
@@ -2525,6 +2536,10 @@ async function getOnlineUserIds(userIds: readonly string[]): Promise<string[]> {
  */
 function closeRealtimeConnections(): void {
   stopRevalidation();
+
+  // The sockets closed below would each start a wait nobody is left to
+  // finish; their beats age out and another process sweeps them.
+  presence?.stop();
   stopGradualClose?.();
   stopGradualClose = null;
   io?.engine.close();
@@ -2564,6 +2579,8 @@ function closeRealtimeGradually(windowMs: number): void {
  */
 async function shutdownSocketIO(): Promise<void> {
   stopRevalidation();
+  presence?.stop();
+  presence = null;
 
   try {
     await adapterPubClient?.quit();

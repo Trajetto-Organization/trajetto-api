@@ -213,6 +213,7 @@ afterAll(async () => {
   await Promise.all([worker, api, apiRole].map((replica) => replica?.stop()));
   await closePubSub();
 
+  await prisma.userPresence.deleteMany({ where: { user_id: WATCHER } });
   await prisma.refreshToken.deleteMany({ where: { userId: WATCHER } });
   await prisma.user.deleteMany({ where: { id: WATCHER } });
   await prisma.permission.deleteMany({ where: { profileAccessId: profileId } });
@@ -289,6 +290,22 @@ describe("a worker (SOCKETS_ENABLED=false by its preset)", () => {
       "o evento do worker não chegou ao socket conectado na API",
     ).not.toBeNull();
     expect(event!.routeCode).toBe(77);
+  });
+});
+
+describe("presence from a process that takes no sockets", () => {
+  it("answers who is online from the database (plano-escala U-05)", async () => {
+    // The watcher of the case above is connected to the all replica; the
+    // worker holds no socket and no longer asks the adapter: it reads the
+    // beat the all replica wrote.
+    expect(watcher, "o caso anterior conecta o despachante").toBeDefined();
+
+    await vi.waitFor(
+      async () => expect(await worker.online([WATCHER])).toEqual([WATCHER]),
+      { timeout: 15_000, interval: 100 },
+    );
+
+    expect(await worker.online([randomUUID()])).toEqual([]);
   });
 });
 

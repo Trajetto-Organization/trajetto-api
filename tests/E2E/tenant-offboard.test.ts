@@ -375,6 +375,10 @@ async function seedExtras(ids: CarrierIds): Promise<void> {
   await prisma.tenantDayDirty.create({
     data: { businessId: ids.businessId, day: new Date("2026-10-31T00:00:00Z") },
   });
+  // A socket's beat (plano-escala U-05): rides the login's cascade.
+  await prisma.userPresence.create({
+    data: { user_id: ids.userId, heartbeat_at: new Date() },
+  });
 }
 
 /** Row counts of every table the plan deletes from. */

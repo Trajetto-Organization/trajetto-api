@@ -2110,6 +2110,22 @@ const envSchema = z
       .transform((value) => value === "true"),
 
     /**
+     * How long a login's last socket may stay gone before it counts as
+     * offline (plano-escala U-05, F4.6; shared/socket/presence.ts): only
+     * then is "visto por último" stamped and the SAC told. A driver's
+     * signal drops for a few seconds all day, and each drop used to be an
+     * "offline" and a new last_seen_at on the chat's screen, then an
+     * "online" a moment later. At most 60 s: the presence row's beat is
+     * read as online for 90 s, so a longer wait would show the driver
+     * offline before the wait ended. 0 is the rollback (offline at once,
+     * as before). Empty counts as absent.
+     */
+    PRESENCE_GRACE_MS: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(0).max(60_000).default(45_000),
+    ),
+
+    /**
      * The `nextFlushAfterMs` POST /route/positions answers when the replica
      * is not pressed (plano-escala F2-26): twice it with the event loop over
      * 70%, the app's 5-minute ceiling over 90% or while shedding

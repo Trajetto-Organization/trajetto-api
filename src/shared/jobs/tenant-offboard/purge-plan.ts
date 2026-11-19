@@ -417,7 +417,13 @@ const TENANT_PURGE_PLAN: readonly PurgeStep[] = [
     parentKey: "email",
   },
   { kind: "direct", table: "business_settings", column: "businessId" },
-  { kind: "direct", table: USER, column: "businessId" },
+  {
+    kind: "direct",
+    table: USER,
+    column: "businessId",
+    // A socket's beat (plano-escala U-05): one row per login at most.
+    cascades: ["user_presence"],
+  },
   { kind: "direct", table: "driver", column: "businessId" },
   { kind: "direct", table: "permission", column: "businessId" },
   { kind: "direct", table: "profile_access", column: "businessId" },

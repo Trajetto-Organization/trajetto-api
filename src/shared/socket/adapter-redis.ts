@@ -117,9 +117,10 @@ async function waitForAdapterRedis(
 /**
  * How long a cluster-wide question (`fetchSockets`, `serverSideEmit` with an
  * ack) waits for every replica. The library's 5 s held an HTTP request — the
- * chat thread list asks for presence — hostage to the slowest replica.
- * SOCKET_ADAPTER_REQUESTS_TIMEOUT_MS overrides it (plano-escala F4-51): with
- * N replicas and no affinity, every presence read asks all of them.
+ * chat thread list asked for presence until plano-escala U-05 moved it to
+ * Postgres — hostage to the slowest replica. SOCKET_ADAPTER_REQUESTS_TIMEOUT_MS
+ * overrides it (F4-51): with N replicas and no affinity, every such question
+ * (now the end of a presence wait) asks all of them.
  */
 const ADAPTER_REQUESTS_TIMEOUT_MS = 2_000;
 

@@ -4141,9 +4141,28 @@ confere o servidor e os scripts de carga na CI da API; a web e o app ele só
 lê onde os três repositórios estão lado a lado, e na CI da API, que baixa só
 este repositório, essas duas partes pulam: o guarda que roda numa mudança
 do cliente é o do repositório dele. Com três réplicas,
-os eventos e a presença atravessam o adapter, e a pergunta a todas as
-réplicas espera no máximo `SOCKET_ADAPTER_REQUESTS_TIMEOUT_MS` (2 s) antes de
+os eventos atravessam o adapter, e a pergunta a todas as réplicas (se o
+último socket de um login sumiu mesmo, no fim da carência da presença)
+espera no máximo `SOCKET_ADAPTER_REQUESTS_TIMEOUT_MS` (2 s) antes de
 responder com o que tem (plano de escala F4-51).
+
+**Presença do chat no banco (plano de escala U-05).** A bolinha de online
+da lista de conversas e o `chatPresence` que o SAC ouve vinham do adapter:
+cada GET da lista perguntava os sockets a todas as réplicas pelo Redis, e
+cada queda de sinal do motorista virava "offline", um "visto por último"
+novo e um "online" logo depois. Agora o processo que segura o socket grava
+a batida do login na tabela `user_presence`
+(`src/shared/socket/presence.ts`): no connect (em lote de 250 ms; a linha
+que faltava ou estava velha é o que anuncia o online), a cada 60 s para
+todo login que ele segura e mais uma vez quando o socket cai, com o
+instante da queda. O login só fica offline quando o último socket dele no
+cluster ficou fora por `PRESENCE_GRACE_MS` (45 s): aí a linha sai, o
+`last_seen_at` é gravado com o instante da queda e o SAC ouve. Quem volta
+antes não muda nada, nem o online, nem o "visto por último". Online é uma
+batida com menos de 90 s, lida do primário por qualquer processo, inclusive
+um sem sockets. A linha que um processo morto deixou é varrida pelos outros
+depois dos 90 s, com a última batida como "visto por último". Presença é
+enfeite: uma falha é registrada uma vez e a batida seguinte acerta.
 
 ## Arquivos
 

@@ -98,14 +98,17 @@ function accessToken({
 
 /**
  * Statements that are work: not the BEGIN/COMMIT around a write, and not
- * the "visto por último" a driver's socket stamps after it is gone, which
- * lands whenever its disconnect is handled — in whatever is measured next.
+ * the "visto por último" a driver's socket stamps after it is gone, nor
+ * the presence beats a socket's connect and disconnect write in a batch
+ * (plano-escala U-05), which land whenever they are flushed — in whatever
+ * is measured next.
  */
 const work = (sql: string[]) =>
   sql.filter(
     (query) =>
       !/^\s*(BEGIN|COMMIT|ROLLBACK)\b/i.test(query) &&
-      !/^\s*UPDATE "public"\."user" SET [^;]*"last_seen_at"/i.test(query),
+      !/^\s*UPDATE "public"\."user" SET [^;]*"last_seen_at"/i.test(query) &&
+      !/"user_presence"/.test(query),
   );
 
 /** The one statement of SessionRepository.loadSession. */

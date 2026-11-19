@@ -398,6 +398,8 @@ model User {
   issuedDriverEnrollmentTokens DriverEnrollmentToken[] @relation("DriverEnrollmentTokenIssuer")
   // Wave 2: the phones where this login may sign in by CPF and password.
   driverTrustedDevices         DriverTrustedDevice[]
+  // Plano-escala U-05: whether a socket of this login is open right now.
+  presence                     UserPresence?
 
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
@@ -1724,6 +1726,26 @@ model ClusterEpoch {
   changed_at        DateTime @db.Timestamptz(6)
 
   @@map("cluster_epoch")
+}
+
+/// Who has a socket open right now (plano-escala U-05, F4.6): one row per
+/// login while a socket of it is open on some realtime process, with the
+/// last beat. The process holding the socket writes it on connect, again
+/// every 60 s for every login it holds, and once more when the socket goes;
+/// the row leaves when no socket came back within PRESENCE_GRACE_MS, which
+/// is when "visto por último" (user.last_seen_at) is stamped. Online = a
+/// beat younger than 90 s, read by the chat's thread list from any process,
+/// one without sockets included. Written by raw SQL only
+/// (src/shared/socket/presence.ts).
+model UserPresence {
+  user_id      String   @id
+  heartbeat_at DateTime @db.Timestamptz(6)
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  // The sweep of the rows a dead process left behind.
+  @@index([heartbeat_at])
+  @@map("user_presence")
 }
 
 /// The replica guard's heartbeat (plano-escala F4-41): one row (id 1, a
