@@ -204,6 +204,17 @@ interface IBackgroundJobRepository {
   renewLease(id: string, attempts: number): Promise<boolean>;
 
   /**
+   * In how many ms the first job of `kinds` that cannot be claimed yet
+   * becomes claimable: a PENDING job's `availableAt` (a backoff, a
+   * scheduled purge) or a PROCESSING job's lease running out (its process
+   * died). On the database's clock, the one the claim reads; null when
+   * there is none.
+   */
+  nextClaimableInMs(
+    kinds: readonly BackgroundJobKind[],
+  ): Promise<number | null>;
+
+  /**
    * Writes the cursor and extends the lease, fenced on `attempts`; with
    * `tx`, inside the caller's transaction. Throws JobLeaseLostError when
    * the job is no longer this attempt's — inside a transaction, that rolls
@@ -446,6 +457,28 @@ class BackgroundJobRepository implements IBackgroundJobRepository {
       jobs: rows.map(({ fairCursor: _cursor, ...job }) => job),
       cursor: nextFairCursor(rows, input.cursor),
     };
+  }
+
+  async nextClaimableInMs(
+    kinds: readonly BackgroundJobKind[],
+  ): Promise<number | null> {
+    if (kinds.length === 0) return null;
+
+    // The live jobs only, on the partial background_job_due_idx: the
+    // queue's depth, never its history.
+    const [row] = await this.prisma.$queryRaw<Array<{ inMs: number | null }>>`
+      SELECT (EXTRACT(EPOCH FROM (MIN("at") - now())) * 1000)::float AS "inMs"
+      FROM (
+        SELECT CASE WHEN "status" = 'PENDING' THEN "availableAt"
+                    ELSE "leaseExpiresAt" END AS "at"
+        FROM "background_job"
+        WHERE "status" IN ('PENDING', 'PROCESSING')
+          AND "kind" IN (${Prisma.join(kinds.map(kindLiteral))})
+      ) AS "live"
+      WHERE "at" > now()
+    `;
+
+    return row?.inMs ?? null;
   }
 
   async renewLease(id: string, attempts: number): Promise<boolean> {

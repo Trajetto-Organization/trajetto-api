@@ -27,7 +27,9 @@ import {
  *    JobLeaseLostError and nothing it does commits), and the new one
  *    resumes from the cursor: every effect happens once;
  *  - the cap of jobs running per company leaves the company's second job
- *    for when the first ends.
+ *    for when the first ends;
+ *  - a job whose lease runs out before the next sweep is claimed when it
+ *    does, so a SIGKILLed job resumes within the lease in the role all.
  */
 const OWNER = () => "test-runner";
 
@@ -301,6 +303,45 @@ describe("the job runner", () => {
       status: "FAILED",
       attempts: 2,
     });
+  });
+
+  it("resumes a SIGKILLed job when its lease runs out, not at the next sweep", async () => {
+    // The role all sweeps every 30 s: a killed job waited for its lease
+    // (up to 120 s) and then for the sweep after it, up to 150 s.
+    const store = new InMemoryBackgroundJobRepository();
+    const runner = new JobRunner({
+      store,
+      sweepIntervalMs: 60_000,
+      owner: OWNER,
+      renewEveryMs: 60_000,
+    });
+    const run = vi.fn(async () => undefined);
+
+    runner.register("SPREADSHEET_IMPORT", { run });
+
+    const id = await enqueue(store);
+
+    // Its process was killed mid-run: PROCESSING, the lease running out in
+    // 300 ms, when nobody would look again for a minute.
+    Object.assign(statusOf(store, id), {
+      status: "PROCESSING",
+      attempts: 1,
+      leaseOwner: "killed",
+      leaseExpiresAt: new Date(Date.now() + 300),
+    });
+
+    await runner.initialize();
+
+    try {
+      await vi.waitFor(
+        () => expect(statusOf(store, id).status).toBe("SUCCEEDED"),
+        { timeout: 5_000, interval: 25 },
+      );
+      expect(run).toHaveBeenCalledTimes(1);
+      expect(statusOf(store, id).attempts).toBe(2);
+    } finally {
+      await runner.shutdown();
+    }
   });
 
   it("hands a job back at SIGTERM without spending the attempt, its cursor kept", async () => {

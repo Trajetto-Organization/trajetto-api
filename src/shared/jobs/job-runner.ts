@@ -36,7 +36,11 @@ const log = logger.child({ component: "jobs" });
  *
  *  - SIGKILL, OOM, a lost node: nothing is written. The lease (120 s,
  *    renewed every 40 s while the handler runs) runs out and another
- *    process claims the job, which resumes from the last checkpoint. The
+ *    process claims the job, which resumes from the last checkpoint —
+ *    at the instant the lease runs out, not at the next sweep: a cycle
+ *    that leaves a lease (or a backoff) ending before the next sweep
+ *    sets a timer for it (armNextClaim), so a killed job resumes within
+ *    the lease's 2 min in the role all too, whose sweep is 30 s. The
  *    handler writes its effects and its cursor in one transaction, through
  *    `checkpoint(progress, tx)`, fenced on `attempts`: whatever committed
  *    is behind the cursor, whatever did not is redone, nothing twice;
@@ -75,6 +79,16 @@ const JOB_RETRY_DELAYS_MS = [
   10 * 60_000,
   30 * 60_000,
 ] as const;
+
+/**
+ * A sweep this short already finds a lease that ran out in time: the timer
+ * for the next claimable job (armNextClaim) is only worth its statement
+ * with a longer one (the role all's 30 s).
+ */
+const JOB_TIMED_CLAIM_MIN_SWEEP_MS = 5_000;
+
+/** After the instant itself: the claim reads `leaseExpiresAt < now()`. */
+const JOB_TIMED_CLAIM_MARGIN_MS = 250;
 
 /**
  * The pause between the attempts of a job that must finish, past its
@@ -188,6 +202,10 @@ class JobRunner {
   private readonly renewEveryMs: number;
 
   private timer: NodeJS.Timeout | null = null;
+
+  /** The claim set for the next job that becomes claimable; one at most. */
+  private nextClaim: NodeJS.Timeout | null = null;
+
   private stopping = false;
   private cycle = false;
 
@@ -282,6 +300,8 @@ class JobRunner {
 
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    if (this.nextClaim) clearTimeout(this.nextClaim);
+    this.nextClaim = null;
     setLocalJobWaker(null);
 
     for (const { job, controller } of this.running.values()) {
@@ -312,6 +332,7 @@ class JobRunner {
   async processBatch(): Promise<number> {
     if (this.cycle) {
       this.pool.rescan();
+      await this.armNextClaim();
       return 0;
     }
 
@@ -327,7 +348,60 @@ class JobRunner {
       if (this.pool.rescanPending && !this.stopping) {
         setImmediate(() => this.wake());
       }
+
+      await this.armNextClaim();
     }
+  }
+
+  /**
+   * A claim at the instant the next job becomes claimable — a dead
+   * process's lease running out, a backoff ending — when that comes before
+   * the next sweep. Without it, a job whose process was SIGKILLed waited
+   * for the lease (up to 120 s) AND for the sweep after it (30 s in the
+   * role all): up to 150 s. Never throws: the sweep is still there.
+   */
+  private async armNextClaim(): Promise<void> {
+    if (
+      this.stopping ||
+      !this.timer ||
+      this.sweepIntervalMs <= JOB_TIMED_CLAIM_MIN_SWEEP_MS
+    ) {
+      return;
+    }
+
+    const kinds = this.kinds();
+
+    if (kinds.length === 0) return;
+
+    let inMs: number | null;
+
+    try {
+      inMs = await this.store.nextClaimableInMs(kinds);
+    } catch (error) {
+      log.warn({ err: error }, "next claimable job could not be read");
+      return;
+    }
+
+    if (inMs === null || inMs >= this.sweepIntervalMs) return;
+    if (this.stopping || !this.timer) return;
+
+    if (this.nextClaim) clearTimeout(this.nextClaim);
+
+    this.nextClaim = setTimeout(
+      () => {
+        this.nextClaim = null;
+
+        if (this.stopping || !this.timer) return;
+
+        withoutRequestContext(() => {
+          this.processBatch().catch((error) => {
+            log.error({ err: error }, "background job timed claim failed");
+          });
+        });
+      },
+      Math.max(0, inMs) + JOB_TIMED_CLAIM_MARGIN_MS,
+    );
+    this.nextClaim.unref?.();
   }
 
   private async claim(limit: number): Promise<ClaimedJob[]> {

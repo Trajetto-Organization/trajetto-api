@@ -314,6 +314,43 @@ function backgroundJobContract(harness: () => BackgroundJobHarness): void {
     });
   });
 
+  it("says when the next job that cannot be claimed yet becomes claimable", async () => {
+    const { repo, expireLease } = harness();
+
+    expect(await repo.nextClaimableInMs(KINDS)).toBeNull();
+
+    // Due now: claimable already, so not "next".
+    const due = await enqueue(A);
+
+    expect(await repo.nextClaimableInMs(KINDS)).toBeNull();
+
+    // A backoff ending in an hour.
+    await enqueue(B, { availableAt: new Date(Date.now() + 3_600_000) });
+
+    const inAnHour = await repo.nextClaimableInMs(KINDS);
+
+    expect(inAnHour).toBeGreaterThan(3_500_000);
+    expect(inAnHour).toBeLessThanOrEqual(3_600_000);
+
+    // A running job's lease (120 s) comes first; once it ran out (its
+    // process died), it is claimable and the hour is next again.
+    const [running] = (await claim(1)).jobs;
+
+    expect(running.id).toBe(due);
+
+    const lease = await repo.nextClaimableInMs(KINDS);
+
+    expect(lease).toBeGreaterThan(100_000);
+    expect(lease).toBeLessThanOrEqual(120_000);
+
+    await expireLease(due);
+
+    expect(await repo.nextClaimableInMs(KINDS)).toBeGreaterThan(3_500_000);
+
+    // Only the kinds asked for.
+    expect(await repo.nextClaimableInMs(["TENANT_OFFBOARD"])).toBeNull();
+  });
+
   it("cancels only a job still waiting, of that company", async () => {
     const { repo } = harness();
     const waiting = await enqueue(A, {

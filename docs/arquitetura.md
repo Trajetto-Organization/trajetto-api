@@ -3856,7 +3856,12 @@ worker numa frota separada) roda o `JobRunner`
   `WHERE id = $1 AND attempts = $n`,
   e o job grava os efeitos e o cursor na mesma transação. Um SIGKILL não
   grava nada: o lease vence, outro processo pega o job e retoma do cursor,
-  sem repetir o que já foi gravado;
+  sem repetir o que já foi gravado. Ele é pego no instante em que o lease
+  vence, não na varredura seguinte: quando o próximo lease a vencer (ou a
+  próxima espera de retentativa a acabar) cai antes da próxima varredura,
+  o runner marca um claim para esse instante. Assim o job volta em até
+  2 min também no papel `all`, cuja varredura é de 30 s (antes, até
+  150 s);
 - no SIGTERM, o `AbortSignal` para cada job no próximo ponto de gravação,
   e ele volta para a fila na hora, sem gastar a tentativa;
 - a falha volta com espera (30 s, 2 min, 10 min, 30 min) até

@@ -182,6 +182,30 @@ class InMemoryBackgroundJobRepository implements IBackgroundJobRepository {
     };
   }
 
+  async nextClaimableInMs(
+    kinds: readonly BackgroundJobKind[],
+  ): Promise<number | null> {
+    const now = this.now().getTime();
+    let next: number | null = null;
+
+    for (const job of this.jobs) {
+      if (!kinds.includes(job.kind)) continue;
+
+      const at =
+        job.status === "PENDING"
+          ? job.availableAt.getTime()
+          : job.status === "PROCESSING"
+            ? (job.leaseExpiresAt?.getTime() ?? null)
+            : null;
+
+      if (at === null || at <= now) continue;
+
+      next = next === null ? at : Math.min(next, at);
+    }
+
+    return next === null ? null : next - now;
+  }
+
   async renewLease(id: string, attempts: number): Promise<boolean> {
     const job = this.held(id, attempts);
 
