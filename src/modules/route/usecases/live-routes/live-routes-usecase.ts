@@ -1,7 +1,10 @@
 import { inject, injectable } from "tsyringe";
 
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
-import type { IOperationDayRepository } from "../../repositories/IOperation-day-repository";
+import type {
+  IOperationDayRepository,
+  LiveRouteKey,
+} from "../../repositories/IOperation-day-repository";
 import type { IOccurrenceAuthorizationRepository } from "@/modules/delivery/repositories/IOccurrence-authorization-repository";
 
 import {
@@ -9,6 +12,10 @@ import {
   resolveOperationsBusiness,
 } from "../control-tower/operations-viewer";
 import { POSITION_WINDOW_MS } from "../control-tower/control-tower-usecase";
+import {
+  towerSnapshot,
+  type SnapshotBody,
+} from "../control-tower/tower-snapshot";
 
 import {
   LIVE_ROUTES_CAP,
@@ -21,6 +28,7 @@ import { POSITION_FRESH_MS } from "@/shared/route/driver-position-rules";
 import { operationDay } from "@/shared/route/operation-day-rules";
 import { isRouteLeftOpen } from "@/shared/route/route-left-open";
 import { resolveTimeZone } from "@/shared/time/business-day";
+import type { TenantSnapshotRead } from "@/shared/cache/tenant-snapshot";
 
 interface LiveRoutesRequest {
   userId: string;
@@ -30,6 +38,18 @@ interface LiveRoutesRequest {
 
   /** The clock. Only tests pass it. */
   now?: Date;
+}
+
+/** The first page only: a page with a cursor is read as before. */
+interface LiveRoutesSnapshotRequest {
+  userId: string;
+  businessId?: string;
+
+  /** x-trajetto-refresh: a read newer than the copy, if it is 2 s old. */
+  refresh: boolean;
+
+  /** The route's serializer: the page becomes the body it would send. */
+  body: SnapshotBody<LiveRoutes>;
 }
 
 interface LiveRouteRow {
@@ -98,6 +118,16 @@ interface LiveRoutes {
  * Manager surface, with the tower's rules: a driver token is refused, a
  * MASTER names the company, anyone else reads their own.
  */
+/**
+ * The first page of each company's live routes, once per
+ * TOWER_SNAPSHOT_TTL_MS in this process (plano-escala F4-11): every
+ * manager's phone polls the same list. The query is in the key — the first
+ * page, no cursor —, so a page that follows a cursor never meets it.
+ */
+const liveRoutesSnapshot = towerSnapshot("route-live");
+
+const FIRST_PAGE = { cursor: null };
+
 @injectable()
 class LiveRoutesUseCase {
   constructor(
@@ -118,12 +148,45 @@ class LiveRoutesUseCase {
     // A malformed cursor is refused before anything is read.
     const after = cursor ? decodeLiveRoutesCursor(cursor) : undefined;
 
-    const resolvedBusinessId = await resolveOperationsBusiness(this.user, {
+    return this.build(await this.resolve(userId, businessId), after, now);
+  }
+
+  /**
+   * The first page through the company's snapshot (F4-11): the same checks,
+   * on every request and before the snapshot is looked at, then the body of
+   * the company's copy, computed once per interval outside this request.
+   */
+  async executeSnapshot({
+    userId,
+    businessId,
+    refresh,
+    body,
+  }: LiveRoutesSnapshotRequest): Promise<TenantSnapshotRead> {
+    const resolvedBusinessId = await this.resolve(userId, businessId);
+
+    return liveRoutesSnapshot.read({
+      businessId: resolvedBusinessId,
+      variant: FIRST_PAGE,
+      refresh,
+      compute: async () =>
+        body(await this.build(resolvedBusinessId, undefined, new Date())),
+    });
+  }
+
+  private resolve(userId: string, businessId?: string): Promise<string> {
+    return resolveOperationsBusiness(this.user, {
       userId,
       businessId,
       driverRefusal: TOWER_DRIVER_REFUSAL,
     });
+  }
 
+  /** One page of the company's routes at `now`; nothing of who asked. */
+  private async build(
+    resolvedBusinessId: string,
+    after: LiveRouteKey | undefined,
+    now: Date,
+  ): Promise<LiveRoutes> {
     const timeZone = resolveTimeZone(
       await this.operation.timeZoneOf(resolvedBusinessId),
     );
@@ -207,5 +270,5 @@ class LiveRoutesUseCase {
   }
 }
 
-export { LiveRoutesUseCase };
+export { LiveRoutesUseCase, liveRoutesSnapshot };
 export type { LiveRouteRow, LiveRoutes };

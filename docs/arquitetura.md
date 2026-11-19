@@ -5158,6 +5158,29 @@ heap), e sai primeiro a cópia usada há mais tempo. Intervalo ou teto 0
 desligam a foto. As regras e o porquê estão no adendo de 19/11/2026 do
 [ADR 0002](./adr/0002-redis-descartavel.md).
 
+**A torre, o resumo e o mapa ao vivo pela foto** (plano de escala F4-11,
+decisão D2): `GET /route/control-tower`, `GET /delivery/operation-summary` e
+a primeira página de `GET /route/live` (sem `cursor`) saem da foto da
+empresa, criada em `src/modules/route/usecases/control-tower/tower-snapshot.ts`
+e lida por cada caso de uso em `executeSnapshot`. A ordem é fixa: o módulo e a
+permissão nos guards, depois `resolveOperationsBusiness` no caso de uso, em
+toda requisição, e só então a foto. Por isso uma cópia quente não deixa
+entrar quem não entraria. O cálculo só depende da empresa e lê no primário (o
+guard de `tests/unitaires/database/database-read-guard.test.ts` cobra). O
+corpo é serializado pelo serializador da própria rota
+(`reply.getSerializationFunction`, em `src/shared/http/snapshot-reply.ts`),
+e por isso a cópia é byte a byte a resposta. Ela vale por
+`TOWER_SNAPSHOT_TTL_MS` (10 s) e sai com `ETag`, `Age` e
+`Cache-Control: private, no-cache`. Com `If-None-Match` igual, a resposta é
+304 sem corpo. O cabeçalho `x-trajetto-refresh: 1`, que a web manda quando um
+evento pede a leitura (F4-12), recalcula só uma cópia de 2 s ou mais. Com
+`TOWER_SNAPSHOT_TTL_MS=0`, o controller volta ao caminho de antes, sem
+`ETag` nem 304. Um cálculo roda fora da requisição e por isso lê o fuso da
+empresa de novo: são as leituras da rota mais uma, uma vez por intervalo. Um
+acerto custa só a sessão. Os números estão em
+`tests/E2E/panel-statement-budgets.test.ts`, e a prova HTTP em
+`tests/E2E/control-tower-snapshot-http.test.ts`.
+
 **Plano com os valores a cada execução**: o `pg` manda statements sem nome, e
 o Postgres planeja cada execução com os valores; o Prisma 6 nomeava os
 statements e, depois de cinco execuções, caía no plano genérico. Query cara de

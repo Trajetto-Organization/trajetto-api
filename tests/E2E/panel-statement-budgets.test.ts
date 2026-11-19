@@ -6,6 +6,7 @@ import { PrismaClient } from "@prisma/client";
 import { container } from "tsyringe";
 
 import { env } from "@/env";
+import { tenantSnapshotMemory } from "@/shared/cache/tenant-snapshot";
 import type { UploadService } from "@/shared/services/upload-service";
 import { ensureDefaultOccurrenceTypes } from "@/shared/delivery/default-occurrence-types";
 import { createPrismaClient } from "@/shared/database/database-client";
@@ -72,6 +73,7 @@ let driverToken = "";
 let managerToken = "";
 
 const initialMode = env.SESSION_LOOKUP_MODE;
+const initialTowerTtl = env.TOWER_SNAPSHOT_TTL_MS;
 
 /**
  * How long the database must stay quiet for a request's window to close.
@@ -105,8 +107,13 @@ async function quiet(): Promise<void> {
 }
 
 /** The statements one request sent, from its start to the quiet after it. */
-async function cost(
-  send: () => Promise<{ statusCode: number; body: string }>,
+async function cost<
+  Answer extends { statusCode: number; body: string } = {
+    statusCode: number;
+    body: string;
+  },
+>(
+  send: () => Promise<Answer>,
   lastWrite: (sql: string) => boolean = () => true,
 ) {
   statements.length = 0;
@@ -280,6 +287,11 @@ beforeAll(async () => {
 
   env.SESSION_LOOKUP_MODE = "single";
 
+  // The tower, the summary and /route/live are measured on their query
+  // path, each read computing in its request; their snapshot (F4-11) has
+  // budgets of its own below.
+  env.TOWER_SNAPSHOT_TTL_MS = 0;
+
   // The day so far, through the app: the driver on the map, and the first
   // stop arrived at and delivered.
   const flush = await app.inject({
@@ -303,6 +315,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   env.SESSION_LOOKUP_MODE = initialMode;
+  env.TOWER_SNAPSHOT_TTL_MS = initialTowerTtl;
 
   await Promise.allSettled(storedKeys.map((key) => uploads.deleteFile(key)));
   await app?.close();
@@ -392,6 +405,68 @@ describe("the panel's hot reads", () => {
     expect(work.filter(isSessionStatement), trace).toHaveLength(1);
     expect(work.length, trace).toBe(budget);
   });
+});
+
+/**
+ * The tower, the summary and the first page of /route/live through the
+ * company's snapshot (plano-escala F4-11). The read that computes costs the
+ * route's statements plus the company's zone: the computation runs outside
+ * the request, where the zone the session brought is not. Every read the
+ * copy serves, and every 304, costs the session alone.
+ */
+const SNAPSHOT_READS = READS.filter(({ url }) =>
+  [
+    "/route/control-tower",
+    "/delivery/operation-summary",
+    "/route/live",
+  ].includes(url),
+);
+
+describe("the panel's hot reads through the company's snapshot", () => {
+  beforeAll(() => {
+    env.TOWER_SNAPSHOT_TTL_MS = 10_000;
+    tenantSnapshotMemory().clear();
+  });
+
+  afterAll(() => {
+    env.TOWER_SNAPSHOT_TTL_MS = 0;
+  });
+
+  const read =
+    (url: string, headers: Record<string, string> = {}) =>
+    () =>
+      app.inject({
+        method: "GET",
+        url,
+        headers: { authorization: `Bearer ${managerToken}`, ...headers },
+      });
+
+  it.each(SNAPSHOT_READS)(
+    "$route costs one more to compute, and the session alone from the copy",
+    async ({ url, budget }) => {
+      const computed = await cost(read(url));
+
+      expect(computed.response.statusCode, computed.response.body).toBe(200);
+      expect(
+        computed.work.filter(isSessionStatement),
+        computed.trace,
+      ).toHaveLength(1);
+      expect(computed.work.length, computed.trace).toBe(budget + 1);
+
+      const copy = await cost(read(url));
+
+      expect(copy.response.statusCode).toBe(200);
+      expect(copy.response.body).toBe(computed.response.body);
+      expect(copy.work.filter(isSessionStatement), copy.trace).toHaveLength(1);
+      expect(copy.work.length, copy.trace).toBe(1);
+
+      const etag = String(computed.response.headers.etag);
+      const notModified = await cost(read(url, { "if-none-match": etag }));
+
+      expect(notModified.response.statusCode).toBe(304);
+      expect(notModified.work.length, notModified.trace).toBe(1);
+    },
+  );
 });
 
 describe("the driver's submissions at a stop", () => {

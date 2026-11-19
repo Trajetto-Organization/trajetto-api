@@ -12,6 +12,7 @@ import {
   TOWER_DRIVER_REFUSAL,
   resolveOperationsBusiness,
 } from "./operations-viewer";
+import { towerSnapshot, type SnapshotBody } from "./tower-snapshot";
 
 import {
   ENDED_ROUTE_VISIBLE_MS,
@@ -32,6 +33,7 @@ import {
 } from "@/shared/route/route-left-open";
 import { dateOnlyKey, resolveTimeZone } from "@/shared/time/business-day";
 import type { GeofenceOutcome } from "@/shared/delivery/geofence/geofence-rules";
+import type { TenantSnapshotRead } from "@/shared/cache/tenant-snapshot";
 
 interface ControlTowerRequest {
   userId: string;
@@ -39,6 +41,17 @@ interface ControlTowerRequest {
 
   /** The clock. Only tests pass it; the tower always asks about now. */
   now?: Date;
+}
+
+interface ControlTowerSnapshotRequest {
+  userId: string;
+  businessId?: string;
+
+  /** x-trajetto-refresh: a read newer than the copy, if it is 2 s old. */
+  refresh: boolean;
+
+  /** The route's serializer: the tower becomes the body it would send. */
+  body: SnapshotBody<ControlTower>;
 }
 
 interface TowerPosition {
@@ -181,6 +194,12 @@ const POSITION_WINDOW_MS = 12 * 60 * 60 * 1000;
 const EVENT_LIMIT = 15;
 
 /**
+ * The tower of each company, once per TOWER_SNAPSHOT_TTL_MS in this process
+ * (plano-escala F4-11): every open tab of a carrier asks the same thing.
+ */
+const controlTowerSnapshot = towerSnapshot("control-tower");
+
+/**
  * Everything the tower draws, in one request.
  *
  * One endpoint and not five, because the panel refreshes all of it together
@@ -213,12 +232,45 @@ class ControlTowerUseCase {
     businessId,
     now = new Date(),
   }: ControlTowerRequest): Promise<ControlTower> {
-    const resolvedBusinessId = await resolveOperationsBusiness(this.user, {
+    return this.build(await this.resolve(userId, businessId), now);
+  }
+
+  /**
+   * The tower through the company's snapshot (F4-11): the same checks, on
+   * every request and before the snapshot is looked at, then the body of
+   * the company's copy — computed here once per interval, outside this
+   * request, from the company alone.
+   */
+  async executeSnapshot({
+    userId,
+    businessId,
+    refresh,
+    body,
+  }: ControlTowerSnapshotRequest): Promise<TenantSnapshotRead> {
+    const resolvedBusinessId = await this.resolve(userId, businessId);
+
+    return controlTowerSnapshot.read({
+      businessId: resolvedBusinessId,
+      refresh,
+      compute: async () =>
+        body(await this.build(resolvedBusinessId, new Date())),
+    });
+  }
+
+  /** Who may read which company's tower: a manager's own, a MASTER's named one. */
+  private resolve(userId: string, businessId?: string): Promise<string> {
+    return resolveOperationsBusiness(this.user, {
       userId,
       businessId,
       driverRefusal: TOWER_DRIVER_REFUSAL,
     });
+  }
 
+  /** The company's tower at `now`; nothing in it depends on who asked. */
+  private async build(
+    resolvedBusinessId: string,
+    now: Date,
+  ): Promise<ControlTower> {
     // In sequence, not in a Promise.all: each read is indexed and small, and
     // the tower polls every 30 s in every open tab. A pool is shared with the
     // writes of the whole fleet.
@@ -415,6 +467,7 @@ class ControlTowerUseCase {
 export {
   ControlTowerUseCase,
   EVENT_LIMIT,
+  controlTowerSnapshot,
   POSITION_WINDOW_MS,
   type ControlTower,
   type TowerActiveRoute,

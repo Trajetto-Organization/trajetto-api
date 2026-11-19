@@ -326,6 +326,22 @@ const controlTowerSchemas = {
   liveRoutes: liveRoutesSchema,
 };
 
+/**
+ * The company's snapshot (plano-escala F4-11), told the same way on the
+ * three routes it serves: the tower, the operation summary and the first
+ * page of /route/live.
+ */
+const towerSnapshotDoc = {
+  description:
+    "Foto da empresa (plano de escala F4-11): a resposta sai de uma cópia por empresa, a mesma para todos dela, lida no máximo uma vez a cada `TOWER_SNAPSHOT_TTL_MS` (padrão 10 s) em cada réplica, e por isso pode ser de até 10 s antes. A permissão, o módulo e a empresa são conferidos antes, em toda requisição: a cópia nunca deixa entrar quem não entraria. Vem com `ETag`, `Age` (segundos desde a leitura) e `Cache-Control: private, no-cache`; com `If-None-Match` igual ao ETag atual, 304 sem corpo. O cabeçalho `x-trajetto-refresh: 1` pede uma leitura nova, feita só se a cópia tiver 2 s ou mais. Com `TOWER_SNAPSHOT_TTL_MS=0`, cada requisição lê sozinha, como antes, sem `ETag` nem 304.",
+
+  notModified: z
+    .null()
+    .describe(
+      "Not Modified: o `If-None-Match` traz o ETag atual da foto da empresa. Sem corpo; `ETag`, `Age` e `Cache-Control` vêm como no 200.",
+    ),
+};
+
 const controlTowerResponses = {
   positionsRecorded: z.object({
     message: z.string(),
@@ -535,4 +551,4 @@ const controlTowerResponses = {
   }),
 };
 
-export { controlTowerResponses, controlTowerSchemas };
+export { controlTowerResponses, controlTowerSchemas, towerSnapshotDoc };

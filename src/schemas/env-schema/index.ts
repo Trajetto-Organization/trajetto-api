@@ -1135,6 +1135,21 @@ const envSchema = z
         .default(64 * 1024 * 1024),
     ),
 
+    // How long the control tower, the operation summary and the first page
+    // of /route/live are served from the company's snapshot, in ms
+    // (plano-escala F4-11, decision D2 of 15/11/2026): every operator of a
+    // carrier polls the same three answers, and each process reads them
+    // once per interval instead of once per operator. The answer can be up
+    // to this old, the same for everyone of the company; the permission
+    // and the company are still checked on every request, before it. 0
+    // turns the snapshot off: each request reads alone, as before, without
+    // ETag nor 304. 10 s; the ceiling of 60 s keeps a typo from freezing
+    // the tower for minutes. Empty counts as absent.
+    TOWER_SNAPSHOT_TTL_MS: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(0).max(60_000).default(10_000),
+    ),
+
     // The graceful shutdown (plano-escala F1-14). STOP_GRACE_PERIOD_MS is the
     // Stop Grace Period the Swarm really gives this service, in ms: every
     // deadline of the sequence is derived from it (shared/lifecycle/

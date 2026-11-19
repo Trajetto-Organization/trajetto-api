@@ -396,6 +396,12 @@ beforeAll(async () => {
   readerToken = await tokenFor(READER);
   mechanicToken = await tokenFor(MECHANIC);
 
+  // Each test rewrites the company's day and reads the tower again at
+  // once: this file proves the tower's query, so every read computes
+  // (TOWER_SNAPSHOT_TTL_MS=0). The snapshot of F4-11 has its own proof,
+  // tests/E2E/control-tower-snapshot-http.test.ts.
+  env.TOWER_SNAPSHOT_TTL_MS = 0;
+
   ({ app } = await import("@/http"));
   await app.ready();
 }, 120_000);

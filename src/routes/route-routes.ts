@@ -53,6 +53,7 @@ import { panelIdempotencyHeaders } from "./documentation/idempotency-documentati
 import {
   controlTowerResponses,
   controlTowerSchemas,
+  towerSnapshotDoc,
 } from "./documentation/control-tower-documentation";
 
 const createRouteController = new CreateRouteController();
@@ -760,10 +761,12 @@ async function routeRoutes(app: FastifyInstance) {
         tags: ["route"],
         summary: "Tudo o que a torre de controle desenha, numa requisição",
         description:
-          'Um endpoint e não cinco: o painel atualiza tudo junto a cada 30 s. "Hoje" é o dia da EMPRESA, no fuso dela (`Business.timezone`), nunca o do servidor. O funil conta os documentos ATIVOS no dia — com parada numa rota do dia (ou em andamento), na rua agora, ou resolvidos no dia (entregue por `delivered_at`, insucesso pelo fato que o causou, cancelado pela mudança de status) —, a mesma definição do Monitoramento. "Finalizadas" = entregues + insucessos + canceladas resolvidos no dia. A pontualidade julga só as rotas do dia, com a hora atual: antes do horário planejado + 15 min a rota está "aguardando" (fora da taxa); depois disso, sem sair, conta como atraso. O mapa olha 12 h para trás; o ponto de rota concluída fica 2 h com estado `ended` e depois sai, e "sem reportar" (`silent`) só vale para rota em andamento. `activeRoutes` lista toda rota em andamento, inclusive a que não tem posição; a que começou antes de hoje (fuso da empresa) ou há mais de 16 h vem com `stale: true` e `openSince` (decisão D26), e `inherited` conta as paradas ainda abertas nessas rotas, que o funil inclui como Em rota. Os eventos juntam o histórico das entregas, as ocorrências e a saída, conclusão e cancelamento de rotas do dia. Superfície do gestor: token de motorista recebe 403.',
+          'Um endpoint e não cinco: o painel atualiza tudo junto a cada 30 s. "Hoje" é o dia da EMPRESA, no fuso dela (`Business.timezone`), nunca o do servidor. O funil conta os documentos ATIVOS no dia — com parada numa rota do dia (ou em andamento), na rua agora, ou resolvidos no dia (entregue por `delivered_at`, insucesso pelo fato que o causou, cancelado pela mudança de status) —, a mesma definição do Monitoramento. "Finalizadas" = entregues + insucessos + canceladas resolvidos no dia. A pontualidade julga só as rotas do dia, com a hora atual: antes do horário planejado + 15 min a rota está "aguardando" (fora da taxa); depois disso, sem sair, conta como atraso. O mapa olha 12 h para trás; o ponto de rota concluída fica 2 h com estado `ended` e depois sai, e "sem reportar" (`silent`) só vale para rota em andamento. `activeRoutes` lista toda rota em andamento, inclusive a que não tem posição; a que começou antes de hoje (fuso da empresa) ou há mais de 16 h vem com `stale: true` e `openSince` (decisão D26), e `inherited` conta as paradas ainda abertas nessas rotas, que o funil inclui como Em rota. Os eventos juntam o histórico das entregas, as ocorrências e a saída, conclusão e cancelamento de rotas do dia. Superfície do gestor: token de motorista recebe 403. ' +
+          towerSnapshotDoc.description,
         querystring: controlTowerSchemas.controlTower,
         response: {
           200: controlTowerResponses.controlTower,
+          304: towerSnapshotDoc.notModified,
           400: controlTowerResponses.error,
           401: controlTowerResponses.error,
           403: controlTowerResponses.error,
@@ -794,10 +797,12 @@ async function routeRoutes(app: FastifyInstance) {
         tags: ["route"],
         summary: "As rotas na rua agora, enxutas, para o app do gestor",
         description:
-          'As rotas da empresa em andamento (de qualquer dia: a esquecida aberta entra, com `stale`) e as liberadas para hoje (dia da empresa, no fuso dela) ainda não iniciadas, uma linha por rota: número, situação, motorista, placa, paradas (`stops_total` sem as canceladas; `stops_resolved` entregues ou com insucesso), pedidos de autorização vivos da rota (`pending_authorizations`, a mesma conta da fila), o último ponto do motorista (`position`, só se das últimas 12 h, a janela do mapa da torre) e `last_signal_at` (o último ponto, por mais antigo). Sem funil, eventos nem pontualidade: são três leituras pequenas (o fuso da empresa, as rotas da página com as contagens e as posições numa consulta, e os pedidos pendentes da página), contra as cerca de oito da torre. Ordem: em andamento primeiro, depois as liberadas, cada grupo pelo número. No máximo 500 linhas; havendo mais, `meta.truncated` é true e `meta.nextCursor` abre a próxima página (cursor inválido: 400 INVALID_CURSOR). `meta.silentAfterMs` é o limite de "Sem sinal" da torre (10 min) e `meta.generatedAt` o relógio do servidor, para o "há N min". O MASTER envia `businessId` (sem ele, 400 BUSINESS_NOT_IDENTIFIED); os demais leem a própria empresa, e nomear outra é 403 TENANT_ACCESS_DENIED. Superfície do gestor, com as guardas da torre: `delivery_manage` de leitura e o módulo Entregas (403 PERMISSION_DENIED, MODULE_NOT_ENABLED); token de motorista recebe 403.',
+          'As rotas da empresa em andamento (de qualquer dia: a esquecida aberta entra, com `stale`) e as liberadas para hoje (dia da empresa, no fuso dela) ainda não iniciadas, uma linha por rota: número, situação, motorista, placa, paradas (`stops_total` sem as canceladas; `stops_resolved` entregues ou com insucesso), pedidos de autorização vivos da rota (`pending_authorizations`, a mesma conta da fila), o último ponto do motorista (`position`, só se das últimas 12 h, a janela do mapa da torre) e `last_signal_at` (o último ponto, por mais antigo). Sem funil, eventos nem pontualidade: são três leituras pequenas (o fuso da empresa, as rotas da página com as contagens e as posições numa consulta, e os pedidos pendentes da página), contra as cerca de oito da torre. Ordem: em andamento primeiro, depois as liberadas, cada grupo pelo número. No máximo 500 linhas; havendo mais, `meta.truncated` é true e `meta.nextCursor` abre a próxima página (cursor inválido: 400 INVALID_CURSOR). `meta.silentAfterMs` é o limite de "Sem sinal" da torre (10 min) e `meta.generatedAt` o relógio do servidor, para o "há N min". O MASTER envia `businessId` (sem ele, 400 BUSINESS_NOT_IDENTIFIED); os demais leem a própria empresa, e nomear outra é 403 TENANT_ACCESS_DENIED. Superfície do gestor, com as guardas da torre: `delivery_manage` de leitura e o módulo Entregas (403 PERMISSION_DENIED, MODULE_NOT_ENABLED); token de motorista recebe 403. Só a primeira página (sem `cursor`) sai da foto; uma página com cursor é lida na hora, sem `ETag`. ' +
+          towerSnapshotDoc.description,
         querystring: controlTowerSchemas.liveRoutes,
         response: {
           200: controlTowerResponses.liveRoutes,
+          304: towerSnapshotDoc.notModified,
           400: controlTowerResponses.error,
           401: controlTowerResponses.error,
           403: controlTowerResponses.error,

@@ -313,6 +313,10 @@ describe("the shapes it publishes", () => {
 
         if (!schema) continue;
 
+        // A 304 has no body to lose (RFC 9110, 15.4.5): the tower's
+        // snapshot (F4-11) declares it as the null the 204s use.
+        if (status === "304" && schema.nullable === true) continue;
+
         const described =
           schema.properties !== undefined ||
           schema.$ref !== undefined ||

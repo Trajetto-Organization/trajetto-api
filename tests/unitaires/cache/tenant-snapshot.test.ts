@@ -465,6 +465,24 @@ describe("a tenant snapshot", () => {
     ).toMatchObject({ source: "off" });
     expect(compute).toHaveBeenCalledTimes(2);
   });
+
+  it("says whether it is on, read on every call, so a caller can keep its old path when it is off", () => {
+    let ttl = 10_000;
+    const on = snapshotOf<string>({ ttlMs: () => ttl });
+    const noBudget = snapshotOf<string>({
+      name: "no-budget",
+      memory: new TenantSnapshotMemory(0),
+    });
+
+    expect(on.enabled).toBe(true);
+    expect(noBudget.enabled).toBe(false);
+
+    ttl = 0;
+    expect(on.enabled).toBe(false);
+
+    ttl = -1;
+    expect(on.enabled).toBe(false);
+  });
 });
 
 describe("the process's memory of tenant snapshots", () => {

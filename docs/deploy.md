@@ -5008,8 +5008,9 @@ entre réplicas nunca rodam antes da produção. Para a validação (cenário S6
    réplicas varrendo.
 
 **Estado em memória (auditoria K15, 03/11/2026).** Nada de dado de empresa
-mora num processo. O que fica em memória é de plataforma ou é limite por
-réplica documentado como tal:
+mora num processo, a não ser a foto da torre (plano de escala F4-11), de até
+10 s e com a permissão conferida antes. O resto do que fica em memória é de
+plataforma ou é limite por réplica documentado como tal:
 
 | O quê                                                                                                                   | Onde                                                                                                                   | Por que é seguro com N réplicas                                                                                                                            |
 | ----------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -5018,6 +5019,7 @@ réplica documentado como tal:
 | filas (outbox, IA, webhooks, geocodificação, importação), crons, aviso de rota esquecida                                | Postgres (`SKIP LOCKED`, lease do cron, carimbo `left_open_alerted_at`, chave única do outbox)                         | cada linha é reivindicada por uma réplica só; provado em `cron-scheduler-lock`, `delivery-geocoding-repository-contract` e `route-close-with-pending-http` |
 | snapshots de plataforma (prontidão dos provedores, painel do MASTER)                                                    | memória da réplica + Redis (`snapshot-cache.ts`)                                                                       | sem empresa na chave; alguns segundos de defasagem                                                                                                         |
 | exportações simultâneas, escrita de `last_used_at` da chave de API, contagem de uso da API, pausa de modelo do WhatsApp | memória da réplica (`export-slots.ts`, `last-used-throttle.ts`, `api-usage-recorder.ts`, `meta-cloud-api-provider.ts`) | limites e buffers por réplica, documentados no próprio arquivo: N réplicas = N vezes o teto; o uso da API soma com `increment`                             |
+| a foto da torre, do resumo e da primeira página do `/route/live`                                                        | memória da réplica (`tenant-snapshot.ts`, `TOWER_SNAPSHOT_TTL_MS`; adendo de 19/11/2026 do ADR 0002)                   | por empresa, com a permissão e a empresa conferidas antes de cada leitura; cada réplica lê a sua, no máximo uma vez por intervalo (10 s); `0` desliga      |
 | formatadores de data, modelos de e-mail compilados, chaves do JWT                                                       | memória da réplica                                                                                                     | derivados do código ou do segredo, iguais em toda réplica                                                                                                  |
 
 ### Ensaio de carga na staging (burn-in)

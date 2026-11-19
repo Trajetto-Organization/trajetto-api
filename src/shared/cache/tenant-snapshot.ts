@@ -374,6 +374,15 @@ class TenantSnapshot<T> {
     return typeof ttlMs === "function" ? ttlMs() : ttlMs;
   }
 
+  /**
+   * Whether a read can be served from a copy: a TTL above 0 and a budget
+   * above 0. Read on every call, like the TTL. A caller that must keep its
+   * old path byte for byte when the snapshot is off asks this first.
+   */
+  get enabled(): boolean {
+    return this.ttlMs() > 0 && this.memory.maxBytes > 0;
+  }
+
   private serialize(value: T): string {
     const body = (this.options.serialize ?? JSON.stringify)(value);
 
@@ -400,7 +409,7 @@ class TenantSnapshot<T> {
 
     const ttlMs = this.ttlMs();
 
-    if (!(ttlMs > 0) || this.memory.maxBytes <= 0) {
+    if (!(ttlMs > 0 && this.memory.maxBytes > 0)) {
       const at = this.now();
       const body = this.serialize(await compute());
 

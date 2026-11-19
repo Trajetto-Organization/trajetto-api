@@ -60,6 +60,7 @@ import { itemOf, ndjsonList, offsetMetaWith } from "./documentation/ndjson";
 import { deliveryListSearchMetaDoc } from "@/modules/delivery/usecases/list-delivery/list-delivery-documentation";
 import { panelIdempotencyHeaders } from "./documentation/idempotency-documentation";
 import { errorResponse } from "./documentation/common-responses";
+import { towerSnapshotDoc } from "./documentation/control-tower-documentation";
 import { idempotencyHeaders } from "./documentation/idempotency-documentation";
 import { startDriverRouteSchema } from "@/schemas/start-driver-route-schema";
 import { clientSentAtHeaders } from "@/shared/delivery/occurred-at";
@@ -258,10 +259,12 @@ async function deliveryRoutes(app: FastifyInstance) {
         tags: ["delivery"],
         summary: "Resumo da operação (monitoramento)",
         description:
-          "Os números do monitoramento, na mesma definição do dia da torre de controle (decisão 7.1): designadas são as pendentes com motorista em rota do dia (programada para hoje ou ainda em andamento) — rota de amanhã, rota de ontem que não saiu e entrega com motorista sem rota não contam; em rota é o que está na rua agora; entregues e insucessos são os documentos do dia (entregues por delivered_at, insucessos pelo último fato de falha, e os resolvidos em rota do dia). À parte, dois números que a torre não tem: sem rota (pendentes sem motorista, de qualquer data) e ocorrências relatadas por motoristas no dia. Traz o quadro por motorista, quem está na rua primeiro, e `inherited`: quantas paradas ainda abertas de rotas esquecidas em andamento (saíram antes de hoje ou há mais de 16 h, decisão D26) o 'em rota' inclui, e desde quando — os mesmos números do `inherited` da torre. 'Hoje' é o dia civil no fuso da empresa (Business.timezone). Superfície do gestor: token de motorista é recusado já na guarda (403 PERMISSION_DENIED); empresa de outro tenant, 403 TENANT_ACCESS_DENIED.",
+          "Os números do monitoramento, na mesma definição do dia da torre de controle (decisão 7.1): designadas são as pendentes com motorista em rota do dia (programada para hoje ou ainda em andamento) — rota de amanhã, rota de ontem que não saiu e entrega com motorista sem rota não contam; em rota é o que está na rua agora; entregues e insucessos são os documentos do dia (entregues por delivered_at, insucessos pelo último fato de falha, e os resolvidos em rota do dia). À parte, dois números que a torre não tem: sem rota (pendentes sem motorista, de qualquer data) e ocorrências relatadas por motoristas no dia. Traz o quadro por motorista, quem está na rua primeiro, e `inherited`: quantas paradas ainda abertas de rotas esquecidas em andamento (saíram antes de hoje ou há mais de 16 h, decisão D26) o 'em rota' inclui, e desde quando — os mesmos números do `inherited` da torre. 'Hoje' é o dia civil no fuso da empresa (Business.timezone). Superfície do gestor: token de motorista é recusado já na guarda (403 PERMISSION_DENIED); empresa de outro tenant, 403 TENANT_ACCESS_DENIED. " +
+          towerSnapshotDoc.description,
         querystring: deliverySchemas.operationSummary,
         response: {
           200: deliveryResponses.operationSummaryResult,
+          304: towerSnapshotDoc.notModified,
           400: errorResponse,
           401: errorResponse,
           403: errorResponse,

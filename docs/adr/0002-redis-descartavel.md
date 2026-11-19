@@ -160,7 +160,9 @@ cria a foto por empresa, em `src/shared/cache/tenant-snapshot.ts`, irmã de
 uma vez por intervalo, e as outras requisições recebem a mesma resposta.
 Quem passa a ler por ela são a F4-11 (a torre, o resumo e o `/route/live`,
 com o intervalo em `TOWER_SNAPSHOT_TTL_MS`) e a F4-23 (a visão geral e as
-tendências do dashboard). Até lá, nenhuma rota usa a foto.
+tendências do dashboard). A F4-11 já liga a torre, o resumo e a primeira
+página do `/route/live`, com `ETag`, 304 e a dica `x-trajetto-refresh`
+(`docs/arquitetura.md`, "A torre, o resumo e o mapa ao vivo pela foto").
 
 **Fica fora do Redis de propósito.** A regra deste ADR não muda: no Redis,
 o único dado de empresa em cache continua sendo o da busca de endereço. As

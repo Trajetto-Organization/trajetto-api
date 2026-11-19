@@ -246,6 +246,29 @@ describe("the side pools of infra/database.ts", () => {
     }
   });
 
+  it("keeps the tower's snapshots on the primary", () => {
+    // plano-escala F4-11: the control tower, the operation summary and the
+    // first page of /route/live are served from a copy of up to 10 s, and
+    // a copy read on a lagging replica would be older than that. What their
+    // computes read: the operation's day, the positions, the pending
+    // authorizations, and the delivery backlog of the summary.
+    const towerFiles = [
+      "src/modules/route/repositories/operation-day-repository.ts",
+      "src/modules/route/repositories/driver-position-repository.ts",
+      "src/modules/delivery/repositories/occurrence-authorization-repository.ts",
+    ];
+
+    for (const file of towerFiles) {
+      // A renamed file would make this check pass without checking.
+      expect(() => readFileSync(resolve(ROOT, file)), file).not.toThrow();
+      expect(READ_ALLOWED[file], file).toBeUndefined();
+    }
+
+    expect(
+      READ_ALLOWED["src/modules/delivery/repositories/delivery-repository.ts"],
+    ).not.toContain("operationBacklog");
+  });
+
   it("keeps databaseBatch to the crons and the maintenance they run", () => {
     const outside = importersOf("databaseBatch").filter(
       (file) => !BATCH_ALLOWED.some((pattern) => pattern.test(file)),
