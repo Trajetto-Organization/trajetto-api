@@ -1726,6 +1726,18 @@ model ClusterEpoch {
   @@map("cluster_epoch")
 }
 
+/// The replica guard's heartbeat (plano-escala F4-41): one row (id 1, a
+/// CHECK in the migration) whose beat_at every process with
+/// DATABASE_REPLICA_URL writes on the primary every 5 s and reads back on
+/// the standby; its age there decides whether readDatabase() may use it
+/// (src/shared/database/replica-guard.ts). Written by raw SQL only.
+model ReplicaHeartbeat {
+  id      Int      @id @db.SmallInt
+  beat_at DateTime @default(now()) @db.Timestamptz(6)
+
+  @@map("replica_heartbeat")
+}
+
 /// The scale plan's series (plano-escala F1, item F1-08): one row per
 /// process per minute, written by a local timer with jitter in every process
 /// (never a cron: the election would leave a single writer), so the triggers

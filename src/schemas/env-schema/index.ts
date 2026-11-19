@@ -198,6 +198,24 @@ const envSchema = z
         .optional(),
     ),
 
+    // The standby, for the explicit reads of readDatabase() (plano-escala
+    // F4-41, F4-42): a closed list of LISTS only, sent there while the
+    // replica guard (shared/database/replica-guard.ts) measures it at most
+    // 15 s behind, and to the primary's bulkhead the rest of the time. Its
+    // own pool of 3 connections, as the bulkhead's, as trajetto_read.
+    // Unset (the default), nothing goes to a standby and no heartbeat is
+    // written: every read stays where it is today. Through PgBouncer, the
+    // rules of DATABASE_URL. It carries a password: never logged (logger.ts
+    // censors it by name). Empty counts as absent.
+    DATABASE_REPLICA_URL: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z
+        .string()
+        .refine(isPostgresUrl, POSTGRES_URL_MESSAGE)
+        .superRefine(refusePooledUrlProblem)
+        .optional(),
+    ),
+
     // The runtime's main URL: read by the pools of infra/database.ts at
     // connect time, checked here only for what PgBouncer would refuse
     // (plano-escala F4-31). Through PgBouncer (port 6432 or pgbouncer=true)

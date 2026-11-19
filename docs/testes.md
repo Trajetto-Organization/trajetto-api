@@ -312,11 +312,14 @@ requisições, "não", F4-37), `pgbouncer-session-names.test.ts` (a sessão
 do `auth_query` e as do cliente da API chegam ao banco com nome, para a
 checagem das contrações não as ler como a imagem antiga),
 `streaming-standby.test.ts` (o standby em
-recuperação, recusando escrita e mostrando um commit do primário) e
+recuperação, recusando escrita e mostrando um commit do primário),
 `replication-hba.test.ts` (o `pg_hba` da imagem: as regras oficiais e uma
 linha de replicação só para o endereço do standby, de onde vem o
 streaming; o mesmo login, com a senha certa, recusado de fora dele; o
-standby clonado pelo ramo da imagem, com a senha só no passfile, F4-40). As fases
+standby clonado pelo ramo da imagem, com a senha só no passfile, F4-40) e
+`replica-guard.test.ts` (com o replay do standby pausado, o replica-guard
+manda as leituras do `readDatabase()` ao primário; retomado, de volta ao
+standby depois de 3 medidas boas, F4-41). As fases
 `shared` e de réplicas deixam esses arquivos de fora (`INFRA_E2E_GLOB`, em
 `tests/E2E/support/replica-files.ts`).
 

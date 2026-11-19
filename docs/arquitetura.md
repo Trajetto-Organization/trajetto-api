@@ -4889,6 +4889,30 @@ segue livre para o resto. Cada statement tem o teto de 10 s do pool: uma
 exportação lê em lotes de 1.000 pela chave do keyset, cada um bem abaixo
 disso.
 
+**O standby e o `readDatabase()`** (plano de escala, F4-41): com
+`DATABASE_REPLICA_URL`, um terceiro pool de lado, do mesmo tamanho e teto do
+`databaseRead` (3 conexões, 10 s, sessões `trajetto-<papel>-replica`), lê do
+standby, e o `readDatabase()` de `infra/database.ts` escolhe a cada leitura:
+o standby enquanto o replica-guard (`src/shared/database/replica-guard.ts`)
+o mede no máximo 15 s atrás, o `databaseRead` do primário no resto do tempo.
+A medida é a idade de uma linha (`replica_heartbeat`) que cada processo com a
+variável grava no primário a cada 5 s e lê de volta no standby: ela envelhece
+tanto com o replay parado quanto com o primário ocioso ou o streaming cortado,
+então "sem notícia" nunca passa por "em dia". O relógio é o do standby contra
+o do primário (os dois no NTP; uma idade negativa conta como zero). Acima do
+limite, com o standby mudo, falhando ou sem a linha, as leituras voltam ao
+primário na hora; voltam ao standby só depois de 3 medidas boas seguidas, e
+um processo começa no primário. Uma leitura no standby tem no máximo o
+limite mais uma rodada de atraso. O heartbeat que falha no primário não
+decide sozinho: decide a idade que ele deixa de renovar. As mudanças de lado
+saem no log (`component: replica-guard`). Sem a variável, nada disso roda:
+nem heartbeat, nem timer, e o `readDatabase()` é o `databaseRead`. Quem usa
+o `readDatabase()` é a lista fechada da guarda
+`tests/unitaires/database/read-routing-guard.test.ts` (F4-42). Provas:
+`tests/unitaires/database/replica-guard.test.ts` e, contra o standby de
+verdade, `tests/E2E/infra/replica-guard.test.ts` (o replay pausado manda as
+leituras ao primário; retomado, elas voltam).
+
 No `databaseBatch` rodam hoje (F3-18): os expurgos noturnos (o
 `deleteInBatches` dos crons e os repositórios que o expurgo de tokens
 chama), o job `partition-maintenance`, o `snapshot-query-stats` e as

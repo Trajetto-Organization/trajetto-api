@@ -309,12 +309,12 @@ interface StatementCeiling {
 const QUERY_TIMEOUT_MARGIN_MS = 30_000;
 
 /** Which of the runtime's pools a session belongs to, besides the main one. */
-type RuntimePool = "read" | "batch" | "probe";
+type RuntimePool = "read" | "batch" | "probe" | "replica";
 
 /**
  * The application_name of a runtime pool (plano-escala F3-02):
- * `trajetto-<role>`, plus `-read`, `-batch` or `-probe` for the side pools
- * and the readiness probe. With roles, pg_stat_activity tells the worker's
+ * `trajetto-<role>`, plus `-read`, `-batch`, `-replica` (the standby, F4-41)
+ * or `-probe` for the side pools and the readiness probe. With roles, pg_stat_activity tells the worker's
  * sessions from the api's and the bulkhead from the requests: the
  * connection budget per role (ADR 0008) is then read, not guessed. It only
  * fills the gap: an application_name in the URL wins (pg reads the

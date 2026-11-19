@@ -68,7 +68,11 @@ import type { ProofSigningService } from "./shared/services/proof-signing/proof-
 
 import { checkRuntimeRoleAtBoot } from "./shared/database/runtime-role-check";
 
-import prisma, { databasePool } from "../infra/database";
+import prisma, { databasePool, setReplicaGuardLog } from "../infra/database";
+
+// The replica guard says, through the shared logger, when the explicit
+// reads move between the standby and the primary (plano-escala F4-41).
+setReplicaGuardLog(logger.child({ component: "replica-guard" }));
 
 /**
  * The process's own lines — boot, shutdown, unhandled rejections — through the

@@ -183,6 +183,9 @@ const CHECKS: Record<string, string> = {
   // Plano-escala U-14: the cluster has one epoch at a time; the release
   // step (infra/sql/50-cluster-epoch.sql) keeps that one row.
   cluster_epoch_single_row: `CHECK ((id = 1))`,
+  // Plano-escala F4-41: the replica guard's heartbeat is one row, the
+  // upsert of id 1 every process with a replica writes.
+  replica_heartbeat_single_row: `CHECK ((id = 1))`,
   release_step_state_status_check: `CHECK ((status = ANY (ARRAY['applied'::text, 'skipped'::text, 'pending'::text, 'failed'::text, 'retired'::text])))`,
 };
 

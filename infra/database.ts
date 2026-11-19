@@ -9,6 +9,11 @@ import {
   runtimeApplicationName,
   type RuntimePool,
 } from "../src/shared/database/pool-config";
+import {
+  createReadRouter,
+  prismaReplicaProbe,
+  type ReplicaGuardLog,
+} from "../src/shared/database/replica-guard";
 import { processRoleFromEnvironment } from "../src/shared/lifecycle/process-role";
 
 /**
@@ -93,10 +98,11 @@ const databasePool = connection.pool;
  *
  *  - databaseRead, the bulkhead of the heavy reads (exports, long lists):
  *    DATABASE_READ_URL, else DATABASE_URL; 3 connections, 10 s a
- *    statement. From wave 17 its URL may point at the standby. Who may use
- *    it is a closed list (tests/unitaires/database/database-read-guard.test.ts):
- *    never a middleware, a socket admission, a queue claim, an idempotency
- *    key or a compare-and-set, which must read the primary's latest write.
+ *    statement, always on the primary. Who may use it is a closed list
+ *    (tests/unitaires/database/database-read-guard.test.ts): never a
+ *    middleware, a socket admission, a queue claim, an idempotency key or a
+ *    compare-and-set, which must read the primary's latest write. The
+ *    standby is another pool, behind readDatabase() (below).
  *  - databaseBatch, the maintenance (purges, partitions, the heavy
  *    metrics, pg_stat_statements): BATCH_DATABASE_URL, else DATABASE_URL;
  *    3 connections, 30 min a statement, a direct URL (never PgBouncer).
@@ -195,6 +201,60 @@ const databaseBatch = batch.client;
 const databaseReadPool = read.pool;
 const databaseBatchPool = batch.pool;
 
+/**
+ * The standby (plano-escala F4-41): DATABASE_REPLICA_URL, a pool of its
+ * own sized and capped as the bulkhead (3 connections, 10 s), sessions
+ * named `trajetto-<role>-replica`. Built on the first read that goes there.
+ */
+const replica = sidePool(
+  () => environmentUrl("DATABASE_REPLICA_URL"),
+  READ_POOL,
+  "replica",
+);
+
+/** Where the guard says what it decided; set by the server at boot. */
+let replicaGuardLog: ReplicaGuardLog | undefined;
+
+/**
+ * The replica guard's log (src/server.ts): this module stays free of the
+ * logger, which validates the whole environment on import, so the scripts
+ * that only need a client keep working.
+ */
+function setReplicaGuardLog(log: ReplicaGuardLog): void {
+  replicaGuardLog = log;
+}
+
+const readRouter = createReadRouter<PrismaClient>({
+  // A test's own client takes every statement, the standby's included.
+  replicaUrl: () =>
+    testClient ? undefined : environmentUrl("DATABASE_REPLICA_URL"),
+  replica: () => replica.client,
+  primaryRead: () => databaseRead,
+  // The beat on the primary, through the application's pool; the age on
+  // the standby, through its own.
+  probe: () => prismaReplicaProbe(prisma, replica.client),
+  log: () => replicaGuardLog,
+});
+
+/**
+ * The explicit reads (plano-escala F4-41, F4-42): the standby while the
+ * replica guard measures it at most 15 s behind, else the primary's
+ * bulkhead. Only a closed list of LISTS reads here
+ * (tests/unitaires/database/read-routing-guard.test.ts): never a write's
+ * path, a GET right after a POST, a claim, an idempotency key, a
+ * compare-and-set or a garbage collector, where a row seconds old is a
+ * wrong decision. Without DATABASE_REPLICA_URL, it is databaseRead, and no
+ * heartbeat is written.
+ */
+function readDatabase(): PrismaClient {
+  return readRouter.readDatabase();
+}
+
+/** The guard, once a read started it (a test, a log line). */
+function replicaGuard() {
+  return readRouter.guard();
+}
+
 export default prisma;
 export {
   BATCH_POOL,
@@ -205,6 +265,9 @@ export {
   databasePool,
   databaseRead,
   databaseReadPool,
+  readDatabase,
+  replicaGuard,
+  setReplicaGuardLog,
 };
 
 if (process.env.NODE_ENV !== "production") {
