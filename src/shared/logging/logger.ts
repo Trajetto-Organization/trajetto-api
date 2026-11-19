@@ -27,6 +27,8 @@ const SECRET_ENV_KEYS = [
   "DATABASE_URL",
   "DATABASE_READ_URL",
   "BATCH_DATABASE_URL",
+  // The readiness probe's pool in PgBouncer (plano-escala F4-37).
+  "READINESS_DATABASE_URL",
   "REDIS_URL",
   // The pub/sub's own Redis (plano-escala F5-01).
   "PUBSUB_REDIS_URL",

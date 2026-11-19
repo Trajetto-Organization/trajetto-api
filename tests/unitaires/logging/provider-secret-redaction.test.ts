@@ -38,6 +38,8 @@ const PROVIDER_SECRETS = [
   // The side pools of plano-escala F3-16.
   "DATABASE_READ_URL",
   "BATCH_DATABASE_URL",
+  // The readiness probe's pool in PgBouncer (plano-escala F4-37).
+  "READINESS_DATABASE_URL",
   // The pub/sub's own Redis (plano-escala F5-01).
   "PUBSUB_REDIS_URL",
   // PgBouncer's stats login (plano-escala F4-36).

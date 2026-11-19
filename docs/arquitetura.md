@@ -5126,6 +5126,19 @@ principal cheio não faz a réplica parecer fora do ar; depois de um "não", a
 probe fecha o pool dela (`$disconnect()`) e a próxima abre outro no mesmo
 client.
 
+Atrás do PgBouncer (onda 17), a conexão própria na API não basta: o
+`SELECT 1` da probe esperaria no mesmo pool do PgBouncer que todas as
+requisições, e um pool saturado tiraria todas as réplicas do ar juntas
+(`query_wait_timeout`). A imagem `trajetto-pgbouncer` tem o alias
+`<banco>_probe`, um pool de 2 conexões de servidor só dele, para o mesmo
+banco. Com `READINESS_DATABASE_URL` apontando para o alias (plano de
+escala, F4-37), a probe conecta lá. O Postgres fora continua sendo um
+"não", porque o alias chega ao mesmo banco. Sem a variável, a probe usa a
+`DATABASE_URL`, como antes. Prova:
+`tests/E2E/infra/readiness-probe-pool.test.ts`, com o pool das requisições
+cheio de verdade: a probe no alias responde "sim", e no pool das
+requisições, "não".
+
 **O pool descarta a conexão quebrada sozinho**: no Prisma 6.1 uma conexão que
 o Postgres fechou voltava ao pool como saudável (P1017 em toda requisição até
 reiniciar a réplica), e `withPoolReset` trocava o pool inteiro. O `pg-pool`

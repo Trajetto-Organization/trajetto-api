@@ -305,8 +305,10 @@ cheio de verdade: o `query_wait_timeout` que o cliente da API recebe numa
 query crua, numa de modelo e numa transação interativa vira 503
 `SERVICE_BUSY`, F4-32), `pgbouncer-stats.test.ts` (o login de estatística
 recusado em `PAUSE`, `KILL` e `SHUTDOWN`, e os pools, o tráfego e as
-conexões de servidor lidos do console de verdade, F4-36) e
-`streaming-standby.test.ts` (o standby em
+conexões de servidor lidos do console de verdade, F4-36),
+`readiness-probe-pool.test.ts` (com o pool das requisições cheio, a
+readiness no alias `trajetto_probe` responde "sim" e no pool das
+requisições, "não", F4-37) e `streaming-standby.test.ts` (o standby em
 recuperação, recusando escrita e mostrando um commit do primário). As fases
 `shared` e de réplicas deixam esses arquivos de fora (`INFRA_E2E_GLOB`, em
 `tests/E2E/support/replica-files.ts`).

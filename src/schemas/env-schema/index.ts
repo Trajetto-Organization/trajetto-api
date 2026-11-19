@@ -211,6 +211,32 @@ const envSchema = z
       z.string().superRefine(refusePooledUrlProblem).optional(),
     ),
 
+    // The readiness probe's own pool in PgBouncer (plano-escala F4-37,
+    // shared/health/readiness-probe.ts): the image's `<db>_probe` alias,
+    // two server connections apart, so a saturated pool of the requests
+    // never takes every replica out of the balancer at once. Unset, the
+    // probe uses DATABASE_URL, as before. It carries the password: never
+    // logged (logger.ts censors it by name). Empty counts as absent.
+    READINESS_DATABASE_URL: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z
+        .string()
+        .refine(isPostgresUrl, POSTGRES_URL_MESSAGE)
+        .superRefine(refusePooledUrlProblem)
+        .optional(),
+    ),
+    BATCH_DATABASE_URL: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z
+        .string()
+        .refine(isPostgresUrl, POSTGRES_URL_MESSAGE)
+        .refine(
+          (value) => !throughPgBouncer(value),
+          "BATCH_DATABASE_URL vai direto ao Postgres (porta 5432, sem pgbouncer=true): o job de partições usa uma sessão própria.",
+        )
+        .optional(),
+    ),
+
     // PgBouncer's console, read by the process with the cron once a minute
     // for /health/metrics and the alerts (plano-escala F4-36,
     // shared/health/pgbouncer-metrics.ts). The URL is the stats login's
