@@ -59,6 +59,7 @@ release nunca tranca o runtime fora do banco.
 | `10-partitions.sql`     | o role `trajetto_partitions` (NOLOGIN), com USAGE e CREATE no schema, dono de cada tabela particionada e de todas as partições (plano de escala, F2-07). O job de partições cria, anexa, destaca e apaga como esse role, e é por ele que um login sem superusuário faz isso depois do corte dos roles                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `15-untrusted-code.sql` | um event trigger que recusa, antes de rodar, todo DDL de um role que não seja superusuário nem membro do dono das tabelas (o usuário das migrations), menos o que o job de partições faz (`CREATE`, `ALTER` e `DROP TABLE`): nenhuma função, operador, tipo, regra ou gatilho de quem só tem o CREATE das partições. Sem ele, o login do batch plantaria no schema uma sobrecarga que o superusuário da etapa e das migrations rodaria                                                                                                                                                                                                                                                                                                                                              |
 | `20-runtime-roles.sql`  | os roles do runtime (plano de escala, F3-19), todos NOLOGIN: o grupo `trajetto_app` (SELECT, INSERT, UPDATE e DELETE em toda tabela, menos a trilha e as tabelas da etapa de release; USAGE nas sequências), `trajetto_http`, `trajetto_worker` e `trajetto_batch` dentro dele, e `trajetto_read` fora (só SELECT). Na trilha (`delivery_event`, e a `delivery_event_part` e a `delivery_event_legacy` quando existirem), http e worker leem, inserem e preenchem só o endereço do GPS; só o batch altera e apaga. Os tetos de cada role (`lock_timeout`, `idle_in_transaction_session_timeout`, `statement_timeout`), o batch nos roles de estatística e no `trajetto_partitions`, e os privilégios padrão do usuário da migração para as tabelas novas. Partição não recebe grant |
+| `30-pgbouncer-auth.sql` | a porta do `auth_query` do PgBouncer (plano de escala, F4-33): o role `pgbouncer_auth` (NOLOGIN) e a função `pgbouncer.user_lookup(text)`, de um superusuário, `SECURITY DEFINER` com o `search_path` fixo, que devolve o verificador SCRAM válido de um login e nada para superusuário, role de replicação, membro do dono das tabelas, `trajetto_replication` e o próprio `pgbouncer_auth`. Só o `pgbouncer_auth` a executa: nem PUBLIC nem os roles do runtime                                                                                                                                                                                                                                                                                                                   |
 | `50-cluster-epoch.sql`  | a linha de `cluster_epoch` (plano de escala, U-14): a época do cluster, que sobe quando o `system_identifier` ou a timeline mudam (PITR, promote, cluster novo); o cursor do feed da integração a carrega                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 
 O `50-cluster-epoch.sql` (plano de escala, U-14) mantém a linha de
@@ -96,6 +97,24 @@ usuário, o passo fica `pending`. Fora do alcance dele: uma tabela do role
 roda os próprios defaults e CHECKs como quem grava nela, então uma
 migration que precise gravar numa tabela particionada grava como
 `trajetto_partitions` (`SET LOCAL ROLE`), nunca como o superusuário.
+
+O `30-pgbouncer-auth.sql` (plano de escala, F4-33, onda 17) é o que deixa
+o PgBouncer autenticar sem guardar senha nenhuma: com
+`auth_user=pgbouncer_auth`, ele pede ao Postgres o verificador SCRAM de
+quem chega e confere a prova do cliente contra ele. Só um superusuário lê
+o `pg_authid`, então a função roda como um (`SECURITY DEFINER`) e é tão
+sensível quanto o que devolve. Por isso o EXECUTE sai do PUBLIC e fica só
+com o `pgbouncer_auth` (sem esse REVOKE, uma injeção de SQL como
+`trajetto_http` leria todos os verificadores), o `search_path` fica preso
+em `pg_catalog, pg_temp`, com todo nome qualificado, e o dono das tabelas
+(superusuário) é recusado: ele nunca passa pelo PgBouncer, a
+`trajetto-api-migrate` e o batch conectam direto. Um schema, uma função
+ou uma sobrecarga de mesmo nome feitos antes por outro role são tomados
+de volta ou removidos, e um grant feito à mão é revogado. Só um
+superusuário cria a função: com outro usuário, o passo fica `pending`. O
+login e a senha do `pgbouncer_auth` são do dono, à mão, antes de criar a
+Application `trajetto-pgbouncer` (`docs/deploy.md`, seção dos roles do
+banco).
 
 O `20-runtime-roles.sql` compara o catálogo com o que deve ser e muda só a
 diferença: o que falta é concedido, e o que sobra para um dos cinco roles
