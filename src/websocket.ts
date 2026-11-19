@@ -682,6 +682,160 @@ function stopRevalidation(): void {
 
   if (revalidationTimer) clearTimeout(revalidationTimer);
   revalidationTimer = null;
+
+  stopRevocationRechecks();
+}
+
+/**
+ * How long a revocation from the feed waits before this replica re-reads
+ * the sockets it names. A session that changed its own password keeps
+ * going (adoptSessionVersion): the version its sockets carry moves by a
+ * frame on the adapter, which may arrive a few milliseconds after the
+ * feed's hint. Re-read before it, the socket would be ended as
+ * `user_updated` and the person signed out of a session the change kept.
+ * 300 ms is far longer than that frame takes, and keeps a revocation made
+ * only by SQL under 2 s (a second of poll at most).
+ */
+const REVOCATION_SETTLE_MS = 300;
+
+/** Whose sockets the feed asked to re-read, waiting for the next pass. */
+const revokedSubjects = {
+  users: new Set<string>(),
+  sessions: new Set<string>(),
+  businesses: new Set<string>(),
+  drivers: new Set<string>(),
+  /** A branch or a profile: no socket records it, so all of them. */
+  everything: false,
+};
+
+let stopRevocationListener: (() => void) | null = null;
+let revocationTimer: NodeJS.Timeout | null = null;
+let revocationPass: Promise<void> | null = null;
+
+function takeRevokedSockets(): Socket[] {
+  if (!io) return [];
+
+  const sockets = [...io.of("/").sockets.values()];
+  const { users, sessions, businesses, drivers, everything } = revokedSubjects;
+
+  const chosen = everything
+    ? sockets
+    : sockets.filter(
+        (socket) =>
+          users.has(String(socket.data.userId)) ||
+          sessions.has(String(socket.data.sessionId)) ||
+          (socket.data.businessId &&
+            businesses.has(String(socket.data.businessId))) ||
+          (socket.data.driverId && drivers.has(String(socket.data.driverId))),
+      );
+
+  users.clear();
+  sessions.clear();
+  businesses.clear();
+  drivers.clear();
+  revokedSubjects.everything = false;
+
+  return chosen;
+}
+
+/**
+ * Re-reads, from the primary, the sockets the feed named: the periodic
+ * sweep's rule and actions (end, or keep with the rooms adjusted), on the
+ * few sockets a revocation concerns. One pass at a time; what arrives
+ * during one waits for the next.
+ */
+function scheduleRevocationPass(): void {
+  if (revocationTimer || revocationPass) return;
+
+  revocationTimer = withoutRequestContext(() =>
+    setTimeout(() => {
+      revocationTimer = null;
+
+      const sockets = takeRevokedSockets();
+
+      if (sockets.length === 0) return;
+
+      revocationPass = sweepConnections(sockets, loadSessionRows, {
+        end: endLocalSocket,
+        keep: applyDeliveryStaff,
+      })
+        .then((result) => {
+          if (result.skipped) {
+            log.error(
+              { sockets: sockets.length },
+              "revocation re-check postponed: the database could not be read",
+            );
+          } else if (result.ended > 0) {
+            log.info(
+              { ended: result.ended, checked: result.checked },
+              "sockets ended by the revocation feed",
+            );
+          }
+        })
+        .catch((error) =>
+          log.error({ err: error }, "revocation re-check failed"),
+        )
+        .finally(() => {
+          revocationPass = null;
+
+          const { users, sessions, businesses, drivers, everything } =
+            revokedSubjects;
+
+          if (
+            everything ||
+            users.size + sessions.size + businesses.size + drivers.size > 0
+          ) {
+            scheduleRevocationPass();
+          }
+        });
+    }, REVOCATION_SETTLE_MS),
+  );
+
+  revocationTimer.unref?.();
+}
+
+/**
+ * The sockets' listener of the revocation feed (plano-escala F5-24,
+ * shared/auth/revocation-feed.ts). Before it, a revocation reached a
+ * socket on another replica only by a frame on the adapter, which is at
+ * most once and absent for a change made by SQL: the socket kept the
+ * company's positions, routes and chat until the sweep, up to 225 s.
+ * Now every revocation the database logs re-reads the sockets it names
+ * within the feed's second, and a gap re-reads them all.
+ */
+function listenToRevocations(): void {
+  stopRevocationListener?.();
+
+  stopRevocationListener = revocationFeed().listen({
+    revoked: (entries) => {
+      for (const entry of entries) {
+        if (entry.kind === "user") revokedSubjects.users.add(entry.subjectId);
+        else if (entry.kind === "refresh_family") {
+          revokedSubjects.sessions.add(entry.subjectId);
+        } else if (entry.kind === "business") {
+          revokedSubjects.businesses.add(entry.subjectId);
+        } else if (entry.kind === "driver") {
+          revokedSubjects.drivers.add(entry.subjectId);
+        } else {
+          revokedSubjects.everything = true;
+        }
+      }
+
+      scheduleRevocationPass();
+    },
+    gap: () => {
+      revokedSubjects.everything = true;
+      scheduleRevocationPass();
+    },
+  });
+}
+
+function stopRevocationRechecks(): void {
+  stopRevocationListener?.();
+  stopRevocationListener = null;
+
+  if (revocationTimer) clearTimeout(revocationTimer);
+  revocationTimer = null;
 }
 
 /**
@@ -1791,8 +1945,12 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
   revalidationStopped = false;
   scheduleRevalidation();
 
-  // Only where sockets connect: the beat is of the logins held here.
-  if (env.SOCKETS_ENABLED) startPresence();
+  // Only where sockets connect: the beat is of the logins held here, and
+  // the revocation feed re-reads the sockets held here (F5-24).
+  if (env.SOCKETS_ENABLED) {
+    startPresence();
+    listenToRevocations();
+  }
 
   return io;
 }

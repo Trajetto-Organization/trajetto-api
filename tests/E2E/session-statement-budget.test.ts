@@ -101,14 +101,16 @@ function accessToken({
  * the "visto por último" a driver's socket stamps after it is gone, nor
  * the presence beats a socket's connect and disconnect write in a batch
  * (plano-escala U-05), which land whenever they are flushed — in whatever
- * is measured next.
+ * is measured next; nor the revocation feed's read of its log, once a
+ * second on its own timer (plano-escala F5-22).
  */
 const work = (sql: string[]) =>
   sql.filter(
     (query) =>
       !/^\s*(BEGIN|COMMIT|ROLLBACK)\b/i.test(query) &&
       !/^\s*UPDATE "public"\."user" SET [^;]*"last_seen_at"/i.test(query) &&
-      !/"user_presence"/.test(query),
+      !/"user_presence"/.test(query) &&
+      !/"session_revocation_log"/.test(query),
   );
 
 /** The one statement of SessionRepository.loadSession. */

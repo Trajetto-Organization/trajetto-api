@@ -40,6 +40,11 @@ import { createPrismaClient } from "@/shared/database/database-client";
  *  - A revocation committed and announced while a handshake is still reading
  *    the database: the frame finds no room, because the socket joins its
  *    rooms only after the handshake ends.
+ *  - A revocation written only by SQL, on a replica that never sweeps but
+ *    reads the revocation feed (plano-escala F5-24): ended within 2 s.
+ *
+ * Every other replica here runs with the feed off (REVOCATION_FEED_POLL_MS
+ * =0), so each case still proves the mechanism it names and not the feed.
  */
 const prisma = createPrismaClient();
 
@@ -56,6 +61,9 @@ const WITNESS = "018fde00-0000-7000-8000-0000000000a8";
 const MID_HANDSHAKE_BUMPED = "018fde00-0000-7000-8000-0000000000a9";
 const MID_HANDSHAKE_LOST = "018fde00-0000-7000-8000-0000000000aa";
 const MID_HANDSHAKE_UNTOUCHED = "018fde00-0000-7000-8000-0000000000ab";
+const FEED_BUMPED = "018fde00-0000-7000-8000-0000000000ac";
+const FEED_FAMILY = "018fde00-0000-7000-8000-0000000000ad";
+const FEED_UNTOUCHED = "018fde00-0000-7000-8000-0000000000ae";
 
 const USERS = [
   RESUBSCRIBER,
@@ -69,11 +77,17 @@ const USERS = [
   MID_HANDSHAKE_BUMPED,
   MID_HANDSHAKE_LOST,
   MID_HANDSHAKE_UNTOUCHED,
+  FEED_BUMPED,
+  FEED_FAMILY,
+  FEED_UNTOUCHED,
 ];
 
 /** The sweeping replica's interval; the others effectively never sweep. */
 const SWEEP_MS = 1_500;
 const NEVER_MS = String(10 * 60 * 1000);
+
+/** The other mechanisms, proven without the revocation feed. */
+const FEED_OFF = "0";
 
 const profiles: Record<string, string> = {};
 
@@ -356,16 +370,19 @@ beforeAll(async () => {
     REDIS_URL: REDIS,
     SOCKET_ADAPTER_KEY,
     SOCKET_REVALIDATE_MS: NEVER_MS,
+    REVOCATION_FEED_POLL_MS: FEED_OFF,
   });
   two = await startReplica({
     REDIS_URL: REDIS,
     SOCKET_ADAPTER_KEY,
     SOCKET_REVALIDATE_MS: NEVER_MS,
+    REVOCATION_FEED_POLL_MS: FEED_OFF,
   });
   sweeper = await startReplica({
     REDIS_URL: REDIS,
     SOCKET_ADAPTER_KEY,
     SOCKET_REVALIDATE_MS: String(SWEEP_MS),
+    REVOCATION_FEED_POLL_MS: FEED_OFF,
   });
 
   // Nothing listens on this port: Redis is down for this replica, and only
@@ -373,6 +390,7 @@ beforeAll(async () => {
   isolated = await startReplica({
     REDIS_URL: `redis://127.0.0.1:${await freePort()}`,
     SOCKET_REVALIDATE_MS: NEVER_MS,
+    REVOCATION_FEED_POLL_MS: FEED_OFF,
   });
 
   replicas.push(one, two, sweeper, isolated);
@@ -607,6 +625,7 @@ describe("a revocation between the handshake's reads and its joins", () => {
       REDIS_URL: REDIS,
       SOCKET_ADAPTER_KEY,
       SOCKET_REVALIDATE_MS: NEVER_MS,
+      REVOCATION_FEED_POLL_MS: FEED_OFF,
       SESSION_LOOKUP_MODE: "legacy",
     });
 
@@ -724,5 +743,79 @@ describe("a revocation between the handshake's reads and its joins", () => {
     expect(await untouchedHears).not.toBeNull();
     expect(untouched.heard).toEqual([]);
     expect(untouched.socket.connected).toBe(true);
+  }, 90_000);
+});
+
+/**
+ * The revocation feed (plano-escala F5-24): a session ended only in the
+ * database (no frame, no hint) on a replica that never sweeps. The
+ * trigger's row reaches the replica's feed within its poll (1 s) and the
+ * replica re-reads the sockets the row names after its settle (300 ms):
+ * ended within 2 s of the commit, with the reason the sweep gives. The
+ * session nobody touched stays.
+ */
+describe("a revocation written only by SQL, on a replica with the feed", () => {
+  let feeding: Replica;
+
+  beforeAll(async () => {
+    feeding = await startReplica({
+      REDIS_URL: REDIS,
+      SOCKET_ADAPTER_KEY,
+      SOCKET_REVALIDATE_MS: NEVER_MS,
+      REVOCATION_FEED_POLL_MS: "1000",
+    });
+
+    replicas.push(feeding);
+  }, 300_000);
+
+  it("ends the socket within 2 s, and leaves the rest alone", async () => {
+    const bumped = await sessionFor(FEED_BUMPED, "BUSINESS_USER", CARRIER);
+    const family = await sessionFor(FEED_FAMILY, "BUSINESS_USER", CARRIER);
+    const untouched = await sessionFor(
+      FEED_UNTOUCHED,
+      "BUSINESS_USER",
+      CARRIER,
+    );
+
+    const bumpedSocket = await connectTo(feeding.port, bumped.token);
+    const familySocket = await connectTo(feeding.port, family.token);
+    const untouchedSocket = await connectTo(feeding.port, untouched.token);
+
+    for (const [socket, userId] of [
+      [bumpedSocket, FEED_BUMPED],
+      [familySocket, FEED_FAMILY],
+      [untouchedSocket, FEED_UNTOUCHED],
+    ] as const) {
+      await feeding.waitForRoom(socket.id, `user:${userId}`, true);
+    }
+
+    const bumpedEnd = waitFor(bumpedSocket, "securityAction", 10_000);
+    const familyEnd = waitFor(familySocket, "securityAction", 10_000);
+    const untouchedEnd = waitFor(untouchedSocket, "securityAction", 4_000);
+
+    const committedAt = Date.now();
+
+    await prisma.user.update({
+      where: { id: FEED_BUMPED },
+      data: { session_version: { increment: 1 } },
+    });
+    await prisma.refreshToken.deleteMany({
+      where: { family_id: family.familyId },
+    });
+
+    expect(await bumpedEnd).toMatchObject({ reason: "user_updated" });
+    expect(Date.now() - committedAt, "a revogação demorou").toBeLessThanOrEqual(
+      2_000,
+    );
+    expect(await familyEnd).toMatchObject({ reason: "session_expired" });
+
+    await waitForDisconnect(bumpedSocket).catch(() => undefined);
+    await waitForDisconnect(familySocket).catch(() => undefined);
+
+    expect(bumpedSocket.connected).toBe(false);
+    expect(familySocket.connected).toBe(false);
+
+    expect(await untouchedEnd).toBeNull();
+    expect(untouchedSocket.connected).toBe(true);
   }, 90_000);
 });

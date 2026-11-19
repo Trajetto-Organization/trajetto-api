@@ -4007,7 +4007,9 @@ sessão, empresa (`business:<id>`), operação (`operations:<id>`) e posições
 (`positions:<id>`, abaixo). A
 autorização é relida do banco a cada inscrição; a sessão é relida no banco
 logo depois de o socket entrar nas salas (fecha a janela entre o handshake e
-o join) e revalidada a cada `SOCKET_REVALIDATE_MS` (3 min com jitter). O
+o join), relida em até 2 s depois de toda revogação que o banco registra (o
+feed de revogação, F5-24, abaixo) e revalidada a cada `SOCKET_REVALIDATE_MS`
+(3 min com jitter), o piso de quando o feed está desligado ou sem banco. O
 socket da web da equipe de despacho entra nas salas de operação e do SAC da
 própria empresa no connect; o do app (cabeçalho `x-trajetto-client: mobile` ou
 `auth.client: "mobile"`) só entra com `operationsSubscribe` e sai com
@@ -4190,6 +4192,23 @@ não consegue ler o log guarda o cursor e lê tudo quando o banco volta;
 cache. `REVOCATION_FEED_POLL_MS=0` desliga o feed. Provas: os unitários
 `revocation-feed` e o E2E `revocation-feed` (dois processos: pelo SQL em
 até 2 s, pelo app em menos de 100 ms).
+
+**Sockets derrubados pelo feed** (F5-24, `src/websocket.ts`): toda réplica
+com sockets escuta o feed. Cada linha marca os sockets locais do sujeito
+(usuário, família, empresa ou motorista; filial e perfil, que nenhum socket
+guarda, marcam todos), e 300 ms depois a réplica os relê no primário com a
+regra e as ações da varredura periódica: encerra com o motivo de sempre, ou
+mantém e ajusta as salas. Os 300 ms existem pela troca da própria senha:
+a sessão que a fez continua (`adoptSessionVersion`), e a versão nova chega
+às outras réplicas por um frame do adapter, que pode vir alguns
+milissegundos depois da dica do feed; relido antes, o socket cairia como
+`user_updated`. Um `gap` relê todos os sockets da réplica. Antes, uma
+revogação feita só no banco, ou cujo frame se perdeu, deixava o socket
+recebendo posições, rotas e chat da empresa até a varredura, até 225 s
+depois; agora cai em até 2 s. Prova: o describe
+`"a revocation written only by SQL, on a replica with the feed"` de
+`tests/E2E/socket-revocation.test.ts`; as outras réplicas daquele arquivo
+rodam com o feed desligado, para cada caso provar o mecanismo que nomeia.
 
 **Escala horizontal** ([ADR 0008](./adr/0008-escala-horizontal.md)): N
 réplicas idênticas atrás do Traefik, sem
