@@ -1,0 +1,40 @@
+{
+  "Rules": [
+    {
+      "ID": "trajetto-ia-deliveryProofs",
+      "Status": "Enabled",
+      "Filter": { "Prefix": "deliveryProofs/" },
+      "Transitions": [{ "Days": 60, "StorageClass": "STANDARD_IA" }]
+    },
+    {
+      "ID": "trajetto-ia-deliveryPhotos",
+      "Status": "Enabled",
+      "Filter": { "Prefix": "deliveryPhotos/" },
+      "Transitions": [{ "Days": 60, "StorageClass": "STANDARD_IA" }]
+    },
+    {
+      "ID": "trajetto-ia-checklistPhotos",
+      "Status": "Enabled",
+      "Filter": { "Prefix": "checklistPhotos/" },
+      "Transitions": [{ "Days": 60, "StorageClass": "STANDARD_IA" }]
+    },
+    {
+      "ID": "trajetto-ia-odometerPhotos",
+      "Status": "Enabled",
+      "Filter": { "Prefix": "odometerPhotos/" },
+      "Transitions": [{ "Days": 60, "StorageClass": "STANDARD_IA" }]
+    },
+    {
+      "ID": "trajetto-ia-chatAttachments",
+      "Status": "Enabled",
+      "Filter": { "Prefix": "chatAttachments/" },
+      "Transitions": [{ "Days": 60, "StorageClass": "STANDARD_IA" }]
+    },
+    {
+      "ID": "trajetto-abort-multipart",
+      "Status": "Enabled",
+      "Filter": { "Prefix": "" },
+      "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 7 }
+    }
+  ]
+}

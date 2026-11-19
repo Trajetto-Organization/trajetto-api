@@ -202,9 +202,11 @@ parou.
 Os retidos saem quando a trava acaba, por uma regra de _Expiration_ no
 prefixo, que vale para os comprovantes de todas as empresas. Hoje o
 `deliveryProofs/` não tem regra de _Expiration_: depois do parecer sobre o
-prazo legal (a trava vai a 1825 dias), o dono cria em _R2 → bucket de
-uploads → Settings → Object lifecycle rules_ uma regra no `deliveryProofs/`
-com o mesmo prazo da trava, ou um pouco mais. Sem ela, os comprovantes de
+prazo legal (a trava vai a 1825 dias), entra no `infra/r2/lifecycle.json`
+uma regra no `deliveryProofs/` com o mesmo prazo da trava, ou um pouco mais,
+aplicada pelo `infra/r2/apply-lifecycle.sh` (F5-28, `infra/r2/lifecycle.md`),
+que hoje leva esse prefixo para a _Infrequent Access_ aos 60 dias e não apaga
+nada. Sem ela, os comprovantes de
 uma empresa excluída ficam no bucket até alguém apagá-los à mão, já fora
 da trava.
 
