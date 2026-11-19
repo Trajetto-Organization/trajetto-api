@@ -36,10 +36,15 @@ afterAll(async () => {
 
 describe("the standby of the infra phase", () => {
   it("streams from the primary as trajetto_replication, through its slot", async () => {
+    // The standby of the slot: the failover file's own standby streams
+    // without one, and may already be promoted.
     const { rows: senders } = await primary.query<{
       usename: string;
       state: string;
-    }>("SELECT usename, state FROM pg_stat_replication");
+    }>(
+      `SELECT r.usename, r.state FROM pg_stat_replication r
+         JOIN pg_replication_slots s ON s.active_pid = r.pid`,
+    );
     const { rows: slots } = await primary.query<{
       slot_type: string;
       active: boolean;

@@ -19,6 +19,11 @@ const INFRA_URL_VARIABLES = {
   primary: "E2E_INFRA_PRIMARY_URL",
   /** The streaming standby of that primary, as the same superuser. */
   standby: "E2E_INFRA_STANDBY_URL",
+  /**
+   * A second standby, for the failover file alone to promote (F4-44): the
+   * one above keeps streaming for every other file.
+   */
+  promote: "E2E_INFRA_PROMOTE_URL",
   /** The runtime through the PgBouncer: trajetto_http on the database. */
   pgbouncer: "E2E_INFRA_PGBOUNCER_URL",
   /** The PgBouncer console as pgbouncer_stats (SHOW only). */

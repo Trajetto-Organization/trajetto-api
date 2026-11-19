@@ -9,9 +9,9 @@ import { infraUrl } from "./support/infra-urls";
  * the security review), on the real network of the infra phase
  * (tests/E2E/infra/run.sh).
  *
- * The primary runs with POSTGRES_REPLICATION_CIDR set to the standby's
- * address alone (/32), so its pg_hba is the official rules plus one line:
- * replication, trajetto_replication, that address, scram-sha-256. The
+ * The primary runs with POSTGRES_REPLICATION_CIDR set to the standbys'
+ * addresses alone (a /30), so its pg_hba is the official rules plus one
+ * line: replication, trajetto_replication, that /30, scram-sha-256. The
  * standby is cloned and started by the image's standby branch. What must
  * hold: the stream comes from inside the CIDR; the same login, with the
  * right password, is refused from anywhere else (this machine reaches the
@@ -40,7 +40,7 @@ afterAll(async () => {
 });
 
 describe("the primary's pg_hba", () => {
-  it("is the image's: the official rules plus one replication line, for the standby's address alone", async () => {
+  it("is the image's: the official rules plus one replication line, for the standbys' addresses alone", async () => {
     const { rows: file } = await primary.query<{ hba_file: string }>(
       "SHOW hba_file",
     );
@@ -52,9 +52,17 @@ describe("the primary's pg_hba", () => {
         WHERE error IS NULL
         ORDER BY line_number`,
     );
-    const { rows: sender } = await primary.query<{ address: string }>(
-      `SELECT host(client_addr) AS address FROM pg_stat_replication
-        WHERE usename = 'trajetto_replication' AND state = 'streaming'`,
+    // The slot's standby streams from inside the line's /30 (run.sh gives
+    // the two standbys .200 and .201 of the stack's network).
+    const { rows: sender } = await primary.query<{
+      address: string;
+      network: string;
+    }>(
+      `SELECT host(r.client_addr) AS address,
+              host(network(set_masklen(r.client_addr, 30))) AS network
+         FROM pg_stat_replication r
+         JOIN pg_replication_slots s ON s.active_pid = r.pid
+        WHERE r.usename = 'trajetto_replication' AND r.state = 'streaming'`,
     );
 
     expect(file[0].hba_file).toBe("/etc/trajetto/run/pg_hba.conf");
@@ -67,8 +75,8 @@ describe("the primary's pg_hba", () => {
       "host replication all 127.0.0.1 255.255.255.255 trust",
       "host replication all ::1 ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff trust",
       "host all all all scram-sha-256",
-      // The stream comes from this very address: inside the CIDR.
-      `host replication trajetto_replication ${sender[0].address} 255.255.255.255 scram-sha-256`,
+      // The stream comes from inside the CIDR, and the CIDR is the /30.
+      `host replication trajetto_replication ${sender[0].network} 255.255.255.252 scram-sha-256`,
     ]);
   });
 

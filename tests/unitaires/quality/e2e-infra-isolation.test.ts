@@ -79,6 +79,7 @@ describe("the infra phase's files", () => {
     expect(infraFiles).toEqual(
       expect.arrayContaining([
         "pgbouncer-transaction-mode.test.ts",
+        "failover-promote.test.ts",
         "replication-hba.test.ts",
         "streaming-standby.test.ts",
       ]),
@@ -148,6 +149,7 @@ describe("infraUrl", () => {
       "postgresql://pgbouncer_stats:x@127.0.0.1:49003/pgbouncer",
     E2E_INFRA_REPLICATION_URL:
       "postgresql://trajetto_replication:x@127.0.0.1:49001/trajetto",
+    E2E_INFRA_PROMOTE_URL: "postgresql://postgres:x@127.0.0.1:49004/trajetto",
     DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/test_db",
   };
 
@@ -161,6 +163,7 @@ describe("infraUrl", () => {
     expect(infraUrl("replication", stack)).toBe(
       stack.E2E_INFRA_REPLICATION_URL,
     );
+    expect(infraUrl("promote", stack)).toBe(stack.E2E_INFRA_PROMOTE_URL);
   });
 
   it("fails without the URL, empty or blank alike, and names the command", () => {
@@ -262,10 +265,10 @@ describe("yarn test:e2e:infra (tests/E2E/infra/run.sh)", () => {
   it("names, labels and publishes on the loopback everything it starts", () => {
     const runs = script.split("docker run -d ").slice(1);
 
-    expect(runs).toHaveLength(3);
+    expect(runs).toHaveLength(4);
 
     for (const run of runs) {
-      expect(run).toMatch(/^--name "\$(?:PRIMARY|STANDBY|BOUNCER)"/);
+      expect(run).toMatch(/^--name "\$(?:PRIMARY|STANDBY|PROMOTE|BOUNCER)"/);
       expect(run).toContain('--label "$LABEL"');
       expect(run).toContain('--network "$NETWORK"');
       expect(run).toMatch(/-p 127\.0\.0\.1::\d+ /);
@@ -274,6 +277,7 @@ describe("yarn test:e2e:infra (tests/E2E/infra/run.sh)", () => {
     expect(script).toContain('docker network create --label "$LABEL"');
     expect(script).toMatch(/\nPRIMARY=\$\{PREFIX\}primary\n/);
     expect(script).toMatch(/\nSTANDBY=\$\{PREFIX\}standby\n/);
+    expect(script).toMatch(/\nPROMOTE=\$\{PREFIX\}promote\n/);
     expect(script).toMatch(/\nBOUNCER=\$\{PREFIX\}pgbouncer\n/);
     expect(script).toMatch(/\nNETWORK=\$\{PREFIX\}net\n/);
   });
@@ -326,8 +330,9 @@ describe("yarn test:e2e:infra (tests/E2E/infra/run.sh)", () => {
     // The trajetto-postgres image (its wrapper stage), never a pg_hba.conf
     // edited on the volume: the one line comes from POSTGRES_REPLICATION_CIDR.
     expect(script).toContain("--target wrapper infra/postgres");
-    expect(script).toContain('-e POSTGRES_REPLICATION_CIDR="${STANDBY_IP}/32"');
+    expect(script).toContain('-e POSTGRES_REPLICATION_CIDR="${STANDBY_IP}/30"');
     expect(script).toContain('--network "$NETWORK" --ip "$STANDBY_IP"');
+    expect(script).toContain('--network "$NETWORK" --ip "$PROMOTE_IP"');
     expect(script).toContain('-e POSTGRES_STANDBY_PRIMARY_HOST="$PRIMARY"');
     expect(script).not.toMatch(/>>\s*"?\$PGDATA\/pg_hba\.conf/);
     expect(script).not.toMatch(/host\s+replication\s+\S+\s+all\b/);

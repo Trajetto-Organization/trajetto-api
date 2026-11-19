@@ -65,9 +65,13 @@ release nunca tranca o runtime fora do banco.
 
 O `50-cluster-epoch.sql` (plano de escala, U-14) mantém a linha de
 `cluster_epoch` (a tabela é de uma migration; a linha é daqui): compara o
-`system_identifier` de `pg_control_system()` e a timeline de
-`pg_control_checkpoint()` com o par guardado e, quando mudaram (um PITR, um
-promote, um cluster novo), sobe a época em um. A primeira execução grava a
+`system_identifier` de `pg_control_system()` e a timeline em que o cluster
+grava (a do WAL atual, `pg_walfile_name(pg_current_wal_lsn())`) com o par
+guardado e, quando mudaram (um PITR, um promote, um cluster novo), sobe a
+época em um. A timeline de `pg_control_checkpoint()` só muda no primeiro
+checkpoint da timeline nova, minutos depois de um promote, e a etapa
+rodada logo depois dele, como o failover manda, não veria nada (medido no
+F4-44). A primeira execução grava a
 época 1. É a época que o cursor do feed da integração carrega (F2-04): depois
 de um PITR ou de um failover os xids voltam a ser usados, e a época separa as
 duas histórias. Até a etapa rodar, o `ops-heartbeat` alerta

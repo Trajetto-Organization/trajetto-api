@@ -15,20 +15,23 @@
 #                      gives by hand (docs/deploy.md: pgbouncer_auth,
 #                      trajetto_http and trajetto_replication, with a
 #                      password), and POSTGRES_REPLICATION_CIDR set to the
-#                      standby's address alone (/32): the image's one
+#                      two standbys' addresses alone (/30): the image's one
 #                      replication line
 #   <prefix>standby    the same image, cloned by its standby branch
 #                      (POSTGRES_STANDBY_PRIMARY_HOST): a pg_basebackup of
 #                      the primary through a physical slot, then streaming
 #                      as trajetto_replication from its fixed address (hot
 #                      standby, read only)
+#   <prefix>promote    a second standby of the same kind, without a slot,
+#                      for the failover file to promote (F4-44): the
+#                      standby above keeps streaming for the others
 #   <prefix>pgbouncer  the trajetto-pgbouncer image (infra/pgbouncer) in
 #                      front of the primary, with the Environment of the
 #                      Application and throwaway passwords
 #   <prefix>net        their network, with a subnet of its own so the
-#                      standby can have a fixed address; this machine
+#                      standbys can have fixed addresses; this machine
 #                      reaches the published ports from the network's
-#                      gateway, outside that /32
+#                      gateway, outside that /30
 #
 # A cluster of its own, never the shared test one: the phase gives roles a
 # login and a password and holds a replication slot, and those belong to the
@@ -73,9 +76,10 @@ SLOT=e2e_infra_standby
 
 PRIMARY=${PREFIX}primary
 STANDBY=${PREFIX}standby
+PROMOTE=${PREFIX}promote
 BOUNCER=${PREFIX}pgbouncer
 NETWORK=${PREFIX}net
-CONTAINERS=("$BOUNCER" "$STANDBY" "$PRIMARY")
+CONTAINERS=("$BOUNCER" "$PROMOTE" "$STANDBY" "$PRIMARY")
 
 BUILT_IMAGES=()
 STACK_STARTED=
@@ -169,9 +173,10 @@ psql_in() {
 
 ready() { docker exec "$1" pg_isready -q -h 127.0.0.1 -U postgres -d "$DATABASE"; }
 healthy() { [ "$(docker inspect -f '{{.State.Health.Status}}' "$1" 2> /dev/null)" = healthy ]; }
-in_recovery() { [ "$(psql_in "$STANDBY" -tAc 'SELECT pg_is_in_recovery()')" = t ]; }
+in_recovery() { [ "$(psql_in "${1:-$STANDBY}" -tAc 'SELECT pg_is_in_recovery()')" = t ]; }
+# streaming [N]: N standbys (1 by default) streaming as trajetto_replication.
 streaming() {
-  [ "$(psql_in "$PRIMARY" -tAc "SELECT count(*) FROM pg_stat_replication WHERE usename = 'trajetto_replication' AND state = 'streaming'")" = 1 ]
+  [ "$(psql_in "$PRIMARY" -tAc "SELECT count(*) FROM pg_stat_replication WHERE usename = 'trajetto_replication' AND state = 'streaming'")" = "${1:-1}" ]
 }
 
 remove_stack
@@ -216,14 +221,16 @@ SUBNET=$(docker network inspect -f '{{range .IPAM.Config}}{{println .Subnet}}{{e
 docker network rm "$NETWORK" > /dev/null || die "a rede $NETWORK não foi recriada"
 [[ $SUBNET =~ ^([0-9]+\.[0-9]+\.[0-9]+)\.0/([0-9]+)$ ]] && [ "${BASH_REMATCH[2]}" -le 24 ] ||
   die "a rede $NETWORK veio com a sub-rede '$SUBNET', sem espaço para o endereço fixo do standby"
+# .200 and .201: one /30, the network's gateway (.1) outside it.
 STANDBY_IP=${BASH_REMATCH[1]}.200
+PROMOTE_IP=${BASH_REMATCH[1]}.201
 docker network create --label "$LABEL" --subnet "$SUBNET" "$NETWORK" > /dev/null ||
   die "a rede $NETWORK não foi criada com a sub-rede $SUBNET"
 
 # --- the primary, as a release leaves it ---------------------------------------
 docker run -d --name "$PRIMARY" --label "$LABEL" --network "$NETWORK" \
   -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD="$SUPERUSER_PASSWORD" \
-  -e POSTGRES_DB="$DATABASE" -e POSTGRES_REPLICATION_CIDR="${STANDBY_IP}/32" \
+  -e POSTGRES_DB="$DATABASE" -e POSTGRES_REPLICATION_CIDR="${STANDBY_IP}/30" \
   -p 127.0.0.1::5432 "$POSTGRES_IMAGE" > /dev/null ||
   die "o primário não subiu"
 # Over TCP: the image's first-start server listens on the socket only.
@@ -249,9 +256,9 @@ ALTER ROLE trajetto_http LOGIN PASSWORD '${HTTP_PASSWORD}';
 ALTER ROLE trajetto_replication LOGIN PASSWORD '${REPLICATION_PASSWORD}';
 SQL
 
-# The image's one replication line: the standby's address, never 'all'.
-rules=$(psql_in "$PRIMARY" -tAc "SELECT count(*) FROM pg_hba_file_rules WHERE error IS NULL AND 'replication' = ANY (database) AND 'trajetto_replication' = ANY (user_name) AND address = '${STANDBY_IP}' AND netmask = '255.255.255.255'")
-[ "$rules" = 1 ] || die "o pg_hba do primário não tem a linha de replicação de ${STANDBY_IP}/32"
+# The image's one replication line: the standbys' addresses, never 'all'.
+rules=$(psql_in "$PRIMARY" -tAc "SELECT count(*) FROM pg_hba_file_rules WHERE error IS NULL AND 'replication' = ANY (database) AND 'trajetto_replication' = ANY (user_name) AND address = '${STANDBY_IP}' AND netmask = '255.255.255.252'")
+[ "$rules" = 1 ] || die "o pg_hba do primário não tem a linha de replicação de ${STANDBY_IP}/30"
 
 # --- the standby -----------------------------------------------------------------
 # Cloned by the image's standby branch, from its fixed address.
@@ -263,6 +270,16 @@ wait_for 90 "o standby" ready "$STANDBY"
 wait_for 30 "o standby em recuperação" in_recovery
 wait_for 30 "o streaming do primário para o standby" streaming
 STANDBY_PORT=$(port_of "$STANDBY" 5432) || die "$STANDBY não publicou a porta 5432"
+
+# The failover's standby: the same branch of the image, no slot.
+docker run -d --name "$PROMOTE" --label "$LABEL" --network "$NETWORK" --ip "$PROMOTE_IP" \
+  -e POSTGRES_STANDBY_PRIMARY_HOST="$PRIMARY" \
+  -e POSTGRES_REPLICATION_PASSWORD="$REPLICATION_PASSWORD" \
+  -p 127.0.0.1::5432 "$POSTGRES_IMAGE" > /dev/null || die "o standby do failover não subiu"
+wait_for 90 "o standby do failover" ready "$PROMOTE"
+wait_for 30 "o standby do failover em recuperação" in_recovery "$PROMOTE"
+wait_for 30 "o streaming do primário para os dois standbys" streaming 2
+PROMOTE_PORT=$(port_of "$PROMOTE" 5432) || die "$PROMOTE não publicou a porta 5432"
 
 # --- the PgBouncer -------------------------------------------------------------------
 docker run -d --name "$BOUNCER" --label "$LABEL" --network "$NETWORK" \
@@ -277,12 +294,13 @@ BOUNCER_PORT=$(port_of "$BOUNCER" 6432) || die "$BOUNCER não publicou a porta 6
 
 export E2E_INFRA_PRIMARY_URL=$PRIMARY_URL
 export E2E_INFRA_STANDBY_URL="postgresql://postgres:${SUPERUSER_PASSWORD}@127.0.0.1:${STANDBY_PORT}/${DATABASE}"
+export E2E_INFRA_PROMOTE_URL="postgresql://postgres:${SUPERUSER_PASSWORD}@127.0.0.1:${PROMOTE_PORT}/${DATABASE}"
 export E2E_INFRA_PGBOUNCER_URL="postgresql://trajetto_http:${HTTP_PASSWORD}@127.0.0.1:${BOUNCER_PORT}/${DATABASE}"
 export E2E_INFRA_PGBOUNCER_STATS_URL="postgresql://pgbouncer_stats:${STATS_PASSWORD}@127.0.0.1:${BOUNCER_PORT}/pgbouncer"
 export E2E_INFRA_REPLICATION_URL="postgresql://trajetto_replication:${REPLICATION_PASSWORD}@127.0.0.1:${PRIMARY_PORT}/${DATABASE}"
 unset SUPERUSER_PASSWORD AUTH_PASSWORD HTTP_PASSWORD REPLICATION_PASSWORD \
   STATS_PASSWORD ADMIN_PASSWORD PRIMARY_URL
 
-say "pilha pronta em $((SECONDS - started)) s: primário, standby em streaming e PgBouncer"
+say "pilha pronta em $((SECONDS - started)) s: primário, dois standbys em streaming e PgBouncer"
 
 E2E_PHASE=infra node ./node_modules/vitest/vitest.mjs run --dir ./tests/E2E "$@"

@@ -314,15 +314,18 @@ checagem das contrações não as ler como a imagem antiga),
 `streaming-standby.test.ts` (o standby em
 recuperação, recusando escrita e mostrando um commit do primário),
 `replication-hba.test.ts` (o `pg_hba` da imagem: as regras oficiais e uma
-linha de replicação só para o endereço do standby, de onde vem o
+linha de replicação só para os endereços dos standbys, de onde vem o
 streaming; o mesmo login, com a senha certa, recusado de fora dele; o
 standby clonado pelo ramo da imagem, com a senha só no passfile, F4-40),
 `replica-guard.test.ts` (com o replay do standby pausado, o replica-guard
 manda as leituras do `readDatabase()` ao primário; retomado, de volta ao
-standby depois de 3 medidas boas, F4-41) e `events-on-standby.test.ts` (o
+standby depois de 3 medidas boas, F4-41), `events-on-standby.test.ts` (o
 `/integration/v1/events` pela ordem de commit no standby, com o horizonte
 dele: 2.000 eventos de quatro escritores lidos alternando standby e
-primário, nenhum pulado nem repetido, F4-43). As fases
+primário, nenhum pulado nem repetido, F4-43) e `failover-promote.test.ts` (o
+promote do standby do failover: a etapa de release logo depois sobe a
+época do cluster, sem esperar um checkpoint, e um cursor da época velha é
+convertido sem pular evento, F4-44). As fases
 `shared` e de réplicas deixam esses arquivos de fora (`INFRA_E2E_GLOB`, em
 `tests/E2E/support/replica-files.ts`).
 
@@ -335,21 +338,25 @@ apaga a pilha no fim:
   com o banco `trajetto` como uma release deixa (`prisma migrate deploy` e
   `yarn release:steps`), os logins que o dono dá à mão (`pgbouncer_auth`,
   `trajetto_http` e `trajetto_replication`, com senha) e o
-  `POSTGRES_REPLICATION_CIDR` no endereço do standby, `/32`;
+  `POSTGRES_REPLICATION_CIDR` nos endereços dos dois standbys, um `/30`;
 - o standby: a mesma imagem, clonada pelo ramo standby dela
   (`POSTGRES_STANDBY_PRIMARY_HOST`), em streaming como
   `trajetto_replication` por um slot físico, de um endereço fixo da rede
   da pilha (que tem sub-rede própria; esta máquina chega às portas pelo
-  gateway dela, fora do `/32`);
+  gateway dela, fora do `/30`);
+- o standby do failover: outro igual, sem slot, que só o
+  `failover-promote.test.ts` promove (os outros arquivos seguem lendo o
+  primeiro);
 - o PgBouncer: a imagem `trajetto-pgbouncer` (`infra/pgbouncer`) na frente
   do primário, com o Environment da Application e senhas descartáveis.
 
 É um cluster próprio, nunca o de teste compartilhado: a fase dá login e
 senha a roles e segura um slot de replicação, e isso é do cluster inteiro.
 As portas são publicadas só em 127.0.0.1, escolhidas pelo Docker; as senhas
-são aleatórias e nunca impressas. Os arquivos recebem cinco URLs
-(`E2E_INFRA_PRIMARY_URL`, `E2E_INFRA_STANDBY_URL`, `E2E_INFRA_PGBOUNCER_URL`,
-`E2E_INFRA_PGBOUNCER_STATS_URL` e `E2E_INFRA_REPLICATION_URL`) por `infraUrl`
+são aleatórias e nunca impressas. Os arquivos recebem seis URLs
+(`E2E_INFRA_PRIMARY_URL`, `E2E_INFRA_STANDBY_URL`, `E2E_INFRA_PROMOTE_URL`,
+`E2E_INFRA_PGBOUNCER_URL`, `E2E_INFRA_PGBOUNCER_STATS_URL` e
+`E2E_INFRA_REPLICATION_URL`) por `infraUrl`
 (`tests/E2E/infra/support/infra-urls.ts`), que **falha** quando uma falta,
 quando sai do loopback ou quando aponta para o cluster compartilhado: o
 arquivo nunca é pulado. Rodam um por vez (qual conexão de servidor um

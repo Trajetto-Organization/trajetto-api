@@ -14,11 +14,15 @@ import type { Prisma } from "@prisma/client";
  * ops heartbeat compares the pair every minute and alerts
  * cluster-epoch-stale until the step runs.
  *
- * pg_control_system() and pg_control_checkpoint() are executable by every
- * role on Postgres 16 (tests/E2E/cluster-epoch.test.ts runs them as
- * trajetto_batch), and the runtime roles read cluster_epoch: the check
- * works the same after the cut of the database roles. One row and two
- * function calls a minute.
+ * The timeline is the current WAL position's, as in the step: right after
+ * a promote, pg_control_checkpoint() keeps the old one until the new
+ * timeline's first checkpoint (minutes), and the step and this check would
+ * both see nothing (F4-44). pg_control_system(), pg_control_checkpoint(),
+ * pg_is_in_recovery(), pg_current_wal_lsn() and pg_walfile_name() are
+ * executable by every role on Postgres 16 (tests/E2E/cluster-epoch.test.ts
+ * runs them as trajetto_batch), and the runtime roles read cluster_epoch:
+ * the check works the same after the cut of the database roles. One row
+ * and a few function calls a minute.
  */
 
 interface ClusterIdentity {
@@ -64,7 +68,10 @@ async function readClusterEpochState(
       e."system_identifier"::text AS stored_system,
       e."timeline" AS stored_timeline,
       s.system_identifier::text AS system,
-      c.timeline_id AS timeline
+      CASE
+        WHEN pg_is_in_recovery() THEN c.timeline_id
+        ELSE ('x' || substr(pg_walfile_name(pg_current_wal_lsn()), 1, 8))::bit(32)::integer
+      END AS timeline
     FROM pg_control_system() s
     CROSS JOIN pg_control_checkpoint() c
     LEFT JOIN "cluster_epoch" e ON e."id" = 1

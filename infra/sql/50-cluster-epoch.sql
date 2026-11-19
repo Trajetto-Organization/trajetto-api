@@ -14,10 +14,21 @@
 -- migrations/20261117150000_cluster_epoch) keeps the epoch with the pair it
 -- was taken from: pg_control_system().system_identifier, which changes
 -- with a new cluster (a logical restore into another Database, a
--- pg_upgrade), and pg_control_checkpoint().timeline_id, which changes with
+-- pg_upgrade), and the timeline the cluster writes on, which changes with
 -- a PITR and with a promote. When the pair differs from the cluster's, the
 -- epoch goes up by one and the row takes the new pair. The first run
 -- writes epoch 1.
+--
+-- The timeline is the one of the current WAL position
+-- (pg_walfile_name(pg_current_wal_lsn()), its first 8 hex digits), not
+-- pg_control_checkpoint()'s: after a promote, the control file keeps the
+-- old timeline until the first checkpoint of the new one completes, and
+-- that checkpoint is a spread one, minutes later (measured on the infra
+-- stack of the E2E, F4-44: still timeline 1 seconds after pg_promote(),
+-- timeline 2 in the WAL at once). A step run right after the promote, as
+-- the failover runbook does, said 'skipped' and left the feed on the old
+-- epoch, exactly when the reused xids appear. During recovery (never the
+-- release step, which runs on the primary) only the control file has it.
 --
 -- When. Every release, and the restore and failover runbooks force the
 -- release step before the runtime comes back (U-11; docs/deploy.md, the
@@ -33,7 +44,12 @@ DECLARE
   stored record;
 BEGIN
   SELECT s.system_identifier INTO current_system FROM pg_control_system() s;
-  SELECT c.timeline_id INTO current_timeline FROM pg_control_checkpoint() c;
+  SELECT CASE
+           WHEN pg_is_in_recovery() THEN c.timeline_id
+           ELSE ('x' || substr(pg_walfile_name(pg_current_wal_lsn()), 1, 8))::bit(32)::integer
+         END
+    INTO current_timeline
+    FROM pg_control_checkpoint() c;
 
   SELECT e.epoch, e.system_identifier, e.timeline INTO stored
   FROM cluster_epoch e
