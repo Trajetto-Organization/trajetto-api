@@ -4610,6 +4610,25 @@ OpenStreetMap são recusados.
   `occurrence_type_businessId_code_key`), sai como `occurrence_code` no
   webhook `occurrence.reported` e no `data` do mesmo evento em
   `/integration/v1/events`.
+- **Criação em lote** (plano de escala U-04, F4.5):
+  `POST /integration/v1/deliveries/batch`, com o escopo `deliveries:write`,
+  leva de 1 a 100 entregas em `deliveries`, cada uma com o corpo da criação
+  avulsa e a sua `idempotency_key` (o papel do cabeçalho `Idempotency-Key`,
+  com as mesmas regras e o mesmo índice por empresa: uma chave usada no lote
+  é a mesma da chamada avulsa). O caso de uso
+  (`create-integration-deliveries-batch-usecase.ts`) roda a criação avulsa
+  entrega por entrega, na ordem, cada uma na sua transação com o seu
+  `delivery.created`: a recusa de uma é o resultado dela (o mesmo `code` e a
+  mesma frase), e as outras seguem. A resposta é 200 com um resultado por
+  entrega (`status` 201, 200 na repetição ou a recusa, com o `delivery_id`) e
+  as contagens. Lista vazia, mais de 100 ou outro campo no corpo recusam a
+  chamada inteira (400). Uma falha que não é da entrega (o banco caindo)
+  para o lote e responde como a avulsa; o reenvio do lote repete as já
+  criadas, sem duplicar. Cada entrega conta uma unidade nos limites por
+  minuto da chave e da empresa: o lote gasta as outras N − 1 depois de ler
+  o envelope e antes de gravar qualquer coisa
+  (`src/shared/integration/integration-units.ts`), no mesmo balde da chave
+  que as chamadas avulsas usam.
 - **Cancelamento pela API** (L9, D49): `POST /integration/v1/deliveries/:id/cancel`,
   com o escopo próprio `deliveries:cancel` (`deliveries:write` não cancela:
   nenhuma chave já emitida ganha o poder em silêncio, e chave não se edita) e

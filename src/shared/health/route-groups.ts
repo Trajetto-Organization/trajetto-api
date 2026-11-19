@@ -301,6 +301,7 @@ const ROUTE_GROUP_TABLE: Readonly<Record<RouteGroup, readonly string[]>> = {
     "GET /integration/v1/routes/:id",
     "GET /integration/v1/events",
     "POST /integration/v1/deliveries",
+    "POST /integration/v1/deliveries/batch",
     "POST /integration/v1/deliveries/:id/cancel",
   ],
   notifications: [

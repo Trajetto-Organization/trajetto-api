@@ -640,7 +640,7 @@ describe("the public integration API, as published", () => {
    */
   const integration = () => operationsUnder("/integration/v1/");
 
-  it("publishes the surface a v1 promises: the reads and the two writes", () => {
+  it("publishes the surface a v1 promises: the reads and the writes", () => {
     expect(
       integration().map(([path, method]) => `${method.toUpperCase()} ${path}`),
     ).toEqual([
@@ -652,6 +652,8 @@ describe("the public integration API, as published", () => {
       "GET /integration/v1/routes",
       "GET /integration/v1/routes/{id}",
       "GET /integration/v1/events",
+      // Plano-escala U-04: up to 100 documents in one call.
+      "POST /integration/v1/deliveries/batch",
       // L9 (D49): the ERP calls off a delivery it pushed, or any other.
       "POST /integration/v1/deliveries/{id}/cancel",
     ]);

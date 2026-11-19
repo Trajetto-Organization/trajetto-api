@@ -3,6 +3,7 @@ import { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { IntegrationReadController } from "@/modules/integration/usecases/integration-read/integration-read-controller";
 import { CreateIntegrationDeliveryController } from "@/modules/integration/usecases/create-delivery/create-integration-delivery-controller";
 import { CancelIntegrationDeliveryController } from "@/modules/integration/usecases/cancel-delivery/cancel-integration-delivery-controller";
+import { CreateIntegrationDeliveriesBatchController } from "@/modules/integration/usecases/create-integration-deliveries-batch/create-integration-deliveries-batch-controller";
 
 import {
   ensureApiKey,
@@ -24,7 +25,9 @@ import {
 
 import {
   CANCEL_DELIVERY_REQUEST_EXAMPLE,
+  CREATE_DELIVERIES_BATCH_REQUEST_EXAMPLE,
   CREATE_DELIVERY_REQUEST_EXAMPLE,
+  integrationBatchResponses,
   integrationCancelResponses,
   integrationWriteResponses,
   integrationWriteSchemas,
@@ -44,10 +47,14 @@ import {
 } from "@/shared/integration/webhook-catalogue";
 
 import { apiUsageRecorder } from "@/shared/integration/api-usage-recorder";
+import { MAX_BATCH_DELIVERIES } from "@/schemas/create-integration-deliveries-batch-schema";
+import { integrationKeyBucket } from "@/shared/integration/integration-units";
 
 const readController = new IntegrationReadController();
 const createDeliveryController = new CreateIntegrationDeliveryController();
 const cancelDeliveryController = new CancelIntegrationDeliveryController();
+const createDeliveriesBatchController =
+  new CreateIntegrationDeliveriesBatchController();
 
 const COMPANY_REFUSAL_HIDDEN_HEADERS = [
   "x-ratelimit-limit",
@@ -164,8 +171,9 @@ async function integrationRoutes(app: FastifyInstance) {
     // The fallback only applies if the key is somehow unresolved.
     max: (request) => request.apiKey?.rateLimitPerMinute ?? 600,
     timeWindow: "1 minute",
+    // integration-units.ts spends a batch's other units on this bucket.
     keyGenerator: (request) =>
-      `integration-key:${request.apiKey?.prefix ?? request.ip}`,
+      integrationKeyBucket(request.apiKey?.prefix ?? request.ip),
   });
 
   app.get(
@@ -363,7 +371,7 @@ async function integrationRoutes(app: FastifyInstance) {
         "x-scopes": ["deliveries:write"],
         summary: "Criar uma entrega",
         description: [
-          "Escopo exigido: `deliveries:write` (que não dá leitura). Uma entrega por requisição: a v1 não tem criação em lote — para várias, uma chamada por documento, cada uma com a sua Idempotency-Key.",
+          "Escopo exigido: `deliveries:write` (que não dá leitura). Uma entrega por requisição; para várias de uma vez, em lote, use POST /integration/v1/deliveries/batch (até 100, cada uma com a sua `idempotency_key`).",
           "",
           "As regras são as do cadastro manual no painel, com as mesmas mensagens: destinatário e endereço obrigatórios, CEP com 8 dígitos, data prevista como dia (`AAAA-MM-DD`, sem hora), até 200 itens. O embarcador vem por `shipper_id` ou por `shipper_cnpj` (um dos dois) e precisa ser da sua empresa e estar ativo. Motorista e rota não vêm aqui: a entrega nasce Pendente e é atribuída no painel.",
           "",
@@ -388,6 +396,52 @@ async function integrationRoutes(app: FastifyInstance) {
       },
     },
     createDeliveryController.handle,
+  );
+
+  /**
+   * The batch (plano-escala U-04, F4.5): up to 100 deliveries in one call,
+   * each the single create, in its own transaction. The same gates and
+   * scope as the single create; N deliveries spend N units of the key's and
+   * the company's minute (integration-units.ts), so a batch is never a way
+   * around the ceilings.
+   */
+  app.post(
+    "/deliveries/batch",
+    {
+      onRequest: [ensureApiKey, perKeyCeiling, limitBusinessApiRate],
+      preHandler: [verifyApiScope("deliveries:write")],
+      config: {
+        rateLimit: false,
+        // Documentation only: each element is parsed by the use case.
+        openapi: { body: integrationWriteSchemas.createDeliveriesBatch },
+      },
+      schema: {
+        security: [{ apiKey: [] }],
+        tags: ["integration"],
+        operationId: "createDeliveriesBatch",
+        "x-scopes": ["deliveries:write"],
+        summary: "Criar entregas em lote",
+        description: [
+          `Escopo exigido: \`deliveries:write\`, o mesmo da criação avulsa. De 1 a ${MAX_BATCH_DELIVERIES} entregas por chamada, em \`deliveries\`: cada uma é o corpo da criação avulsa mais a sua \`idempotency_key\`, que faz aqui o papel do cabeçalho Idempotency-Key (obrigatória, as mesmas regras, única por empresa).`,
+          "",
+          "Cada entrega passa pelas mesmas regras e mensagens da criação avulsa, na ordem em que veio, e é gravada na sua própria transação, com o seu webhook `delivery.created`: o sucesso pode ser parcial. A resposta é 200 com um resultado por entrega (`status` 201 criada, 200 já criada por esta chave, ou a recusa com `code` e `message`) e as contagens. Uma lista vazia, com mais de 100 entregas ou com outro campo no corpo recusa a chamada inteira (400), sem ler nenhuma entrega.",
+          "",
+          "Reenviar o mesmo lote com as mesmas `idempotency_key` devolve os mesmos resultados, as já criadas como 200 com o mesmo `delivery_id`, sem duplicar nem avisar de novo. Se a chamada falhar no meio (500 ou 503), reenvie o lote inteiro do mesmo jeito.",
+          "",
+          `Cada entrega conta como uma requisição nos limites por minuto da chave e da empresa: um lote de ${MAX_BATCH_DELIVERIES} gasta ${MAX_BATCH_DELIVERIES}, e um lote que passa do que sobra do minuto é recusado inteiro com 429 e \`retry-after\`.`,
+          "",
+          CREATE_DELIVERIES_BATCH_REQUEST_EXAMPLE,
+        ].join("\n"),
+        response: {
+          200: integrationBatchResponses.processed,
+          400: integrationBatchResponses.badRequest,
+          429: integrationBatchResponses.tooManyRequests,
+          500: integrationBatchResponses.internalError,
+          503: integrationBatchResponses.unavailable,
+        },
+      },
+    },
+    createDeliveriesBatchController.handle,
   );
 
   /**

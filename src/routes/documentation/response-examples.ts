@@ -436,6 +436,32 @@ const RESPONSE_EXAMPLES: ResponseExamples = {
   "POST /integration/v1/deliveries/:id/cancel": {
     200: cancelledPublicDelivery,
   },
+  // The batch (plano-escala U-04): one created now, one refused with the
+  // single create's code and sentence, at their positions.
+  "POST /integration/v1/deliveries/batch": {
+    200: {
+      results: [
+        {
+          index: 0,
+          idempotency_key: "pedido-10452",
+          status: 201,
+          delivery_id: DELIVERY_ID,
+        },
+        {
+          index: 1,
+          idempotency_key: "pedido-10453",
+          status: 409,
+          delivery_id: NEXT_DELIVERY_ID,
+          code: "DELIVERY_INVOICE_KEY_EXISTS",
+          message:
+            "Já existe uma entrega com esta chave de NF-e nesta empresa.",
+        },
+      ],
+      created: 1,
+      replayed: 0,
+      refused: 1,
+    },
+  },
   "GET /integration/v1/routes": {
     200: { data: [publicRoute], next_cursor: null },
   },

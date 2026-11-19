@@ -50,6 +50,20 @@ interface IntegrationRateGuard {
     key: string,
     cost: number,
   ): Promise<{ total: number; resetInMs: number } | null>;
+  /**
+   * Spends `cost` more units of a minute's counter (plano-escala U-04: a
+   * batch of N deliveries counts N calls): the total after it and when the
+   * minute ends. Null when Redis did not answer: the caller fails open.
+   */
+  spendUnits(
+    key: string,
+    cost: number,
+  ): Promise<{ total: number; resetInMs: number } | null>;
+  /** The same spend on the company's minute (`allowBusiness`'s counter). */
+  spendBusiness(
+    businessId: string,
+    cost: number,
+  ): Promise<{ total: number; resetInMs: number } | null>;
 }
 
 const authFailureKey = (address: string): string =>
@@ -92,6 +106,27 @@ function createIntegrationRateGuard(
       }
     },
 
+    async spendUnits(key, cost) {
+      try {
+        return await spendInFixedWindow(redis, key, WINDOW_SECONDS, cost);
+      } catch {
+        return null;
+      }
+    },
+
+    async spendBusiness(businessId, cost) {
+      try {
+        return await spendInFixedWindow(
+          redis,
+          businessKey(businessId),
+          WINDOW_SECONDS,
+          cost,
+        );
+      } catch {
+        return null;
+      }
+    },
+
     async allowBusiness(businessId, max) {
       try {
         return (
@@ -114,6 +149,8 @@ const unlimitedIntegrationRateGuard: IntegrationRateGuard = {
   recordAuthFailure: async () => undefined,
   allowBusiness: async () => true,
   spendPanelBudget: async () => null,
+  spendUnits: async () => null,
+  spendBusiness: async () => null,
 };
 
 // Wired in http.ts with the rate-limit Redis connection.

@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { createIntegrationDeliverySchema } from "@/schemas/create-integration-delivery-schema";
 import { cancelIntegrationDeliverySchema } from "@/schemas/cancel-integration-delivery-schema";
+import { batchBodyDocumentation } from "@/schemas/create-integration-deliveries-batch-schema";
 import { INTEGRATION_IDEMPOTENCY_KEY_PATTERN } from "@/modules/integration/usecases/create-delivery/integration-idempotency-key";
 import { NOT_CANCELLABLE_STATUSES } from "@/shared/integration/cancel-delivery-rules";
 import { DATABASE_RETRY_AFTER_SECONDS } from "@/shared/errors/database-unavailable";
@@ -16,6 +17,7 @@ import {
 } from "./public-docs-responses";
 import {
   CANCEL_DELIVERY_REQUEST_BODY,
+  CREATE_DELIVERIES_BATCH_REQUEST_BODY,
   CREATE_DELIVERY_REQUEST_BODY,
 } from "./public-docs-examples";
 
@@ -129,6 +131,98 @@ const integrationWriteResponses = {
 };
 
 /**
+ * The batch (plano-escala U-04): one answer for the call, one result per
+ * delivery, at its position.
+ */
+const batchDeliveryResult = z
+  .object({
+    index: z
+      .number()
+      .int()
+      .describe("A posição da entrega em `deliveries`, a partir de 0."),
+    idempotency_key: z
+      .string()
+      .nullable()
+      .describe(
+        "A `idempotency_key` que a entrega trouxe; null quando faltou ou não segue o formato.",
+      ),
+    status: z
+      .number()
+      .int()
+      .describe(
+        "201: criada agora. 200: esta `idempotency_key` já tinha criado esta entrega com o mesmo corpo (nada criado nem avisado de novo). 4xx: recusada, com `code` e `message` iguais aos da criação avulsa (400 VALIDATION_ERROR, IDEMPOTENCY_KEY_REQUIRED, IDEMPOTENCY_KEY_INVALID ou SHIPPER_INACTIVE; 404 SHIPPER_NOT_FOUND; 409 IDEMPOTENCY_KEY_REUSED ou DELIVERY_INVOICE_KEY_EXISTS).",
+      ),
+    delivery_id: z
+      .string()
+      .nullable()
+      .optional()
+      .describe(
+        "A entrega criada (201), a já criada por esta chave (200) ou, num 409, a que está no caminho. Sempre da sua empresa.",
+      ),
+    code: z
+      .string()
+      .optional()
+      .describe("Só numa recusa: o código estável para decidir."),
+    message: z
+      .string()
+      .optional()
+      .describe("Só numa recusa: a frase em português, a da criação avulsa."),
+    issues: z
+      .array(z.string())
+      .optional()
+      .describe(
+        "Só em VALIDATION_ERROR: uma frase por problema, com o campo na frente.",
+      ),
+  })
+  .describe("O que aconteceu com uma entrega do lote.");
+
+const integrationBatchResponses = {
+  processed: z
+    .object({
+      results: z
+        .array(batchDeliveryResult)
+        .describe("Um resultado por entrega, na ordem em que vieram."),
+      created: z.number().int().describe("Quantas foram criadas agora (201)."),
+      replayed: z
+        .number()
+        .int()
+        .describe("Quantas já existiam por esta chave (200)."),
+      refused: z.number().int().describe("Quantas foram recusadas (4xx)."),
+    })
+    .describe(
+      "O lote foi processado, entrega por entrega, cada uma na sua transação: o sucesso pode ser parcial. Reenvie só as recusadas, corrigidas, ou o lote inteiro com as mesmas `idempotency_key`: as já criadas voltam como 200, com o mesmo `delivery_id`, sem duplicar.",
+    ),
+
+  badRequest: codedError(
+    'VALIDATION_ERROR: o corpo não é `{ "deliveries": [...] }`, a lista está vazia, tem mais de 100 entregas ou o corpo tem outro campo; nenhuma entrega foi lida nem gravada. MALFORMED_REQUEST: o corpo não é JSON válido. Uma entrega com problema não recusa o lote: ela vem com o seu status em `results`.',
+    "Em VALIDATION_ERROR é a frase em português do primeiro problema; a lista completa está em `issues`. Em MALFORMED_REQUEST é a frase do servidor HTTP, em inglês.",
+  ),
+
+  internalError: z
+    .object({
+      code: z.string().describe("INTERNAL_ERROR."),
+      status: z.string().optional(),
+      message: z
+        .string()
+        .describe("Texto fixo, sem tradução (`Internal server error`)."),
+      requestId: z
+        .string()
+        .optional()
+        .describe(
+          "Informe ao suporte: é por ele que o erro é encontrado no registro.",
+        ),
+    })
+    .describe(
+      "INTERNAL_ERROR: falha nossa no meio do lote, que parou ali. Reenvie o lote inteiro com as MESMAS `idempotency_key`: as entregas que chegaram a ser criadas voltam como 200, sem duplicar.",
+    ),
+
+  // Shared with the reads: the company ceiling's 429 (merged by the
+  // transform with the per-key one). Each delivery counts one call.
+  tooManyRequests: publicBusinessRateLimitResponse,
+  unavailable: publicServiceUnavailableResponse,
+};
+
+/**
  * The public cancel (L9, D49). No Idempotency-Key: the delivery's own state
  * makes a repeat harmless, so the 500 and the 503 say "repeat" without one.
  */
@@ -182,6 +276,7 @@ const integrationCancelResponses = {
 
 const integrationWriteSchemas = {
   createDelivery: createIntegrationDeliverySchema,
+  createDeliveriesBatch: batchBodyDocumentation,
   idempotencyHeaders: integrationIdempotencyHeaders,
   cancelDelivery: cancelIntegrationDeliverySchema,
 };
@@ -206,6 +301,20 @@ const CREATE_DELIVERY_REQUEST_EXAMPLE = [
   "```",
 ].join("\n");
 
+/** The batch's call, with the published example body (same rule as above). */
+const CREATE_DELIVERIES_BATCH_REQUEST_EXAMPLE = [
+  "```bash",
+  "curl -X POST https://<api>/integration/v1/deliveries/batch \\",
+  '  -H "Authorization: Bearer tjk_live_<prefixo>.<segredo>" \\',
+  '  -H "Content-Type: application/json" \\',
+  "  -d '" +
+    JSON.stringify(CREATE_DELIVERIES_BATCH_REQUEST_BODY, null, 2)
+      .split("\n")
+      .join("\n  ") +
+    "'",
+  "```",
+].join("\n");
+
 /** The cancel's call, with the published example body (same rule as above). */
 const CANCEL_DELIVERY_REQUEST_EXAMPLE = [
   "```bash",
@@ -218,7 +327,9 @@ const CANCEL_DELIVERY_REQUEST_EXAMPLE = [
 
 export {
   CANCEL_DELIVERY_REQUEST_EXAMPLE,
+  CREATE_DELIVERIES_BATCH_REQUEST_EXAMPLE,
   CREATE_DELIVERY_REQUEST_EXAMPLE,
+  integrationBatchResponses,
   integrationCancelResponses,
   integrationIdempotencyHeaders,
   integrationWriteResponses,

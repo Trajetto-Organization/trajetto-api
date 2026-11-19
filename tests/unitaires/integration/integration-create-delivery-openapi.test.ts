@@ -183,8 +183,11 @@ describe("the public create, as published", () => {
     }
   });
 
-  it("says there is no batch create in v1", () => {
-    expect(operation.description ?? "").toMatch(/lote/);
+  it("points to the batch for many documents at once (plano-escala U-04)", () => {
+    expect(operation.description ?? "").toMatch(/em lote/);
+    expect(operation.description ?? "").toContain(
+      "POST /integration/v1/deliveries/batch",
+    );
   });
 
   it("documents the error bodies the API really sends", () => {
