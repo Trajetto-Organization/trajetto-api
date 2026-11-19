@@ -231,11 +231,199 @@ function drainVerdict(summary, options = {}) {
   };
 }
 
+/**
+ * The ABBA of the GPS write path at the 5M gate's rate (plano-escala
+ * LOAD-11): positions-abba.sh ran positions-5m.js with the group commit
+ * and the session cache off (A) and on (B), and left the session: per run,
+ * the arm, k6's summary, the points it counted in the database over the
+ * run's window, the database's commits and the window's ops_sample.
+ *
+ * Passes when every run lost nothing (each point the API answered 200 for
+ * is in the database, and no product failure), B never opened the group
+ * commit's breaker and actually batched (A never did), and B's p95 is at
+ * most `p95TolerancePct` (5) worse than A's; with `p95Ms` (the gate's 150),
+ * B's p95 must also be under it. What B gained (commits per POST, the
+ * p95, the cache's hits) is said either way: the owner reads it before
+ * turning either on in production.
+ */
+function positionsAbbaVerdict(session, options = {}) {
+  const tolerance = options.p95TolerancePct ?? 5;
+  const runs = Array.isArray(session?.runs) ? session.runs : [];
+  const reasons = [];
+
+  const facts = runs.map((run) => {
+    const summary = run.summary;
+    const posts = countOf(summary, "http_reqs");
+    const stored = countOf(summary, "positions_points_stored");
+    const failures = rateOf(
+      summary,
+      "surface_failures{surface:route.positions}",
+    );
+    const p95 = statOf(
+      summary,
+      "surface_latency{surface:route.positions}",
+      "p(95)",
+    );
+    const ops = run.ops ?? {};
+    const label = `corrida ${run.n} (${run.arm})`;
+
+    if (posts === 0) reasons.push(`${label}: nenhum envio`);
+    if (stored === 0) {
+      reasons.push(
+        `${label}: nenhum ponto gravado (o fixture tem rotas em andamento?)`,
+      );
+    }
+    if (failures === null || failures > 0) {
+      reasons.push(
+        `${label}: falhas de produto nas posições (${failures ?? "?"})`,
+      );
+    }
+    if (run.dbPoints !== stored) {
+      reasons.push(
+        `${label}: ${stored} pontos respondidos com 200 e ${run.dbPoints} no banco`,
+      );
+    }
+    if (run.arm === "B" && Number(ops.breakerOpens ?? 0) > 0) {
+      reasons.push(
+        `${label}: o disjuntor do group commit abriu ${ops.breakerOpens} vez(es)`,
+      );
+    }
+    if (run.arm === "B" && Number(ops.batches ?? 0) === 0) {
+      reasons.push(
+        `${label}: nenhum lote do group commit (o POSITION_GROUP_COMMIT=on chegou às réplicas?)`,
+      );
+    }
+    if (run.arm === "A" && Number(ops.batches ?? 0) > 0) {
+      reasons.push(`${label}: lotes do group commit com o braço desligado`);
+    }
+
+    return {
+      n: run.n,
+      arm: run.arm,
+      posts,
+      stored,
+      dbPoints: run.dbPoints,
+      failures,
+      p95,
+      commits: Number(run.commits ?? 0),
+      ops,
+    };
+  });
+
+  const armOf = (arm) => {
+    const of = facts.filter((fact) => fact.arm === arm);
+    const posts = of.reduce((sum, fact) => sum + fact.posts, 0);
+    const commits = of.reduce((sum, fact) => sum + fact.commits, 0);
+    const p95s = of.map((fact) => fact.p95).filter((value) => value !== null);
+    const hits = of.reduce(
+      (sum, fact) => sum + Number(fact.ops.cacheHits ?? 0),
+      0,
+    );
+    const misses = of.reduce(
+      (sum, fact) => sum + Number(fact.ops.cacheMisses ?? 0),
+      0,
+    );
+
+    return {
+      runs: of.length,
+      p95: p95s.length ? p95s.reduce((x, y) => x + y, 0) / p95s.length : null,
+      commitsPerPost: posts > 0 ? commits / posts : null,
+      cacheHitRate: hits + misses > 0 ? hits / (hits + misses) : null,
+    };
+  };
+
+  const a = armOf("A");
+  const b = armOf("B");
+
+  if (a.runs < 2 || b.runs < 2 || a.runs !== b.runs) {
+    reasons.push(
+      `a sessão precisa de A e B na mesma conta, dois de cada (A ${a.runs}, B ${b.runs})`,
+    );
+  }
+
+  const p95DeltaPct =
+    a.p95 && b.p95 !== null ? ((b.p95 - a.p95) / a.p95) * 100 : null;
+
+  if (p95DeltaPct === null) {
+    reasons.push("sem p95 das posições para comparar os braços");
+  } else if (p95DeltaPct > tolerance) {
+    reasons.push(
+      `o p95 do braço B ficou ${p95DeltaPct.toFixed(1)}% pior que o do A (tolerância ${tolerance}%)`,
+    );
+  }
+
+  if (
+    options.p95Ms !== undefined &&
+    (b.p95 === null || b.p95 >= options.p95Ms)
+  ) {
+    reasons.push(
+      `o p95 do braço B foi ${b.p95 ?? "?"} ms (limite ${options.p95Ms} ms)`,
+    );
+  }
+
+  return {
+    pass: reasons.length === 0,
+    arms: { A: a, B: b },
+    gain: {
+      p95DeltaPct,
+      commitsPerPost: { A: a.commitsPerPost, B: b.commitsPerPost },
+      fewerCommits:
+        a.commitsPerPost !== null && b.commitsPerPost !== null
+          ? b.commitsPerPost < a.commitsPerPost
+          : null,
+    },
+    runs: facts,
+    reasons,
+  };
+}
+
+/**
+ * A day of the queues dropped under load (plano-escala LOAD-11):
+ * queue-drop-under-load.mjs wrote its summary (`options.drop`: the day
+ * drained, its three partitions gone, the failures in the dead letters,
+ * the DROP in under a minute), and load.js or positions-5m.js ran beside
+ * it. Passes when both hold and the load had no product failures past
+ * `maxFailureRate` (1%) and a p95 under `p95Ms` (300). Without the
+ * scene's summary, it fails.
+ */
+function queueDropVerdict(summary, options = {}) {
+  const p95Ms = options.p95Ms ?? 300;
+  const maxFailureRate = options.maxFailureRate ?? 0.01;
+  const drop = options.drop ?? null;
+  const p95 = statOf(summary, "surface_latency", "p(95)");
+  const failures = rateOf(summary, "surface_failures");
+  const reasons = [];
+
+  if (!drop) reasons.push("sem o resumo do queue-drop-under-load.mjs");
+  else if (!drop.pass) reasons.push(...(drop.reasons ?? ["o DROP falhou"]));
+
+  if (p95 === null || p95 >= p95Ms) {
+    reasons.push(
+      `carga com p95 de ${p95 ?? "?"} ms durante o DROP (limite ${p95Ms} ms)`,
+    );
+  }
+  if (failures === null || failures > maxFailureRate) {
+    reasons.push("falhas de produto na carga durante o DROP");
+  }
+
+  return {
+    pass: reasons.length === 0,
+    day: drop?.day ?? null,
+    dropSeconds: drop?.dropSeconds ?? null,
+    drainSeconds: drop?.drainSeconds ?? null,
+    p95,
+    failures,
+    reasons,
+  };
+}
+
 const VERDICTS = {
   "noisy-tenant": noisyTenantVerdict,
   outage: outageVerdict,
   spike: spikeVerdict,
   drain: drainVerdict,
+  "positions-abba": positionsAbbaVerdict,
+  "queue-drop": queueDropVerdict,
 };
 
 export {
@@ -246,6 +434,8 @@ export {
   metricOf,
   noisyTenantVerdict,
   outageVerdict,
+  positionsAbbaVerdict,
+  queueDropVerdict,
   rateOf,
   spikeVerdict,
   statOf,
@@ -270,9 +460,13 @@ if (invokedDirectly) {
   const summary = JSON.parse(readFileSync(file, "utf8"));
   const options = optionsJson ? JSON.parse(optionsJson) : {};
 
-  // The drain's verdict reads the script's own summary by its path.
+  // The drain's and the DROP's verdicts read the scripts' own summaries
+  // by their paths.
   if (typeof options.drainFile === "string") {
     options.drain = JSON.parse(readFileSync(options.drainFile, "utf8"));
+  }
+  if (typeof options.dropFile === "string") {
+    options.drop = JSON.parse(readFileSync(options.dropFile, "utf8"));
   }
 
   const verdict = judge(summary, options);

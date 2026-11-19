@@ -431,7 +431,7 @@ const STEPS = {
       [
         "500 POST/s de posições (2.000 pontos/s)",
         "p95 < 150 ms, e o ABBA do group commit e do cache",
-        "as cenas do LOAD-11",
+        "positions-5m.js com POSITIONS_5M_ACCEPTANCE=true e o ABBA de positions-abba.sh (LOAD-11; no alvo, à mão)",
       ],
       [
         "24 mil sockets por 2 h, matando um realtime",
@@ -451,9 +451,13 @@ const STEPS = {
       [
         "folga de 10×",
         "3.330 POST/s por 10 min, 0 ponto perdido",
-        "as cenas do LOAD-11, contando no banco",
+        "positions-5m.js com POSITIONS_5M_RATE=3330, contando a janela no banco (LOAD-11)",
       ],
-      ["DROP de um dia de fila", "< 1 min sob carga", "as cenas do LOAD-11"],
+      [
+        "DROP de um dia de fila",
+        "< 1 min sob carga",
+        "queue-drop-under-load.mjs com o load.js ao lado e o veredito queue-drop (LOAD-11)",
+      ],
       ["outbox oldest_pending", "p95 < 30 s", "o ops_sample da corrida"],
       [
         "15 min pela Cloudflare",

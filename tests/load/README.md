@@ -514,6 +514,100 @@ segundo e nenhuma recusa do falso, contra uma API local com as variáveis do
 imagem de produção não foi construída para isso: a rodada de verdade é da
 bancada (Linux com 10 núcleos ou mais e o `vps-6vcpu.env`) e dos portões.
 
+### As cenas do portão do 5M (LOAD-11)
+
+Três critérios do portão do 5M (seção 6 do plano, "Portão do 5M") pedem
+cenas próprias: as posições a 500 POST/s com o ABBA do group commit e do
+cache de sessão, a folga de 10× contando os pontos no banco e o DROP de um
+dia de fila sob carga. O número só vale no hardware-alvo (onda 23), com o
+seed `5m`; aqui elas ficam prontas e provadas em escala pequena.
+
+| cena                        | o que faz                                                                                                                                                                    | aceite                                                                                                            |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `positions-5m.js`           | `POST /route/positions` a uma taxa fixa (500 POST/s de 4 pontos, 2.000 pontos/s), um motorista do fixture depois do outro, com o braço do ABBA em cada amostra               | p95 abaixo de 150 ms e nenhuma falha (`POSITIONS_5M_ACCEPTANCE=true`)                                             |
+| `positions-abba.sh`         | a cena acima em A B B A no mesmo harness: A com o group commit e o cache desligados (a produção de hoje), B com os dois ligados; conta os pontos da janela no banco          | 0 ponto perdido em toda corrida, nenhuma abertura do disjuntor em B e o p95 de B no máximo 5% pior que o de A     |
+| `queue-drop-under-load.mjs` | grava um dia da família de notificação (500 mil eventos assentados, 1 mil FAILED, 10 mil recibos e 5 mil pendentes), espera o dreno do dia e roda o DROP do job de partições | o dia drenado, as três partições fora, as falhas nos dead letters e o DROP em menos de 1 min, com a carga ao lado |
+
+```bash
+H="docker compose --env-file .env -f tests/load/compose.load.yaml"
+R="-v $PWD/tests/load/results:/results"
+DB="postgresql://trajetto:trajetto-password@localhost:54321/load_test?schema=public"
+
+# O ABBA das posições (sem o perfil ingest: o braço chega só às réplicas da api).
+bash tests/load/positions-abba.sh
+
+# A folga de 10×: 3.330 POST/s por 10 min, com o mesmo arquivo.
+$H --profile k6 run --rm $R -e POSITIONS_5M_RATE=3330 -e POSITIONS_5M_MAX_VUS=6000 \
+  k6 run --summary-export /results/positions-5m.json /load/positions-5m.js
+
+# O DROP de um dia sob carga: o load.js mede o HTTP durante a cena inteira.
+$H --profile k6 run --rm $R -e LOAD_DURATION=20m k6 run \
+  --summary-export /results/queue-drop-load.json /load/load.js &
+NODE_ENV=test REDIS_URL=redis://localhost:56379 DATABASE_URL="$DB" \
+  npx tsx tests/load/queue-drop-under-load.mjs
+wait
+node tests/load/lib/verdicts.mjs queue-drop tests/load/results/queue-drop-load.json \
+  '{"dropFile":"tests/load/results/queue-drop.json"}'
+```
+
+- **`positions-5m.js`** (`POSITIONS_5M_RATE` 500, `POSITIONS_5M_POINTS` 4,
+  `POSITIONS_5M_DURATION` 10 min, `POSITIONS_5M_MAX_VUS` 2000,
+  `POSITIONS_5M_ARM`, `POSITIONS_5M_ACCEPTANCE`): o `positions.js` é a
+  frota no ritmo que o servidor pede; este segura a taxa do portão, qualquer
+  que seja a resposta, para medir o caminho de escrita nela. Cada 200 soma o
+  `data.stored` da resposta em `positions_points_stored` (um reenvio responde
+  0), e o fim da cena imprime a janela (`POSITIONS_5M_WINDOW`) em que os
+  pontos foram gravados. Com o seed `5m`, cada um dos vinte mil motoristas
+  envia a cada 40 s; na folga de 10×, a cada 6 s.
+- **`positions-abba.sh`** (`POSITIONS_ABBA_ORDER` ABBA, `POSITIONS_ABBA_RATE`
+  500, `POSITIONS_ABBA_POINTS` 4, `POSITIONS_ABBA_DURATION` 10m,
+  `POSITIONS_ABBA_CACHE_TTL_MS` 15000, e as do `lib/bench.sh`): recria as
+  réplicas da api com o env de cada braço (`LOAD_API_ENV_FILE`, um arquivo
+  na pasta da corrida), confere que ele chegou, lê os commits do
+  `pg_stat_database` antes e depois, conta as linhas da janela em
+  `driver_position_v2` e soma as seções `position_group_commit` e
+  `session_cache` do `ops_sample` da janela. O veredito `positions-abba` diz
+  também o ganho de B: commits por POST e o p95, braço a braço, e a taxa de
+  acerto do cache. Só na máquina do harness (a guarda do `lib/bench.sh`).
+- **`queue-drop-under-load.mjs`** (`QUEUE_DROP_DAY`, `QUEUE_DROP_EVENTS`
+  500000, `QUEUE_DROP_FAILED` 1000, `QUEUE_DROP_RECEIPTS` 10000,
+  `QUEUE_DROP_PENDING` 5000, `QUEUE_DROP_TENANTS` 100, `QUEUE_DROP_CHUNK`
+  50000, `QUEUE_DROP_LIMIT_S` 60, `QUEUE_DROP_DRAIN_TIMEOUT_MIN` 30,
+  `QUEUE_DROP_POLL_S` 5, `QUEUE_DROP_OUT`): grava o dia numa partição que já
+  existe (por padrão a mais antiga antes de ontem, senão a mais nova depois
+  de amanhã: a API grava em ontem, hoje e amanhã), com os ids em uuid v7 de
+  instantes do dia, e espera o pipeline do harness drenar os pendentes (o
+  portão do DROP guarda um dia com algo em voo). Depois roda o
+  `maintainPartitions` desta árvore nas três tabelas da família, com a
+  retenção posta para que só esse dia passe dela e o portão aberto só para
+  ele (o legado e os outros dias ficam), e mede. Por fim roda o job de novo
+  com a retenção de verdade e confere que nenhum dia de que uma linha
+  precisa agora ficou faltando. Antes de carregar o código da API, fixa no
+  banco descartável toda URL de banco que o `.env` do repositório poderia
+  trazer (a DDL nunca vai para outro lugar). Imprime a janela do DROP
+  (`QUEUE_DROP_WINDOW`) para o `lib/ops-window.mjs`.
+
+**No portão (hardware-alvo, onda 23).** O `positions-abba.sh` não roda lá:
+o alvo é um servidor do Dokploy, que a guarda do `lib/bench.sh` recusa. A
+mesma sequência é à mão, do gerador: em cada corrida, `POSITION_GROUP_COMMIT`
+e `SESSION_CACHE_TTL_MS` do braço no _Environment_ das Applications que
+recebem a rota (**Deploy**), o `positions-5m.js` com `POSITIONS_5M_ARM` e
+`--summary-export`, e a contagem da janela pelo SSH do alvo, com o SQL do
+script. O ABBA da expansão do outbox em lote (`OUTBOX_EXPANSION_MODE`,
+F5-33) segue o mesmo desenho com o `drain-backlog.mjs`: `per-event` e
+`batch` no worker, A B B A, comparando o `drainSeconds` e os commits.
+
+**Conferido** (19/11/2026, nesta máquina, em escala pequena, só para provar
+que cada uma roda e mede o que diz): o `positions-5m.js` no k6 do harness
+(`grafana/k6:2.2.0` pelo digest), 50 POST/s por 5 s contra um servidor
+falso, somou 1.000 pontos gravados e imprimiu a janela; o SQL de contagem e
+do `ops_sample` do `positions-abba.sh` rodou num Postgres 16 descartável; e o
+`queue-drop-under-load.mjs`, num banco descartável com as filas
+particionadas, gravou 5 mil eventos e 400 pendentes num dia futuro, viu um
+processo do pipeline drenar o dia em 6 s e derrubou as três partições em
+0,5 s, com os 20 FAILED nos dead letters; sem consumidor, parou no tempo do
+dreno com o motivo.
+
 ## O que foi medido, e o que mudou por causa disso
 
 ### Teto de uma réplica

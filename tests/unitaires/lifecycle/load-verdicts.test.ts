@@ -352,3 +352,170 @@ describe("the ops window verdict", () => {
     });
   });
 });
+
+/**
+ * The ABBA of the GPS write path and the DROP of a day of the queues
+ * (plano-escala LOAD-11). A verdict that compared the k6 counter with
+ * itself, or read the unfiltered latency, would pass a run that lost
+ * points or one whose B never batched; one that read the DROP's summary
+ * as optional would pass a load run that dropped nothing.
+ */
+describe("the positions ABBA verdict", () => {
+  const verdicts = () =>
+    load() as Promise<
+      Verdicts & {
+        positionsAbbaVerdict: (session: unknown, options?: object) => any;
+        queueDropVerdict: (summary: unknown, options?: object) => any;
+      }
+    >;
+
+  const runOf = (
+    n: number,
+    arm: "A" | "B",
+    over: { p95?: number; dbPoints?: number; ops?: object } = {},
+  ) => ({
+    n,
+    arm,
+    dbPoints: over.dbPoints ?? 2000,
+    commits: arm === "A" ? 2600 : 900,
+    ops:
+      over.ops ??
+      (arm === "B"
+        ? { batches: 300, breakerOpens: 0, cacheHits: 90, cacheMisses: 10 }
+        : { batches: 0, breakerOpens: 0, cacheHits: 0, cacheMisses: 0 }),
+    summary: {
+      metrics: {
+        http_reqs: { count: 500 },
+        positions_points_stored: { count: 2000 },
+        "surface_latency{surface:route.positions}": trend(
+          over.p95 ?? (arm === "A" ? 40 : 38),
+        ),
+        "surface_failures{surface:route.positions}": rate(0),
+      },
+    },
+  });
+
+  const abba = (...overrides: Array<Parameters<typeof runOf>[2]>) => ({
+    runs: (["A", "B", "B", "A"] as const).map((arm, index) =>
+      runOf(index + 1, arm, overrides[index] ?? {}),
+    ),
+  });
+
+  it("passes when nothing was lost, B batched without the breaker and kept the p95", async () => {
+    const { positionsAbbaVerdict } = await verdicts();
+    const verdict = positionsAbbaVerdict(abba());
+
+    expect(verdict).toMatchObject({ pass: true, reasons: [] });
+    expect(verdict.gain.fewerCommits).toBe(true);
+    expect(verdict.gain.commitsPerPost).toEqual({ A: 5.2, B: 1.8 });
+    expect(verdict.arms.B.cacheHitRate).toBe(0.9);
+  });
+
+  it("fails on a point the database does not have", async () => {
+    const { positionsAbbaVerdict } = await verdicts();
+
+    expect(
+      positionsAbbaVerdict(abba({}, { dbPoints: 1998 })).reasons,
+    ).toContain(
+      "corrida 2 (B): 2000 pontos respondidos com 200 e 1998 no banco",
+    );
+  });
+
+  it("fails when B opened the breaker, never batched, or A batched", async () => {
+    const { positionsAbbaVerdict } = await verdicts();
+
+    expect(
+      positionsAbbaVerdict(abba({}, { ops: { batches: 10, breakerOpens: 1 } }))
+        .pass,
+    ).toBe(false);
+    expect(
+      positionsAbbaVerdict(abba({}, {}, { ops: { batches: 0 } })).pass,
+    ).toBe(false);
+    expect(positionsAbbaVerdict(abba({ ops: { batches: 5 } })).pass).toBe(
+      false,
+    );
+  });
+
+  it("fails when B's p95 is more than 5% worse, or over the gate's limit", async () => {
+    const { positionsAbbaVerdict } = await verdicts();
+
+    expect(positionsAbbaVerdict(abba({}, { p95: 50 }, { p95: 50 })).pass).toBe(
+      false,
+    );
+    expect(
+      positionsAbbaVerdict(abba(), { p95Ms: 30 }).reasons.join(" "),
+    ).toContain("limite 30 ms");
+  });
+
+  it("never passes a session without two runs of each arm", async () => {
+    const { positionsAbbaVerdict } = await verdicts();
+
+    expect(positionsAbbaVerdict({ runs: [] }).pass).toBe(false);
+    expect(positionsAbbaVerdict({ runs: abba().runs.slice(0, 2) }).pass).toBe(
+      false,
+    );
+  });
+});
+
+describe("the queue DROP verdict", () => {
+  const httpSummary = (p95: number, failures = 0) => ({
+    metrics: {
+      surface_latency: trend(p95),
+      surface_failures: rate(failures),
+    },
+  });
+
+  const dropped = {
+    pass: true,
+    day: "20261126",
+    dropSeconds: 0.5,
+    reasons: [],
+  };
+
+  it("passes with the day dropped in time and the load in p95 under 300 ms", async () => {
+    const { queueDropVerdict } = (await load()) as any;
+
+    expect(queueDropVerdict(httpSummary(120), { drop: dropped })).toMatchObject(
+      {
+        pass: true,
+        day: "20261126",
+        dropSeconds: 0.5,
+      },
+    );
+  });
+
+  it("fails on a failed DROP, a slow or failing load, or no DROP at all", async () => {
+    const { queueDropVerdict } = (await load()) as any;
+
+    expect(
+      queueDropVerdict(httpSummary(120), {
+        drop: { pass: false, reasons: ["o DROP levou 75 s (limite 60 s)"] },
+      }).reasons,
+    ).toEqual(["o DROP levou 75 s (limite 60 s)"]);
+    expect(queueDropVerdict(httpSummary(300), { drop: dropped }).pass).toBe(
+      false,
+    );
+    expect(
+      queueDropVerdict(httpSummary(120, 0.02), { drop: dropped }).pass,
+    ).toBe(false);
+    expect(queueDropVerdict(httpSummary(120)).pass).toBe(false);
+  });
+
+  it("reads the DROP's summary by its path from the command line", () => {
+    const dir = mkdtempSync(join(tmpdir(), "load-verdict-"));
+    const http = join(dir, "queue-drop-load.json");
+    const drop = join(dir, "queue-drop.json");
+
+    writeFileSync(http, JSON.stringify(httpSummary(120)));
+    writeFileSync(drop, JSON.stringify(dropped));
+
+    const result = spawnSync(
+      process.execPath,
+      [VERDICTS, "queue-drop", http, JSON.stringify({ dropFile: drop })],
+      { encoding: "utf8" },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ pass: true });
+  });
+});

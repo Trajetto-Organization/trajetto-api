@@ -161,6 +161,8 @@ const SCENARIOS = [
   // plano-escala LOAD-04.
   "import-20k.js",
   "import-geocode.js",
+  // plano-escala LOAD-11.
+  "positions-5m.js",
 ];
 
 /** The k6 scenes judged elsewhere: rolling.js by swarm-rolling-script. */
@@ -168,6 +170,9 @@ const OTHER_SCENES = ["rolling.js"];
 
 /** The k6 scenes of plano-escala LOAD-04 (the import's two). */
 const LOAD_04_SCENES = ["import-20k.js", "import-geocode.js"];
+
+/** The k6 scene of plano-escala LOAD-11 (the 5M gate's positions). */
+const LOAD_11_SCENES = ["positions-5m.js"];
 
 /** The scenes plano-escala LOAD-03 added, with what their verdict reads. */
 const LOAD_03_SCENES = [
@@ -391,7 +396,7 @@ describe("the scenes (LOAD-03)", () => {
     );
   });
 
-  it.each([...LOAD_03_SCENES, ...LOAD_04_SCENES])(
+  it.each([...LOAD_03_SCENES, ...LOAD_04_SCENES, ...LOAD_11_SCENES])(
     "%s summarises p99 and is run with its summary-export",
     (scene) => {
       expect(read(LOAD, scene)).toContain(
@@ -1772,4 +1777,296 @@ describe("the routes by Path, as Dokploy writes them (F5-26)", () => {
       );
     });
   });
+});
+
+/**
+ * The scenes of the 5M gate (plano-escala LOAD-11, section 6): the
+ * positions at 500 POST/s in an ABBA of the group commit and the session
+ * cache, the 10× headroom counted in the database, and a day of the queues
+ * drained and dropped under load. The numbers come only on the target
+ * hardware; what can go wrong before that is quiet: a scene that follows
+ * the server's hint measures another rate than the gate's, an arm whose
+ * variables never reached the replicas compares A with A, a count that
+ * trusts k6 instead of the database cannot see a lost point, and a DROP
+ * pointed by the repository's .env at another database drops a real day.
+ * So the k6 scene is read, the DROP scene refuses before connecting, and
+ * the ABBA script runs for real with docker stubbed.
+ */
+describe("the 5M gate's scenes (LOAD-11)", () => {
+  const readme = read(LOAD, "README.md");
+  const section = readme.slice(
+    readme.indexOf("### As cenas do portão do 5M (LOAD-11)"),
+  );
+  const positions = read(LOAD, "positions-5m.js");
+  const drop = read(LOAD, "queue-drop-under-load.mjs");
+  const tsxCli = resolve(ROOT, "node_modules", "tsx", "dist", "cli.mjs");
+
+  it.each([
+    "positions-5m.js",
+    "positions-abba.sh",
+    "queue-drop-under-load.mjs",
+  ])("%s is in the README's table of the 5M gate's scenes", (scene) => {
+    expect(section).toMatch(
+      new RegExp(`\\| \`${scene.replace(".", "\\.")}\` +\\|`),
+    );
+  });
+
+  it("holds the gate's rate, 500 POST/s of 4 points, whatever the answers say", () => {
+    expect(positions).toContain('executor: "constant-arrival-rate"');
+    expect(positions).toContain("Number(__ENV.POSITIONS_5M_RATE || 500)");
+    expect(positions).toContain("Number(__ENV.POSITIONS_5M_POINTS || 4)");
+    // No pause on the hint: positions.js is the fleet at the server's pace.
+    expect(positions).not.toMatch(/\bsleep\(/);
+    expect(positions).not.toContain("nextFlushAfterMs");
+  });
+
+  it("tags every sample with its arm and counts what the API says it stored", () => {
+    expect(positions).toContain("tags: ARM ? { arm: ARM } : {}");
+    expect(positions).toContain('response.json("data.stored")');
+    expect(positions).toContain("POSITIONS_5M_WINDOW");
+  });
+
+  it("puts the gate's acceptance behind POSITIONS_5M_ACCEPTANCE", () => {
+    expect(positions).toContain('__ENV.POSITIONS_5M_ACCEPTANCE === "true"');
+    expect(positions).toContain(
+      '"surface_latency{surface:route.positions}": ["p(95)<150"]',
+    );
+    expect(positions).toContain(
+      '"surface_failures{surface:route.positions}": ["rate==0"]',
+    );
+    expect(positions).toContain('dropped_iterations: ["count==0"]');
+  });
+
+  it("pins every database URL of the app to the disposable one before the app loads", () => {
+    const pin = drop.indexOf('"BATCH_DATABASE_URL",');
+    const load = drop.indexOf('import("../../src/');
+
+    expect(pin).toBeGreaterThan(0);
+    expect(pin).toBeLessThan(load);
+
+    for (const name of [
+      '"DATABASE_READ_URL",',
+      '"READINESS_DATABASE_URL",',
+      '"DATABASE_REPLICA_URL"',
+      '"PGBOUNCER_STATS_URL"',
+    ]) {
+      expect(drop.indexOf(name), name).toBeGreaterThan(0);
+      expect(drop.indexOf(name), name).toBeLessThan(load);
+    }
+  });
+
+  it("drops the chosen day only, through the family's own gate", () => {
+    expect(drop).toContain("partition.name === `${parent}_${stamp}`");
+    expect(drop).toContain("? gate.mayDrop(parent, partition)");
+    expect(drop).toContain(
+      '"webhook-deliveries": { mayDrop: async () => false }',
+    );
+    expect(drop).toContain("FAMILY.includes(table.table)");
+    // Never a day the API writes into.
+    expect(drop).toContain("day >= today - DAY_MS && day <= today + DAY_MS");
+  });
+
+  it("queue-drop-under-load.mjs refuses a database that is not the disposable one, before connecting", () => {
+    expect(
+      drop.indexOf("assertDisposableDatabase(env.DATABASE_URL"),
+    ).toBeLessThan(drop.indexOf("new pg.Client"));
+
+    const result = spawnSync(
+      process.execPath,
+      [tsxCli, resolve(LOAD, "queue-drop-under-load.mjs")],
+      {
+        cwd: ROOT,
+        encoding: "utf8",
+        timeout: 60_000,
+        env: {
+          ...process.env,
+          DATABASE_URL: "postgresql://load:load@db.example.com:5432/load_test",
+          LOAD_PG_PORT: "",
+        },
+      },
+    );
+
+    expect(result.status).not.toBe(0);
+    expect(result.stdout + result.stderr).toContain("Só no banco descartável");
+  }, 60_000);
+
+  it("keeps the ABBA script executable on any checkout", () => {
+    const listed = spawnSync(
+      "git",
+      ["ls-files", "-s", "tests/load/positions-abba.sh"],
+      { cwd: ROOT, encoding: "utf8" },
+    );
+
+    expect(listed.stdout).toMatch(/^100755 /);
+  });
+
+  /**
+   * docker, as the harness answers positions-abba.sh. The env file of the
+   * last `up` is kept (the replicas' environment that inspect shows); k6
+   * writes the summary and the window line in its logfmt; psql answers the
+   * commits, the count of the window (the points k6 stored, or one fewer
+   * with STUB_LOST) and the ops_sample of the arm.
+   */
+  const DOCKER = `
+state="$STUB_STATE"
+case "$1" in
+  context) echo "npipe:////./pipe/docker_engine" ;;
+  info) case "$*" in *LocalNodeState*) echo inactive ;; *) echo 12 ;; esac ;;
+  service) ;;
+  ps)
+    case "$*" in
+      *service=api*) printf 'api1\\napi2\\n' ;;
+      *service=postgres*) echo pg1 ;;
+      *service=ingest*) [ -z "\${STUB_INGEST:-}" ] || echo i1 ;;
+    esac ;;
+  inspect) cat "$state/env" 2>/dev/null ;;
+  exec)
+    case "$*" in
+      *wget*) ;;
+      *xact_commit*)
+        now=$(( $(cat "$state/commits" 2>/dev/null || echo 1000) + 2500 ))
+        echo "$now" > "$state/commits"
+        echo "$now" ;;
+      *driver_position_v2*)
+        if [ -n "\${STUB_LOST:-}" ]; then echo 1999; else echo 2000; fi ;;
+      *ops_sample*)
+        if grep -q '=on' "$state/env"; then
+          echo '{"batches" : 300, "fallbackFlushes" : 0, "breakerOpens" : 0, "cacheHits" : 450, "cacheMisses" : 50}'
+        else
+          echo '{"batches" : 0, "fallbackFlushes" : 0, "breakerOpens" : 0, "cacheHits" : 0, "cacheMisses" : 0}'
+        fi ;;
+      *"SELECT 1"*) echo 1 ;;
+    esac ;;
+  compose)
+    case "$*" in
+      *" up "*)
+        cat "$LOAD_API_ENV_FILE" > "$state/env"
+        cat "$LOAD_API_ENV_FILE" >> "$state/ups"
+        echo "--" >> "$state/ups" ;;
+      *" run "*)
+        dir=""; out=""; prev=""; arm=""
+        for a in "$@"; do
+          case "$a" in
+            *:/results) dir="\${a%:/results}" ;;
+            POSITIONS_5M_ARM=*) arm="\${a#POSITIONS_5M_ARM=}" ;;
+          esac
+          [ "$prev" != "--summary-export" ] || out="\${a#/results/}"
+          prev="$a"
+        done
+        if [ "$arm" = B ]; then p95=30; else p95=31; fi
+        printf '{"metrics":{"http_reqs":{"count":500},"positions_points_stored":{"count":2000},"surface_latency{surface:route.positions}":{"p(95)":%s},"surface_failures{surface:route.positions}":{"value":0}}}' "$p95" > "$dir/$out"
+        printf '%s\\n' 'time="2026-11-19T10:10:00Z" level=info msg="POSITIONS_5M_WINDOW {\\"from\\":\\"2026-11-19T10:00:00.000Z\\",\\"to\\":\\"2026-11-19T10:10:00.000Z\\",\\"arm\\":\\"'"$arm"'\\"}" source=console' ;;
+    esac ;;
+esac
+exit 0`;
+
+  describe.skipIf(!hasShell("bash"))(
+    "positions-abba.sh",
+    { timeout: 120_000 },
+    () => {
+      let box: Sandbox;
+      let base: Record<string, string>;
+
+      beforeEach(() => {
+        box = sandbox();
+        box.stub("docker", DOCKER);
+        box.stub("sleep", "exit 0");
+        box.file("state/.keep", "");
+        base = {
+          STUB_STATE: `${box.root}/state`,
+          LOAD_ENV_FILE: box.file(
+            "harness.env",
+            "JWT_SECRET=x\nJWT_SECRET_REFRESH_TOKEN=y\n",
+          ),
+          LOAD_CONTEXT_FILE: box.file("load-context.json", "{}"),
+          POSITIONS_ABBA_WORK: `${box.root}/work`,
+          BENCH_DOKPLOY_DIR: `${box.root}/no-dokploy`,
+          DOCKER_HOST: "",
+        };
+      });
+
+      afterEach(() => box.dispose());
+
+      const abba = (env: Record<string, string> = {}) =>
+        run("bash", repoFile("tests/load/positions-abba.sh"), [], {
+          bin: box.bin,
+          env: { ...base, ...env },
+        });
+
+      it("refuses an order that is not as many A as B, two of each, before docker", () => {
+        for (const order of ["AB", "AAB", "ABXA"]) {
+          expect(abba({ POSITIONS_ABBA_ORDER: order }).status, order).toBe(2);
+        }
+
+        expect(abba({ POSITIONS_ABBA_CACHE_TTL_MS: "20000" }).status).toBe(2);
+        expect(box.calls("docker")).toEqual([]);
+      });
+
+      it("refuses with the ingest profile up: the arm would not reach the route", () => {
+        const result = abba({ STUB_INGEST: "1" });
+
+        expect(result.status).toBe(2);
+        expect(result.stderr).toContain("perfil ingest");
+        expect(
+          box.calls("docker").filter((call) => call.includes(" up ")),
+        ).toEqual([]);
+      });
+
+      it("recreates the api with each arm's variables in ABBA and passes when nothing was lost", () => {
+        const result = abba();
+
+        expect(result.status, result.stderr + result.stdout).toBe(0);
+
+        const ups = readFileSync(`${box.root}/state/ups`, "utf8")
+          .replace(/\r\n/g, "\n")
+          .split("--\n")
+          .filter(Boolean);
+
+        expect(ups).toEqual([
+          "POSITION_GROUP_COMMIT=off\nSESSION_CACHE_TTL_MS=0\n",
+          "POSITION_GROUP_COMMIT=on\nSESSION_CACHE_TTL_MS=15000\n",
+          "POSITION_GROUP_COMMIT=on\nSESSION_CACHE_TTL_MS=15000\n",
+          "POSITION_GROUP_COMMIT=off\nSESSION_CACHE_TTL_MS=0\n",
+        ]);
+
+        const session = JSON.parse(
+          readFileSync(`${box.root}/work/session.json`, "utf8"),
+        );
+
+        expect(session.runs.map((each: { arm: string }) => each.arm)).toEqual([
+          "A",
+          "B",
+          "B",
+          "A",
+        ]);
+        expect(session.runs[0]).toMatchObject({
+          dbPoints: 2000,
+          commits: 2500,
+          from: "2026-11-19T10:00:00.000Z",
+          to: "2026-11-19T10:10:00.000Z",
+        });
+
+        const verdict = JSON.parse(
+          readFileSync(`${box.root}/work/verdict.json`, "utf8"),
+        );
+
+        expect(verdict.pass).toBe(true);
+        expect(verdict.arms.B.cacheHitRate).toBe(0.9);
+      });
+
+      it("fails when the database has fewer points than the API said it stored", () => {
+        const result = abba({ STUB_LOST: "1" });
+
+        expect(result.status).toBe(1);
+
+        const verdict = JSON.parse(
+          readFileSync(`${box.root}/work/verdict.json`, "utf8"),
+        );
+
+        expect(verdict.reasons).toContain(
+          "corrida 1 (A): 2000 pontos respondidos com 200 e 1999 no banco",
+        );
+      });
+    },
+  );
 });
