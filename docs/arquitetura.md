@@ -4792,7 +4792,12 @@ OpenStreetMap são recusados.
   que as chamadas avulsas usam, e só quando elas cabem nos dois minutos (um
   script só no Redis confere e gasta os dois juntos): o lote recusado com
   429 não gasta nada além da própria chamada, e as chamadas avulsas da
-  chave seguem com o que sobrou.
+  chave seguem com o que sobrou. O corpo tem limite próprio,
+  `BATCH_BODY_LIMIT_BYTES` (64 KiB por entrega, 6,25 MiB no lote de 100),
+  porque o padrão do Fastify (1 MiB, o da criação avulsa) recusava um lote
+  de NF-e com dezenas de itens por entrega; acima dele o 413 é
+  `BATCH_TOO_LARGE`, com a frase de dividir o lote (`bodyTooLarge` na
+  config da rota, lido pelo tratamento de erro em `src/http.ts`).
 - **Cancelamento pela API** (L9, D49): `POST /integration/v1/deliveries/:id/cancel`,
   com o escopo próprio `deliveries:cancel` (`deliveries:write` não cancela:
   nenhuma chave já emitida ganha o poder em silêncio, e chave não se edita) e

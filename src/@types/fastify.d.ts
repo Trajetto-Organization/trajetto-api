@@ -48,6 +48,12 @@ declare module "fastify" {
      * on. Absent everywhere else: the session is read on every request.
      */
     sessionCache?: boolean;
+    /**
+     * The 413 of a body past the route's own `bodyLimit`, when it is not
+     * the upload one (src/http.ts): the public batch says how to split
+     * (plano-escala U-04). Absent, the upload's sentence.
+     */
+    bodyTooLarge?: { code: string; message: string };
     openapi?: {
       body?: ZodType;
       headers?: ZodType;

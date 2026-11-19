@@ -216,6 +216,10 @@ const integrationBatchResponses = {
       "INTERNAL_ERROR: falha nossa no meio do lote, que parou ali. Reenvie o lote inteiro com as MESMAS `idempotency_key`: as entregas que chegaram a ser criadas voltam como 200, sem duplicar.",
     ),
 
+  tooLarge: codedError(
+    "BATCH_TOO_LARGE: o corpo passa do limite de tamanho do lote, dito na descrição da rota. Nenhuma entrega foi lida nem gravada, e só a chamada contou nos limites por minuto, como uma avulsa: divida as entregas em lotes menores e envie cada um.",
+  ),
+
   // Shared with the reads: the company ceiling's 429 (merged by the
   // transform with the per-key one). Each delivery counts one call.
   tooManyRequests: publicBusinessRateLimitResponse,

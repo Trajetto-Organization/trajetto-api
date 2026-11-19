@@ -5,6 +5,10 @@ import { randomUUID } from "node:crypto";
 import Redis from "ioredis";
 
 import {
+  BATCH_BODY_LIMIT_BYTES,
+  MAX_BATCH_DELIVERIES,
+} from "@/schemas/create-integration-deliveries-batch-schema";
+import {
   BUSINESS_API_RATE_PER_MINUTE,
   generateApiKey,
 } from "@/shared/integration/api-key-rules";
@@ -318,6 +322,68 @@ describe("what refuses the whole call", () => {
     expect(response.statusCode).toBe(403);
     expect(response.json().code).toBe("MISSING_API_SCOPE");
   });
+
+  it("a body past the batch's size limit: 413 BATCH_TOO_LARGE, and nothing is written", async () => {
+    const before = await deliveriesOf(CARRIER);
+    const heavy = (index: number) => ({
+      description: `Item ${index} ${"x".repeat(390)}`,
+      quantity: 1,
+    });
+    const body = JSON.stringify({
+      deliveries: Array.from({ length: MAX_BATCH_DELIVERIES }, () =>
+        document(randomUUID(), {
+          items: Array.from({ length: 200 }, (_, index) => heavy(index)),
+        }),
+      ),
+    });
+
+    expect(Buffer.byteLength(body)).toBeGreaterThan(BATCH_BODY_LIMIT_BYTES);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/integration/v1/deliveries/batch",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${writeKey}`,
+      },
+      payload: body,
+    });
+
+    expect(response.statusCode, response.body).toBe(413);
+    expect(response.json().code).toBe("BATCH_TOO_LARGE");
+    expect(response.json().message).toContain("divida");
+    expect(await deliveriesOf(CARRIER)).toBe(before);
+  });
+});
+
+describe("a batch heavier than a single create's body", () => {
+  // Fastify's default body limit is 1 MiB, and the single create keeps it.
+  // A hundred NF-e deliveries of sixty items each weigh more than that, and
+  // the batch used to refuse them whole with an undocumented 413.
+  it("is processed whole: 100 deliveries of 60 items each, past 1 MiB", async () => {
+    const key = await seedKey(CARRIER, ["deliveries:write"], 200);
+    const body = {
+      deliveries: Array.from({ length: MAX_BATCH_DELIVERIES }, () =>
+        document(randomUUID(), {
+          items: Array.from({ length: 60 }, (_, index) => ({
+            description: `Produto ${index} da nota fiscal ${"-".repeat(140)}`,
+            quantity: 2,
+            unit: "UN",
+            unit_value: 19.9,
+          })),
+        }),
+      ),
+    };
+
+    expect(Buffer.byteLength(JSON.stringify(body))).toBeGreaterThan(
+      1024 * 1024,
+    );
+
+    const response = await batch(key, body);
+
+    expect(response.statusCode, response.body.slice(0, 500)).toBe(200);
+    expect(response.json().created).toBe(MAX_BATCH_DELIVERIES);
+  }, 120_000);
 });
 
 describe("another company", () => {

@@ -47,7 +47,12 @@ import {
 } from "@/shared/integration/webhook-catalogue";
 
 import { apiUsageRecorder } from "@/shared/integration/api-usage-recorder";
-import { MAX_BATCH_DELIVERIES } from "@/schemas/create-integration-deliveries-batch-schema";
+import {
+  BATCH_BODY_LIMIT_BYTES,
+  BATCH_BODY_LIMIT_LABEL,
+  BATCH_TOO_LARGE,
+  MAX_BATCH_DELIVERIES,
+} from "@/schemas/create-integration-deliveries-batch-schema";
 import { integrationKeyBucket } from "@/shared/integration/integration-units";
 
 const readController = new IntegrationReadController();
@@ -403,15 +408,19 @@ async function integrationRoutes(app: FastifyInstance) {
    * each the single create, in its own transaction. The same gates and
    * scope as the single create; N deliveries spend N units of the key's and
    * the company's minute (integration-units.ts), so a batch is never a way
-   * around the ceilings.
+   * around the ceilings. Its own body limit (BATCH_BODY_LIMIT_BYTES): a
+   * hundred deliveries weigh more than Fastify's default of 1 MiB, the
+   * single create's, and a body past it is the batch's own 413.
    */
   app.post(
     "/deliveries/batch",
     {
       onRequest: [ensureApiKey, perKeyCeiling, limitBusinessApiRate],
       preHandler: [verifyApiScope("deliveries:write")],
+      bodyLimit: BATCH_BODY_LIMIT_BYTES,
       config: {
         rateLimit: false,
+        bodyTooLarge: BATCH_TOO_LARGE,
         // Documentation only: each element is parsed by the use case.
         openapi: { body: integrationWriteSchemas.createDeliveriesBatch },
       },
@@ -426,6 +435,8 @@ async function integrationRoutes(app: FastifyInstance) {
           "",
           "Cada entrega passa pelas mesmas regras e mensagens da criação avulsa, na ordem em que veio, e é gravada na sua própria transação, com o seu webhook `delivery.created`: o sucesso pode ser parcial. A resposta é 200 com um resultado por entrega (`status` 201 criada, 200 já criada por esta chave, ou a recusa com `code` e `message`) e as contagens. Uma lista vazia, com mais de 100 entregas ou com outro campo no corpo recusa a chamada inteira (400), sem ler nenhuma entrega.",
           "",
+          `O corpo inteiro vai até ${BATCH_BODY_LIMIT_LABEL} (${BATCH_BODY_LIMIT_BYTES} bytes), o que cabe em ${MAX_BATCH_DELIVERIES} entregas de até 200 itens comuns; acima disso a chamada é recusada inteira com 413 \`BATCH_TOO_LARGE\`, sem ler nenhuma entrega nem contá-las nos limites por minuto (só a chamada conta, como uma avulsa): divida as entregas em lotes menores.`,
+          "",
           "Reenviar o mesmo lote com as mesmas `idempotency_key` devolve os mesmos resultados, as já criadas como 200 com o mesmo `delivery_id`, sem duplicar nem avisar de novo. Se a chamada falhar no meio (500 ou 503), reenvie o lote inteiro do mesmo jeito.",
           "",
           `Cada entrega conta como uma requisição nos limites por minuto da chave e da empresa: um lote de ${MAX_BATCH_DELIVERIES} gasta ${MAX_BATCH_DELIVERIES}, e um lote que passa do que sobra do minuto é recusado inteiro com 429 e \`retry-after\`, sem gastar as unidades das entregas: só a chamada conta, e as chamadas avulsas seguem com o que sobrou.`,
@@ -435,6 +446,7 @@ async function integrationRoutes(app: FastifyInstance) {
         response: {
           200: integrationBatchResponses.processed,
           400: integrationBatchResponses.badRequest,
+          413: integrationBatchResponses.tooLarge,
           429: integrationBatchResponses.tooManyRequests,
           500: integrationBatchResponses.internalError,
           503: integrationBatchResponses.unavailable,

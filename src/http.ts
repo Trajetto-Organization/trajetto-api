@@ -938,9 +938,14 @@ app.setErrorHandler((thrown, request, reply) => {
   }
 
   if (isBodyTooLarge) {
+    // A route with a JSON body of its own size says how to split it (the
+    // public batch, plano-escala U-04); every other one is an upload.
+    const refusal = request.routeOptions.config?.bodyTooLarge;
+
     return sendError(reply, 413, {
-      code: "UPLOAD_FILE_TOO_LARGE",
-      message: "O arquivo excede o limite de tamanho permitido.",
+      code: refusal?.code ?? "UPLOAD_FILE_TOO_LARGE",
+      message:
+        refusal?.message ?? "O arquivo excede o limite de tamanho permitido.",
     });
   }
 
