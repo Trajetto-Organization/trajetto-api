@@ -75,6 +75,7 @@ let managerToken = "";
 const initialMode = env.SESSION_LOOKUP_MODE;
 const initialTowerTtl = env.TOWER_SNAPSHOT_TTL_MS;
 const initialRollupMode = env.DASHBOARD_ROLLUP_MODE;
+const initialDashboardTtl = env.DASHBOARD_SNAPSHOT_TTL_MS;
 
 /**
  * How long the database must stay quiet for a request's window to close.
@@ -293,6 +294,10 @@ beforeAll(async () => {
   // budgets of its own below.
   env.TOWER_SNAPSHOT_TTL_MS = 0;
 
+  // The same for the overview and the trend chart, and their snapshot
+  // (F4-23).
+  env.DASHBOARD_SNAPSHOT_TTL_MS = 0;
+
   // The day so far, through the app: the driver on the map, and the first
   // stop arrived at and delivered.
   const flush = await app.inject({
@@ -318,6 +323,7 @@ afterAll(async () => {
   env.SESSION_LOOKUP_MODE = initialMode;
   env.TOWER_SNAPSHOT_TTL_MS = initialTowerTtl;
   env.DASHBOARD_ROLLUP_MODE = initialRollupMode;
+  env.DASHBOARD_SNAPSHOT_TTL_MS = initialDashboardTtl;
 
   await Promise.allSettled(storedKeys.map((key) => uploads.deleteFile(key)));
   await app?.close();
@@ -368,11 +374,12 @@ const READS = [
     budget: 17,
   },
   {
-    // The company's modules, the registries' series and the work's, and
-    // the shadow's one statement after the answer.
+    // The registries' series and the work's, and the shadow's one
+    // statement after the answer. The company's modules come with the
+    // session, as on the overview (F4-23).
     route: "GET /dashboard/trends",
     url: "/dashboard/trends?period=30d",
-    budget: 5,
+    budget: 4,
   },
   {
     // The page of the bell, its unread count and its total.
@@ -427,8 +434,8 @@ describe("the dashboard in each rollup mode", () => {
   it.each([
     { mode: "off", url: "/dashboard/overview", budget: 16 },
     { mode: "on", url: "/dashboard/overview", budget: 16 },
-    { mode: "off", url: "/dashboard/trends?period=30d", budget: 4 },
-    { mode: "on", url: "/dashboard/trends?period=30d", budget: 4 },
+    { mode: "off", url: "/dashboard/trends?period=30d", budget: 3 },
+    { mode: "on", url: "/dashboard/trends?period=30d", budget: 3 },
   ] as const)(
     "$url with $mode costs $budget statements",
     async ({ mode, url, budget }) => {
@@ -507,6 +514,62 @@ describe("the panel's hot reads through the company's snapshot", () => {
 
       expect(notModified.response.statusCode).toBe(304);
       expect(notModified.work.length, notModified.trace).toBe(1);
+    },
+  );
+});
+
+/**
+ * The overview and the trend chart through the company's snapshot
+ * (plano-escala F4-23). The read that computes costs what the route costs
+ * without it: the zone and the modules came with the session and are in
+ * the key, so the computation, outside the request, reads nothing more.
+ * A read the copy serves costs the session, plus, on the overview, the
+ * recent activity, which names people and is read on every view: the
+ * viewer's company, the five lines and who did them.
+ */
+const DASHBOARD_SNAPSHOT_READS = [
+  { url: "/dashboard/overview", fromCopy: 4 },
+  { url: "/dashboard/trends?period=30d", fromCopy: 1 },
+].map((read) => ({
+  ...read,
+  budget: READS.find(({ url }) => url === read.url)!.budget,
+}));
+
+describe("the dashboard through the company's snapshot", () => {
+  beforeAll(() => {
+    env.DASHBOARD_SNAPSHOT_TTL_MS = 60_000;
+    tenantSnapshotMemory().clear();
+  });
+
+  afterAll(() => {
+    env.DASHBOARD_SNAPSHOT_TTL_MS = 0;
+  });
+
+  it.each(DASHBOARD_SNAPSHOT_READS)(
+    "$url costs $budget to compute, and $fromCopy from the copy",
+    async ({ url, budget, fromCopy }) => {
+      const read = () =>
+        app.inject({
+          method: "GET",
+          url,
+          headers: { authorization: `Bearer ${managerToken}` },
+        });
+
+      const computed = await cost(read);
+
+      expect(computed.response.statusCode, computed.response.body).toBe(200);
+      expect(
+        computed.work.filter(isSessionStatement),
+        computed.trace,
+      ).toHaveLength(1);
+      expect(computed.work.length, computed.trace).toBe(budget);
+
+      const copy = await cost(read);
+
+      expect(copy.response.statusCode).toBe(200);
+      expect(copy.response.body).toBe(computed.response.body);
+      expect(copy.work.filter(isSessionStatement), copy.trace).toHaveLength(1);
+      expect(copy.work.length, copy.trace).toBe(fromCopy);
     },
   );
 });

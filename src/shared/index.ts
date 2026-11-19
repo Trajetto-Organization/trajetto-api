@@ -140,6 +140,9 @@ import {
   MASTER_OVERVIEW_TTL_MS,
   type OverviewNumbers,
 } from "@/modules/dashboard/usecases/get-dashboard-overview/get-dashboard-overview-usecase";
+import type { DashboardTrendsResponse } from "@/modules/dashboard/usecases/get-dashboard-trends/get-dashboard-trends-usecase";
+import { dashboardSnapshot } from "@/modules/dashboard/usecases/shared/dashboard-snapshot";
+import type { TenantSnapshot } from "@/shared/cache/tenant-snapshot";
 
 import { ActivityRepository } from "@/modules/activity/repositories/activity-repository";
 import { IActivityRepository } from "@/modules/activity/repositories/IActivity-repository";
@@ -315,6 +318,21 @@ container.registerInstance<SnapshotCache<OverviewNumbers>>(
     ttlMs: MASTER_OVERVIEW_TTL_MS,
     store: redisSnapshotStore(() => RedisConnection.getInstance().getClient()),
   }),
+);
+
+// A company's dashboard numbers, a minute per company and per what the
+// viewer may see, in this process's memory only (plano-escala F4-23,
+// DASHBOARD_SNAPSHOT_TTL_MS; modules/dashboard/usecases/shared/
+// dashboard-snapshot.ts). One instance each per process: the copies and
+// the single-flight live in them, and a second one with the same name
+// throws.
+container.registerInstance<TenantSnapshot<OverviewNumbers>>(
+  "DashboardOverviewSnapshots",
+  dashboardSnapshot<OverviewNumbers>("dashboard-overview"),
+);
+container.registerInstance<TenantSnapshot<DashboardTrendsResponse>>(
+  "DashboardTrendsSnapshots",
+  dashboardSnapshot<DashboardTrendsResponse>("dashboard-trends"),
 );
 
 container.registerSingleton<IActivityRepository>(

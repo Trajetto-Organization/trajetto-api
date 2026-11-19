@@ -10,7 +10,7 @@ class GetDashboardTrendsController {
     request: FastifyRequest,
     reply: FastifyReply,
   ): Promise<Response> {
-    const { id } = request.user;
+    const { id, entitlements } = request.user;
     const { period } = trendsPeriodSchema.parse(request.query);
 
     const getDashboardTrendsUseCase = container.resolve(
@@ -20,6 +20,7 @@ class GetDashboardTrendsController {
     const result = await getDashboardTrendsUseCase.execute({
       userId: id,
       period,
+      entitlements,
     });
 
     return reply.status(200).send(result);

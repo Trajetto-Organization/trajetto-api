@@ -162,7 +162,11 @@ Quem passa a ler por ela são a F4-11 (a torre, o resumo e o `/route/live`,
 com o intervalo em `TOWER_SNAPSHOT_TTL_MS`) e a F4-23 (a visão geral e as
 tendências do dashboard). A F4-11 já liga a torre, o resumo e a primeira
 página do `/route/live`, com `ETag`, 304 e a dica `x-trajetto-refresh`
-(`docs/arquitetura.md`, "A torre, o resumo e o mapa ao vivo pela foto").
+(`docs/arquitetura.md`, "A torre, o resumo e o mapa ao vivo pela foto"). A F4-23 liga os números da
+visão geral e as tendências do dashboard, por 60 s
+(`DASHBOARD_SNAPSHOT_TTL_MS`), sem `ETag` nem 304, com o que o perfil de
+quem vê pode ver na variante (`docs/arquitetura.md`, "O dashboard pela foto
+da empresa").
 
 **Fica fora do Redis de propósito.** A regra deste ADR não muda: no Redis,
 o único dado de empresa em cache continua sendo o da busca de endereço. As

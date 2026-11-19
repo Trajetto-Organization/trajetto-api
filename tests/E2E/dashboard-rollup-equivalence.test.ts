@@ -90,6 +90,7 @@ const ADMIN = "018f6d00-0000-7000-8000-0000000000a1";
 const MASTER = "018f6d00-0000-7000-8000-0000000000f1";
 
 const initialMode = env.DASHBOARD_ROLLUP_MODE;
+const initialSnapshotTtl = env.DASHBOARD_SNAPSHOT_TTL_MS;
 
 /** A small deterministic generator: the same 300 windows on every run. */
 function random(seed: number): () => number {
@@ -455,10 +456,16 @@ beforeAll(async () => {
 
   ({ app } = await import("@/http"));
   await app.ready();
+
+  // Each mode is compared on the read itself: the 60 s snapshot of the
+  // dashboard (F4-23) would hand a later mode the numbers an earlier one
+  // computed. Its own proof is tests/E2E/dashboard-snapshot-http.test.ts.
+  env.DASHBOARD_SNAPSHOT_TTL_MS = 0;
 }, 120_000);
 
 afterAll(async () => {
   env.DASHBOARD_ROLLUP_MODE = initialMode;
+  env.DASHBOARD_SNAPSHOT_TTL_MS = initialSnapshotTtl;
   await dashboardRollupShadowIdle();
   await app?.close();
   await prisma.$disconnect();

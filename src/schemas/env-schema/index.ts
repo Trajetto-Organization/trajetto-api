@@ -1168,6 +1168,21 @@ const envSchema = z
       z.enum(["off", "shadow", "on"]).default("shadow"),
     ),
 
+    // How long a company's overview numbers and trend charts are served
+    // from its snapshot, in ms (plano-escala F4-23, decision D2 of
+    // 15/11/2026; modules/dashboard/usecases/shared/dashboard-snapshot.ts):
+    // the heaviest reads of the panel, repeated by every manager who opens
+    // it, read once per interval in each process. Keyed by the company and
+    // by what the viewer's profile may see, so two viewers share a copy
+    // only when they would be shown the same numbers; the recent activity,
+    // which names people, is read on every view. 0 turns it off: each view
+    // reads alone, as before. 60 s, which is also the ceiling decision D2
+    // accepted for this screen. Empty counts as absent.
+    DASHBOARD_SNAPSHOT_TTL_MS: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(0).max(60_000).default(60_000),
+    ),
+
     // The graceful shutdown (plano-escala F1-14). STOP_GRACE_PERIOD_MS is the
     // Stop Grace Period the Swarm really gives this service, in ms: every
     // deadline of the sequence is derived from it (shared/lifecycle/

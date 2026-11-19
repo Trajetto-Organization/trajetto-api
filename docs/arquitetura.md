@@ -5272,14 +5272,49 @@ as duas contagens). Com `on`, a tela serve o braço do rollup; se essa leitura
 falhar, conta ao vivo (`on_fallbacks`). `off` nem lê nem compara. O dono liga
 o `on` depois de 7 dias de shadow sem divergência, primeiro na staging e uma
 semana depois na produção. O custo: com `shadow`, um statement a mais depois
-da resposta (a visão geral 17, as tendências 5); com `on` ou `off`, os mesmos
-16 e 4 de antes (`tests/E2E/panel-statement-budgets.test.ts`). A prova está em
+da resposta (a visão geral 17, as tendências 4); com `on` ou `off`, 16 e 3
+(`tests/E2E/panel-statement-budgets.test.ts`; as tendências caíram de 5 e 4
+na F4-23, que passou a tirar os módulos da empresa da sessão). A prova está em
 `tests/unitaires/dashboard/delivery-pieces.test.ts`, em
 `tests/unitaires/dashboard/delivery-rollup.test.ts` e em
 `tests/E2E/dashboard-rollup-equivalence.test.ts`. Esse último confere 300
 janelas idênticas à contagem ao vivo, com marcas, dias pendentes, empresa em
 expurgo, empresa que o job nunca viu e relógios atrás e à frente do job, e
 também as mesmas respostas HTTP nos três modos.
+
+**O dashboard pela foto da empresa** (plano de escala F4-23, decisão D2;
+`src/modules/dashboard/usecases/shared/dashboard-snapshot.ts`): os números
+da visão geral (tudo menos as atividades recentes) e as tendências saem de
+uma foto por empresa, na memória do processo (`tenant-snapshot.ts`), por
+`DASHBOARD_SNAPSHOT_TTL_MS` (60 s). Diferente da torre, a resposta depende
+de quem pergunta: um perfil só da frota não pode receber as entregas que a
+cópia de um despachante contou. Por isso a variante da chave é a impressão
+do que o perfil pode ver: as séries visíveis (permissão de leitura e módulo
+contratado), a frota, a manutenção, os custos e a operação do dia, mais o
+fuso da empresa e, nas tendências, o período. O cálculo recebe só a empresa
+e essa impressão, nunca o usuário (`numbersFor` e `trendsFor`). Dois perfis
+dividem uma cópia exatamente quando todas as entradas do cálculo são iguais,
+e um perfil que perde uma permissão, ou uma empresa que desliga um módulo,
+cai numa chave nova na mesma hora, porque a sessão relê o perfil e os
+módulos em toda requisição. A guarda de papel da rota e a leitura do usuário
+continuam antes da foto. As atividades recentes, que citam pessoas e são
+filtradas por quem vê, são lidas a cada visita. O MASTER, que não tem
+empresa, continua com a foto da plataforma (`MasterOverviewSnapshots`), e
+as tendências dele são lidas a cada visita. Sem `ETag` nem 304: o corpo da
+visão geral leva as atividades de cada visita, e ninguém revalida essas
+leituras. O fuso e os módulos vêm da sessão e entram na chave, então o
+cálculo, fora da requisição, não lê nada a mais. Com
+`DASHBOARD_SNAPSHOT_TTL_MS=0`, cada visita volta a ler sozinha, pelo
+caminho de antes. Um acerto custa 4 statements na visão geral (a sessão e
+as três leituras das atividades) e 1 nas tendências, contra 17 e 4 do
+cálculo (`tests/E2E/panel-statement-budgets.test.ts`). A prova de que um
+perfil nunca vê o número de outro está em
+`tests/unitaires/dashboard/dashboard-snapshot.test.ts` (cada perfil, em
+qualquer ordem de chegada, recebe o que leria sozinho) e em
+`tests/E2E/dashboard-snapshot-http.test.ts` (dois perfis da mesma empresa,
+o colega com as mesmas permissões, a permissão retirada, o módulo desligado
+e outra empresa, comparando o corpo HTTP byte a byte com a leitura sem a
+foto).
 
 **Plano com os valores a cada execução**: o `pg` manda statements sem nome, e
 o Postgres planeja cada execução com os valores; o Prisma 6 nomeava os
