@@ -1,0 +1,106 @@
+# The vmalert rules against series written by hand (vmalert-tool unittest).
+# Not in the CI: run it after changing monitoring-config.ts, as the guide
+# says (infra/monitoring/README.md, "Provar as regras"). The test clock
+# starts at 2000-01-01T00:00:00Z, so a verdict's timestamp is 946684800
+# plus the seconds since the start.
+rule_files:
+  - ../vmalert/alert-codes.yml
+  - ../vmalert/process.yml
+evaluation_interval: 1m
+tests:
+  - name: only the newest verdict of the environment counts
+    interval: 1m
+    input_series:
+      # Replica a judged outbox-lag active at minute 0 and never again;
+      # replica b judges it inactive from minute 1 on.
+      - series: 'trajetto_alert_active{env="production",job="trajetto-api",instance="a:9464",code="outbox-lag"}'
+        values: "1x10"
+      - series: 'trajetto_alert_evaluated_timestamp_seconds{env="production",job="trajetto-api",instance="a:9464"}'
+        values: "946684800x10"
+      - series: 'trajetto_alert_active{env="production",job="trajetto-api",instance="b:9464",code="outbox-lag"}'
+        values: "_ 0x9"
+      - series: 'trajetto_alert_evaluated_timestamp_seconds{env="production",job="trajetto-api",instance="b:9464"}'
+        values: "_ 946684860+60x9"
+      # The staging's worker judges redis-down active every minute.
+      - series: 'trajetto_alert_active{env="staging",job="trajetto-worker",instance="c:9464",code="redis-down"}'
+        values: "1x10"
+      - series: 'trajetto_alert_evaluated_timestamp_seconds{env="staging",job="trajetto-worker",instance="c:9464"}'
+        values: "946684800+60x10"
+    alert_rule_test:
+      - eval_time: 5m
+        groupname: trajetto-alert-codes
+        alertname: TrajettoOutboxLag
+        exp_alerts: []
+      - eval_time: 5m
+        groupname: trajetto-alert-codes
+        alertname: TrajettoRedisDown
+        exp_alerts:
+          - exp_labels:
+              env: staging
+              code: redis-down
+              severity: page
+              source: ops-heartbeat
+            exp_annotations:
+              summary: "Redis sem resposta"
+              runbook: "docs/runbooks/redis-down.md"
+  - name: a stopped heartbeat stops paging on its last verdict
+    interval: 1m
+    input_series:
+      # Active from minute 0; the last evaluation is at minute 3.
+      - series: 'trajetto_alert_active{env="production",job="trajetto-api",instance="a:9464",code="outbox-lag"}'
+        values: "1x15"
+      - series: 'trajetto_alert_evaluated_timestamp_seconds{env="production",job="trajetto-api",instance="a:9464"}'
+        values: "946684800+60x3 946684980x12"
+      - series: 'up{env="production",job="trajetto-api",instance="a:9464"}'
+        values: "1x15"
+    alert_rule_test:
+      - eval_time: 2m
+        groupname: trajetto-alert-codes
+        alertname: TrajettoOutboxLag
+        exp_alerts:
+          - exp_labels:
+              env: production
+              code: outbox-lag
+              severity: page
+              source: ops-heartbeat
+            exp_annotations:
+              summary: "Outbox parado"
+              runbook: "docs/runbooks/outbox-lag.md"
+      - eval_time: 10m
+        groupname: trajetto-alert-codes
+        alertname: TrajettoOutboxLag
+        exp_alerts: []
+      - eval_time: 11m
+        groupname: trajetto-process
+        alertname: TrajettoAlertVerdictStale
+        exp_alerts:
+          - exp_labels:
+              env: production
+              severity: warn
+              source: metrics
+            exp_annotations:
+              summary: "Nenhum processo julgou os alertas há mais de 5 min: o heartbeat de operação parou"
+              runbook: "infra/monitoring/README.md#heartbeat-parado"
+  - name: a replica that stops answering /metrics
+    interval: 1m
+    input_series:
+      - series: 'up{env="production",job="trajetto-worker",instance="d:9464"}'
+        values: "1 1 0x8"
+    alert_rule_test:
+      - eval_time: 3m
+        groupname: trajetto-process
+        alertname: TrajettoMetricsTargetDown
+        exp_alerts: []
+      - eval_time: 6m
+        groupname: trajetto-process
+        alertname: TrajettoMetricsTargetDown
+        exp_alerts:
+          - exp_labels:
+              env: production
+              job: trajetto-worker
+              instance: "d:9464"
+              severity: warn
+              source: metrics
+            exp_annotations:
+              summary: "Réplica sem /metrics: fora do ar, METRICS_PORT diferente ou token recusado"
+              runbook: "infra/monitoring/README.md#um-alvo-fora"

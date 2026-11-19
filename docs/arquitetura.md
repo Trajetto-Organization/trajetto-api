@@ -6138,7 +6138,13 @@ lista (`role`, `app_env`, `commit`, `group`, `class`, `pool`, `adapter`,
 na hora de escrever e contado em `trajetto_metrics_refused_series`. Uma
 porta que não abre é um erro no log, nunca um motivo para parar de
 atender. Prova: o unitário `prometheus` (o formato, a guarda dos rótulos,
-o 401 e a recusa do boot).
+o 401 e a recusa do boot). Quem lê a porta é a pilha de métricas da onda
+23 (F5-30): o vmagent de cada ambiente, as regras do vmalert (uma por
+código do `ALERT_KINDS`, pelo veredito mais novo do ambiente) e os painéis
+do Grafana, gerados de `infra/monitoring/monitoring-config.ts` por
+`yarn monitoring:render`. O unitário `monitoring-config` falha se uma regra
+ou um painel ler uma métrica que o `/metrics` não expõe, ou um rótulo fora
+da lista ([infra/monitoring/README.md](../infra/monitoring/README.md)).
 
 **Group commit das posições** (F5-19,
 `src/modules/route/services/position-write-buffer.ts`): com

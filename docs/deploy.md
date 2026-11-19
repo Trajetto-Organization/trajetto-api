@@ -5880,6 +5880,23 @@ acima de 80 % (node-exporter); restarts de contêiner (cAdvisor). O Dokploy tem
 uma aba _Monitoring_ por serviço que ajuda no dia a dia, mas não alerta
 ninguém.
 
+### Pilha de métricas (onda 23)
+
+A configuração já está versionada em `infra/monitoring/` (plano de escala
+F5-30, decisão D56), mas **nada sobe na VPS única**: a pilha custaria
+400–600 MB e cairia junto com o host. Na onda 23 (E-02), um vmagent por
+ambiente lê o `/metrics` de cada réplica (`METRICS_PORT=9464`, sempre com o
+`METRICS_TOKEN`, achando as réplicas por `tasks.<App Name>`) e grava numa
+VictoriaMetrics no Remote Server `trajetto-monitor`, com o vmalert e o
+Grafana ao lado. O vmalert tem uma regra por código do `ALERT_KINDS`, que lê
+o veredito do `ops-heartbeat` (nunca refaz a conta), mais as regras do que só
+o scrape vê, e começa sem paginar ninguém: o healthchecks.io continua sendo
+quem acorda e o dead man's switch de fora. O guia das Applications, as
+imagens por digest e a conferência estão em
+[infra/monitoring/README.md](../infra/monitoring/README.md); os arquivos são
+gerados por `yarn monitoring:render`, e o `monitoring-config.test.ts` os
+confere contra o código.
+
 ## 21. Cadeia de suprimentos e segredos
 
 | Controle                                                             | Onde                                                                                                                                         | Quando falha                                                                                                                                                                                                                                        |
