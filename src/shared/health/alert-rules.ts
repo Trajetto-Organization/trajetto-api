@@ -628,6 +628,8 @@ const OPERATION_RUNBOOKS = [
   "noisy-tenant",
   "trail-archive",
   "pgbouncer",
+  "failover-standby",
+  "drills",
 ] as const;
 
 /** One reason to wake the operation: its code and its pt-BR message. */
