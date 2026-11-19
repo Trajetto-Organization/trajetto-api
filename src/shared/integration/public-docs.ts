@@ -30,7 +30,7 @@ import {
   WEBHOOK_SECRET_ROTATION_GRACE_MS,
 } from "./webhook-signature";
 import { MAX_API_KEY_AUTH_FAILURES_PER_MINUTE } from "./integration-rate-guard";
-import { BATCH_BODY_LIMIT_LABEL } from "@/schemas/create-integration-deliveries-batch-schema";
+import { BATCH_BODY_LIMIT_LABEL } from "./deliveries-batch-limits";
 
 import { DATABASE_RETRY_AFTER_SECONDS } from "@/shared/errors/database-unavailable";
 import { SERVICE_BUSY_RETRY_AFTER_SECONDS } from "@/shared/errors/database-error-map";
