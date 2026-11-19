@@ -24,6 +24,7 @@ const REPLICA_E2E_FILES = [
   "resilience-crash-after-accept.test.ts",
   "resilience-database-loss.test.ts",
   "resilience-provider-outage.test.ts",
+  "resilience-push-batch-stop.test.ts",
   "resilience-redis-loss.test.ts",
   "resilience-replica-drain.test.ts",
   "socket-chat-replicas.test.ts",

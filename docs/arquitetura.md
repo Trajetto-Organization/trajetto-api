@@ -4859,6 +4859,16 @@ OpenStreetMap são recusados.
   Expo). A limpeza diária também apaga o aparelho sem sessão vinculada
   (registrado antes da coluna) sem registro há mais que a maior janela ociosa
   das sessões (A9).
+  Com `PUSH_BATCH_SIZE` de 2 ou mais (U-06; padrão 1, uma chamada por
+  entrega), a linha de push que começa com a raia em atraso reivindica outras
+  linhas de push e o grupo vai em chamadas de até 100 mensagens
+  (`sendExpoPushBatch` em `push-provider.ts`, o encontro em
+  `push-batch-gate.ts`): o Expo devolve um ticket por mensagem, na ordem, e
+  cada linha recebe só os das próprias posições; contagem diferente da
+  enviada não é atribuída a ninguém. Cada linha fecha com o seu cercamento,
+  um 5xx devolve o grupo sem gastar tentativa (pelo cronograma da idade,
+  `pushOutageDelayMs`), e um 400 de várias entregas é reenviado uma por
+  chamada.
 - **Turnstile**: o formulário público de orçamento é verificado pela própria
   API; com `TURNSTILE_SECRET_KEY` definida, pedido sem token é recusado.
 

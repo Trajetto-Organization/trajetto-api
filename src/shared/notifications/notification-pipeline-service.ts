@@ -55,7 +55,15 @@ import { SUPPRESSED_ADDRESS_REASON } from "./customer-message-suppression";
 
 import { deliveryIdFor } from "./delivery-id";
 import { getNotificationPolicy } from "./notification-policy";
-import { sendExpoPushMessages } from "./push-provider";
+import {
+  sendExpoPushBatch,
+  sendExpoPushMessages,
+  type PushBatchOutcome,
+  type PushCallError,
+  type PushRequest,
+  type PushSendResult,
+} from "./push-provider";
+import { PushBatchGate } from "./push-batch-gate";
 import { inAppPushData, withPushOwner } from "./push-data";
 import {
   WhatsAppTemplateMismatchError,
@@ -92,7 +100,9 @@ import {
   assertDeliveryLeaseInvariant,
   channelsForRecipient,
   honourRetryAfter,
+  laneOf,
   nextRetryDelayMs,
+  pushOutageDelayMs,
   recipientsBesidesActor,
   resolveRecipientChannelFlags,
   withRetryJitter,
@@ -344,6 +354,34 @@ const PIPELINE_SHUTDOWN_WAIT_MS = 10_000;
 const SUPPRESSED_LOG_LIMIT = 50;
 
 /**
+ * How long the push rows of a group wait for the slowest of them before
+ * their call goes without it (plano-escala U-06; push-batch-gate.ts). The
+ * rows of a group reach the send within milliseconds of each other (a few
+ * reads each); two seconds plus Expo's own 10 s timeout stay under the
+ * 15 s per-delivery backstop, so a group never makes a row overrun it.
+ */
+const PUSH_BATCH_GATE_WAIT_MS = 2_000;
+
+/**
+ * The push lane's other channels: what the claim of a push group leaves out,
+ * so it takes only push rows (the lane's index and predicate stay the
+ * lane's; notChannelsSql filters the rows it returns).
+ */
+const PUSH_LANE: DeliveryLane = laneOf(NotificationChannel.PUSH);
+
+const PUSH_LANE_OTHER_CHANNELS: readonly string[] = DELIVERY_LANES[
+  PUSH_LANE
+].filter((channel) => channel !== NotificationChannel.PUSH);
+
+/**
+ * Push deliveries per call to Expo (PUSH_BATCH_SIZE); 1 is one call per
+ * delivery, the path of before. Read at every row, so a test can switch it.
+ */
+function pushBatchSize(): number {
+  return env.PUSH_BATCH_SIZE;
+}
+
+/**
  * Structured lines, one per delivery outcome, each carrying the ids that
  * find it: delivery, event, the request that caused it (`correlationId`),
  * topic, tenant, channel, attempt (OBS-06).
@@ -475,6 +513,16 @@ interface ClaimedDelivery {
    * WhatsApp quota from (F3-15b), until the unit is given back.
    */
   whatsAppQuotaDay?: string;
+
+  /**
+   * The claim that brought the row came back with all it asked for: more
+   * rows are likely due behind it. Only a push row claimed so gathers a
+   * group (U-06); a quiet lane spends no extra claim on a lone push.
+   */
+  claimedInFull?: boolean;
+
+  /** The push group this row sends with (U-06); absent: a call of its own. */
+  pushGate?: PushBatchGate;
 }
 
 /** The slice of an outbox row a delivery needs to render itself. */
@@ -1552,7 +1600,7 @@ class NotificationPipelineService {
         skipsBusyKeys: true,
         claim: (limit, busyProviders, inFlight) =>
           this.claimLaneRows(lane, limit, { busyProviders, inFlight }),
-        run: (delivery) => this.runOneDelivery(delivery),
+        run: (delivery) => this.runClaimedDelivery(delivery),
         giveBack: (delivery) => this.giveBackDelivery(delivery),
         stopping: () => this.stopping,
         onClaim: () =>
@@ -1564,7 +1612,7 @@ class NotificationPipelineService {
       slots: () => LANE_CONCURRENCY[lane],
       maxPerClaim: DELIVERY_BATCH_SIZE,
       claim: (limit) => this.claimLaneRows(lane, limit),
-      run: (delivery) => this.runOneDelivery(delivery),
+      run: (delivery) => this.runClaimedDelivery(delivery),
       giveBack: (delivery) => this.giveBackDelivery(delivery),
       stopping: () => this.stopping,
       onClaim: () => workerHeartbeat.progress(`notification-delivery-${lane}`),
@@ -1600,6 +1648,13 @@ class NotificationPipelineService {
       ? await this.claimWithinProviderCaps(lane, limit, caps)
       : await this.claimDeliveries(lane, limit);
 
+    return this.withEvents(deliveries);
+  }
+
+  /** Reads the claimed rows' events in one query; one recipient cache. */
+  private async withEvents(
+    deliveries: ClaimedDelivery[],
+  ): Promise<ClaimedDelivery[]> {
     if (deliveries.length === 0) return deliveries;
 
     const events = await database.domainOutboxEvent.findMany({
@@ -1616,6 +1671,127 @@ class NotificationPipelineService {
     }
 
     return deliveries;
+  }
+
+  /**
+   * What the lane's pool runs for a row it claimed: the row alone, or,
+   * for a push row with PUSH_BATCH_SIZE of 2 or more, the row and the push
+   * group it gathers (runPushGroup).
+   */
+  private runClaimedDelivery(delivery: ClaimedDelivery): Promise<void> {
+    if (delivery.channel === NotificationChannel.PUSH && pushBatchSize() > 1) {
+      return this.runPushGroup(delivery);
+    }
+
+    return this.runOneDelivery(delivery);
+  }
+
+  /**
+   * A push row and the due push rows it claims to go with it, in one call
+   * to Expo (plano-escala U-06).
+   *
+   * The pool claims only for its free slots, so with one call per row a
+   * slot carried one push per round trip to Expo, however long the queue
+   * behind it. A push row whose claim came back full (a backlog) claims
+   * up to PUSH_BATCH_SIZE − 1 more due push rows of its lane, for the slot
+   * it already holds. They start at once, every row its own delivery
+   * (runOneDelivery: its checks, its render, its devices, its backstop and
+   * its fenced settling), and only the send is shared, through the gate:
+   * one call of up to 100 messages, each row getting back the tickets at
+   * its own positions (sendExpoPushBatch).
+   *
+   * The extra rows are claimed only for this start and never wait for a
+   * slot, so the lease holds as for any row, and a stop has none of them
+   * to hand back: once the process stops, no group claims more, and the
+   * group in flight ends as any row in flight does. Under the providers'
+   * global cap (F3-15a), the group is the one call its first row's slot
+   * stands for.
+   */
+  private async runPushGroup(first: ClaimedDelivery): Promise<void> {
+    let companions: ClaimedDelivery[] = [];
+
+    if (first.claimedInFull && !this.stopping) {
+      let claimed: ClaimedDelivery[] = [];
+
+      try {
+        claimed = await this.claimDeliveries(
+          PUSH_LANE,
+          pushBatchSize() - 1,
+          PUSH_LANE_OTHER_CHANNELS,
+        );
+
+        companions = await this.withEvents(claimed);
+
+        if (companions.length > 0) {
+          workerHeartbeat.progress(`notification-delivery-${PUSH_LANE}`);
+        }
+      } catch (error) {
+        // Rows claimed without their events cannot run (a row without its
+        // event fails for good): the claim is undone, as on a stop.
+        await Promise.allSettled(
+          claimed.map((row) => this.giveBackDelivery(row)),
+        );
+
+        // The row still goes, alone: its claim is the pool's.
+        log.warn(
+          { ...this.deliveryLogFields(first), err: error },
+          "push group claim failed; the push goes alone",
+        );
+      }
+    }
+
+    const group = [first, ...companions];
+
+    // Only push rows meet at the gate; the claim takes no other channel.
+    const pushRows = group.filter(
+      (row) => row.channel === NotificationChannel.PUSH,
+    );
+
+    const gate = new PushBatchGate(
+      pushRows.map((row) => row.id),
+      (requests) => this.sendPushBatch(requests),
+      PUSH_BATCH_GATE_WAIT_MS,
+    );
+
+    for (const row of pushRows) row.pushGate = gate;
+
+    await Promise.all(
+      group.map((row) =>
+        this.runOneDelivery(row).finally(() => gate.leave(row.id)),
+      ),
+    );
+  }
+
+  /**
+   * One call of a push group's requests (sendExpoPushBatch, which never
+   * rejects), with one line when Expo refused a call: each row logs its
+   * own failure, but a 5xx row goes back without a line of its own.
+   */
+  private async sendPushBatch(
+    requests: PushRequest[],
+  ): Promise<PushBatchOutcome[]> {
+    const outcomes = await sendExpoPushBatch(requests);
+
+    const failed = outcomes.filter(
+      (outcome): outcome is Extract<PushBatchOutcome, { ok: false }> =>
+        !outcome.ok,
+    );
+
+    if (failed.length > 0) {
+      log.warn(
+        {
+          deliveries: requests.length,
+          failed: failed.length,
+          httpStatus: [
+            ...new Set(failed.map((outcome) => outcome.error.httpStatus)),
+          ],
+          error: failed[0].error.message,
+        },
+        "Expo refused a push batch call; each delivery records its own outcome",
+      );
+    }
+
+    return outcomes;
   }
 
   /**
@@ -1933,6 +2109,7 @@ class NotificationPipelineService {
       for (const delivery of claimed) {
         delete delivery.fairCursor;
         delivery.claimStartedAtMs = claimStartedAtMs;
+        delivery.claimedInFull = claimed.length >= limit;
       }
 
       return claimed;
@@ -1942,8 +2119,10 @@ class NotificationPipelineService {
       deliveryClaimSql(lane, floor, limit, notChannels),
     );
 
-    for (const delivery of claimed)
+    for (const delivery of claimed) {
       delivery.claimStartedAtMs = claimStartedAtMs;
+      delivery.claimedInFull = claimed.length >= limit;
+    }
 
     return claimed;
   }
@@ -2116,13 +2295,13 @@ class NotificationPipelineService {
     // One notification per device is what Expo counts (plano-escala F3-15c).
     await this.paceProvider("push", devices.length);
 
-    const { deliveredAny, invalidTokens, tickets } = await sendExpoPushMessages(
-      devices.map((device) => device.token),
+    const request: PushRequest = {
+      tokens: devices.map((device) => device.token),
       // The delivery id rides along: the app can tell a repeated tray message
       // apart, and support can trace one back. It is also the collapse key,
       // so a redelivery of this same row replaces the tray message instead
       // of showing it twice (push-provider.ts).
-      {
+      content: {
         ...content,
         data: { ...content.data, deliveryId: delivery.id },
         collapseKey: delivery.id,
@@ -2132,12 +2311,22 @@ class NotificationPipelineService {
       },
       // Collapsing in transit is iPhone-only: on Android it would cap what
       // FCM keeps for an offline phone at four messages.
-      new Set(
+      iosTokens: new Set(
         devices
           .filter((device) => device.platform === "ios")
           .map((device) => device.token),
       ),
-    );
+    };
+
+    // In a push group (U-06), the call is the group's and the tickets are
+    // this row's own; alone, the call of before.
+    const { deliveredAny, invalidTokens, tickets } = delivery.pushGate
+      ? await this.sendInPushGroup(delivery, delivery.pushGate, request)
+      : await sendExpoPushMessages(
+          request.tokens,
+          request.content,
+          request.iosTokens,
+        );
 
     if (invalidTokens.length > 0) {
       await database.pushDeviceToken
@@ -2170,6 +2359,44 @@ class NotificationPipelineService {
     });
 
     return undefined;
+  }
+
+  /**
+   * This row's share of its push group's call (U-06). A 5xx is Expo
+   * failing the whole call before sending any of it: the row goes back to
+   * the queue without spending an attempt, after the retry schedule's wait
+   * for its age (pushOutageDelayMs), so one Expo incident does not exhaust
+   * every row of a group at once. Past the schedule, and on any other
+   * failure, the row's failure is what it always was.
+   */
+  private async sendInPushGroup(
+    delivery: ClaimedDelivery,
+    gate: PushBatchGate,
+    request: PushRequest,
+  ): Promise<PushSendResult> {
+    try {
+      return await gate.submit(delivery.id, request);
+    } catch (error) {
+      const httpStatus = (error as PushCallError | null)?.httpStatus;
+
+      if (typeof httpStatus !== "number" || httpStatus < 500) throw error;
+
+      const createdAt = delivery.event?.created_at;
+      const waitMs = pushOutageDelayMs(
+        createdAt ? Date.now() - new Date(createdAt).getTime() : 0,
+      );
+
+      if (waitMs === null) throw error;
+
+      throw new DeferredDeliveryError(
+        formatDeliveryError((error as Error).message, {
+          provider: "push",
+          httpStatus,
+        }),
+        new Date(Date.now() + withRetryJitter(waitMs)),
+        "aguardando o Expo voltar, sem gastar tentativa",
+      );
+    }
   }
 
   private async deliverInApp(

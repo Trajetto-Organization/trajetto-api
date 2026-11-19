@@ -4769,6 +4769,22 @@ de metade do limite do provedor, com o mesmo valor em todas as
 Applications que consomem a raia (propostos: 60, 8 e 500;
 [runbook](./runbooks/provider-throttled.md)).
 
+**Push em lote (U-06).** `PUSH_BATCH_SIZE` (1, uma chamada ao Expo por
+entrega, por padrão) junta várias entregas de push numa chamada. A partir
+de 2, a linha de push que começa com a raia `internal` em atraso (o claim
+que a trouxe veio cheio) reivindica até esse número menos um de outras
+linhas de push vencidas, para a mesma vaga, e o grupo sai em chamadas de
+até 100 mensagens. Cada linha faz as suas conferências, lê os seus
+aparelhos, recebe só os tickets das próprias posições na chamada e fecha
+com o seu cercamento; os recibos seguem pelo `check-push-receipts` como
+antes. Um 5xx do Expo devolve o grupo à fila sem gastar tentativa (a
+espera é o degrau do cronograma pela idade da linha; passadas ~4 h 40, a
+falha volta a gastar tentativa), e um 400 numa chamada de várias entregas
+é reenviado uma entrega por chamada, para só a culpada falhar. Numa parada,
+nenhum grupo reivindica mais, e o que está no ar termina como qualquer
+linha. Ligue com `20` na Application que consome a raia `internal` quando a
+fila de push crescer; `1` desliga.
+
 **Orçamento de memória (U-15).** No boot, cada processo soma o heap
 principal (o `--max-old-space-size` do `NODE_OPTIONS`), as threads da
 planilha (`SPREADSHEET_READS_PER_PROCESS` × `SPREADSHEET_WORKER_MAX_OLD_MB`)

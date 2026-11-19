@@ -1068,6 +1068,22 @@ const envSchema = z
     EMAIL_REQUESTS_PER_SECOND: providerRatePerSecond(),
     PUSH_NOTIFICATIONS_PER_SECOND: providerRatePerSecond(),
 
+    // Push deliveries per call to Expo (plano-escala U-06;
+    // shared/notifications/push-batch-gate.ts). Each push row used to be
+    // one POST, so a slot of the internal lane carried one delivery per
+    // round trip to Expo. From 2 up, a push row started while its lane has
+    // a backlog (the claim that brought it came back full) claims up to
+    // this many minus one other due push rows, and the group goes in calls
+    // of up to 100 messages; each row keeps its own checks, its own
+    // tickets (by position, never another row's) and its own fenced
+    // settling, and a 5xx from Expo puts the group back without spending
+    // an attempt. 1 (the default) is one call per delivery, as before.
+    // Empty counts as absent.
+    PUSH_BATCH_SIZE: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(1).max(100).default(1),
+    ),
+
     // Webhook calls in flight to ONE endpoint across every process that
     // claims the webhooks (plano-escala F3-13; decision D8): the claim
     // counts the endpoint's rows in flight under a live lease, under a

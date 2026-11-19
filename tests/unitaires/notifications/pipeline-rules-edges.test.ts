@@ -8,6 +8,7 @@ import {
   UNKNOWN_TOPIC_PATIENCE_MS,
   assertDeliveryLeaseInvariant,
   honourRetryAfter,
+  pushOutageDelayMs,
   withRetryJitter,
 } from "@/shared/notifications/pipeline-rules";
 
@@ -69,5 +70,25 @@ describe("withRetryJitter", () => {
 
     vi.spyOn(Math, "random").mockReturnValue(0.75);
     expect(withRetryJitter(100_000)).toBe(110_000);
+  });
+});
+
+describe("pushOutageDelayMs", () => {
+  // A push batch Expo answered with a 5xx goes back without spending an
+  // attempt (U-06), waiting the retry schedule by the row's age: the step
+  // its age is in, and null past the whole schedule, where the row spends
+  // its attempts again and a long outage still ends in FAILED.
+  it("follows the delivery schedule by age, and gives up past its span", () => {
+    expect(pushOutageDelayMs(0)).toBe(30_000);
+    expect(pushOutageDelayMs(29_999)).toBe(30_000);
+    expect(pushOutageDelayMs(30_000)).toBe(120_000);
+    expect(pushOutageDelayMs(149_999)).toBe(120_000);
+    expect(pushOutageDelayMs(150_000)).toBe(600_000);
+
+    const span = DELIVERY_RETRY_DELAYS_MS.reduce((sum, delay) => sum + delay);
+
+    expect(span).toBe(16_950_000);
+    expect(pushOutageDelayMs(span - 1)).toBe(10_800_000);
+    expect(pushOutageDelayMs(span)).toBeNull();
   });
 });

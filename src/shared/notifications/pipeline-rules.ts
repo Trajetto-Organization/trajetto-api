@@ -341,6 +341,36 @@ function withRetryJitter(delayMs: number): number {
   return Math.max(1_000, Math.round(delayMs + offset));
 }
 
+/**
+ * How long a push row waits after Expo answered its batch with a 5xx
+ * (plano-escala U-06), or null when it should spend an attempt as any
+ * failure does.
+ *
+ * A 5xx is Expo failing the whole call before sending any of it: nothing
+ * about the messages in it. With several deliveries in one call, spending
+ * an attempt of each would let one Expo incident exhaust a whole batch of
+ * rows at once, so they go back to the queue without spending one. They
+ * still wait the retry schedule, read by the row's age instead of its
+ * attempts: the step the age is in, so an outage is retried as gently as
+ * before. Past the whole schedule (about 4 h 40), the row spends its
+ * attempts again, so a long outage still ends in FAILED, never in a row
+ * retried forever.
+ */
+function pushOutageDelayMs(
+  ageMs: number,
+  delays: readonly number[] = DELIVERY_RETRY_DELAYS_MS,
+): number | null {
+  let elapsed = 0;
+
+  for (const delay of delays) {
+    elapsed += delay;
+
+    if (ageMs < elapsed) return delay;
+  }
+
+  return null;
+}
+
 export {
   DELIVERY_LANES,
   DELIVERY_MAX_ATTEMPTS,
@@ -358,6 +388,7 @@ export {
   OUTBOX_RETRY_DELAYS_MS,
   DELIVERY_RETRY_DELAYS_MS,
   nextRetryDelayMs,
+  pushOutageDelayMs,
   withRetryJitter,
   channelsForRecipient,
   recipientsBesidesActor,

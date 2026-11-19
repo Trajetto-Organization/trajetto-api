@@ -41,7 +41,9 @@ type Behaviour =
   // Recorded, then never answered until released: the call the provider
   // accepted while we died waiting for the answer.
   | { kind: "hold" }
-  | { kind: "status"; status: number; body?: unknown };
+  // `delayMs`: the answer is computed now (and recorded by the test that
+  // computed it) but written only after the delay, like a slow provider.
+  | { kind: "status"; status: number; body?: unknown; delayMs?: number };
 
 class FakeProvider {
   readonly calls: ProviderCall[] = [];
@@ -193,12 +195,20 @@ class FakeProvider {
       }
 
       if (behaviour.kind === "status") {
-        response.writeHead(behaviour.status, {
-          "content-type": "application/json",
-        });
-        response.end(
-          JSON.stringify(behaviour.body ?? { error: "fake failure" }),
-        );
+        const write = () => {
+          if (response.destroyed) return;
+
+          response.writeHead(behaviour.status, {
+            "content-type": "application/json",
+          });
+          response.end(
+            JSON.stringify(behaviour.body ?? { error: "fake failure" }),
+          );
+        };
+
+        if (behaviour.delayMs) setTimeout(write, behaviour.delayMs);
+        else write();
+
         return;
       }
 
