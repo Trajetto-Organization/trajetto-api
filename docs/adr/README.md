@@ -28,6 +28,7 @@ nesses arquivos.
 | [0010](./0010-ia-local.md)                         | IA local (OCR em CPU, `trajetto-ai`); o provedor externo saiu            | aceito                                 |
 | [0011](./0011-orm-prisma-6-7-8.md)                 | ORM: Prisma 7.10.1 com adapter-pg (go na 2ª tentativa); o 8 não saiu     | aceito                                 |
 | [0012](./0012-papeis-de-processo.md)               | Papéis de processo: uma imagem, uma Application por papel                | aceito em 18/11/2026                   |
+| [0013](./0013-camada-de-dados.md)                  | Camada de dados: PITR, standby, PgBouncer, roles e leituras explícitas   | aceito em 19/11/2026                   |
 | [0014](./0014-filas-particionadas.md)              | As quatro filas particionadas por dia, pelo id, a tabela de hoje legada  | aceito                                 |
 
 ## Outras decisões registradas
