@@ -45,7 +45,17 @@
 #             to 8 check it, and fail if LOAD_API_ROLE was forgotten);
 #   realtime  the sockets' role (PROCESS_ROLE=realtime) behind Traefik on
 #             /socket.io, as the Domain with Path of wave 18; with
-#             LOAD_API_SOCKETS=false the api replicas refuse sockets.
+#             LOAD_API_SOCKETS=false the api replicas refuse sockets;
+#   ingest    the positions' role (PROCESS_ROLE=ingest, LOAD_INGEST_REPLICAS,
+#             1), reached only by the file routers below.
+#
+# The routes by Path as Dokploy writes them (plano-escala F5-26): Traefik
+# also loads tests/load/traefik/ on its file provider, where
+# dokploy-roles.yml has the api, the realtime and the ingest routers in
+# Dokploy's own shape, for the host roles.load.localhost only (no other
+# request matches them). tests/load/roles-routing.sh proves the order
+# through the access log, and that the ingest's Path answers 502 with no
+# replica (--profile roles --profile realtime --profile ingest).
 #
 # A profile cannot change another service's settings, so the api's role is
 # the variable LOAD_API_ROLE and not the profile itself.
@@ -114,6 +124,9 @@ services:
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
       - --providers.docker.network=trajetto-load-edge
+      # The routers in Dokploy's file shape (F5-26): see the header.
+      - --providers.file.directory=/etc/traefik/dynamic
+      - --providers.file.watch=true
       # :80 inside; Traefik's own entrypoint (ping) takes :8080.
       - --entrypoints.web.address=:80
       # The production value (infra/traefik/traefik.reference.yaml), not
@@ -129,6 +142,7 @@ services:
       - "127.0.0.1:${LOAD_EDGE_PORT:-8080}:80"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik:/etc/traefik/dynamic:ro
     healthcheck:
       test: ["CMD", "traefik", "healthcheck", "--ping"]
       interval: 5s
@@ -274,7 +288,9 @@ services:
   # The sockets' role (profile `realtime`, wave 18 of the plan): the same
   # image in PROCESS_ROLE=realtime, which Traefik reaches on /socket.io
   # before the api's catch-all, the way the Domain with Path does in
-  # Dokploy. The scenes connect over WebSocket only, so one connection
+  # Dokploy: with no priority, by the rule's length, as Dokploy's routers
+  # (the file routers of the roles' host must win their own requests,
+  # F5-26). The scenes connect over WebSocket only, so one connection
   # stays on one replica without a sticky cookie.
   realtime:
     profiles: ["realtime"]
@@ -297,7 +313,6 @@ services:
     labels:
       - traefik.enable=true
       - traefik.http.routers.load-realtime.rule=PathPrefix(`/socket.io`)
-      - traefik.http.routers.load-realtime.priority=100
       - traefik.http.routers.load-realtime.entrypoints=web
       - traefik.http.routers.load-realtime.service=load-realtime
       - traefik.http.services.load-realtime.loadbalancer.server.port=3333
@@ -305,6 +320,40 @@ services:
       - traefik.http.services.load-realtime.loadbalancer.healthcheck.path=/health/readiness
       - traefik.http.services.load-realtime.loadbalancer.healthcheck.interval=10s
       - traefik.http.services.load-realtime.loadbalancer.healthcheck.timeout=5s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - edge
+      - data
+
+  # The positions' role (profile `ingest`, plano-escala F5-26): the same
+  # image in PROCESS_ROLE=ingest (only /health* and POST /route/positions).
+  # No docker label: only the file router of the roles' host reaches it,
+  # as the Domain with Path /route/positions does in Dokploy, and at 0
+  # replicas (--scale ingest=0) that router answers 502.
+  ingest:
+    profiles: ["ingest"]
+    image: ${LOAD_INGEST_IMAGE:-${LOAD_API_IMAGE:-trajetto-api:load}}
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      target: runner
+    cpuset: ${LOAD_INGEST_CPUSET:-}
+    deploy:
+      replicas: ${LOAD_INGEST_REPLICAS:-1}
+      resources:
+        limits:
+          memory: ${LOAD_INGEST_MEMORY_LIMIT:-512M}
+    environment:
+      <<: *api-environment
+      PROCESS_ROLE: ingest
+      SOCKETS_ENABLED: ""
+      NODE_OPTIONS: --max-old-space-size=${LOAD_INGEST_HEAP_MB:-320}
     depends_on:
       migrate:
         condition: service_completed_successfully

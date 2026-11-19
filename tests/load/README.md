@@ -800,6 +800,31 @@ bash tests/load/multi-replica.sh            # 0 a 8
 LOAD_STEPS="6 7 8" bash tests/load/multi-replica.sh
 ```
 
+### Os papéis por _Path_ (`roles-routing.sh`)
+
+Na staging e na produção, o realtime e o ingest entram no host da API por
+uma _Domain_ com _Path_ (`/socket.io`, `/route/positions`), que o Dokploy
+escreve como roteador de arquivo, sem prioridade (plano de escala F5-26).
+O Traefik do harness carrega as mesmas regras, no formato do Dokploy, de
+`traefik/dokploy-roles.yml`, só para o host `roles.load.localhost` (as
+cenas seguem nos labels de sempre). O `roles-routing.sh` pergunta por esse
+host e confere no access log (`RouterName`) quem atendeu: a API no host
+puro, o realtime em `/socket.io`, o ingest em `/route/positions`,
+`/route/live` na API, e o ingest com 0 réplicas dando 502 e voltando:
+
+```bash
+LOAD_API_ROLE=api LOAD_API_SOCKETS=false docker compose --env-file .env \
+  -f tests/load/compose.load.yaml --profile roles --profile realtime \
+  --profile ingest up -d --build
+bash tests/load/roles-routing.sh
+```
+
+Provado na onda 18 com o Traefik 3.7.13 avulso e servidores de mentira no
+lugar dos papéis (`ROUTING_TRAEFIK_CONTAINER` e
+`ROUTING_INGEST_CONTAINER`): os quatro caminhos nos seus roteadores e o
+502 do ingest parado. O runbook é
+[`docs/runbooks/roteamento-por-path.md`](../../docs/runbooks/roteamento-por-path.md).
+
 ### O que foi verificado
 
 **O tráfego se divide.** O access log do Traefik diz qual réplica atendeu cada

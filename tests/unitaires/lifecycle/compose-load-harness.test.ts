@@ -703,12 +703,14 @@ describe("the roles of the harness (LOAD-01)", () => {
     return harness.slice(start, end === -1 ? undefined : start + 1 + end);
   };
 
-  it("adds the worker and the realtime only under their profiles", () => {
+  it("adds the worker, the realtime and the ingest only under their profiles", () => {
     expect(block("worker")).toContain('profiles: ["roles"]');
     expect(block("realtime")).toContain('profiles: ["realtime"]');
+    expect(block("ingest")).toContain('profiles: ["ingest"]');
     expect(block("api")).not.toContain("profiles:");
     expect(block("worker")).toContain("PROCESS_ROLE: worker");
     expect(block("realtime")).toContain("PROCESS_ROLE: realtime");
+    expect(block("ingest")).toContain("PROCESS_ROLE: ingest");
   });
 
   it("gives the replicas the role `all` unless LOAD_API_ROLE says otherwise", () => {
@@ -748,6 +750,7 @@ describe("the roles of the harness (LOAD-01)", () => {
         "LOAD_K6_CPUSET",
         "LOAD_PG_CPUSET",
         "LOAD_REALTIME_CPUSET",
+        "LOAD_INGEST_CPUSET",
         "LOAD_REDIS_CPUSET",
         "LOAD_TRAEFIK_CPUSET",
         "LOAD_WORKER_CPUSET",
@@ -1595,5 +1598,178 @@ describe.skipIf(!hasCompose)("the CPU profile's flags (LOAD-10)", () => {
         /^--max-old-space-size=\d+$/,
       );
     }
+  });
+});
+
+/**
+ * The routes of the roles by Path (plano-escala F5-26).
+ *
+ * On staging and production the realtime and the ingest are reached on the
+ * API's host by Domains with a Path, which Dokploy writes as file routers
+ * with no priority: Traefik orders them by the length of their rule. The
+ * harness loads the same shape for one host (tests/load/traefik), and
+ * tests/load/roles-routing.sh proves the order through the access log and
+ * that the ingest's Path answers 502 with no replica. Text where the files
+ * are config; the script run for real against stubs of curl and docker
+ * that play Traefik.
+ */
+describe("the routes by Path, as Dokploy writes them (F5-26)", () => {
+  const routes = read(LOAD, "traefik", "dokploy-roles.yml");
+
+  it("loads the file routers beside the docker labels", () => {
+    expect(harness).toContain(
+      "--providers.file.directory=/etc/traefik/dynamic",
+    );
+    expect(harness).toContain("./traefik:/etc/traefik/dynamic:ro");
+  });
+
+  it("names, matches and serves each role as Dokploy does, with no priority and nothing stripped", () => {
+    for (const [role, rule] of [
+      ["api", "Host(`roles.load.localhost`)"],
+      ["realtime", "Host(`roles.load.localhost`) && PathPrefix(`/socket.io`)"],
+      [
+        "ingest",
+        "Host(`roles.load.localhost`) && PathPrefix(`/route/positions`)",
+      ],
+    ]) {
+      expect(routes).toContain(
+        `trajetto-${role}-router-1:\n      rule: ${rule}\n      service: trajetto-${role}-service-1\n`,
+      );
+      expect(routes).toContain(
+        `trajetto-${role}-service-1:\n      loadBalancer:\n        servers:\n          - url: http://${role}:3333\n        passHostHeader: true`,
+      );
+    }
+
+    // Traefik's order is the rule's length, as in Dokploy's files.
+    expect(routes).not.toMatch(/^\s+priority:/m);
+    expect(routes).not.toMatch(/stripprefix|stripPrefix/);
+  });
+
+  it("leaves the realtime's own label without a priority, so the roles' host wins its requests", () => {
+    expect(harness).not.toContain("load-realtime.priority");
+  });
+
+  it("reaches the ingest only through the file router", () => {
+    const start = harness.indexOf("\n  ingest:\n");
+    const ingest = harness.slice(
+      start,
+      start + 1 + harness.slice(start + 1).search(/\n {2}[a-z0-9-]+:\n/),
+    );
+
+    expect(ingest).not.toContain("labels:");
+    expect(ingest).toContain("- edge");
+  });
+
+  describe.skipIf(!hasShell("bash"))("roles-routing.sh", () => {
+    let box: Sandbox;
+
+    beforeEach(() => {
+      box = sandbox();
+      box.stub("sleep", "exit 0");
+    });
+
+    afterEach(() => box.dispose());
+
+    /**
+     * Traefik in two stubs: curl answers by the path and writes the access
+     * log line of the router that served it; docker reads that log and
+     * stops or starts the ingest. `socket` names the router /socket.io
+     * lands on, `downStatus` what /route/positions answers with no ingest.
+     */
+    function traefik(options: { socket?: string; downStatus?: number } = {}) {
+      const socket = options.socket ?? "trajetto-realtime-router-1";
+      const downStatus = options.downStatus ?? 502;
+
+      box.stub(
+        "curl",
+        [
+          'method=GET; url=""',
+          "while [ $# -gt 0 ]; do",
+          '  case "$1" in',
+          "    -X) method=$2; shift 2 ;;",
+          "    -H|-o|-w|--max-time|--data) shift 2 ;;",
+          "    -s) shift ;;",
+          "    *) url=$1; shift ;;",
+          "  esac",
+          "done",
+          "path=${url#http://localhost:8080}",
+          `down=$(cat "${box.root}/ingest-down" 2>/dev/null)`,
+          'case "$path" in',
+          `  /socket.io*) router=${socket}; status=400 ;;`,
+          "  /route/positions*)",
+          "    router=trajetto-ingest-router-1",
+          `    if [ "$down" = 1 ]; then status=${downStatus}; else status=401; fi ;;`,
+          "  *) router=trajetto-api-router-1; status=200 ;;",
+          "esac",
+          `printf '{"RequestPath":"%s","RouterName":"%s@file","DownstreamStatus":%s}\\n' "$path" "$router" "$status" >> "${box.root}/access.log"`,
+          'printf "%s" "$status"',
+        ].join("\n"),
+      );
+      box.stub(
+        "docker",
+        [
+          'case "$1" in',
+          `  logs) cat "${box.root}/access.log" ;;`,
+          `  stop) echo 1 > "${box.root}/ingest-down" ;;`,
+          `  start) echo 0 > "${box.root}/ingest-down" ;;`,
+          "esac",
+        ].join("\n"),
+      );
+    }
+
+    const routing = () =>
+      run("bash", resolve(LOAD, "roles-routing.sh"), [], {
+        bin: box.bin,
+        env: {
+          ROUTING_TRAEFIK_CONTAINER: "wfl-traefik",
+          ROUTING_INGEST_CONTAINER: "wfl-ingest",
+          ROUTING_WAIT_SECONDS: "2",
+        },
+      });
+
+    it("passes when every Path lands on its role and the ingest at 0 answers 502", () => {
+      traefik();
+
+      const result = routing();
+
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(result.stdout).toContain(
+        "ok: 2. o realtime em /socket.io pelo trajetto-realtime-router-1",
+      );
+      expect(result.stdout).toContain(
+        "ok: 4. /route/live fica na API pelo trajetto-api-router-1",
+      );
+      expect(result.stdout).toContain(
+        "ok: 5a. /route/positions sem ingest pelo trajetto-ingest-router-1 (HTTP 502)",
+      );
+      expect(box.calls("docker")).toEqual(
+        expect.arrayContaining([
+          "docker stop wfl-ingest",
+          "docker start wfl-ingest",
+        ]),
+      );
+    });
+
+    it("fails when the API's router takes /socket.io (a priority that beats the Path)", () => {
+      traefik({ socket: "trajetto-api-router-1" });
+
+      const result = routing();
+
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain(
+        "FALHOU: 2. o realtime em /socket.io: atendido por 'trajetto-api-router-1@file', esperado trajetto-realtime-router-1",
+      );
+    });
+
+    it("fails when the ingest's Path does not answer 502 with no replica", () => {
+      traefik({ downStatus: 401 });
+
+      const result = routing();
+
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain(
+        "FALHOU: 5a. o ingest em 0 réplicas não deu 502",
+      );
+    });
   });
 });

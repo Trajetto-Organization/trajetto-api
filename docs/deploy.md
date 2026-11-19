@@ -4898,7 +4898,10 @@ régua espera. O que muda em cada papel está em
    Traefik manda o _Path_ mais longo para esta Application: sem task de pé,
    cada pedido desse caminho recebe o erro do Traefik, em vez de ir para a
    `trajetto-api`. Depois, no host, confira a regra em
-   `/etc/dokploy/traefik/dynamic/<App Name>.yml`.
+   `/etc/dokploy/traefik/dynamic/<App Name>.yml`
+   ([runbook roteamento-por-path](./runbooks/roteamento-por-path.md): o
+   formato que o Dokploy escreve, a ordem pelo tamanho da regra e a prova
+   na bancada com `tests/load/roles-routing.sh`).
 5. _Advanced → Resources_: _Memory Limit_ e _CPU Limit_ da tabela de tetos,
    em bytes e nano-CPU (1 MiB = `1048576`; 1 CPU = `1000000000`; "livre" é
    o campo vazio). **Save**.

@@ -68,6 +68,20 @@ Conferir no host antes de aplicar (são os padrões do Dokploy, não garantia):
 | rede                                 | `dokploy-network` (onde o Dokploy põe todo Application e Database)                            |
 | roteador de cada Application         | `/etc/dokploy/traefik/dynamic/<appName>.yml` (_Advanced → Traefik_ no Application)            |
 
+## Os papéis por _Path_ no host da API
+
+O realtime e o ingest (plano de escala F5-26) entram no host da API por uma
+_Domain_ com _Path_ (`/socket.io`, `/route/positions`). O Dokploy escreve o
+roteador deles no mesmo arquivo dinâmico de cada Application, com a regra
+`Host(...) && PathPrefix(...)` e **sem prioridade**: o Traefik ordena pelo
+tamanho da regra, e o caminho mais longo ganha do host puro da API. Nada
+disso é configuração estática, então nada vai para `traefik.reference.yaml`.
+O formato está reproduzido em `tests/load/traefik/dokploy-roles.yml`, que o
+Traefik da bancada carrega, e o `tests/load/roles-routing.sh` prova a
+ordem e o 502 de um _Path_ sem réplica pelo access log. O passo a passo, a
+conferência no host e o que fazer quando um caminho cai no papel errado:
+[`docs/runbooks/roteamento-por-path.md`](../../docs/runbooks/roteamento-por-path.md).
+
 ## Aplicar
 
 1. No host, juntar as chaves de `traefik.reference.yaml` ao `traefik.yml` do
