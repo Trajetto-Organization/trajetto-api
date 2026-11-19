@@ -56,6 +56,21 @@ fora da tabela abaixo.
 | ---- | ------ | --------- | ------- |
 | —    | —      | —         | nenhum  |
 
+## Bancada ABBA (`bancada/`)
+
+A pasta `bancada/` (criada pelo primeiro relatório) guarda os relatórios do
+`tests/load/cpu-abba.sh` (plano de escala LOAD-10): a CPU e os statements
+por requisição de duas imagens da API, alternadas em ABBAAB no harness de
+uma máquina de bancada, com o método do
+[ADR 0011](../adr/0011-orm-prisma-6-7-8.md#medições). Eles não são
+relatórios de portão e não sobem degrau nenhum: dizem se um corte reduz a
+CPU (a F4-07 mantém um corte só com 2% a menos ou mais, sem piorar o p95) e
+se a bancada mede (o controle A=B, com |Δ| < 5%). A meta da onda 15 (≤ 6
+ms e ≤ 7 statements por requisição) sai neles como indicativa; o número
+que vale é o do portão do 1M, no hardware-alvo. O nome é
+`<data>-<rótulo>.md`, e o roteiro e as variáveis estão em
+[`tests/load/README.md`](../../tests/load/README.md), "Bancada de CPU".
+
 ## Medições de outubro de 2026, antes do template
 
 Duas medições de 07/10/2026 orientaram correções que o código ainda cita. Os

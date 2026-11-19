@@ -1564,3 +1564,36 @@ describe("the queue and import scenes (LOAD-04)", () => {
     });
   });
 });
+
+/**
+ * plano-escala LOAD-10: cpu-profile.sh recreates the api replicas with
+ * --cpu-prof through LOAD_API_NODE_FLAGS. Only the replicas behind Traefik
+ * may read it: a profiler in the migrate would profile the migrations, and
+ * in the worker or the realtime a process nobody asked about.
+ */
+describe.skipIf(!hasCompose)("the CPU profile's flags (LOAD-10)", () => {
+  const flags = "--cpu-prof --cpu-prof-dir=/tmp/cpu-prof";
+  const options = (services: Record<string, RoleService>, name: string) =>
+    services[name]?.environment?.NODE_OPTIONS ?? "";
+
+  it("are empty by default, the heap ceiling as before", () => {
+    const services = renderWith([]);
+
+    expect(options(services, "api")).toBe("--max-old-space-size=768");
+  });
+
+  it("reach the api replicas' NODE_OPTIONS and no other service's", () => {
+    const services = renderWith(
+      ["--profile", "roles", "--profile", "realtime"],
+      { LOAD_API_NODE_FLAGS: flags },
+    );
+
+    expect(options(services, "api")).toBe(`--max-old-space-size=768 ${flags}`);
+
+    for (const name of ["migrate", "worker", "realtime"]) {
+      expect(options(services, name), name).toMatch(
+        /^--max-old-space-size=\d+$/,
+      );
+    }
+  });
+});

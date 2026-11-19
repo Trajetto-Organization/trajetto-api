@@ -1122,3 +1122,95 @@ hostname, nproc e sleep): as recusas sem tocar em nada, o relatório com o
 commit, o digest e o gerador, e o reprovado com um 5xx.
 `performance-reports.test.ts` confere todo relatório da pasta e o
 verificador que recusa um sem o commit, sem o digest ou sem o gerador.
+
+## Bancada de CPU (`cpu-abba.sh` e `cpu-profile.sh`, LOAD-10)
+
+A CPU e os statements por requisição, medidos como o
+[ADR 0011](../../docs/adr/0011-orm-prisma-6-7-8.md#medições) mediu os 8,14
+ms e os 10,68 statements: duas imagens da API se alternam no mesmo harness,
+em ABBAAB, cada corrida numa cópia nova do mesmo banco. É a régua da meta
+da onda 15 (≤ 6 ms e ≤ 7 statements por requisição) e de cada corte da
+F4-07. Roda só nesta máquina de bancada: recusa um docker que aponte para
+outra máquina (`DOCKER_HOST` ou o contexto por `ssh://` ou `tcp://`), um nó
+com a pasta do Dokploy e um nó num Swarm com serviços, que é como um
+servidor do Dokploy se parece.
+
+```bash
+# O harness de pé e com o seed (passos 1 e 2 acima), de preferência com a
+# CPU da VPS. Rode a bancada com as MESMAS variáveis do `up`: a api é
+# recriada com elas a cada corrida.
+docker compose --env-file .env --env-file tests/load/vps-6vcpu.env \
+  -f tests/load/compose.load.yaml up -d --build
+
+# O controle, A=B: a mesma imagem duas vezes. |Δ| < 5% na CPU e nos
+# statements, ou a bancada está ruidosa demais para julgar um corte.
+docker tag trajetto-api:load trajetto-api:controle
+LOAD_EXTRA_ENV_FILES=tests/load/vps-6vcpu.env ABBA_LABEL=controle \
+  ABBA_A_IMAGE=trajetto-api:load ABBA_B_IMAGE=trajetto-api:controle \
+  bash tests/load/cpu-abba.sh
+
+# Um corte: a imagem de antes e a de depois.
+LOAD_EXTRA_ENV_FILES=tests/load/vps-6vcpu.env ABBA_LABEL=sessao-num-statement \
+  ABBA_A_IMAGE=trajetto-api:antes ABBA_B_IMAGE=trajetto-api:depois \
+  bash tests/load/cpu-abba.sh
+
+# Onde a CPU vai: o perfil de cada réplica sob carga, e a parte da sessão.
+LOAD_EXTRA_ENV_FILES=tests/load/vps-6vcpu.env \
+  PROFILE_MATCH='ensureAuthenticated|loadSession' bash tests/load/cpu-profile.sh
+```
+
+Cada corrida do `cpu-abba.sh`:
+
+1. para as réplicas (e o worker e o realtime, quando rodam), devolve o
+   `load_test` a partir do modelo `load_abba_template` (feito do `load_test`
+   na primeira sessão; `ABBA_FRESH_TEMPLATE=1` depois de um seed novo) e
+   esvazia o Redis do harness, para nenhuma corrida herdar as escritas, os
+   caches ou os limites da anterior;
+2. recria as réplicas com a imagem da vez e espera a readiness de cada uma;
+3. aquece com o `load.js` (`ABBA_WARMUP_SECONDS`, 20) e mede o repouso sem
+   carga (`ABBA_IDLE_SECONDS`, 15: as filas, o cron, os amostradores);
+4. zera o `pg_stat_statements`, lê a CPU de cada contêiner no cgroup
+   (`cpu.stat`), roda o `load.js` a `ABBA_RATE` operações/s (60, a do ADR)
+   por `ABBA_DURATION_SECONDS` (120) e lê tudo de novo.
+
+A CPU por requisição é a das réplicas da api na janela sobre as requisições
+do k6; com `PROCESS_ROLE=all` o trabalho das filas está nela, como no ADR.
+Os statements são as chamadas do `pg_stat_statements` no `load_test` sobre
+as mesmas requisições (com BEGIN e COMMIT). O relatório traz também os dois
+números sem o repouso, a CPU do Postgres, a execução no Postgres e o
+p50/p95/p99, e o veredito (`lib/abba-report.mjs`):
+
+- **controle** (A e B a mesma imagem): |Δ| < 5% na CPU e nos statements;
+- **corte** (duas imagens): fica só com a CPU 2% menor ou mais e o p95 no
+  máximo 5% pior;
+- **inválido**: uma corrida sem requisição, com 1% ou mais de falhas, ou
+  fora da ordem;
+- a meta da onda 15 para B, indicativa: o número que vale é o do portão do
+  1M no hardware-alvo.
+
+O relatório vai para `docs/desempenho/bancada/<data>-<rótulo>.md` (uma
+segunda sessão no mesmo dia vira `-2`); os arquivos brutos ficam em
+`tests/load/results/abba-<…>`, fora do Git. A api fica com a imagem da
+última corrida e o `load_test` como ela o deixou. Saída: 0 o veredito
+passou, 1 não passou, 2 recusou começar ou uma corrida falhou.
+
+O `cpu-profile.sh` recria as réplicas com a flag `--cpu-prof` em
+`LOAD_API_NODE_FLAGS`, que só o `NODE_OPTIONS` da api lê no
+`compose.load.yaml` (o migrate,
+o worker e o realtime não), roda o `load.js` (`PROFILE_RATE`, 60, por
+`PROFILE_DURATION_SECONDS`, 120), para as réplicas com `docker stop -t 40`
+(o desligamento da API termina em `process.exit`, e o Node grava o perfil
+na saída), copia o perfil de cada uma e imprime o topo da janela medida,
+sem o boot nem o desligamento: por pacote, por função (tempo próprio e
+total) e, com `PROFILE_MATCH`, a parte da CPU sob um padrão (o gatilho do
+cache de sessão é a sessão acima de 25%). No fim, sempre, recria as
+réplicas sem a flag. O perfil é o da thread principal: a CPU por
+requisição dele é conferência, o número da bancada é o do cgroup.
+`lib/cpuprofile-top.mjs` também lê perfis avulsos:
+`node tests/load/lib/cpuprofile-top.mjs --top 30 CPU.*.cpuprofile`.
+
+`cpu-bench.test.ts` executa os dois roteiros com um docker de mentira que
+guarda o estado do harness (a ordem ABBAAB, a cópia do banco e o Redis
+vazio antes de cada corrida, o perfil desligado no fim mesmo com falha) e
+alimenta as duas bibliotecas com números e com um perfil real do
+`node --cpu-prof`.

@@ -508,7 +508,14 @@ origens e um restart ([`deploy.md`](./deploy.md#frota-de-sockets-pela-borda-load
 nunca é o alvo (recusa um `TARGET_HOST_IP` desta máquina e os hosts da
 produção e da staging), e escreve o relatório em `docs/desempenho`;
 `gate-script.test.ts` o executa com stubs, e `performance-reports.test.ts`
-recusa um relatório sem o commit, sem o digest ou sem o gerador. O
+recusa um relatório sem o commit, sem o digest ou sem o gerador.
+`cpu-abba.sh` (LOAD-10) alterna duas imagens da API no harness em ABBAAB,
+cada corrida numa cópia nova do banco, e escreve em
+`docs/desempenho/bancada` a CPU (do cgroup) e os statements (do
+`pg_stat_statements`) por requisição, com o controle A=B abaixo de 5%;
+`cpu-profile.sh` grava o perfil de CPU das réplicas sob carga e imprime o
+topo por função e por pacote; os dois recusam um docker de outra máquina e
+um servidor do Dokploy, e o `cpu-bench.test.ts` os executa com stubs. O
 `seed.ts` prepara o banco `load_test` (empresas, motoristas, histórico); com
 `LOAD_TIER` (`tiny`, `100k`, `1m`, `5m` ou `prod-like`, plano de escala
 LOAD-02) a população vem em SQL de massa, com cauda longa de Zipf, as 150 mil

@@ -175,7 +175,13 @@ services:
       resources:
         limits:
           memory: ${API_MEMORY_LIMIT:-1024M}
-    environment: *api-environment
+    environment:
+      <<: *api-environment
+      # Node flags for the api replicas alone (plano-escala LOAD-10):
+      # cpu-profile.sh recreates them with --cpu-prof here, and the
+      # migrate, worker and realtime never see it. Unset, the value is the
+      # anchor's, to the character.
+      NODE_OPTIONS: --max-old-space-size=${API_HEAP_MB:-768}${LOAD_API_NODE_FLAGS:+ ${LOAD_API_NODE_FLAGS:-}}
     # The API's own variables for one scene (LOAD-04): read only when the
     # file is named, never required.
     env_file:
