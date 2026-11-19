@@ -23,6 +23,11 @@ const INFRA_URL_VARIABLES = {
   pgbouncer: "E2E_INFRA_PGBOUNCER_URL",
   /** The PgBouncer console as pgbouncer_stats (SHOW only). */
   pgbouncerStats: "E2E_INFRA_PGBOUNCER_STATS_URL",
+  /**
+   * The primary as trajetto_replication, with its password, from this
+   * machine: outside the one address its pg_hba lets replicate (F4-40).
+   */
+  replication: "E2E_INFRA_REPLICATION_URL",
 } as const;
 
 type InfraEndpoint = keyof typeof INFRA_URL_VARIABLES;

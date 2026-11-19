@@ -17,6 +17,14 @@
 #   - an extra argument (the Database's Args) that wins over the default and
 #     keeps every other flag, with and without a leading `postgres`;
 #   - bad environment values falling back instead of stopping the server;
+#   - pg_hba (F4-40): the image's rules are the ones the official entrypoint
+#     wrote on the new volume; POSTGRES_REPLICATION_CIDR adds exactly one
+#     replication line for that CIDR, and 'all' or too wide a mask adds none;
+#   - the standby branch (F4-40): an empty volume refused without the
+#     password (never initdb'd), then cloned through a slot, streaming as
+#     trajetto_replication, read only, the password only in its passfile;
+#     restarted without a new clone; and never demoted, neither the primary
+#     started with the standby's variables nor the standby once promoted;
 #   - a PITR round trip on an encrypted posix repository: stanza-create with
 #     archiving off, then on, check, full backup, archive-get, and a restore
 #     to a time between two batches of rows that brings back the first only;
@@ -222,6 +230,165 @@ expect archive_mode off
 stop
 ARGS=(postgres)
 ok "um arg extra ganha do padrão e mantém os outros"
+
+# --- pg_hba: the official rules, and replication from one CIDR only ------------
+
+# The volume's own pg_hba.conf is what the official entrypoint wrote at the
+# first start above: the image's rules must be those, line for line, or a
+# migrated Database would accept other connections than it did.
+rules() { grep -Ev '^[[:space:]]*(#|$)' "$1" | tr -s ' \t' ' '; }
+hba_rules() { sql "SELECT count(*) FROM pg_hba_file_rules WHERE error IS NULL"; }
+start
+expect hba_file /etc/trajetto/run/pg_hba.conf
+[ "$(rules "${PGDATA}/pg_hba.conf")" = "$(rules /etc/trajetto/pg_hba.conf)" ] \
+  || fail "as regras da imagem não são as do volume novo: $(diff <(rules "${PGDATA}/pg_hba.conf") <(rules /etc/trajetto/pg_hba.conf) || true)"
+[ "$(hba_rules)" = 7 ] || fail "pg_hba_file_rules: $(hba_rules) regras válidas, esperado 7"
+[ "$(sql "SELECT count(*) FROM pg_hba_file_rules WHERE 'replication' = ANY (database) AND type = 'host' AND address NOT IN ('127.0.0.1', '::1')")" = 0 ] \
+  || fail "replicação pela rede sem POSTGRES_REPLICATION_CIDR"
+stop
+
+start POSTGRES_REPLICATION_CIDR=10.20.30.45/24
+[ "$(hba_rules)" = 8 ] || fail "com o CIDR: $(hba_rules) regras válidas, esperado 8"
+line=$(sql "SELECT type || ' ' || array_to_string(database, ',') || ' ' || array_to_string(user_name, ',') || ' ' || address || ' ' || netmask || ' ' || auth_method FROM pg_hba_file_rules ORDER BY line_number DESC LIMIT 1")
+[ "$line" = "host replication trajetto_replication 10.20.30.0 255.255.255.0 scram-sha-256" ] \
+  || fail "a linha de replicação é '${line}'"
+stop
+
+for bad in all 0.0.0.0/0 10.0.0.0/8; do
+  start "POSTGRES_REPLICATION_CIDR=${bad}"
+  [ "$(hba_rules)" = 7 ] || fail "POSTGRES_REPLICATION_CIDR=${bad} abriu uma linha"
+  grep -q "AVISO: POSTGRES_REPLICATION_CIDR='${bad}'" "$LOG" || fail "POSTGRES_REPLICATION_CIDR=${bad} sem AVISO"
+  stop
+done
+ok "pg_hba: as regras do volume novo, mais uma linha de replicação só para o CIDR, nunca 'all'"
+
+# --- the standby branch ------------------------------------------------------------
+
+# This volume is the primary; the standby is a second server in this same
+# container, cloned over the loopback (which the official rules trust, so
+# the password is not what is proven here: tests/E2E/infra does it over a
+# real network, from the CIDR and from outside it).
+REPLICATION_PASSWORD=$(od -An -N24 -tx1 /dev/urandom | tr -d ' \n')
+SB_DATA="${WORK}/standby"
+SB_RUN="${WORK}/standby-run"
+SB_SOCK="${WORK}/standby-socket"
+SB_PID=""
+SB_LOG=""
+install -d -o postgres -g postgres -m 0700 "$SB_SOCK"
+sb_sql() { psql -X -v ON_ERROR_STOP=1 -h "$SB_SOCK" -p 5433 -U trajetto -d trajetto -Atq -c "$1"; }
+
+# start_standby [NAME=value...]: the wrapper, as a standby of the primary.
+start_standby() {
+  RUNS=$((RUNS + 1))
+  SB_LOG="${WORK}/standby-${RUNS}.log"
+  env PGDATA="$SB_DATA" TRAJETTO_RUN_DIR="$SB_RUN" POSTGRES_STANDBY_PRIMARY_HOST=127.0.0.1 "$@" \
+    trajetto-entrypoint.sh postgres -c port=5433 -c "unix_socket_directories=${SB_SOCK}" \
+    -c listen_addresses= > "$SB_LOG" 2>&1 &
+  SB_PID=$!
+  for _ in $(seq 1 240); do
+    if pg_isready -q -h "$SB_SOCK" -p 5433 -U trajetto -d trajetto; then return 0; fi
+    if ! kill -0 "$SB_PID" 2> /dev/null; then
+      LOG=$SB_LOG
+      fail "o standby saiu ao subir"
+    fi
+    sleep 0.25
+  done
+  LOG=$SB_LOG
+  fail "o standby não ficou pronto em 60 s"
+}
+
+stop_standby() {
+  kill -INT "$SB_PID"
+  wait "$SB_PID" || true
+  SB_PID=""
+}
+
+start
+sql "CREATE ROLE trajetto_replication REPLICATION LOGIN PASSWORD '${REPLICATION_PASSWORD}'"
+sql "CREATE TABLE standby_probe (n int PRIMARY KEY)"
+sql "INSERT INTO standby_probe VALUES (1)"
+
+# Never a new, empty primary in a standby's place: without the password,
+# the empty volume is refused before docker-entrypoint.sh can initdb it.
+status=0
+env PGDATA="${WORK}/standby-refused" TRAJETTO_RUN_DIR="${WORK}/standby-refused-run" \
+  POSTGRES_STANDBY_PRIMARY_HOST=127.0.0.1 trajetto-entrypoint.sh postgres \
+  > "${WORK}/standby-refused.log" 2>&1 || status=$?
+[ "$status" = 64 ] || fail "o clone sem senha saiu com ${status}, esperado 64"
+grep -q "sem POSTGRES_REPLICATION_PASSWORD" "${WORK}/standby-refused.log" || fail "o clone sem senha não disse por quê"
+[ -z "$(ls -A "${WORK}/standby-refused" 2> /dev/null)" ] || fail "o clone recusado deixou um volume"
+if grep -q "init process complete" "${WORK}/standby-refused.log"; then fail "o clone recusado rodou o initdb"; fi
+
+start_standby POSTGRES_REPLICATION_PASSWORD="$REPLICATION_PASSWORD" POSTGRES_STANDBY_SLOT=test_standby
+grep -q "clonando o standby de 127.0.0.1 pelo slot test_standby" "$SB_LOG" || fail "o standby não foi clonado pelo wrapper"
+[ "$(sb_sql 'SELECT pg_is_in_recovery()')" = t ] || fail "o standby não está em recuperação"
+[ -f "${SB_DATA}/standby.signal" ] || fail "o clone ficou sem standby.signal"
+streaming=""
+for _ in $(seq 1 120); do
+  if [ "$(sql "SELECT count(*) FROM pg_stat_replication WHERE usename = 'trajetto_replication' AND application_name = 'trajetto-standby' AND state = 'streaming'")" = 1 ]; then
+    streaming=yes
+    break
+  fi
+  sleep 0.25
+done
+[ -n "$streaming" ] || fail "o standby não está em streaming como trajetto_replication"
+[ "$(sql "SELECT slot_type || ':' || active FROM pg_replication_slots WHERE slot_name = 'test_standby'")" = "physical:true" ] \
+  || fail "o slot test_standby não está ativo"
+sql "INSERT INTO standby_probe VALUES (2)"
+lsn=$(sql "SELECT pg_current_wal_lsn()")
+caught=""
+for _ in $(seq 1 120); do
+  if [ "$(sb_sql "SELECT pg_last_wal_replay_lsn() >= '${lsn}'::pg_lsn")" = t ]; then
+    caught=yes
+    break
+  fi
+  sleep 0.25
+done
+[ -n "$caught" ] || fail "o standby não aplicou o commit do primário"
+[ "$(sb_sql 'SELECT count(*) FROM standby_probe')" = 2 ] || fail "o standby não vê o commit do primário"
+if sb_sql "INSERT INTO standby_probe VALUES (3)" 2> /dev/null; then fail "o standby aceitou uma escrita"; fi
+# The password is in the passfile only: not in primary_conninfo, not on the
+# volume, not in the log, not in the server's environment.
+conninfo=$(sb_sql 'SHOW primary_conninfo')
+[[ "$conninfo" == *"user=trajetto_replication passfile=${SB_RUN}/replication.pgpass"* ]] \
+  || fail "primary_conninfo sem o passfile: ${conninfo}"
+[ "$(stat -c '%a %U' "${SB_RUN}/replication.pgpass")" = "600 postgres" ] || fail "o passfile não é 600 do postgres"
+if grep -q "primary_conninfo" "${SB_DATA}/postgresql.auto.conf"; then fail "o clone gravou primary_conninfo no volume"; fi
+if grep -q "$REPLICATION_PASSWORD" "$SB_LOG" "${SB_DATA}/postgresql.auto.conf" < /dev/null; then fail "a senha de replicação vazou"; fi
+if tr '\0' '\n' < "/proc/${SB_PID}/environ" | grep -q '^POSTGRES_REPLICATION_PASSWORD='; then
+  fail "a senha de replicação ficou no ambiente do servidor"
+fi
+[ "$(sb_sql 'SHOW hot_standby_feedback')" = off ] || fail "hot_standby_feedback ligado"
+[ "$(sb_sql 'SHOW max_standby_streaming_delay')" = 30s ] || fail "max_standby_streaming_delay não é 30s"
+stop_standby
+ok "standby: clonado pelo slot, em streaming como trajetto_replication, só leitura, senha só no passfile"
+
+start_standby POSTGRES_REPLICATION_PASSWORD="$REPLICATION_PASSWORD" POSTGRES_STANDBY_SLOT=test_standby
+if grep -q "clonando" "$SB_LOG"; then fail "um standby existente foi clonado de novo"; fi
+[ "$(sb_sql 'SELECT pg_is_in_recovery()')" = t ] || fail "o standby existente não voltou em recuperação"
+
+# The primary with the standby's variables: never demoted.
+stop
+start POSTGRES_STANDBY_PRIMARY_HOST=127.0.0.1 POSTGRES_REPLICATION_PASSWORD="$REPLICATION_PASSWORD"
+[ "$(sql 'SELECT pg_is_in_recovery()')" = f ] || fail "o primário com POSTGRES_STANDBY_PRIMARY_HOST subiu em recuperação"
+[ ! -e "${PGDATA}/standby.signal" ] || fail "o wrapper criou standby.signal num primário"
+grep -q "AVISO: POSTGRES_STANDBY_PRIMARY_HOST está definida, mas o volume é um primário" "$LOG" || fail "o primário não avisou"
+
+# A promoted standby starts as a primary on its next start, the variables
+# still there: the failover is never undone by a restart.
+[ "$(sb_sql 'SELECT pg_promote()')" = t ] || fail "pg_promote() no standby"
+[ "$(sb_sql 'SELECT pg_is_in_recovery()')" = f ] || fail "o standby promovido continua em recuperação"
+[ "$(sb_sql 'SELECT substr(pg_walfile_name(pg_current_wal_lsn()), 1, 8)')" = 00000002 ] || fail "o promovido não está na timeline 2"
+stop_standby
+start_standby POSTGRES_REPLICATION_PASSWORD="$REPLICATION_PASSWORD" POSTGRES_STANDBY_SLOT=test_standby
+[ "$(sb_sql 'SELECT pg_is_in_recovery()')" = f ] || fail "o standby promovido foi rebaixado ao reiniciar"
+[ ! -e "${SB_DATA}/standby.signal" ] || fail "o wrapper recriou standby.signal no promovido"
+grep -q "AVISO: POSTGRES_STANDBY_PRIMARY_HOST está definida, mas o volume é um primário" "$SB_LOG" || fail "o promovido não avisou"
+stop_standby
+sql "SELECT pg_drop_replication_slot('test_standby')" > /dev/null
+stop
+rm -rf "$SB_DATA" "$SB_RUN"
+ok "nunca rebaixa: o primário e o standby promovido sobem como primários, com aviso"
 
 # --- PITR round trip on an encrypted posix repository ----------------------------
 

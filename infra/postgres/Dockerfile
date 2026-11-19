@@ -3,10 +3,12 @@
 # trajetto-postgres: the Database image of staging and production
 # (plano-escala F1-01). The official postgres:16-alpine, byte for byte, plus
 # pgBackRest compiled from source, the parameters production runs
-# (trajetto-entrypoint.sh, postgres.params) and the backup and drill scripts.
+# (trajetto-entrypoint.sh, postgres.params), a versioned pg_hba.conf, the
+# standby branch (plano-escala F4-40) and the backup and drill scripts.
 #
 #   docker build -t trajetto-postgres infra/postgres      the image (last stage)
 #   docker build --target test infra/postgres             its tests, offline
+#   docker build --target wrapper infra/postgres          no pgBackRest (E2E)
 #
 # A drop-in for the volume of today's Database: the same base by digest (the
 # one validate.yml's E2E runs), so the same PostgreSQL 16 binaries, the same
@@ -33,6 +35,23 @@ ARG PGBACKREST_VERSION=2.60.1 \
 
 FROM postgres:16-alpine@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab AS base
 
+# --- wrapper: the official server started the way this image starts it ------
+# The parameters, pg_hba (the official rules plus one replication line for
+# POSTGRES_REPLICATION_CIDR) and the standby branch, without pgBackRest:
+# none of them needs it. The E2E infra phase runs this stage
+# (tests/E2E/infra/run.sh builds --target wrapper in seconds), so its
+# primary and its standby start exactly as the Database does.
+FROM base AS wrapper
+COPY --link postgres.params /etc/trajetto/postgres.params
+COPY --link pg_hba.conf /etc/trajetto/pg_hba.conf
+COPY --link --chmod=0755 trajetto-entrypoint.sh /usr/local/bin/trajetto-entrypoint.sh
+# run/ holds what the entrypoint writes at every start (the pg_hba.conf
+# hba_file points at, the standby's passfile); the postgres user owns it
+# so a container started as that user can write them too.
+RUN install -d -o postgres -g postgres -m 0755 /etc/trajetto/run
+ENTRYPOINT ["trajetto-entrypoint.sh"]
+CMD ["postgres"]
+
 # --- pgBackRest, from source ---------------------------------------------------
 # meson against the image's libpq (/usr/local). The source is the GitHub
 # archive of the release tag, checked against the SHA-256 above before it is
@@ -58,7 +77,7 @@ RUN --network=none set -eu; \
     test "$(/out/usr/local/bin/pgbackrest version)" = "pgBackRest ${PGBACKREST_VERSION}"
 
 # --- app: what the tests and the image both run -------------------------------
-FROM base AS app
+FROM wrapper AS app
 
 # The one runtime library pgBackRest needs that the base lacks (libbz2; lz4,
 # zstd, libxml2, zlib and OpenSSL are the server's own). Adding it must not
@@ -76,9 +95,7 @@ RUN set -eu; \
     rm /tmp/apk-before /tmp/apk-after
 
 COPY --link --from=pgbackrest /out/ /
-COPY --link postgres.params /etc/trajetto/postgres.params
 COPY --link pgbackrest.conf /etc/pgbackrest/pgbackrest.conf
-COPY --link --chmod=0755 trajetto-entrypoint.sh /usr/local/bin/trajetto-entrypoint.sh
 # The backup of the Schedule Jobs and the monthly drill (F1-02) ship with
 # the server they back up: the same pgBackRest, no other copy to drift.
 COPY --link --chmod=0755 bin/trajetto-backup bin/trajetto-restore-drill /usr/local/bin/
@@ -86,9 +103,6 @@ COPY --link --chmod=0755 bin/trajetto-backup bin/trajetto-restore-drill /usr/loc
 # conf.d holds runtime.conf, which the entrypoint rewrites at every start;
 # the postgres user owns it so a container started as that user can too.
 RUN install -d -o postgres -g postgres -m 0755 /etc/pgbackrest/conf.d
-
-ENTRYPOINT ["trajetto-entrypoint.sh"]
-CMD ["postgres"]
 
 # --- tests: built by CI (`--target test`), never shipped -----------------------
 # Offline: every server, backup and restore of test/run.sh is local.

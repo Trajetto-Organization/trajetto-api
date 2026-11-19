@@ -79,6 +79,7 @@ describe("the infra phase's files", () => {
     expect(infraFiles).toEqual(
       expect.arrayContaining([
         "pgbouncer-transaction-mode.test.ts",
+        "replication-hba.test.ts",
         "streaming-standby.test.ts",
       ]),
     );
@@ -145,6 +146,8 @@ describe("infraUrl", () => {
       "postgresql://trajetto_http:x@127.0.0.1:49003/trajetto",
     E2E_INFRA_PGBOUNCER_STATS_URL:
       "postgresql://pgbouncer_stats:x@127.0.0.1:49003/pgbouncer",
+    E2E_INFRA_REPLICATION_URL:
+      "postgresql://trajetto_replication:x@127.0.0.1:49001/trajetto",
     DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/test_db",
   };
 
@@ -154,6 +157,9 @@ describe("infraUrl", () => {
     expect(infraUrl("pgbouncer", stack)).toBe(stack.E2E_INFRA_PGBOUNCER_URL);
     expect(infraUrl("pgbouncerStats", stack)).toBe(
       stack.E2E_INFRA_PGBOUNCER_STATS_URL,
+    );
+    expect(infraUrl("replication", stack)).toBe(
+      stack.E2E_INFRA_REPLICATION_URL,
     );
   });
 
@@ -281,9 +287,26 @@ describe("yarn test:e2e:infra (tests/E2E/infra/run.sh)", () => {
     expect(removal).toMatch(
       /label=\$\(label_of container "\$name"\) \|\| continue\n\s+\[ "\$label" = "\$PURPOSE" \] \|\|\n\s+die /,
     );
-    expect(
-      lines.filter((line) => /docker (?:rm|network rm)\b/.test(line)),
-    ).toHaveLength(2);
+    const removals = lines.filter((line) =>
+      /docker (?:rm|network rm)\b/.test(line),
+    );
+
+    // remove_stack's two, plus the network the script itself has just
+    // created with its label, taken back to be made again with an explicit
+    // subnet (the standby's fixed address needs one).
+    expect(removals).toHaveLength(3);
+    expect(removals.filter((line) => removal.includes(line))).toHaveLength(2);
+
+    const recreate = lines.findIndex((line) =>
+      line.startsWith('docker network rm "$NETWORK" > /dev/null || die'),
+    );
+
+    expect(lines[recreate - 1]).toMatch(
+      /^SUBNET=\$\(docker network inspect .* "\$NETWORK" \| grep -m 1 /,
+    );
+    expect(lines[recreate - 3]).toBe(
+      'docker network create --label "$LABEL" "$NETWORK" > /dev/null ||',
+    );
 
     for (const shared of [
       "trajetto-database",
@@ -299,10 +322,14 @@ describe("yarn test:e2e:infra (tests/E2E/infra/run.sh)", () => {
     }
   });
 
-  it("gives replication to the stack's network only, never 'all'", () => {
-    expect(script).toContain(
-      'printf "host replication trajetto_replication %s scram-sha-256\\n" "$1"',
-    );
+  it("gives replication to the standby's address only, never 'all', through the image's own pg_hba", () => {
+    // The trajetto-postgres image (its wrapper stage), never a pg_hba.conf
+    // edited on the volume: the one line comes from POSTGRES_REPLICATION_CIDR.
+    expect(script).toContain("--target wrapper infra/postgres");
+    expect(script).toContain('-e POSTGRES_REPLICATION_CIDR="${STANDBY_IP}/32"');
+    expect(script).toContain('--network "$NETWORK" --ip "$STANDBY_IP"');
+    expect(script).toContain('-e POSTGRES_STANDBY_PRIMARY_HOST="$PRIMARY"');
+    expect(script).not.toMatch(/>>\s*"?\$PGDATA\/pg_hba\.conf/);
     expect(script).not.toMatch(/host\s+replication\s+\S+\s+all\b/);
   });
 });

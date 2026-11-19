@@ -4,21 +4,31 @@
 # against a REAL PgBouncer and a REAL streaming standby, on a throwaway
 # stack of their own, created here and removed at the end:
 #
-#   <prefix>primary    postgres:16-alpine (the digest of the CI's services)
+#   <prefix>primary    the trajetto-postgres image without pgBackRest
+#                      (infra/postgres, --target wrapper: the official
+#                      postgres:16-alpine of the CI's services started
+#                      through trajetto-entrypoint.sh, as the Database is),
 #                      with the database `trajetto` as a release leaves it
 #                      (prisma migrate deploy, then yarn release:steps: the
-#                      roles of infra/sql and pgbouncer.user_lookup), the
-#                      logins the owner gives by hand (docs/deploy.md:
-#                      pgbouncer_auth and trajetto_http, with a password),
-#                      and a replication line in pg_hba.conf for the stack's
-#                      own network only
-#   <prefix>standby    the same image: a pg_basebackup -R of the primary,
-#                      streaming as trajetto_replication through a physical
-#                      slot (hot standby, read only)
+#                      roles of infra/sql, trajetto_replication included,
+#                      and pgbouncer.user_lookup), the logins the owner
+#                      gives by hand (docs/deploy.md: pgbouncer_auth,
+#                      trajetto_http and trajetto_replication, with a
+#                      password), and POSTGRES_REPLICATION_CIDR set to the
+#                      standby's address alone (/32): the image's one
+#                      replication line
+#   <prefix>standby    the same image, cloned by its standby branch
+#                      (POSTGRES_STANDBY_PRIMARY_HOST): a pg_basebackup of
+#                      the primary through a physical slot, then streaming
+#                      as trajetto_replication from its fixed address (hot
+#                      standby, read only)
 #   <prefix>pgbouncer  the trajetto-pgbouncer image (infra/pgbouncer) in
 #                      front of the primary, with the Environment of the
 #                      Application and throwaway passwords
-#   <prefix>net        their network
+#   <prefix>net        their network, with a subnet of its own so the
+#                      standby can have a fixed address; this machine
+#                      reaches the published ports from the network's
+#                      gateway, outside that /32
 #
 # A cluster of its own, never the shared test one: the phase gives roles a
 # login and a password and holds a replication slot, and those belong to the
@@ -35,7 +45,10 @@
 #                              CI builds it with its cache); without it, it
 #                              is built here from infra/pgbouncer and
 #                              removed at the end
-#   E2E_INFRA_POSTGRES_IMAGE   the Postgres image (the CI services' digest)
+#   E2E_INFRA_POSTGRES_IMAGE   a trajetto-postgres image already built (the
+#                              whole image or its wrapper stage); without
+#                              it, --target wrapper of infra/postgres is
+#                              built here and removed at the end
 #   E2E_INFRA_KEEP=1           keeps the stack for a look (names printed)
 #
 # The containers and the network carry the label trajetto.purpose=e2e-infra.
@@ -51,7 +64,7 @@ export MSYS_NO_PATHCONV=1
 cd "$(dirname "$0")/../../.." || exit 2
 
 PREFIX=${E2E_INFRA_PREFIX:-trajetto-e2e-infra-}
-POSTGRES_IMAGE=${E2E_INFRA_POSTGRES_IMAGE:-postgres:16-alpine@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab}
+POSTGRES_IMAGE=${E2E_INFRA_POSTGRES_IMAGE:-}
 PGBOUNCER_IMAGE=${E2E_INFRA_PGBOUNCER_IMAGE:-}
 PURPOSE=e2e-infra
 LABEL=trajetto.purpose=$PURPOSE
@@ -64,7 +77,7 @@ BOUNCER=${PREFIX}pgbouncer
 NETWORK=${PREFIX}net
 CONTAINERS=("$BOUNCER" "$STANDBY" "$PRIMARY")
 
-BUILT_IMAGE=
+BUILT_IMAGES=()
 STACK_STARTED=
 LOG=$(mktemp)
 
@@ -119,7 +132,9 @@ cleanup() {
     say "E2E_INFRA_KEEP=1: a pilha fica (${CONTAINERS[*]} e a rede $NETWORK)"
   else
     remove_stack
-    [ -z "$BUILT_IMAGE" ] || docker image rm "$BUILT_IMAGE" > /dev/null 2>&1 || true
+    for image in ${BUILT_IMAGES[@]+"${BUILT_IMAGES[@]}"}; do
+      docker image rm "$image" > /dev/null 2>&1 || true
+    done
   fi
   rm -f "$LOG"
   exit "$status"
@@ -168,24 +183,48 @@ read -r SUPERUSER_PASSWORD AUTH_PASSWORD HTTP_PASSWORD REPLICATION_PASSWORD \
   STATS_PASSWORD ADMIN_PASSWORD < <(node -e "console.log(Array.from({ length: 6 }, () => require('crypto').randomBytes(32).toString('hex')).join(' '))")
 [ -n "${ADMIN_PASSWORD:-}" ] || die "as senhas descartáveis não foram geradas"
 
-if [ -z "$PGBOUNCER_IMAGE" ]; then
-  BUILT_IMAGE=${PREFIX}pgbouncer-image:local
-  say "construindo a imagem do PgBouncer (infra/pgbouncer)"
-  if ! docker build -q -t "$BUILT_IMAGE" infra/pgbouncer > "$LOG" 2>&1; then
+# build TAG WHAT [docker build arguments]: an image of the stack, loaded
+# into Docker (--load: the CI's builder is a container) and removed at the
+# end.
+build() {
+  local tag=$1 what=$2
+  shift 2
+  say "construindo a imagem $what"
+  if ! docker build --load -q -t "$tag" "$@" > "$LOG" 2>&1; then
     tail -n 40 "$LOG" >&2
-    die "a imagem do PgBouncer não foi construída"
+    die "a imagem $what não foi construída"
   fi
-  PGBOUNCER_IMAGE=$BUILT_IMAGE
+  BUILT_IMAGES+=("$tag")
+}
+
+if [ -z "$PGBOUNCER_IMAGE" ]; then
+  PGBOUNCER_IMAGE=${PREFIX}pgbouncer-image:local
+  build "$PGBOUNCER_IMAGE" "do PgBouncer (infra/pgbouncer)" infra/pgbouncer
+fi
+if [ -z "$POSTGRES_IMAGE" ]; then
+  POSTGRES_IMAGE=${PREFIX}postgres-image:local
+  build "$POSTGRES_IMAGE" "do Postgres (infra/postgres, --target wrapper)" --target wrapper infra/postgres
 fi
 
 STACK_STARTED=1
+# A subnet of the network's own, so the standby can have a fixed address
+# and the primary's one replication line can name it alone: Docker picks
+# a free subnet, which is then taken explicitly (--ip needs that).
 docker network create --label "$LABEL" "$NETWORK" > /dev/null ||
   die "a rede $NETWORK não foi criada"
+SUBNET=$(docker network inspect -f '{{range .IPAM.Config}}{{println .Subnet}}{{end}}' "$NETWORK" | grep -m 1 '\.')
+docker network rm "$NETWORK" > /dev/null || die "a rede $NETWORK não foi recriada"
+[[ $SUBNET =~ ^([0-9]+\.[0-9]+\.[0-9]+)\.0/([0-9]+)$ ]] && [ "${BASH_REMATCH[2]}" -le 24 ] ||
+  die "a rede $NETWORK veio com a sub-rede '$SUBNET', sem espaço para o endereço fixo do standby"
+STANDBY_IP=${BASH_REMATCH[1]}.200
+docker network create --label "$LABEL" --subnet "$SUBNET" "$NETWORK" > /dev/null ||
+  die "a rede $NETWORK não foi criada com a sub-rede $SUBNET"
 
 # --- the primary, as a release leaves it ---------------------------------------
 docker run -d --name "$PRIMARY" --label "$LABEL" --network "$NETWORK" \
   -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD="$SUPERUSER_PASSWORD" \
-  -e POSTGRES_DB="$DATABASE" -p 127.0.0.1::5432 "$POSTGRES_IMAGE" > /dev/null ||
+  -e POSTGRES_DB="$DATABASE" -e POSTGRES_REPLICATION_CIDR="${STANDBY_IP}/32" \
+  -p 127.0.0.1::5432 "$POSTGRES_IMAGE" > /dev/null ||
   die "o primário não subiu"
 # Over TCP: the image's first-start server listens on the socket only.
 wait_for 90 "o primário" ready "$PRIMARY"
@@ -202,39 +241,24 @@ for command in "prisma migrate deploy" "release:steps"; do
 done
 
 # The owner's hand steps (docs/deploy.md): a login and a password for the
-# auth login and the runtime; a replication login for the standby (the role
-# of infra/sql when it exists, else created here).
+# auth login, the runtime and the standby's role (infra/sql gives
+# trajetto_replication its REPLICATION, never a login).
 psql_in "$PRIMARY" > /dev/null << SQL || die "os logins não foram dados no primário"
 ALTER ROLE pgbouncer_auth LOGIN PASSWORD '${AUTH_PASSWORD}';
 ALTER ROLE trajetto_http LOGIN PASSWORD '${HTTP_PASSWORD}';
-SELECT 'CREATE ROLE trajetto_replication NOLOGIN'
- WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'trajetto_replication')
-\gexec
-ALTER ROLE trajetto_replication LOGIN REPLICATION PASSWORD '${REPLICATION_PASSWORD}';
+ALTER ROLE trajetto_replication LOGIN PASSWORD '${REPLICATION_PASSWORD}';
 SQL
 
-# Replication only for the stack's network, never 'all'.
-SUBNET=$(docker network inspect -f '{{range .IPAM.Config}}{{println .Subnet}}{{end}}' "$NETWORK" | grep -m 1 '\.')
-[ -n "$SUBNET" ] || die "a rede $NETWORK não tem sub-rede IPv4"
-docker exec "$PRIMARY" sh -c \
-  'printf "host replication trajetto_replication %s scram-sha-256\n" "$1" >> "$PGDATA/pg_hba.conf"' \
-  sh "$SUBNET" || die "a linha de replicação não foi escrita"
-psql_in "$PRIMARY" -tAc 'SELECT pg_reload_conf()' > /dev/null || die "o primário não releu o pg_hba.conf"
-rules=$(psql_in "$PRIMARY" -tAc "SELECT count(*) FROM pg_hba_file_rules WHERE error IS NULL AND 'replication' = ANY (database) AND 'trajetto_replication' = ANY (user_name)")
-[ "$rules" = 1 ] || die "a linha de replicação não entrou no pg_hba.conf do primário"
+# The image's one replication line: the standby's address, never 'all'.
+rules=$(psql_in "$PRIMARY" -tAc "SELECT count(*) FROM pg_hba_file_rules WHERE error IS NULL AND 'replication' = ANY (database) AND 'trajetto_replication' = ANY (user_name) AND address = '${STANDBY_IP}' AND netmask = '255.255.255.255'")
+[ "$rules" = 1 ] || die "o pg_hba do primário não tem a linha de replicação de ${STANDBY_IP}/32"
 
 # --- the standby -----------------------------------------------------------------
-docker run -d --name "$STANDBY" --label "$LABEL" --network "$NETWORK" \
-  -e PGPASSWORD="$REPLICATION_PASSWORD" -e PRIMARY_HOST="$PRIMARY" -e SLOT="$SLOT" \
-  -p 127.0.0.1::5432 --entrypoint sh "$POSTGRES_IMAGE" -ec '
-    if [ ! -s "$PGDATA/PG_VERSION" ]; then
-      mkdir -p "$PGDATA"
-      chown postgres:postgres "$PGDATA"
-      chmod 700 "$PGDATA"
-      su-exec postgres pg_basebackup -h "$PRIMARY_HOST" -U trajetto_replication \
-        -D "$PGDATA" -R -X stream -C -S "$SLOT" -c fast
-    fi
-    exec docker-entrypoint.sh postgres' > /dev/null || die "o standby não subiu"
+# Cloned by the image's standby branch, from its fixed address.
+docker run -d --name "$STANDBY" --label "$LABEL" --network "$NETWORK" --ip "$STANDBY_IP" \
+  -e POSTGRES_STANDBY_PRIMARY_HOST="$PRIMARY" -e POSTGRES_STANDBY_SLOT="$SLOT" \
+  -e POSTGRES_REPLICATION_PASSWORD="$REPLICATION_PASSWORD" \
+  -p 127.0.0.1::5432 "$POSTGRES_IMAGE" > /dev/null || die "o standby não subiu"
 wait_for 90 "o standby" ready "$STANDBY"
 wait_for 30 "o standby em recuperação" in_recovery
 wait_for 30 "o streaming do primário para o standby" streaming
@@ -255,6 +279,7 @@ export E2E_INFRA_PRIMARY_URL=$PRIMARY_URL
 export E2E_INFRA_STANDBY_URL="postgresql://postgres:${SUPERUSER_PASSWORD}@127.0.0.1:${STANDBY_PORT}/${DATABASE}"
 export E2E_INFRA_PGBOUNCER_URL="postgresql://trajetto_http:${HTTP_PASSWORD}@127.0.0.1:${BOUNCER_PORT}/${DATABASE}"
 export E2E_INFRA_PGBOUNCER_STATS_URL="postgresql://pgbouncer_stats:${STATS_PASSWORD}@127.0.0.1:${BOUNCER_PORT}/pgbouncer"
+export E2E_INFRA_REPLICATION_URL="postgresql://trajetto_replication:${REPLICATION_PASSWORD}@127.0.0.1:${PRIMARY_PORT}/${DATABASE}"
 unset SUPERUSER_PASSWORD AUTH_PASSWORD HTTP_PASSWORD REPLICATION_PASSWORD \
   STATS_PASSWORD ADMIN_PASSWORD PRIMARY_URL
 

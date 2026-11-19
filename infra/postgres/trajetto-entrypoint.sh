@@ -28,19 +28,31 @@
 #      the bottleneck (synchronous_commit stays on: a 2xx means committed);
 #   5. archiving: on only with PITR_ARCHIVE=on AND a complete repo1;
 #      archive_mode=off, explicitly, in every other case;
-#   6. trajetto.image_revision, the commit the image was built from;
-#   7. whatever the container was started with (the Database's Args), last,
+#   6. hba_file: the image's pg_hba.conf (the official rules), plus one
+#      replication line for POSTGRES_REPLICATION_CIDR alone (F4-40);
+#   7. the standby branch, with POSTGRES_STANDBY_PRIMARY_HOST: an empty
+#      volume is cloned from that primary and follows it; a volume that is
+#      already a standby keeps following it; a volume that is a primary
+#      (or a standby promoted since) starts as a primary. The image never
+#      demotes a primary: only a clone of an empty volume gets a
+#      standby.signal here;
+#   8. trajetto.image_revision, the commit the image was built from;
+#   9. whatever the container was started with (the Database's Args), last,
 #      so an extra flag wins over the default and keeps every other one.
 #
 # Bad or missing environment never stops the database: the value falls back
-# to its default and a line on stderr says so. Only a broken params file
-# (a build defect, which the image's test stage would have caught) refuses.
+# to its default and a line on stderr says so. Only a broken params file or
+# pg_hba.conf (a build defect, which the image's test stage would have
+# caught) refuses, and a standby that cannot be cloned: an empty volume
+# never becomes a new, empty primary in its place.
 #
 # Any first argument other than `postgres` or a flag runs as given (bash,
 # pgbackrest, trajetto-restore-drill...).
 set -Eeuo pipefail
 
 PARAMS_FILE=${TRAJETTO_POSTGRES_PARAMS:-/etc/trajetto/postgres.params}
+HBA_TEMPLATE=${TRAJETTO_HBA_TEMPLATE:-/etc/trajetto/pg_hba.conf}
+RUN_DIR=${TRAJETTO_RUN_DIR:-/etc/trajetto/run}
 PGBACKREST_CONF_DIR=${TRAJETTO_PGBACKREST_CONF_DIR:-/etc/pgbackrest/conf.d}
 CGROUP_ROOT=${TRAJETTO_CGROUP_ROOT:-/sys/fs/cgroup}
 
@@ -314,7 +326,184 @@ else
   fi
 fi
 
-# --- 6. the image's commit, then the container's own args ---------------------
+# --- 6. pg_hba: the official rules, plus replication from one CIDR ------------
+
+# An IPv4 address with a mask from /16 to /32, its host bits cleared, or
+# nothing. Never "all", 0.0.0.0/0, samenet or a host name, which pg_hba
+# would take; and nothing Postgres could refuse to parse, because a bad
+# line in pg_hba stops the server at start.
+replication_cidr_of() {
+  local value=$1 prefix ip mask net octet
+  [[ "$value" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})/([0-9]{1,2})$ ]] || return 1
+  prefix=$((10#${BASH_REMATCH[5]}))
+  [ "$prefix" -ge 16 ] && [ "$prefix" -le 32 ] || return 1
+  ip=0
+  for octet in "${BASH_REMATCH[@]:1:4}"; do
+    octet=$((10#$octet))
+    [ "$octet" -le 255 ] || return 1
+    ip=$(((ip << 8) | octet))
+  done
+  mask=$(((0xFFFFFFFF << (32 - prefix)) & 0xFFFFFFFF))
+  net=$((ip & mask))
+  printf '%d.%d.%d.%d/%d' $(((net >> 24) & 255)) $(((net >> 16) & 255)) \
+    $(((net >> 8) & 255)) $((net & 255)) "$prefix"
+}
+
+if [ ! -r "$HBA_TEMPLATE" ]; then
+  echo "trajetto-postgres: ${HBA_TEMPLATE} não existe: imagem quebrada." >&2
+  exit 64
+fi
+
+replication_cidr=""
+if [ -n "${POSTGRES_REPLICATION_CIDR:-}" ]; then
+  replication_cidr=$(replication_cidr_of "$POSTGRES_REPLICATION_CIDR") || {
+    replication_cidr=""
+    warn "POSTGRES_REPLICATION_CIDR='${POSTGRES_REPLICATION_CIDR}' não é um IPv4 com máscara de /16 a /32 (como 10.0.1.25/32): nenhuma replicação pela rede."
+  }
+fi
+
+# Rewritten at every start: the rules travel with the digest, and the
+# volume's own pg_hba.conf (the official one) is left as it was, for a
+# rollback of the image.
+mkdir -p "$RUN_DIR"
+hba_file="${RUN_DIR}/pg_hba.conf"
+{
+  echo "# Written by trajetto-entrypoint.sh at every start, from ${HBA_TEMPLATE}; edits here are lost."
+  cat "$HBA_TEMPLATE"
+  if [ -n "$replication_cidr" ]; then
+    printf 'host    replication     trajetto_replication    %s    scram-sha-256\n' "$replication_cidr"
+  fi
+} > "${hba_file}.tmp"
+chmod 0644 "${hba_file}.tmp"
+mv -f "${hba_file}.tmp" "$hba_file"
+add "hba_file=${hba_file}"
+if [ -n "$replication_cidr" ]; then
+  say "replicação pela rede só de ${replication_cidr}, como trajetto_replication (scram-sha-256)."
+fi
+
+# --- 7. the standby branch -----------------------------------------------------
+
+DATA=${PGDATA:-/var/lib/postgresql/data}
+PASSFILE="${RUN_DIR}/replication.pgpass"
+
+# The replication password goes to a passfile, never into
+# primary_conninfo (which SHOW and postgresql.auto.conf would print), and
+# leaves the environment before the server starts, standby or not.
+replication_password=${POSTGRES_REPLICATION_PASSWORD:-}
+unset POSTGRES_REPLICATION_PASSWORD
+
+# As the postgres user when started as root: the clone must own what it
+# writes, and libpq reads a passfile only when its owner runs it.
+as_postgres() {
+  if [ "$(id -u)" = 0 ]; then
+    "$(command -v gosu || command -v su-exec)" postgres "$@"
+  else
+    "$@"
+  fi
+}
+
+# An empty volume that cannot be cloned stops here: starting it would make
+# docker-entrypoint.sh create a new, empty primary in the standby's place.
+refuse_clone() {
+  echo "trajetto-postgres: ERRO: $*. O volume vazio não vira um primário novo: corrija o Environment e faça o Deploy." >&2
+  exit 64
+}
+
+standby=""
+if [ -n "${POSTGRES_STANDBY_PRIMARY_HOST:-}" ]; then
+  if [ -s "${DATA}/PG_VERSION" ]; then
+    if [ -f "${DATA}/standby.signal" ]; then
+      standby=follow
+    else
+      # A primary, or a standby promoted since (pg_promote() removes the
+      # signal). Following the old primary would throw away what was
+      # written after the promote: never.
+      warn "POSTGRES_STANDBY_PRIMARY_HOST está definida, mas o volume é um primário (sem standby.signal; um standby promovido também é): sobe como PRIMÁRIO. A imagem nunca rebaixa um primário; tire a variável."
+    fi
+  else
+    standby=clone
+  fi
+elif [ -f "${DATA}/standby.signal" ]; then
+  warn "o volume tem standby.signal, mas POSTGRES_STANDBY_PRIMARY_HOST está vazia: sobe em recuperação, sem o primary_conninfo da imagem. Para promovê-lo: SELECT pg_promote();"
+fi
+
+if [ -n "$standby" ]; then
+  primary_host=$POSTGRES_STANDBY_PRIMARY_HOST
+  # A Database's App Name or an address: never a list, never options.
+  if ! [[ "$primary_host" =~ ^[A-Za-z0-9]([A-Za-z0-9._-]{0,251}[A-Za-z0-9])?$ ]]; then
+    [ "$standby" = follow ] || refuse_clone "POSTGRES_STANDBY_PRIMARY_HOST='${primary_host}' não é um nome de host"
+    warn "POSTGRES_STANDBY_PRIMARY_HOST='${primary_host}' não é um nome de host: o standby sobe sem seguir o primário."
+    primary_host=""
+  fi
+
+  slot=${POSTGRES_STANDBY_SLOT:-}
+  if [ -n "$slot" ] && ! [[ "$slot" =~ ^[a-z0-9_]{1,63}$ ]]; then
+    [ "$standby" = follow ] || refuse_clone "POSTGRES_STANDBY_SLOT='${slot}' não é um nome de slot (a-z, 0-9 e _)"
+    warn "POSTGRES_STANDBY_SLOT='${slot}' não é um nome de slot (a-z, 0-9 e _): segue sem slot."
+    slot=""
+  fi
+
+  password=$replication_password
+  if [[ "$password" == *$'\n'* || "$password" == *$'\r'* ]]; then
+    password=""
+    warn "POSTGRES_REPLICATION_PASSWORD tem quebra de linha: ignorada."
+  fi
+  if [ -n "$password" ]; then
+    escaped=${password//\\/\\\\}
+    escaped=${escaped//:/\\:}
+    (umask 077 && printf '*:*:*:trajetto_replication:%s\n' "$escaped" > "${PASSFILE}.tmp")
+    if [ "$(id -u)" = 0 ]; then chown postgres:postgres "${PASSFILE}.tmp"; fi
+    mv -f "${PASSFILE}.tmp" "$PASSFILE"
+    unset escaped
+  else
+    rm -f "$PASSFILE"
+    [ "$standby" = follow ] || refuse_clone "sem POSTGRES_REPLICATION_PASSWORD, a senha do trajetto_replication"
+    warn "sem POSTGRES_REPLICATION_PASSWORD: o standby não entra no primário."
+  fi
+  unset password
+
+  conninfo="host=${primary_host} port=5432 user=trajetto_replication passfile=${PASSFILE} application_name=trajetto-standby connect_timeout=10"
+  slot_args=()
+  if [ -n "$slot" ]; then slot_args=(-S "$slot"); fi
+
+  if [ "$standby" = clone ]; then
+    if [ -d "$DATA" ] && [ -n "$(ls -A "$DATA")" ]; then
+      refuse_clone "${DATA} não está vazio e não tem um cluster (sem PG_VERSION)"
+    fi
+    mkdir -p "$DATA"
+    if [ "$(id -u)" = 0 ]; then chown postgres:postgres "$DATA"; fi
+    chmod 0700 "$DATA"
+    if [ -n "$slot" ]; then
+      as_postgres pg_receivewal -d "$conninfo" --slot="$slot" --create-slot --if-not-exists --no-password ||
+        refuse_clone "o slot ${slot} não foi criado em ${primary_host}"
+    fi
+    say "clonando o standby de ${primary_host}${slot:+ pelo slot ${slot}} (pg_basebackup)."
+    # No -R: it would write primary_conninfo into postgresql.auto.conf,
+    # on the volume, where a rollback of the image would keep it.
+    as_postgres pg_basebackup -d "$conninfo" -D "$DATA" -X stream -c fast --no-password \
+      ${slot_args[@]+"${slot_args[@]}"} ||
+      refuse_clone "o pg_basebackup de ${primary_host} falhou"
+    as_postgres touch "${DATA}/standby.signal"
+    say "standby clonado de ${primary_host}."
+  fi
+
+  if [ -n "$primary_host" ]; then
+    add "primary_conninfo=${conninfo}"
+    if [ -n "$slot" ]; then add "primary_slot_name=${slot}"; fi
+  fi
+  add "hot_standby=on"
+  add "hot_standby_feedback=off"
+  add "max_standby_streaming_delay=30s"
+  add "recovery_target_timeline=latest"
+  # The WAL the stream no longer has comes from the PITR repository.
+  if [ "$repo1_ready" = true ]; then
+    add 'restore_command=pgbackrest --stanza=trajetto archive-get %f "%p"'
+  fi
+  say "standby de ${primary_host:-<nenhum primário>}${slot:+ pelo slot ${slot}}: em recuperação, só leitura."
+fi
+unset replication_password
+
+# --- 8. the image's commit, then the container's own args ---------------------
 
 revision=${APP_COMMIT_SHA:-dev}
 [[ "$revision" =~ ^[0-9A-Za-z._-]{1,64}$ ]] || revision=dev

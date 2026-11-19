@@ -1990,15 +1990,16 @@ release cria os roles e os grants em toda release
 são do dono, à mão, e nunca entram num arquivo do repositório nem num SQL
 com a senha escrita.
 
-| Role                  | O que pode                                                                                                                                                                                                                        | Quem usa                                        |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
-| `trajetto_app`        | o grupo (nunca um login): lê e grava toda tabela, menos a trilha das entregas e as tabelas da etapa de release, que só lê                                                                                                         | ninguém direto; os três abaixo são membros      |
-| `trajetto_http`       | o grupo; na trilha (`delivery_event`), lê, insere e preenche o endereço do GPS do comprovante; `statement_timeout` de 30 s                                                                                                        | as requisições (API, tempo real, ingestão)      |
-| `trajetto_worker`     | igual ao `trajetto_http`                                                                                                                                                                                                          | os workers (onda 12)                            |
-| `trajetto_batch`      | o grupo; na trilha, lê, altera e apaga; membro do `trajetto_partitions` e dos roles de estatística; `statement_timeout` de 30 min                                                                                                 | o cron: expurgos, partições, métricas pesadas   |
-| `trajetto_read`       | só SELECT, fora do grupo; `statement_timeout` de 10 s                                                                                                                                                                             | as leituras pesadas (onda 12)                   |
-| `trajetto_partitions` | dono das tabelas particionadas e das partições (`infra/sql/10-partitions.sql`); no schema, só cria, altera e apaga tabelas (`infra/sql/15-untrusted-code.sql`)                                                                    | só por `SET ROLE`, a partir do `trajetto_batch` |
-| `pgbouncer_auth`      | só executa `pgbouncer.user_lookup(text)` (`infra/sql/30-pgbouncer-auth.sql`), que devolve o verificador SCRAM de um login do runtime e nada para superusuário, replicação, o dono das tabelas, `trajetto_replication` e ele mesmo | o PgBouncer (onda 17), pelo `auth_query`        |
+| Role                   | O que pode                                                                                                                                                                                                                        | Quem usa                                                                                           |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `trajetto_app`         | o grupo (nunca um login): lê e grava toda tabela, menos a trilha das entregas e as tabelas da etapa de release, que só lê                                                                                                         | ninguém direto; os três abaixo são membros                                                         |
+| `trajetto_http`        | o grupo; na trilha (`delivery_event`), lê, insere e preenche o endereço do GPS do comprovante; `statement_timeout` de 30 s                                                                                                        | as requisições (API, tempo real, ingestão)                                                         |
+| `trajetto_worker`      | igual ao `trajetto_http`                                                                                                                                                                                                          | os workers (onda 12)                                                                               |
+| `trajetto_batch`       | o grupo; na trilha, lê, altera e apaga; membro do `trajetto_partitions` e dos roles de estatística; `statement_timeout` de 30 min                                                                                                 | o cron: expurgos, partições, métricas pesadas                                                      |
+| `trajetto_read`        | só SELECT, fora do grupo; `statement_timeout` de 10 s                                                                                                                                                                             | as leituras pesadas (onda 12)                                                                      |
+| `trajetto_partitions`  | dono das tabelas particionadas e das partições (`infra/sql/10-partitions.sql`); no schema, só cria, altera e apaga tabelas (`infra/sql/15-untrusted-code.sql`)                                                                    | só por `SET ROLE`, a partir do `trajetto_batch`                                                    |
+| `pgbouncer_auth`       | só executa `pgbouncer.user_lookup(text)` (`infra/sql/30-pgbouncer-auth.sql`), que devolve o verificador SCRAM de um login do runtime e nada para superusuário, replicação, o dono das tabelas, `trajetto_replication` e ele mesmo | o PgBouncer (onda 17), pelo `auth_query`                                                           |
+| `trajetto_replication` | só REPLICATION (`infra/sql/40-replication.sql`): clona o cluster inteiro e segue o WAL; entra só pela linha de replicação do `pg_hba` da imagem (`POSTGRES_REPLICATION_CIDR`), nunca pelo PgBouncer                               | o standby (o do ensaio de failover; o do prod-db-2 na onda 23), com login dado só quando houver um |
 
 Todos levam `lock_timeout` de 5 s e `idle_in_transaction_session_timeout`
 de 60 s no próprio role, além dos da URL. Cada URL, com o login, o
@@ -2214,6 +2215,63 @@ ele:
 - **Nunca pelo PgBouncer**: a `BATCH_DATABASE_URL` e a URL da
   `trajetto-api-migrate`, que usam sessão própria; o boot e a etapa de
   release as recusam na porta 6432.
+
+### Standby: o `pg_hba` da imagem e o ramo standby (onda 17)
+
+A imagem `trajetto-postgres` já sai pronta para um standby (plano de
+escala, F4-40). Nada muda num Database sem as variáveis abaixo, a não ser
+de onde o Postgres lê o `pg_hba`:
+
+- **O `pg_hba` vem da imagem** (`infra/postgres/pg_hba.conf`): as mesmas
+  regras que a imagem oficial escreveu no volume (confiança só dentro do
+  contêiner, `scram-sha-256` de qualquer endereço), copiadas a cada partida
+  para `/etc/trajetto/run/pg_hba.conf`, para onde aponta o `hba_file`. O
+  arquivo do volume fica como estava: voltar o digest volta a ele. O
+  primário aceita as mesmas conexões de antes, e o teste da imagem compara
+  as regras com as do volume que a imagem oficial cria.
+- **Replicação pela rede só de um endereço**: com
+  `POSTGRES_REPLICATION_CIDR`, o wrapper soma uma linha só,
+  `host replication trajetto_replication <cidr> scram-sha-256`. Só IPv4, de
+  /16 a /32; `all`, `0.0.0.0/0`, uma máscara mais larga ou um nome não
+  abrem nada (o log avisa e o banco sobe). Use o endereço mais estreito de
+  onde o standby conecta: o IP privado dele, `/32`, quando ele vem pela
+  rede privada; pela `dokploy-network`, cujo endereço de cada tarefa muda a
+  cada deploy, a sub-rede dela
+  (`docker network inspect dokploy-network -f '{{(index .IPAM.Config 0).Subnet}}'`).
+- **O role** `trajetto_replication` vem da etapa de release, NOLOGIN e
+  com REPLICATION ([roles do banco](#roles-do-banco-logins-urls-e-conexões)).
+  Só quando houver standby, no `psql` do primário:
+  `ALTER ROLE trajetto_replication LOGIN;` e `\password trajetto_replication`
+  (senha de `openssl rand -hex 32`, no cofre).
+- **O ramo standby**, num Database da mesma imagem e do mesmo digest, com
+  `POSTGRES_STANDBY_PRIMARY_HOST` (o App Name do primário),
+  `POSTGRES_REPLICATION_PASSWORD` e, de preferência, `POSTGRES_STANDBY_SLOT`:
+  - volume vazio: o wrapper clona o primário (`pg_basebackup` pelo slot,
+    criado se faltar) e sobe o clone em recuperação, só leitura, seguindo o
+    primário. A senha vai para um passfile, nunca para o
+    `primary_conninfo` nem para o volume. Sem a senha, com um host ou um
+    slot inválido, ou com o clone falhando, o contêiner para (código 64):
+    um volume vazio nunca vira um primário novo no lugar do standby;
+  - volume que já é standby (tem `standby.signal`): segue o primário, sem
+    clonar de novo; com o repo1 do PITR completo, o WAL que o streaming
+    não tem mais vem do repositório (`restore_command`);
+  - volume que é primário, ou um standby promovido depois: sobe como
+    **primário**, com aviso no log. A imagem nunca rebaixa um primário.
+    Os mesmos `POSTGRES_MAX_CONNECTIONS` (e o resto do _Environment_ de
+    memória) do primário: a recuperação recusa valores menores. Sem
+    _Domain_, e sem `PITR_ARCHIVE` nem `PGBACKREST_*` num standby de ensaio:
+    promovido, ele arquivaria na stanza do primário.
+- **Promover** é à mão, no `psql` do standby: `SELECT pg_promote();` e
+  depois `CHECKPOINT;`. O failover inteiro (o primário parado, o retarget
+  do PgBouncer, a etapa de release e a época do cluster) está no runbook
+  do failover (F4-44).
+
+**Trocar o digest no primário** (a imagem com este `pg_hba`), numa janela,
+a staging antes: no console de administração do PgBouncer (só o dono tem a
+senha), `PAUSE trajetto;`; no Database, `CHECKPOINT;`; _Deploy_ do
+Database com o digest novo; `RESUME trajetto;`. Sem o PgBouncer, o
+`CHECKPOINT` e o _Deploy_ de sempre ([Postgres](#postgres)). Depois,
+`SHOW hba_file` responde `/etc/trajetto/run/pg_hba.conf`.
 
 ### Redis
 

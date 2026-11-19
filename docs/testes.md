@@ -310,31 +310,40 @@ conexões de servidor lidos do console de verdade, F4-36),
 readiness no alias `trajetto_probe` responde "sim" e no pool das
 requisições, "não", F4-37), `pgbouncer-session-names.test.ts` (a sessão
 do `auth_query` e as do cliente da API chegam ao banco com nome, para a
-checagem das contrações não as ler como a imagem antiga) e
+checagem das contrações não as ler como a imagem antiga),
 `streaming-standby.test.ts` (o standby em
-recuperação, recusando escrita e mostrando um commit do primário). As fases
+recuperação, recusando escrita e mostrando um commit do primário) e
+`replication-hba.test.ts` (o `pg_hba` da imagem: as regras oficiais e uma
+linha de replicação só para o endereço do standby, de onde vem o
+streaming; o mesmo login, com a senha certa, recusado de fora dele; o
+standby clonado pelo ramo da imagem, com a senha só no passfile, F4-40). As fases
 `shared` e de réplicas deixam esses arquivos de fora (`INFRA_E2E_GLOB`, em
 `tests/E2E/support/replica-files.ts`).
 
 `tests/E2E/infra/run.sh` sobe uma pilha descartável só dela, roda a fase e
 apaga a pilha no fim:
 
-- o primário: `postgres:16-alpine` (o digest dos serviços do CI), com o
-  banco `trajetto` como uma release deixa (`prisma migrate deploy` e
-  `yarn release:steps`), os logins que o dono dá à mão (`pgbouncer_auth` e
-  `trajetto_http`, com senha) e a linha de replicação do `pg_hba.conf` só
-  para a rede da pilha;
-- o standby: um `pg_basebackup -R` do primário, em streaming como
-  `trajetto_replication`, por um slot físico;
+- o primário: a imagem `trajetto-postgres` sem o pgBackRest
+  (`infra/postgres`, `--target wrapper`: o `postgres:16-alpine` dos
+  serviços do CI iniciado pelo `trajetto-entrypoint.sh`, como o Database),
+  com o banco `trajetto` como uma release deixa (`prisma migrate deploy` e
+  `yarn release:steps`), os logins que o dono dá à mão (`pgbouncer_auth`,
+  `trajetto_http` e `trajetto_replication`, com senha) e o
+  `POSTGRES_REPLICATION_CIDR` no endereço do standby, `/32`;
+- o standby: a mesma imagem, clonada pelo ramo standby dela
+  (`POSTGRES_STANDBY_PRIMARY_HOST`), em streaming como
+  `trajetto_replication` por um slot físico, de um endereço fixo da rede
+  da pilha (que tem sub-rede própria; esta máquina chega às portas pelo
+  gateway dela, fora do `/32`);
 - o PgBouncer: a imagem `trajetto-pgbouncer` (`infra/pgbouncer`) na frente
   do primário, com o Environment da Application e senhas descartáveis.
 
 É um cluster próprio, nunca o de teste compartilhado: a fase dá login e
 senha a roles e segura um slot de replicação, e isso é do cluster inteiro.
 As portas são publicadas só em 127.0.0.1, escolhidas pelo Docker; as senhas
-são aleatórias e nunca impressas. Os arquivos recebem quatro URLs
-(`E2E_INFRA_PRIMARY_URL`, `E2E_INFRA_STANDBY_URL`, `E2E_INFRA_PGBOUNCER_URL`
-e `E2E_INFRA_PGBOUNCER_STATS_URL`) por `infraUrl`
+são aleatórias e nunca impressas. Os arquivos recebem cinco URLs
+(`E2E_INFRA_PRIMARY_URL`, `E2E_INFRA_STANDBY_URL`, `E2E_INFRA_PGBOUNCER_URL`,
+`E2E_INFRA_PGBOUNCER_STATS_URL` e `E2E_INFRA_REPLICATION_URL`) por `infraUrl`
 (`tests/E2E/infra/support/infra-urls.ts`), que **falha** quando uma falta,
 quando sai do loopback ou quando aponta para o cluster compartilhado: o
 arquivo nunca é pulado. Rodam um por vez (qual conexão de servidor um
@@ -344,8 +353,11 @@ do molde.
 Os nomes começam por `E2E_INFRA_PREFIX` (`trajetto-e2e-infra-`) e levam o
 label `trajetto.purpose=e2e-infra`; um nome da pilha ocupado por algo sem
 esse label para o script (saída 2) sem remover nada. Sem
-`E2E_INFRA_PGBOUNCER_IMAGE`, o script constrói a imagem de `infra/pgbouncer`
-e a remove no fim; `E2E_INFRA_KEEP=1` deixa a pilha de pé para olhar.
+`E2E_INFRA_PGBOUNCER_IMAGE`, o script constrói a imagem de `infra/pgbouncer`,
+e sem `E2E_INFRA_POSTGRES_IMAGE`, o estágio `wrapper` de `infra/postgres`
+(segundos: só copia os arquivos do wrapper sobre a base), e as remove no
+fim (`docker build --load`, que serve também ao builder em contêiner do CI);
+`E2E_INFRA_KEEP=1` deixa a pilha de pé para olhar.
 
 No CI, o job `E2E (1/3)` roda a fase depois da fatia dele, mesmo se a fatia
 falhou, com a imagem do PgBouncer do próprio commit construída antes, com o

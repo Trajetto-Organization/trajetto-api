@@ -417,6 +417,8 @@ describe.skipIf(!bash)("the table of values, through the wrapper", () => {
           PGDATA: "/var/lib/postgresql/data",
           POSTGRES_USER: "trajetto",
           TRAJETTO_POSTGRES_PARAMS: repoFile("infra/postgres/postgres.params"),
+          TRAJETTO_HBA_TEMPLATE: repoFile("infra/postgres/pg_hba.conf"),
+          TRAJETTO_RUN_DIR: `${box.root}/run`,
           TRAJETTO_PGBACKREST_CONF_DIR: `${box.root}/conf.d`,
           TRAJETTO_CGROUP_ROOT: `${box.root}/cgroup`,
           ...env,

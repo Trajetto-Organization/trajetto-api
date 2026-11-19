@@ -60,6 +60,7 @@ release nunca tranca o runtime fora do banco.
 | `15-untrusted-code.sql` | um event trigger que recusa, antes de rodar, todo DDL de um role que não seja superusuário nem membro do dono das tabelas (o usuário das migrations), menos o que o job de partições faz (`CREATE`, `ALTER` e `DROP TABLE`): nenhuma função, operador, tipo, regra ou gatilho de quem só tem o CREATE das partições. Sem ele, o login do batch plantaria no schema uma sobrecarga que o superusuário da etapa e das migrations rodaria                                                                                                                                                                                                                                                                                                                                              |
 | `20-runtime-roles.sql`  | os roles do runtime (plano de escala, F3-19), todos NOLOGIN: o grupo `trajetto_app` (SELECT, INSERT, UPDATE e DELETE em toda tabela, menos a trilha e as tabelas da etapa de release; USAGE nas sequências), `trajetto_http`, `trajetto_worker` e `trajetto_batch` dentro dele, e `trajetto_read` fora (só SELECT). Na trilha (`delivery_event`, e a `delivery_event_part` e a `delivery_event_legacy` quando existirem), http e worker leem, inserem e preenchem só o endereço do GPS; só o batch altera e apaga. Os tetos de cada role (`lock_timeout`, `idle_in_transaction_session_timeout`, `statement_timeout`), o batch nos roles de estatística e no `trajetto_partitions`, e os privilégios padrão do usuário da migração para as tabelas novas. Partição não recebe grant |
 | `30-pgbouncer-auth.sql` | a porta do `auth_query` do PgBouncer (plano de escala, F4-33): o role `pgbouncer_auth` (NOLOGIN) e a função `pgbouncer.user_lookup(text)`, de um superusuário, `SECURITY DEFINER` com o `search_path` fixo, que devolve o verificador SCRAM válido de um login e nada para superusuário, role de replicação, membro do dono das tabelas, `trajetto_replication` e o próprio `pgbouncer_auth`. Só o `pgbouncer_auth` a executa: nem PUBLIC nem os roles do runtime                                                                                                                                                                                                                                                                                                                   |
+| `40-replication.sql`    | o role do standby (plano de escala, F4-40): `trajetto_replication`, NOLOGIN e com REPLICATION, e nada além disso: sem SUPERUSER, CREATEDB, CREATEROLE nem BYPASSRLS e sem ser membro de outro role (o que sobrar é tirado). O login e a senha são do dono, à mão, só quando houver standby                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `50-cluster-epoch.sql`  | a linha de `cluster_epoch` (plano de escala, U-14): a época do cluster, que sobe quando o `system_identifier` ou a timeline mudam (PITR, promote, cluster novo); o cursor do feed da integração a carrega                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 
 O `50-cluster-epoch.sql` (plano de escala, U-14) mantém a linha de
@@ -123,6 +124,20 @@ e o `trajetto_capability_ready` da etapa de release lê uma sessão sem
 nome no banco como a imagem de antes do plano de escala: sem o nome, ela
 seguraria todas as contrações enquanto o PgBouncer estivesse no ar. Nunca
 num role do runtime, cuja sessão sem nome é justamente a imagem antiga.
+
+O `40-replication.sql` (plano de escala, F4-40, onda 17) cria o role com
+que um standby clona o primário e segue o WAL dele, sempre pela linha de
+replicação que a imagem `trajetto-postgres` escreve no `pg_hba` para
+`POSTGRES_REPLICATION_CIDR` (`docs/deploy.md`, seção 10). O atributo
+REPLICATION lê o cluster inteiro (um base backup é cada byte dele, os
+verificadores do `pg_authid` incluídos), então o role não ganha mais nada:
+um poder a mais é tirado, e uma participação em outro role, que daria a ele
+as tabelas por uma conexão comum, é revogada (de cada quem concedeu: no
+PostgreSQL 16 há uma linha por concedente). Um `trajetto_replication` feito
+à mão sem REPLICATION fica como está e o passo avisa: dar um poder é do
+dono. O `pgbouncer.user_lookup` nunca o serve (`30-pgbouncer-auth.sql`).
+Só um superusuário cria um role com REPLICATION: com outro usuário, o
+passo fica `pending`.
 
 O `20-runtime-roles.sql` compara o catálogo com o que deve ser e muda só a
 diferença: o que falta é concedido, e o que sobra para um dos cinco roles

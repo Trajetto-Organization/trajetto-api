@@ -79,8 +79,9 @@ describe("the image's Dockerfile", () => {
     // Only the base: every other stage builds on it.
     expect(instructions.filter((line) => /^FROM /.test(line))).toEqual([
       expect.stringMatching(/^FROM postgres:16-alpine@sha256:\w+ AS base$/),
+      "FROM base AS wrapper",
       "FROM base AS pgbackrest",
-      "FROM base AS app",
+      "FROM wrapper AS app",
       "FROM app AS test",
       "FROM app AS runtime",
     ]);
@@ -138,7 +139,7 @@ describe("the image's Dockerfile", () => {
 
   it("ships no postgresql package and fails the build if adding pgBackRest's library moves a package of the base", () => {
     const app = instructions.slice(
-      instructions.indexOf("FROM base AS app"),
+      instructions.indexOf("FROM wrapper AS app"),
       instructions.indexOf("FROM app AS test"),
     );
     const adds = instructions.filter((line) => /apk add/.test(line));
@@ -153,6 +154,41 @@ describe("the image's Dockerfile", () => {
     expect(runtimeAdd).toContain("exit 1");
     // Only the binary crosses from the builder.
     expect(app).toContain("COPY --link --from=pgbackrest /out/ /");
+  });
+
+  it("starts every stage after the wrapper the way the Database starts: params, pg_hba and entrypoint, and nothing of pgBackRest", () => {
+    const wrapperStage = instructions.slice(
+      instructions.indexOf("FROM base AS wrapper"),
+      instructions.indexOf("FROM base AS pgbackrest"),
+    );
+
+    // The E2E infra phase runs this stage (tests/E2E/infra/run.sh): the
+    // primary and the standby there start through the same files.
+    expect(wrapperStage).toEqual([
+      "FROM base AS wrapper",
+      "COPY --link postgres.params /etc/trajetto/postgres.params",
+      "COPY --link pg_hba.conf /etc/trajetto/pg_hba.conf",
+      "COPY --link --chmod=0755 trajetto-entrypoint.sh /usr/local/bin/trajetto-entrypoint.sh",
+      "RUN install -d -o postgres -g postgres -m 0755 /etc/trajetto/run",
+      'ENTRYPOINT ["trajetto-entrypoint.sh"]',
+      'CMD ["postgres"]',
+    ]);
+    // Once: the app stage (and so the test and the image) inherit them.
+    for (const file of [
+      "postgres.params",
+      "pg_hba.conf",
+      "trajetto-entrypoint.sh",
+    ]) {
+      expect(
+        instructions.filter(
+          (line) =>
+            line.startsWith(`COPY --link ${file}`) ||
+            line.includes(`--chmod=0755 ${file}`),
+        ),
+        file,
+      ).toHaveLength(1);
+    }
+    expect(read("tests/E2E/infra/run.sh")).toContain("--target wrapper");
   });
 
   it("runs the wrapper as the entrypoint, the tests offline, and builds the image last", () => {
@@ -192,6 +228,20 @@ describe("the image's test stage", () => {
     expect(test).toContain('[ "$rows" = "first:100" ]');
     expect(test).toContain("PGBACKREST_ARCHIVE_PUSH_QUEUE_MAX=1MB");
     expect(test).toContain('grep -q "dropped WAL file"');
+  });
+
+  it("proves pg_hba against the new volume's own file, and the standby branch for real", () => {
+    expect(test).toContain(
+      '[ "$(rules "${PGDATA}/pg_hba.conf")" = "$(rules /etc/trajetto/pg_hba.conf)" ]',
+    );
+    expect(test).toContain(
+      '"host replication trajetto_replication 10.20.30.0 255.255.255.0 scram-sha-256"',
+    );
+    expect(test).toContain("for bad in all 0.0.0.0/0 10.0.0.0/8; do");
+    expect(test).toContain('[ "$status" = 64 ] || fail "o clone sem senha');
+    expect(test).toContain("start_standby POSTGRES_REPLICATION_PASSWORD=");
+    expect(test).toContain("SELECT pg_promote()");
+    expect(test).toContain("o standby promovido foi rebaixado ao reiniciar");
   });
 });
 
@@ -334,6 +384,10 @@ const CLEAN_ENV: Record<string, string> = Object.fromEntries(
     "PGBACKREST_REPO2_CIPHER_PASS",
     "PGBACKREST_REPO2_CIPHER_TYPE",
     "PGBACKREST_ARCHIVE_PUSH_QUEUE_MAX",
+    "POSTGRES_REPLICATION_CIDR",
+    "POSTGRES_STANDBY_PRIMARY_HOST",
+    "POSTGRES_STANDBY_SLOT",
+    "POSTGRES_REPLICATION_PASSWORD",
   ].map((name) => [name, ""]),
 );
 
@@ -381,6 +435,8 @@ function wrapper(
         PGDATA: "/var/lib/postgresql/data",
         POSTGRES_USER: "trajetto",
         TRAJETTO_POSTGRES_PARAMS: repoFile("infra/postgres/postgres.params"),
+        TRAJETTO_HBA_TEMPLATE: repoFile("infra/postgres/pg_hba.conf"),
+        TRAJETTO_RUN_DIR: `${box.root}/run`,
         TRAJETTO_PGBACKREST_CONF_DIR: `${box.root}/conf.d`,
         // The host's own cgroup never decides a test's numbers.
         TRAJETTO_CGROUP_ROOT: `${box.root}/cgroup`,
@@ -701,6 +757,315 @@ describe.skipIf(!bash)("trajetto-entrypoint.sh", () => {
       expect(status).toBe(0);
       expect(box.calls("pgbackrest")).toEqual(["pgbackrest info"]);
       expect(box.calls("docker-entrypoint.sh")).toEqual([]);
+    });
+  });
+
+  /**
+   * pg_hba (plano-escala F4-40). The rules travel with the digest: the
+   * wrapper writes the image's file (the official rules) to the run
+   * directory at every start and points hba_file at it, so a rollback of
+   * the image uses the volume's own file again. Replication from the
+   * network gets exactly one line, for POSTGRES_REPLICATION_CIDR, and a
+   * value pg_hba would read as "everyone" (or could not parse, which stops
+   * the server) gets none.
+   */
+  describe("pg_hba", () => {
+    const rules = (text: string) =>
+      text
+        .split("\n")
+        .filter((line) => !/^\s*(#|$)/.test(line))
+        .map((line) => line.trim().replace(/\s+/g, " "));
+    const template = rules(read("infra/postgres/pg_hba.conf"));
+    const rendered = () => readFileSync(`${box.root}/run/pg_hba.conf`, "utf8");
+
+    it("is the official rules, written at every start, and nothing from the network for replication", () => {
+      const { status, settings } = wrapper();
+
+      expect(status).toBe(0);
+      expect(settings.get("hba_file")).toBe(`${box.root}/run/pg_hba.conf`);
+      expect(rules(rendered())).toEqual(template);
+      // initdb's defaults (trust inside the container only) plus the line
+      // docker-entrypoint.sh appends: what every volume has today.
+      expect(template).toEqual([
+        "local all all trust",
+        "host all all 127.0.0.1/32 trust",
+        "host all all ::1/128 trust",
+        "local replication all trust",
+        "host replication all 127.0.0.1/32 trust",
+        "host replication all ::1/128 trust",
+        "host all all all scram-sha-256",
+      ]);
+    });
+
+    it.each([
+      ["10.0.1.25/32", "10.0.1.25/32"],
+      ["10.20.30.45/24", "10.20.30.0/24"],
+      ["172.18.0.0/16", "172.18.0.0/16"],
+    ])(
+      "adds one replication line, for trajetto_replication only, for %s",
+      (cidr, line) => {
+        const { status, stderr } = wrapper({ POSTGRES_REPLICATION_CIDR: cidr });
+
+        expect(status).toBe(0);
+        expect(rules(rendered())).toEqual([
+          ...template,
+          `host replication trajetto_replication ${line} scram-sha-256`,
+        ]);
+        expect(stderr).toContain(`replicação pela rede só de ${line}`);
+      },
+    );
+
+    it.each([
+      "all",
+      "0.0.0.0/0",
+      "10.0.0.0/8",
+      "10.0.0.1/33",
+      "256.1.1.1/32",
+      "samenet",
+      "db.example.com",
+      "10.0.0.1",
+      "::1/128",
+      "10.0.0.1/32 10.0.0.2/32",
+      "10.0.0.1/32,10.0.0.2/32",
+    ])("adds no line for %j, warns, and still starts", (cidr) => {
+      const { status, stderr } = wrapper({ POSTGRES_REPLICATION_CIDR: cidr });
+
+      expect(status).toBe(0);
+      expect(rules(rendered())).toEqual(template);
+      expect(stderr).toContain(`AVISO: POSTGRES_REPLICATION_CIDR='${cidr}'`);
+      expect(box.calls("docker-entrypoint.sh")).toHaveLength(1);
+    });
+
+    it("refuses to start without the image's pg_hba.conf: a build defect", () => {
+      const { status, stderr } = wrapper({
+        TRAJETTO_HBA_TEMPLATE: `${box.root}/missing/pg_hba.conf`,
+      });
+
+      expect(status).toBe(64);
+      expect(stderr).toContain("pg_hba.conf não existe: imagem quebrada");
+      expect(box.calls("docker-entrypoint.sh")).toEqual([]);
+    });
+  });
+
+  /**
+   * The standby branch (plano-escala F4-40). An empty volume is cloned
+   * from POSTGRES_STANDBY_PRIMARY_HOST and follows it; a volume that is
+   * already a standby keeps following; a primary, or a standby promoted
+   * since, starts as a primary. Only the clone of an empty volume gets a
+   * standby.signal: the image never demotes a primary, and an empty
+   * volume it cannot clone never becomes a new primary in its place.
+   */
+  describe("the standby branch", () => {
+    const PASSWORD = "replication-pass-never-printed:with\\colon";
+    let data: string;
+
+    beforeEach(() => {
+      data = `${box.root}/data`;
+      // The clone: records its arguments and leaves a cluster behind.
+      box.stub(
+        "pg_basebackup",
+        'while [ "$#" -gt 0 ]; do if [ "$1" = -D ]; then mkdir -p "$2" && echo 16 > "$2/PG_VERSION"; fi; shift; done',
+      );
+      box.stub("pg_receivewal", "exit 0");
+      // Started as root (a Swarm task), the clone runs as postgres.
+      box.stub("gosu", 'shift; exec "$@"');
+      box.stub("chown", "exit 0");
+      // What reaches the server: its environment, as the official entrypoint sees it.
+      box.stub(
+        "docker-entrypoint.sh",
+        `for arg in "$@"; do printf '%s\\n' "$arg"; done > "${box.root}/argv"\nenv > "${box.root}/server-env"`,
+      );
+    });
+
+    const standby = (env: Record<string, string> = {}) =>
+      wrapper({
+        PGDATA: data,
+        POSTGRES_STANDBY_PRIMARY_HOST: "trajetto-postgres-staging",
+        POSTGRES_REPLICATION_PASSWORD: PASSWORD,
+        ...env,
+      });
+    const conninfo = () =>
+      `host=trajetto-postgres-staging port=5432 user=trajetto_replication passfile=${box.root}/run/replication.pgpass application_name=trajetto-standby connect_timeout=10`;
+
+    it("clones an empty volume through the slot, then starts it following the primary", () => {
+      const { status, settings, stderr } = standby({
+        POSTGRES_STANDBY_SLOT: "trajetto_standby",
+      });
+
+      expect(status).toBe(0);
+      expect(box.calls("pg_receivewal")).toEqual([
+        `pg_receivewal -d ${conninfo()} --slot=trajetto_standby --create-slot --if-not-exists --no-password`,
+      ]);
+      // No -R: primary_conninfo never lands on the volume.
+      expect(box.calls("pg_basebackup")).toEqual([
+        `pg_basebackup -d ${conninfo()} -D ${data} -X stream -c fast --no-password -S trajetto_standby`,
+      ]);
+      expect(existsSync(`${data}/standby.signal`)).toBe(true);
+      expect(settings.get("primary_conninfo")).toBe(conninfo());
+      expect(settings.get("primary_slot_name")).toBe("trajetto_standby");
+      expect(settings.get("hot_standby")).toBe("on");
+      expect(settings.get("hot_standby_feedback")).toBe("off");
+      expect(settings.get("max_standby_streaming_delay")).toBe("30s");
+      expect(settings.get("recovery_target_timeline")).toBe("latest");
+      expect(settings.has("restore_command")).toBe(false);
+      expect(stderr).toContain(
+        "clonando o standby de trajetto-postgres-staging pelo slot trajetto_standby",
+      );
+    });
+
+    it("keeps the password in the passfile only: never in the flags, the log or the server's environment", () => {
+      const { argv, stdout, stderr } = standby();
+
+      expect(readFileSync(`${box.root}/run/replication.pgpass`, "utf8")).toBe(
+        "*:*:*:trajetto_replication:replication-pass-never-printed\\:with\\\\colon\n",
+      );
+      expect(argv.join("\n")).not.toContain("replication-pass");
+      expect(stdout + stderr).not.toContain("replication-pass");
+      expect(readFileSync(`${box.root}/server-env`, "utf8")).not.toContain(
+        "POSTGRES_REPLICATION_PASSWORD",
+      );
+    });
+
+    it("drops the password from a primary's environment too", () => {
+      const { status } = wrapper({ POSTGRES_REPLICATION_PASSWORD: PASSWORD });
+
+      expect(status).toBe(0);
+      expect(readFileSync(`${box.root}/server-env`, "utf8")).not.toContain(
+        "POSTGRES_REPLICATION_PASSWORD",
+      );
+      expect(existsSync(`${box.root}/run/replication.pgpass`)).toBe(false);
+    });
+
+    it("clones without a slot when none is named", () => {
+      const { status, settings } = standby();
+
+      expect(status).toBe(0);
+      expect(box.calls("pg_receivewal")).toEqual([]);
+      expect(box.calls("pg_basebackup")[0]).not.toContain(" -S ");
+      expect(settings.has("primary_slot_name")).toBe(false);
+    });
+
+    it("follows from an existing standby volume, without cloning it again", () => {
+      box.file("data/PG_VERSION", "16\n");
+      box.file("data/standby.signal", "");
+
+      const { status, settings } = standby();
+
+      expect(status).toBe(0);
+      expect(box.calls("pg_basebackup")).toEqual([]);
+      expect(settings.get("primary_conninfo")).toBe(conninfo());
+    });
+
+    it("takes the WAL the stream no longer has from the PITR repository, when it is complete", () => {
+      box.file("data/PG_VERSION", "16\n");
+      box.file("data/standby.signal", "");
+
+      expect(standby({ ...R2 }).settings.get("restore_command")).toBe(
+        'pgbackrest --stanza=trajetto archive-get %f "%p"',
+      );
+    });
+
+    it("never demotes a primary, nor a standby promoted since: it starts as a primary and says so", () => {
+      box.file("data/PG_VERSION", "16\n");
+
+      const { status, settings, stderr } = standby({
+        POSTGRES_STANDBY_SLOT: "trajetto_standby",
+      });
+
+      expect(status).toBe(0);
+      expect(existsSync(`${data}/standby.signal`)).toBe(false);
+      expect(box.calls("pg_basebackup")).toEqual([]);
+      expect(box.calls("pg_receivewal")).toEqual([]);
+      for (const name of [
+        "primary_conninfo",
+        "primary_slot_name",
+        "hot_standby",
+      ]) {
+        expect(settings.has(name), name).toBe(false);
+      }
+      expect(stderr).toContain(
+        "AVISO: POSTGRES_STANDBY_PRIMARY_HOST está definida, mas o volume é um primário",
+      );
+    });
+
+    it("warns about a standby.signal it did not ask for, and promotes nothing", () => {
+      box.file("data/PG_VERSION", "16\n");
+      box.file("data/standby.signal", "");
+
+      const { status, settings, stderr } = wrapper({ PGDATA: data });
+
+      expect(status).toBe(0);
+      expect(existsSync(`${data}/standby.signal`)).toBe(true);
+      expect(settings.has("primary_conninfo")).toBe(false);
+      expect(stderr).toContain("AVISO: o volume tem standby.signal");
+    });
+
+    it.each([
+      [
+        "without the password",
+        { POSTGRES_REPLICATION_PASSWORD: "" },
+        "sem POSTGRES_REPLICATION_PASSWORD",
+      ],
+      [
+        "with a host that is not one",
+        { POSTGRES_STANDBY_PRIMARY_HOST: "db host=evil" },
+        "não é um nome de host",
+      ],
+      [
+        "with a slot name that is not one",
+        { POSTGRES_STANDBY_SLOT: "Slot-1" },
+        "não é um nome de slot",
+      ],
+    ])(
+      "refuses to clone %s, and never starts an empty primary instead",
+      (_case, env, reason) => {
+        const { status, stderr } = standby(env);
+
+        expect(status).toBe(64);
+        expect(stderr).toContain(reason);
+        expect(stderr).toContain("O volume vazio não vira um primário novo");
+        expect(box.calls("pg_basebackup")).toEqual([]);
+        expect(box.calls("docker-entrypoint.sh")).toEqual([]);
+      },
+    );
+
+    it("refuses a volume that is neither empty nor a cluster", () => {
+      box.file("data/leftover", "x");
+
+      const { status, stderr } = standby();
+
+      expect(status).toBe(64);
+      expect(stderr).toContain("não está vazio e não tem um cluster");
+      expect(box.calls("pg_basebackup")).toEqual([]);
+      expect(box.calls("docker-entrypoint.sh")).toEqual([]);
+    });
+
+    it("stops when the clone fails, before docker-entrypoint.sh can initdb the volume", () => {
+      box.stub("pg_basebackup", "exit 1");
+
+      const { status, stderr } = standby();
+
+      expect(status).toBe(64);
+      expect(stderr).toContain(
+        "o pg_basebackup de trajetto-postgres-staging falhou",
+      );
+      expect(box.calls("docker-entrypoint.sh")).toEqual([]);
+    });
+
+    it("starts an existing standby even with bad values, without following anyone", () => {
+      box.file("data/PG_VERSION", "16\n");
+      box.file("data/standby.signal", "");
+
+      const { status, settings, stderr } = standby({
+        POSTGRES_STANDBY_PRIMARY_HOST: "db host=evil",
+        POSTGRES_REPLICATION_PASSWORD: "",
+      });
+
+      expect(status).toBe(0);
+      expect(settings.has("primary_conninfo")).toBe(false);
+      expect(settings.get("hot_standby")).toBe("on");
+      expect(stderr).toContain("não é um nome de host");
+      expect(stderr).toContain("sem POSTGRES_REPLICATION_PASSWORD");
     });
   });
 
