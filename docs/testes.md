@@ -30,6 +30,7 @@
 | ------------------------ | --------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
 | Unitários                | `tests/unitaires` (~480 arquivos) | `yarn test`                                          | Node; um Redis em `REDIS_URL` para `socket/adapter-channel-isolation.test.ts` (alguns arquivos sobem a API inteira em memória) | regras de negócio com os gêmeos in-memory, schemas, contratos de rota/OpenAPI, workflows e scripts de infra          |
 | E2E                      | `tests/E2E` (~300 arquivos)       | `yarn test:e2e` (duas fases)                         | Postgres 16 e Redis 7 reais                                                                                                    | HTTP de ponta a ponta, SQL real, autorização e isolamento entre empresas, planos de consulta, filas, crons, réplicas |
+| E2E, fase infra          | `tests/E2E/infra`                 | `yarn test:e2e:infra`                                | Docker (a pilha própria do script)                                                                                             | PgBouncer em modo transaction e standby em streaming reais, como o código conta que estão                            |
 | Contrato de repositórios | `tests/contract`                  | junto com o E2E (os `*-repository-contract.test.ts`) | Postgres                                                                                                                       | o gêmeo in-memory e o repositório Prisma respondem igual                                                             |
 | Serviço de IA (Python)   | `infra/ai-ocr/tests`              | `docker build --target test infra/ai-ocr`            | Docker                                                                                                                         | o servidor de OCR, dentro da imagem que vai para produção                                                            |
 | Contrato com a IA real   | `tests/ai-local`                  | `AI_LOCAL_E2E=1 npx vitest run tests/ai-local`       | Docker, ~1 GiB                                                                                                                 | o leitor e as regras da API contra o contêiner `trajetto-ai` de verdade                                              |
@@ -52,20 +53,21 @@ caminho da aplicação: o Prisma 7 exige o driver adapter.
 
 ## Comandos
 
-| Comando                        | O que faz                                                                                                  |
-| ------------------------------ | ---------------------------------------------------------------------------------------------------------- |
-| `yarn test`                    | unitários (`vitest run --dir tests/unitaires`)                                                             |
-| `yarn test:watch`              | unitários em modo watch                                                                                    |
-| `yarn test:e2e`                | E2E em duas fases (`infra/scripts/run-e2e.mjs`): o resto em paralelo, depois as réplicas, um por vez       |
-| `yarn test:e2e:watch`          | E2E em modo watch                                                                                          |
-| `yarn test:coverage`           | unitários com cobertura e **piso** (`coverage/unit`)                                                       |
-| `yarn test:coverage:e2e`       | cobertura do E2E em lotes de 8, juntada com a unitária em `coverage/all` (`infra/scripts/coverage-e2e.sh`) |
-| `yarn test:mutation`           | Stryker nas regras críticas (`MUTATION_BATCH=guards\|states\|outbox\|lists`)                               |
-| `yarn test:ui`                 | interface do Vitest                                                                                        |
-| `yarn typecheck`               | `tsc --noEmit` (gere o client antes: `yarn prisma:generate`)                                               |
-| `yarn validate`                | `prisma:generate`, `typecheck` e `test`                                                                    |
-| `npx vitest run <arquivo>`     | um arquivo só (unitário ou E2E)                                                                            |
-| `npx vitest run -t "<título>"` | só os testes com aquele título                                                                             |
+| Comando                        | O que faz                                                                                                                            |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `yarn test`                    | unitários (`vitest run --dir tests/unitaires`)                                                                                       |
+| `yarn test:watch`              | unitários em modo watch                                                                                                              |
+| `yarn test:e2e`                | E2E em duas fases (`infra/scripts/run-e2e.mjs`): o resto em paralelo, depois as réplicas, um por vez                                 |
+| `yarn test:e2e:infra`          | a fase infra do E2E (`tests/E2E/infra/run.sh`): sobe primário, standby e PgBouncer descartáveis, roda `tests/E2E/infra` e apaga tudo |
+| `yarn test:e2e:watch`          | E2E em modo watch                                                                                                                    |
+| `yarn test:coverage`           | unitários com cobertura e **piso** (`coverage/unit`)                                                                                 |
+| `yarn test:coverage:e2e`       | cobertura do E2E em lotes de 8, juntada com a unitária em `coverage/all` (`infra/scripts/coverage-e2e.sh`)                           |
+| `yarn test:mutation`           | Stryker nas regras críticas (`MUTATION_BATCH=guards\|states\|outbox\|lists`)                                                         |
+| `yarn test:ui`                 | interface do Vitest                                                                                                                  |
+| `yarn typecheck`               | `tsc --noEmit` (gere o client antes: `yarn prisma:generate`)                                                                         |
+| `yarn validate`                | `prisma:generate`, `typecheck` e `test`                                                                                              |
+| `npx vitest run <arquivo>`     | um arquivo só (unitário ou E2E)                                                                                                      |
+| `npx vitest run -t "<título>"` | só os testes com aquele título                                                                                                       |
 
 O lint (`yarn lint:check`, Prettier) e o build (`yarn build`) rodam no CI.
 
@@ -243,8 +245,9 @@ jobs 1 a n−1 dividem a fase `shared` com o `--shard` do próprio Vitest, e o
 job n roda a fase de réplicas inteira, sozinha (os arquivos dela sobem
 processos que o Vitest não conta). `quality/e2e-shards.test.ts` confere,
 pelo sequenciador do próprio Vitest, que a matriz roda cada arquivo
-exatamente uma vez e que nenhum job fica vazio. Para rodar um job como o
-CI, na máquina:
+exatamente uma vez e que nenhum job fica vazio. O job 1, depois da fatia
+dele, roda também a fase infra ([abaixo](#a-fase-infra-yarn-teste2einfra)).
+Para rodar um job como o CI, na máquina:
 
 ```bash
 E2E_SHARD=2/3 yarn test:e2e --run --reporter=basic
@@ -289,6 +292,56 @@ chegou a 2,8 GB contando o cache de páginas, contra 1,3 GB na fase `shared`;
 com o contêiner limitado a 1,3 GB, o OOM killer matou uma réplica e o teste
 falhou com "a réplica não subiu (morta por SIGKILL)". O runner do GitHub tem
 7 GB; num Docker com limite de memória, dê ao menos 3 GB a esse job.
+
+### A fase infra (`yarn test:e2e:infra`)
+
+Os arquivos de `tests/E2E/infra` (plano de escala F4-38) medem o que o código
+assume do PgBouncer e do standby, contra os de verdade:
+`pgbouncer-transaction-mode.test.ts` (o pool por transação, o login SCRAM
+pelo `auth_query` com os tetos do próprio role, o dono recusado, um `SET` de
+sessão que chega ao próximo cliente e o `SET LOCAL` que não chega, o cliente
+da API com transação interativa) e `streaming-standby.test.ts` (o standby em
+recuperação, recusando escrita e mostrando um commit do primário). As fases
+`shared` e de réplicas deixam esses arquivos de fora (`INFRA_E2E_GLOB`, em
+`tests/E2E/support/replica-files.ts`).
+
+`tests/E2E/infra/run.sh` sobe uma pilha descartável só dela, roda a fase e
+apaga a pilha no fim:
+
+- o primário: `postgres:16-alpine` (o digest dos serviços do CI), com o
+  banco `trajetto` como uma release deixa (`prisma migrate deploy` e
+  `yarn release:steps`), os logins que o dono dá à mão (`pgbouncer_auth` e
+  `trajetto_http`, com senha) e a linha de replicação do `pg_hba.conf` só
+  para a rede da pilha;
+- o standby: um `pg_basebackup -R` do primário, em streaming como
+  `trajetto_replication`, por um slot físico;
+- o PgBouncer: a imagem `trajetto-pgbouncer` (`infra/pgbouncer`) na frente
+  do primário, com o Environment da Application e senhas descartáveis.
+
+É um cluster próprio, nunca o de teste compartilhado: a fase dá login e
+senha a roles e segura um slot de replicação, e isso é do cluster inteiro.
+As portas são publicadas só em 127.0.0.1, escolhidas pelo Docker; as senhas
+são aleatórias e nunca impressas. Os arquivos recebem quatro URLs
+(`E2E_INFRA_PRIMARY_URL`, `E2E_INFRA_STANDBY_URL`, `E2E_INFRA_PGBOUNCER_URL`
+e `E2E_INFRA_PGBOUNCER_STATS_URL`) por `infraUrl`
+(`tests/E2E/infra/support/infra-urls.ts`), que **falha** quando uma falta,
+quando sai do loopback ou quando aponta para o cluster compartilhado: o
+arquivo nunca é pulado. Rodam um por vez (qual conexão de servidor um
+cliente recebe é o que eles medem) e no ambiente `node`, sem banco clonado
+do molde.
+
+Os nomes começam por `E2E_INFRA_PREFIX` (`trajetto-e2e-infra-`) e levam o
+label `trajetto.purpose=e2e-infra`; um nome da pilha ocupado por algo sem
+esse label para o script (saída 2) sem remover nada. Sem
+`E2E_INFRA_PGBOUNCER_IMAGE`, o script constrói a imagem de `infra/pgbouncer`
+e a remove no fim; `E2E_INFRA_KEEP=1` deixa a pilha de pé para olhar.
+
+No CI, o job `E2E (1/3)` roda a fase depois da fatia dele, mesmo se a fatia
+falhou, com a imagem do PgBouncer do próprio commit construída antes, com o
+cache dos jobs do PgBouncer. Na máquina do dono, com a imagem pronta, a pilha
+sobe em 28 s e a fase inteira leva 34 s. `quality/e2e-infra-isolation.test.ts`
+confere a separação das fases, o `infraUrl`, o script e os passos do CI. O
+`coverage-e2e.sh` deixa `tests/E2E/infra` de fora.
 
 ### Nenhuma rede de fora
 
@@ -656,6 +709,7 @@ uma garantia:
 | `security/env-example.test.ts`                                           | o `.env.example` tem toda variável do env-schema                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `quality/coverage-config.test.ts`                                        | a configuração de cobertura e o piso no CI                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `quality/e2e-replica-isolation.test.ts`                                  | os arquivos que sobem réplicas estão todos na lista da segunda fase do `yarn test:e2e`, e só eles; as fases do `vite.config.mts` e do `infra/scripts/run-e2e.mjs`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `quality/e2e-infra-isolation.test.ts`                                    | a fase infra: os arquivos de `tests/E2E/infra` só nela, um por vez, no ambiente `node`, sem `skip`, só pelas URLs do `infraUrl` (que falha sem URL, fora do loopback ou no cluster compartilhado); o `run.sh` só remove o que leva o label dele; o CI roda a fase só no job 1, depois da fatia, com a imagem do PgBouncer do commit                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `quality/e2e-shards.test.ts`                                             | os jobs `E2E (i/n)` do `validate.yml` rodam cada arquivo E2E exatamente uma vez, pelo sequenciador do próprio Vitest; nenhum job vazio; a fase de réplicas inteira no último                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `env/prisma-test-template.test.ts`, `E2E/test-database-template.test.ts` | o nome do banco molde muda com o que o `migrate deploy` lê e só com isso; o construtor migra sob o _advisory lock_ e marca o molde só depois da última migration, refaz um molde não marcado, poda os de outras chaves (nunca o próprio), não marca um molde cujo migrate falhou e constrói uma vez só com vários arquivos ao mesmo tempo; o banco de um arquivo E2E tem todas as migrations, o `pg_trgm`, e o molde marcado sem conexões                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `lifecycle/changes-script.test.ts`                                       | `.github/scripts/changes.sh` contra um histórico git de verdade: push só de documentação, código, sem intervalo; na branch, a branch inteira desde que saiu da staging decide (um push de documentação por cima de código ainda valida o código); a base do audit no último build servido pela staging (um push cancelado fica no intervalo; sem login no GHCR, o push anterior), na branch o ponto em que saiu da staging                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
@@ -665,17 +719,18 @@ uma garantia:
 
 ## O que roda onde (local × CI)
 
-|                               | Local (antes de dizer "pronto")                    | `ci.yml` (branch)                                          | `staging.yml` (push em `staging`)                                   |
-| ----------------------------- | -------------------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------- |
-| typecheck                     | `yarn prisma:generate && yarn typecheck`           | sim                                                        | sim                                                                 |
-| unitários + piso              | `yarn test` (ou o arquivo tocado)                  | sim, com cobertura                                         | sim, com cobertura                                                  |
-| E2E                           | os arquivos tocados, contra o Postgres descartável | só _Run workflow_ com **e2e**                              | **sim**, a suíte inteira, em 3 jobs paralelos                       |
-| lint, build                   | ficam com o CI                                     | lint                                                       | lint (o build é o da imagem)                                        |
-| audit, gitleaks, pytest da IA | —                                                  | sim (o audit bloqueia só quando a branch muda dependência) | sim (bloqueia quando muda dependência desde o último build servido) |
-| push só de documentação       | —                                                  | gitleaks e `Docs` (unitários sem cobertura)                | gitleaks e `Docs`, sem build nem deploy                             |
-| contrato com a IA real        | opt-in                                             | só _Run workflow_                                          | não                                                                 |
-| carga, mutação                | sob demanda                                        | não                                                        | não                                                                 |
-| simulação do dia de entregas  | sob demanda                                        | não                                                        | não                                                                 |
+|                               | Local (antes de dizer "pronto")                                        | `ci.yml` (branch)                                          | `staging.yml` (push em `staging`)                                   |
+| ----------------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------- |
+| typecheck                     | `yarn prisma:generate && yarn typecheck`                               | sim                                                        | sim                                                                 |
+| unitários + piso              | `yarn test` (ou o arquivo tocado)                                      | sim, com cobertura                                         | sim, com cobertura                                                  |
+| E2E                           | os arquivos tocados, contra o Postgres descartável                     | só _Run workflow_ com **e2e**                              | **sim**, a suíte inteira, em 3 jobs paralelos                       |
+| E2E, fase infra               | `yarn test:e2e:infra` quando mexer no PgBouncer, no standby ou no pool | junto com o E2E, no job 1                                  | **sim**, no job 1                                                   |
+| lint, build                   | ficam com o CI                                                         | lint                                                       | lint (o build é o da imagem)                                        |
+| audit, gitleaks, pytest da IA | —                                                                      | sim (o audit bloqueia só quando a branch muda dependência) | sim (bloqueia quando muda dependência desde o último build servido) |
+| push só de documentação       | —                                                                      | gitleaks e `Docs` (unitários sem cobertura)                | gitleaks e `Docs`, sem build nem deploy                             |
+| contrato com a IA real        | opt-in                                                                 | só _Run workflow_                                          | não                                                                 |
+| carga, mutação                | sob demanda                                                            | não                                                        | não                                                                 |
+| simulação do dia de entregas  | sob demanda                                                            | não                                                        | não                                                                 |
 
 O PR `staging → main` (`pr.yml`) não roda nada disso de novo: confere o
 `staged-<7>`, o `Gate` do staging e que a `main` só traz documentação.

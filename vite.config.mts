@@ -8,8 +8,10 @@ import {
 import tsconfigPaths from "vite-tsconfig-paths";
 
 import {
+  E2E_PHASE_INFRA,
   E2E_PHASE_REPLICAS,
   E2E_PHASE_SHARED,
+  INFRA_E2E_GLOB,
   replicaFileGlobs,
 } from "./tests/E2E/support/replica-files";
 
@@ -38,6 +40,12 @@ const DOT_TEST_GLOB = "**/*.{test,spec}?(-d).?(c|m)[jt]s?(x)";
  * own, one file at a time, after the rest (tests/E2E/support/replica-files.ts
  * has the list and the why). E2E_PHASE picks the phase; without it —
  * `npx vitest run <file>`, the unit suite — every file is included as before.
+ *
+ * The infra phase (`yarn test:e2e:infra`, tests/E2E/infra/run.sh) runs only
+ * tests/E2E/infra, one file at a time: its files read the server
+ * connections of a real PgBouncer (which server a client gets is what they
+ * measure), so none may run beside another. The shared phase leaves them
+ * out, since it has no PgBouncer and no standby.
  */
 const E2E_PHASE = process.env.E2E_PHASE;
 
@@ -62,10 +70,18 @@ export default defineConfig({
   plugins: [tsconfigPaths()],
   test: {
     ...(E2E_PHASE === E2E_PHASE_SHARED && {
-      exclude: [...configDefaults.exclude, ...replicaFileGlobs()],
+      exclude: [
+        ...configDefaults.exclude,
+        ...replicaFileGlobs(),
+        INFRA_E2E_GLOB,
+      ],
     }),
     ...(E2E_PHASE === E2E_PHASE_REPLICAS && {
       include: replicaFileGlobs(),
+      fileParallelism: false,
+    }),
+    ...(E2E_PHASE === E2E_PHASE_INFRA && {
+      include: [INFRA_E2E_GLOB],
       fileParallelism: false,
     }),
     coverage: {

@@ -49,14 +49,27 @@ const SERIAL_E2E_FILES = [
 /** E2E_PHASE values (vite.config.mts). Unset: every file, as always. */
 const E2E_PHASE_SHARED = "shared";
 const E2E_PHASE_REPLICAS = "replicas";
+const E2E_PHASE_INFRA = "infra";
+
+/**
+ * The infra phase's files (plano-escala F4-38): tests/E2E/infra, against a
+ * real PgBouncer and a real standby that tests/E2E/infra/run.sh (`yarn
+ * test:e2e:infra`) starts for them. Never in the shared or the replicas
+ * phase, which have neither; in the CI, job 1 runs them after its slice
+ * (validate.yml). tests/unitaires/quality/e2e-infra-isolation.test.ts
+ * checks both. Relative to `--dir ./tests/E2E` or to the root alike.
+ */
+const INFRA_E2E_GLOB = "**/infra/**/*.test.ts";
 
 /** Every file of the one-file-at-a-time phase: replicas and cluster-sensitive. */
 const replicaFileGlobs = (): string[] =>
   [...REPLICA_E2E_FILES, ...SERIAL_E2E_FILES].map((name) => `**/${name}`);
 
 export {
+  E2E_PHASE_INFRA,
   E2E_PHASE_REPLICAS,
   E2E_PHASE_SHARED,
+  INFRA_E2E_GLOB,
   REPLICA_E2E_FILES,
   SERIAL_E2E_FILES,
   replicaFileGlobs,

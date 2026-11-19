@@ -8,7 +8,9 @@ name: Validate
 #                      the coverage floor; the route contract against the
 #                      web and the app of the same branch, or their staging)
 #        ─▶ E2E (i/n) (the E2E suite in parallel jobs, each on its own
-#                      Postgres and Redis; the last one is the replica phase)
+#                      Postgres and Redis; the last one is the replica phase,
+#                      and the first one also runs the infra phase, against
+#                      a real PgBouncer and a real standby)
 #        ─▶ AI OCR    (the trajetto-ai pytest inside its image, skipped when
 #                      an image of the same infra/ai-ocr already passed it)
 #        ─▶ Postgres image (the trajetto-postgres image's own tests and its
@@ -197,10 +199,14 @@ jobs:
   # its own Postgres and Redis, migrates the E2E template once and clones it
   # per file (prisma/vitest-environment-prisma/template.ts), with two test
   # processes. Jobs 1 to n−1 split the shared phase with vitest's --shard;
-  # job n runs the replica phase whole, one file at a time.
+  # job n runs the replica phase whole, one file at a time. Job 1 then runs
+  # the infra phase (tests/E2E/infra, plano-escala F4-38) on a stack of its
+  # own: this commit's PgBouncer in front of a primary, and a streaming
+  # standby of it.
   # tests/unitaires/quality/e2e-shards.test.ts checks that this matrix runs
-  # every file exactly once. A failing job does not stop the others: one run
-  # shows every failure.
+  # every file exactly once, and e2e-infra-isolation.test.ts the infra
+  # phase. A failing job does not stop the others: one run shows every
+  # failure.
   e2e:
     name: E2E (${{ matrix.shard }}/${{ strategy.job-total }})
     if: ${{ !inputs.docs && inputs.e2e }}
@@ -290,6 +296,7 @@ jobs:
       # counts and the duration of each phase go to the job summary, so the
       # balance of the jobs can be read off a run.
       - name: Run E2E tests
+        id: e2e
         env:
           E2E_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
         run: |
@@ -300,6 +307,50 @@ jobs:
             echo "E2E ${E2E_SHARD}:"
             echo '```'
             sed 's/\x1b\[[0-9;]*m//g' "$log" | grep -E '^(== E2E, fase| *(Test Files|Tests|Duration) )' || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+      # The infra phase, in job 1 only, after its slice, and even when the
+      # slice failed (as the replica phase runs after a red shared phase):
+      # one run shows every failure. tests/E2E/infra/run.sh starts the
+      # stack (a primary migrated as a release leaves it, a streaming
+      # standby of it, and the PgBouncer built here from this commit's
+      # infra/pgbouncer), runs the phase and removes the stack
+      # (docs/testes.md, "A fase infra"). With the caches the PgBouncer
+      # jobs write, the build is little more than the runtime stage.
+      - name: Set up Docker Buildx (infra phase)
+        if: ${{ !cancelled() && matrix.shard == 1 && steps.e2e.outcome != 'skipped' }}
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+        with:
+          driver-opts: image=moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
+
+      - name: Build the PgBouncer image for the infra phase
+        if: ${{ !cancelled() && matrix.shard == 1 && steps.e2e.outcome != 'skipped' }}
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5.4.0
+        with:
+          context: ./infra/pgbouncer
+          push: false
+          load: true
+          tags: trajetto-pgbouncer:e2e-infra
+          cache-from: |
+            type=gha,scope=pgbouncer
+            type=gha,scope=pgbouncer-test
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+
+      - name: Run the E2E infra phase (PgBouncer and standby)
+        if: ${{ !cancelled() && matrix.shard == 1 && steps.e2e.outcome != 'skipped' }}
+        env:
+          E2E_INFRA_PGBOUNCER_IMAGE: trajetto-pgbouncer:e2e-infra
+        run: |
+          log="${RUNNER_TEMP}/e2e-infra.log"
+          status=0
+          yarn test:e2e:infra --run --reporter=basic 2>&1 | tee "$log" || status=$?
+          {
+            echo "E2E, fase infra:"
+            echo '```'
+            sed 's/\x1b\[[0-9;]*m//g' "$log" | grep -E '^(e2e-infra: | *(Test Files|Tests|Duration) )' || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$status"

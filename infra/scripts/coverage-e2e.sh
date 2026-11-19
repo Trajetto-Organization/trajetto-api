@@ -20,6 +20,10 @@
 # ones (SERIAL_E2E_FILES: a write transaction open in another batch's
 # database holds back the pruning a HOT update needs, plano-escala F2-13).
 #
+# The infra phase's files (tests/E2E/infra) are left out: they need the real
+# PgBouncer and standby that `yarn test:e2e:infra` starts (plano-escala
+# F4-38), and they fail without them.
+#
 # Usage: bash infra/scripts/coverage-e2e.sh [batch-size]
 #   coverage/unit     — from `yarn test:coverage` (run it first to merge it in)
 #   coverage/e2e/NN   — one report per batch (NN-a / NN-b when it was split)
@@ -68,7 +72,7 @@ while IFS= read -r file; do
   else
     files+=("$file")
   fi
-done < <(find tests/E2E -name '*.test.ts' | sort)
+done < <(find tests/E2E -path tests/E2E/infra -prune -o -name '*.test.ts' -print | sort)
 failed=0
 batch=0
 

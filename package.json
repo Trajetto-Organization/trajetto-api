@@ -40,6 +40,7 @@
     "test": "vitest run --dir tests/unitaires",
     "test:watch": "vitest --dir tests/unitaires",
     "test:e2e": "node infra/scripts/run-e2e.mjs",
+    "test:e2e:infra": "bash tests/E2E/infra/run.sh",
     "test:e2e:watch": "vitest --dir ./tests/E2E",
     "test:coverage": "vitest run --dir tests/unitaires --coverage --coverage.thresholds.statements=70.8 --coverage.thresholds.lines=70.8 --coverage.thresholds.branches=82.57 --coverage.thresholds.functions=57.62",
     "test:coverage:e2e": "bash infra/scripts/coverage-e2e.sh",

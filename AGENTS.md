@@ -89,6 +89,7 @@ yarn test                          # unitários
 npx vitest run <arquivo>           # um arquivo
 yarn test:coverage                 # unitários com o piso de cobertura do CI
 yarn test:e2e                      # E2E em duas fases (precisa de DATABASE_URL/REDIS_URL de um Postgres/Redis DESCARTÁVEL)
+yarn test:e2e:infra                # fase infra do E2E: sobe PgBouncer e standby descartáveis (Docker), roda tests/E2E/infra e apaga
 yarn prisma:migrate:dev            # cria uma migration (--create-only); revise o SQL
 yarn prisma:migrate:deploy         # aplica
 docker compose -f compose.development.yaml --profile ai up -d trajetto-ai   # IA local (~1 GiB)
@@ -228,6 +229,10 @@ checksum). Detalhes: `docs/arquitetura.md` ("Migrations: expandir e contrair").
 - E2E novo que sobe réplicas da API entra em
   `tests/E2E/support/replica-files.ts` (a fase própria do `yarn test:e2e`, um
   arquivo por vez); `quality/e2e-replica-isolation.test.ts` cobra.
+- E2E que precisa do PgBouncer ou do standby de verdade vai em `tests/E2E/infra`
+  (a fase infra, `yarn test:e2e:infra`; no CI, no job 1): começa com
+  `// @vitest-environment node`, conecta só pelo `infraUrl` e nunca pula;
+  `quality/e2e-infra-isolation.test.ts` cobra.
 - Windows: E2E em lotes de no máximo 8 arquivos (limite herdado do napi panic do
   Prisma 6; o Prisma 7 não tem engine nativo, mas lotes maiores não foram medidos).
 
