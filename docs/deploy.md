@@ -4723,6 +4723,17 @@ banco deste processo (a expansão do outbox mais a raia `internal`) somam o
 `connection_limit` da `DATABASE_URL` ou mais: não sobraria conexão para o
 HTTP, os claims das outras filas e o cron. É aviso, não recusa.
 
+**Expansão do outbox em lote (F5-33).** Com `OUTBOX_EXPANSION_MODE=batch`
+no processo que consome a fila `outbox`, um claim de 50 eventos é
+expandido junto: uma consulta de preferências e uma de celulares para
+todos, um `INSERT` das entregas e uma marca de PUBLISHED com o fencing de
+cada evento, um lote por vez (a `OUTBOX_EXPANSION_CONCURRENCY` não vale).
+As linhas são as mesmas do padrão `per-event`. Staging primeiro; a
+produção só depois de 7 dias de staging e do ABBA do portão (decisão D57).
+Um lote cuja escrita falhou aparece no log como
+`notification events batch write failed; written again event by event`,
+com os ids; para voltar, a variável vazia (ou `per-event`) e **Deploy**.
+
 **Pool contínuo (F3-06 e F3-07).** Desde a onda 13, cada fila é um pool
 contínuo: a vaga que libera reivindica de novo, em vez de esperar o lote
 inteiro terminar. Um valor acima do lote (20 nas raias e nos webhooks, 10

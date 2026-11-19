@@ -149,6 +149,23 @@ const OUTBOX_BATCH_SIZE = 10;
 const OUTBOX_EXPANSION_CONCURRENCY = env.OUTBOX_EXPANSION_CONCURRENCY;
 
 /**
+ * The events one claim takes in OUTBOX_EXPANSION_MODE=batch (plano-escala
+ * F5-33): they are expanded together, with one preference query and one
+ * push-device query for all of them, one INSERT of their deliveries and
+ * one fenced PUBLISHED mark. 50 keeps the transaction short: a claim of 50
+ * events of four rows each writes 200 rows.
+ */
+const OUTBOX_EXPANSION_BATCH_SIZE = 50;
+
+/**
+ * The most delivery rows one batch transaction writes. A broadcast event
+ * (every admin of a large company, on four channels) writes hundreds; past
+ * this the batch's events are written in several transactions, never one
+ * event split across two.
+ */
+const OUTBOX_EXPANSION_BATCH_MAX_ROWS = 2_000;
+
+/**
  * The outbox's claim: the due events, PENDING ones and PROCESSING ones whose
  * lease ran out, oldest due first, under a lease of their own. `floor` is
  * the partitioned queue's claim floor (queue-claim-floor.ts, plano-escala
@@ -471,6 +488,79 @@ function aggregateKeyOf(event: ClaimedEvent): string {
 }
 
 /**
+ * The PUBLISHED mark of a batch's events (plano-escala F5-33), fenced per
+ * event as `fenced()` fences one: only the events still PROCESSING under
+ * the attempt this worker claimed. An event another replica took over
+ * meanwhile keeps its new owner's state. The database clock, as the claim;
+ * updated_at by hand, which the client sets on every other update.
+ * Exported for the batch test.
+ */
+function outboxPublishedBatchSql(
+  events: ReadonlyArray<Pick<ClaimedEvent, "id" | "attempts">>,
+): Prisma.Sql {
+  const claimed = Prisma.join(
+    events.map(
+      (event) => Prisma.sql`(${event.id}::text, ${event.attempts}::int)`,
+    ),
+  );
+
+  return Prisma.sql`
+      UPDATE "domain_outbox_event" AS e SET
+        "status" = 'PUBLISHED',
+        "processedAt" = now(),
+        "leaseExpiresAt" = NULL,
+        "lastError" = NULL,
+        "updated_at" = now()
+      FROM (VALUES ${claimed}) AS claimed("id", "attempts")
+      WHERE e."id" = claimed."id"
+        AND e."status" = 'PROCESSING'
+        AND e."attempts" = claimed."attempts"
+    `;
+}
+
+/**
+ * Events in the order their facts happened: the order their deliveries are
+ * written in, whichever order the claim returned them in.
+ */
+function byCreation(a: ClaimedEvent, b: ClaimedEvent): number {
+  const at =
+    new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+
+  if (at !== 0) return at;
+
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+
+/**
+ * Consecutive groups of a batch's expanded events whose rows fit
+ * OUTBOX_EXPANSION_BATCH_MAX_ROWS together; an event over the cap alone
+ * makes a group, as its own expansion always did.
+ */
+function chunkByRows<T extends { rows: readonly unknown[] }>(
+  expanded: readonly T[],
+  maxRows: number = OUTBOX_EXPANSION_BATCH_MAX_ROWS,
+): T[][] {
+  const chunks: T[][] = [];
+  let current: T[] = [];
+  let rows = 0;
+
+  for (const each of expanded) {
+    if (current.length > 0 && rows + each.rows.length > maxRows) {
+      chunks.push(current);
+      current = [];
+      rows = 0;
+    }
+
+    current.push(each);
+    rows += each.rows.length;
+  }
+
+  if (current.length > 0) chunks.push(current);
+
+  return chunks;
+}
+
+/**
  * The user lookups of one claim's rows, keyed by user id.
  *
  * One event fans out to the same person across in-app, e-mail, WhatsApp and
@@ -542,6 +632,42 @@ interface ClaimedEventRow {
 type RecipientUser = NonNullable<
   Awaited<ReturnType<IUserRepository["findUserById"]>>
 >;
+
+/**
+ * An event's recipients, resolved by its policy: what both expansion modes
+ * turn into delivery rows (plano-escala F5-33).
+ */
+interface EventExpansion {
+  event: ClaimedEvent;
+  policy: AnyPolicy;
+  payload: AnyPayload;
+  recipients: Awaited<ReturnType<AnyPolicy["resolveRecipients"]>>;
+  externals: NonNullable<
+    Awaited<ReturnType<NonNullable<AnyPolicy["resolveExternalRecipients"]>>>
+  >;
+  actorLeftOut: boolean;
+}
+
+/** A user's choices for one category, as the expansion reads them. */
+type PreferenceRow = Prisma.NotificationPreferenceGetPayload<object>;
+
+/** A delivery row before its id and company, as the expansion decides it. */
+type DeliveryRow = Prisma.NotificationDeliveryCreateManyInput;
+
+/** What an expansion left out and why (OBS-08). */
+interface SuppressedChannel {
+  userId?: string;
+  externalRecipientId?: string;
+  channel: NotificationChannel;
+  reason: string;
+}
+
+/** The rows of one expanded event, ready to be written. */
+interface ExpandedEvent {
+  expansion: EventExpansion;
+  rows: DeliveryRow[];
+  suppressed: SuppressedChannel[];
+}
 
 /**
  * A failure that retrying can never fix (recipient deleted, no policy). A
@@ -680,6 +806,13 @@ class NotificationPipelineService {
 
   /** The outbox's, the same way (F3-11). */
   private outboxFairCursor = "";
+
+  /**
+   * A look asked for while a batch cycle ran (OUTBOX_EXPANSION_MODE=batch,
+   * plano-escala F5-33): the batch loop's `rescan`, as the pool keeps its
+   * own for the per-event mode.
+   */
+  private outboxBatchRescan = false;
 
   /**
    * Set when the replica starts going away. The pools stop claiming and
@@ -1002,6 +1135,7 @@ class NotificationPipelineService {
   public runOutboxCycle(): Promise<boolean> {
     if (this.outboxCycle) {
       this.outboxPool.rescan();
+      this.outboxBatchRescan = true;
 
       return this.outboxCycle.catch(() => false);
     }
@@ -1024,7 +1158,11 @@ class NotificationPipelineService {
         processedAny = (await this.drainOutbox()) || processedAny;
 
         // A look asked for between the pool's last one and its end.
-        if (!this.outboxPool.rescanPending || this.stopping) break;
+        const again = this.inBatches()
+          ? this.outboxBatchRescan
+          : this.outboxPool.rescanPending;
+
+        if (!again || this.stopping) break;
       }
     } finally {
       // Same synchronous turn as the last look at `rescanPending`: a caller
@@ -1044,9 +1182,165 @@ class NotificationPipelineService {
     workerHeartbeat.beginCycle("notification-outbox");
 
     try {
-      return (await this.outboxPool.drain()) > 0;
+      return this.inBatches()
+        ? (await this.drainOutboxInBatches()) > 0
+        : (await this.outboxPool.drain()) > 0;
     } finally {
       workerHeartbeat.endCycle("notification-outbox");
+    }
+  }
+
+  /**
+   * OUTBOX_EXPANSION_MODE (plano-escala F5-33), read at every cycle:
+   * `per-event` (the default) is the pool of before, exactly.
+   */
+  private inBatches(): boolean {
+    return env.OUTBOX_EXPANSION_MODE === "batch";
+  }
+
+  /**
+   * The batch mode's cycle: a claim of OUTBOX_EXPANSION_BATCH_SIZE events,
+   * expanded together, then the next claim, until one comes back short and
+   * nobody asked for another look. One batch at a time per process, so two
+   * events of one aggregate are never expanded at once here, as the pool's
+   * perKey promises in the per-event mode (OUTBOX_EXPANSION_CONCURRENCY
+   * does not apply). A batch starts the moment it is claimed: no event
+   * waits for a slot with its lease running, so none is renewed.
+   */
+  private async drainOutboxInBatches(): Promise<number> {
+    let expanded = 0;
+
+    while (!this.stopping) {
+      // This claim answers every look asked for before it.
+      this.outboxBatchRescan = false;
+
+      const events = await this.claimEvents(OUTBOX_EXPANSION_BATCH_SIZE);
+
+      workerHeartbeat.progress("notification-outbox");
+
+      if (events.length === 0) break;
+
+      expanded += events.length;
+
+      await this.expandClaimedBatch(events);
+
+      if (
+        events.length < OUTBOX_EXPANSION_BATCH_SIZE &&
+        !this.outboxBatchRescan
+      ) {
+        break;
+      }
+    }
+
+    return expanded;
+  }
+
+  /**
+   * One claimed batch, start to settle (plano-escala F5-33). Never rejects.
+   *
+   * The same rows as the per-event path, event by event: the recipients
+   * are resolved by each event's policy as before, and the same rules
+   * decide the channels; only the lookups and the writes are shared. An
+   * event whose policy fails gets the failure of its own and the others go
+   * on. The batch's write is one transaction: the deliveries in one INSERT
+   * (their ids are decided by event, recipient and channel, so a second
+   * expansion writes nothing new) and one PUBLISHED mark fenced per event.
+   * A batch whose write fails is written again event by event, as the
+   * per-event path writes, so one bad event costs only itself a retry.
+   */
+  private async expandClaimedBatch(events: ClaimedEvent[]): Promise<void> {
+    const expansions: EventExpansion[] = [];
+
+    for (const event of [...events].sort(byCreation)) {
+      try {
+        const expansion = await this.resolveExpansion(event);
+
+        if (expansion) expansions.push(expansion);
+      } catch (error) {
+        await this.recordEventFailure(event, error);
+      }
+    }
+
+    if (expansions.length === 0) return;
+
+    const expanded: ExpandedEvent[] = [];
+
+    try {
+      const preferenceOf = await this.preferencesOf(expansions);
+      const pushOwners = await this.pushOwnersOf([
+        ...new Set(
+          expansions.flatMap((expansion) =>
+            expansion.recipients.map((recipient) => recipient.id),
+          ),
+        ),
+      ]);
+
+      for (const expansion of expansions) {
+        try {
+          expanded.push({
+            expansion,
+            ...(await this.deliveryRowsOf(
+              expansion,
+              (userId) => preferenceOf(expansion.policy.category, userId),
+              pushOwners,
+            )),
+          });
+        } catch (error) {
+          await this.recordEventFailure(expansion.event, error);
+        }
+      }
+    } catch (error) {
+      // The batch's lookups failed: every event of it retries, as each
+      // would have on its own path.
+      for (const expansion of expansions) {
+        await this.recordEventFailure(expansion.event, error);
+      }
+
+      return;
+    }
+
+    for (const chunk of chunkByRows(expanded)) {
+      try {
+        await database.$transaction([
+          this.createDeliveries(
+            chunk.map(({ expansion, rows }) => ({
+              event: expansion.event,
+              rows,
+            })),
+          ),
+          database.$executeRaw(
+            outboxPublishedBatchSql(
+              chunk.map(({ expansion }) => expansion.event),
+            ),
+          ),
+        ]);
+      } catch (error) {
+        log.warn(
+          {
+            err: error,
+            events: chunk.length,
+            outboxEventIds: chunk
+              .slice(0, SUPPRESSED_LOG_LIMIT)
+              .map(({ expansion }) => expansion.event.id),
+          },
+          "notification events batch write failed; written again event by event",
+        );
+
+        for (const each of chunk) {
+          try {
+            await this.writeExpansion(each.expansion.event, each.rows);
+          } catch (eventError) {
+            await this.recordEventFailure(each.expansion.event, eventError);
+            continue;
+          }
+
+          this.logSuppressed(each);
+        }
+
+        continue;
+      }
+
+      for (const each of chunk) this.logSuppressed(each);
     }
   }
 
@@ -1184,6 +1478,46 @@ class NotificationPipelineService {
   }
 
   private async expandEvent(event: ClaimedEvent): Promise<void> {
+    const expansion = await this.resolveExpansion(event);
+
+    if (!expansion) return;
+
+    const recipientIds = expansion.recipients.map((recipient) => recipient.id);
+
+    // Per-category choices, fetched in one query for the whole batch. A user
+    // without a row falls back to their legacy global toggles.
+    const preferences = recipientIds.length
+      ? await database.notificationPreference.findMany({
+          where: {
+            category: expansion.policy.category,
+            userId: { in: recipientIds },
+          },
+        })
+      : [];
+
+    const preferenceByUser = new Map(
+      preferences.map((preference) => [preference.userId, preference]),
+    );
+
+    const { rows, suppressed } = await this.deliveryRowsOf(
+      expansion,
+      (userId) => preferenceByUser.get(userId),
+      await this.pushOwnersOf(recipientIds),
+    );
+
+    await this.writeExpansion(event, rows);
+
+    this.logSuppressed({ expansion, rows, suppressed });
+  }
+
+  /**
+   * Who an event is for, by its policy: the users besides its actor and the
+   * people with no account. Null when this build has no policy for the
+   * topic (the event was put back or failed).
+   */
+  private async resolveExpansion(
+    event: ClaimedEvent,
+  ): Promise<EventExpansion | null> {
     const policy = getNotificationPolicy(event.topic);
 
     if (!policy) {
@@ -1192,7 +1526,7 @@ class NotificationPipelineService {
         `No notification policy registered for topic "${event.topic}"`,
       );
 
-      return;
+      return null;
     }
 
     const payload = event.payload as AnyPayload;
@@ -1232,51 +1566,95 @@ class NotificationPipelineService {
       ? await policy.resolveExternalRecipients(payload, policyDeps)
       : [];
 
-    // Per-category choices, fetched in one query for the whole batch. A user
-    // without a row falls back to their legacy global toggles.
-    const preferences = recipients.length
-      ? await database.notificationPreference.findMany({
-          where: {
-            category: policy.category,
-            userId: { in: recipients.map((recipient) => recipient.id) },
-          },
-        })
-      : [];
+    return { event, policy, payload, recipients, externals, actorLeftOut };
+  }
 
-    const preferenceByUser = new Map(
-      preferences.map((preference) => [preference.userId, preference]),
+  /**
+   * Per-category choices of every recipient of a batch, in one query: the
+   * same rows the per-event path reads one category at a time.
+   */
+  private async preferencesOf(
+    expansions: readonly EventExpansion[],
+  ): Promise<
+    (
+      category: EventExpansion["policy"]["category"],
+      userId: string,
+    ) => PreferenceRow | undefined
+  > {
+    const usersByCategory = new Map<
+      EventExpansion["policy"]["category"],
+      Set<string>
+    >();
+
+    for (const { policy, recipients } of expansions) {
+      if (recipients.length === 0) continue;
+
+      const users = usersByCategory.get(policy.category) ?? new Set<string>();
+
+      for (const recipient of recipients) users.add(recipient.id);
+
+      usersByCategory.set(policy.category, users);
+    }
+
+    if (usersByCategory.size === 0) return () => undefined;
+
+    const preferences = await database.notificationPreference.findMany({
+      where: {
+        OR: [...usersByCategory].map(([category, users]) => ({
+          category,
+          userId: { in: [...users] },
+        })),
+      },
+    });
+
+    const byKey = new Map(
+      preferences.map((preference) => [
+        `${preference.category}:${preference.userId}`,
+        preference,
+      ]),
     );
 
-    // Who has a registered mobile device — a PUSH delivery only exists for
-    // them, so web-only users never accumulate dead push rows.
-    const pushOwners = recipients.length
-      ? new Set(
-          (
-            await database.pushDeviceToken.findMany({
-              where: {
-                userId: { in: recipients.map((recipient) => recipient.id) },
-              },
-              select: { userId: true },
-            })
-          ).map((row) => row.userId),
-        )
-      : new Set<string>();
+    return (category, userId) => byKey.get(`${category}:${userId}`);
+  }
 
-    const rows: Prisma.NotificationDeliveryCreateManyInput[] = [];
+  /**
+   * Who has a registered mobile device — a PUSH delivery only exists for
+   * them, so web-only users never accumulate dead push rows.
+   */
+  private async pushOwnersOf(userIds: readonly string[]): Promise<Set<string>> {
+    if (userIds.length === 0) return new Set<string>();
+
+    return new Set(
+      (
+        await database.pushDeviceToken.findMany({
+          where: { userId: { in: [...userIds] } },
+          select: { userId: true },
+        })
+      ).map((row) => row.userId),
+    );
+  }
+
+  /**
+   * The delivery rows of one event: a row per recipient and channel the
+   * rules allow, and what was left out and why. The same in both modes.
+   */
+  private async deliveryRowsOf(
+    expansion: EventExpansion,
+    preferenceOf: (userId: string) => PreferenceRow | undefined,
+    pushOwners: ReadonlySet<string>,
+  ): Promise<{ rows: DeliveryRow[]; suppressed: SuppressedChannel[] }> {
+    const { event, policy, payload, recipients, externals } = expansion;
+
+    const rows: DeliveryRow[] = [];
 
     // What was left out and why (OBS-08): no row is created for a suppressed
     // channel, so without this "she never gets WhatsApp" had nothing to show.
-    const suppressed: Array<{
-      userId?: string;
-      externalRecipientId?: string;
-      channel: NotificationChannel;
-      reason: string;
-    }> = [];
+    const suppressed: SuppressedChannel[] = [];
 
     for (const recipient of recipients) {
       const flags = resolveRecipientChannelFlags(
         recipient,
-        preferenceByUser.get(recipient.id),
+        preferenceOf(recipient.id),
       );
 
       const options = {
@@ -1404,28 +1782,29 @@ class NotificationPipelineService {
       });
     }
 
-    // skipDuplicates makes a re-run after a crash, or by a replica that took
-    // the event over, a no-op instead of a second batch of notifications:
-    // every row's id is decided by its event, recipient and channel
-    // (delivery-id.ts, plano-escala F5-03), so a second expansion computes
-    // the same primary keys. The (event, recipient, channel) unique indexes
-    // still say the same until wave 10 drops them (F5-06), and keep the rows
-    // the previous image wrote under random ids, during the rolling deploy,
-    // from gaining a twin. The PUBLISHED mark is fenced: if this worker lost
-    // the row to another replica the rows above were a no-op and so is the
-    // mark.
+    return { rows, suppressed };
+  }
+
+  /**
+   * One event's deliveries and its PUBLISHED mark, in one transaction.
+   *
+   * skipDuplicates makes a re-run after a crash, or by a replica that took
+   * the event over, a no-op instead of a second batch of notifications:
+   * every row's id is decided by its event, recipient and channel
+   * (delivery-id.ts, plano-escala F5-03), so a second expansion computes
+   * the same primary keys. The (event, recipient, channel) unique indexes
+   * still say the same until wave 10 drops them (F5-06), and keep the rows
+   * the previous image wrote under random ids, during the rolling deploy,
+   * from gaining a twin. The PUBLISHED mark is fenced: if this worker lost
+   * the row to another replica the rows above were a no-op and so is the
+   * mark.
+   */
+  private async writeExpansion(
+    event: ClaimedEvent,
+    rows: DeliveryRow[],
+  ): Promise<void> {
     await database.$transaction([
-      database.notificationDelivery.createMany({
-        // Every row carries the event's company (plano-escala F3-09): the
-        // fair claim of the lanes takes them company by company. NULL for
-        // the platform's own events, the claim's "no company" bucket.
-        data: rows.map((row) => ({
-          ...row,
-          id: deliveryIdFor(event, row, row.channel),
-          business_id: event.businessId,
-        })),
-        skipDuplicates: true,
-      }),
+      this.createDeliveries([{ event, rows }]),
       database.domainOutboxEvent.updateMany({
         where: this.fenced(event),
         data: {
@@ -1436,10 +1815,37 @@ class NotificationPipelineService {
         },
       }),
     ]);
+  }
 
-    // Debug, not info: a web-only user has no push device on every event.
-    // LOG_LEVEL=debug answers "why did she never get it?" (OBS-08), and
-    // `actorLeftOut` "why did I not get my own?".
+  /**
+   * The deliveries of one or more expanded events, in one INSERT. Every row
+   * carries the event's company (plano-escala F3-09): the fair claim of the
+   * lanes takes them company by company. NULL for the platform's own
+   * events, the claim's "no company" bucket.
+   */
+  private createDeliveries(
+    expanded: ReadonlyArray<{ event: ClaimedEvent; rows: DeliveryRow[] }>,
+  ) {
+    return database.notificationDelivery.createMany({
+      data: expanded.flatMap(({ event, rows }) =>
+        rows.map((row) => ({
+          ...row,
+          id: deliveryIdFor(event, row, row.channel),
+          business_id: event.businessId,
+        })),
+      ),
+      skipDuplicates: true,
+    });
+  }
+
+  /**
+   * Debug, not info: a web-only user has no push device on every event.
+   * LOG_LEVEL=debug answers "why did she never get it?" (OBS-08), and
+   * `actorLeftOut` "why did I not get my own?".
+   */
+  private logSuppressed({ expansion, suppressed }: ExpandedEvent): void {
+    const { event, actorLeftOut } = expansion;
+
     if (suppressed.length > 0 || actorLeftOut) {
       log.debug(
         {
@@ -3392,8 +3798,13 @@ class NotificationPipelineService {
 
 export {
   NotificationPipelineService,
+  OUTBOX_EXPANSION_BATCH_MAX_ROWS,
+  OUTBOX_EXPANSION_BATCH_SIZE,
+  byCreation,
+  chunkByRows,
   deliveryClaimSql,
   deliveryFairClaimSql,
   outboxClaimSql,
   outboxFairClaimSql,
+  outboxPublishedBatchSql,
 };

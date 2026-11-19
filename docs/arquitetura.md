@@ -3665,6 +3665,21 @@ continua de pé depois:
   partição em que o evento também está. A janela de 24 h do
   `/health/metrics` (`deliveryIdFloor`) passa a contar as entregas pelo
   instante do evento, não pelo da expansão.
+- a expansão em lote (F5-33, `OUTBOX_EXPANSION_MODE=batch`; o padrão é
+  `per-event`, um evento por expansão, como antes): um claim de 50 eventos
+  expandidos juntos. Os destinatários de cada evento saem da política dele,
+  como antes, e as mesmas regras decidem os canais; só as consultas e a
+  escrita são do lote: uma consulta das preferências e uma dos celulares
+  para todos os destinatários, um `INSERT` das entregas (até 2.000 linhas
+  por transação; um evento nunca se divide entre duas) e uma marca de
+  PUBLISHED com o fencing de cada evento (`UPDATE … FROM (VALUES …)`, o
+  status e o `attempts` do claim). Um lote por vez por processo, então dois
+  eventos de um agregado nunca se expandem ao mesmo tempo ali, e a
+  `OUTBOX_EXPANSION_CONCURRENCY` não vale. A política que falha num evento
+  custa uma retentativa só a ele; a escrita do lote que falha é refeita
+  evento a evento, pelo caminho de antes. O E2E `outbox-batch-expansion`
+  prova as mesmas linhas nos dois modos e nenhuma duplicata com dois
+  processos expandindo o mesmo lote.
 - cada recibo de provedor (`notification_provider_receipt`) nasce com um
   id decidido pelo fato que ele registra (F5-04,
   `src/shared/notifications/receipt-id.ts`):

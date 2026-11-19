@@ -996,6 +996,24 @@ const envSchema = z
     OUTBOX_EXPANSION_CONCURRENCY: queueConcurrency(
       "OUTBOX_EXPANSION_CONCURRENCY",
     ),
+
+    /**
+     * How the outbox turns events into deliveries (plano-escala F5-33,
+     * shared/notifications/notification-pipeline-service.ts). `per-event`
+     * (the default): one event per expansion, as before, with
+     * OUTBOX_EXPANSION_CONCURRENCY of them at once. `batch`: a claim of 50
+     * events expanded together, with one preference query and one
+     * push-device query for all of them, one INSERT of their deliveries
+     * and one PUBLISHED mark fenced per event; one batch at a time per
+     * process, and a batch whose write fails is written again event by
+     * event. The same rows either way. Staging first; production only
+     * after seven days of staging and the gate's ABBA. Empty counts as
+     * absent.
+     */
+    OUTBOX_EXPANSION_MODE: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.enum(["per-event", "batch"]).default("per-event"),
+    ),
     WEBHOOK_CONCURRENCY: queueConcurrency("WEBHOOK_CONCURRENCY"),
     AI_CONCURRENCY: queueConcurrency("AI_CONCURRENCY"),
 
