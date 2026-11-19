@@ -125,6 +125,25 @@ async function remember<T>(key: string, load: () => Promise<T>): Promise<T> {
 }
 
 /**
+ * Leaves a row this request already read in its memory, as if `remember` had
+ * loaded it under that key.
+ *
+ * For a read that answers more than one question at once: the session
+ * lookup (SessionRepository.loadSession) reads the user and its refresh-token
+ * family in one statement, and the use case of the same request then asks
+ * findUserById for that user. Without the seed, that second question would
+ * go back to the database for a row read a millisecond earlier. Outside a
+ * request it does nothing, as `remember` keeps nothing there.
+ */
+function rememberRow(key: string, value: unknown): void {
+  const context = getRequestContext();
+
+  if (!context) return;
+
+  (context.rows ??= new Map()).set(key, value);
+}
+
+/**
  * Forgets everything this request had remembered.
  *
  * Coarse on purpose: forgetting one key would still leave a stale copy behind
@@ -160,6 +179,7 @@ export {
   forgetRequestCache,
   getRequestContext,
   remember,
+  rememberRow,
   requestCacheSize,
   withoutRequestContext,
 };

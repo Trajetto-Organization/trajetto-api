@@ -62,6 +62,15 @@ function withoutPassword<T extends { password?: unknown }>(
   return listed;
 }
 
+/**
+ * The key the session user is remembered under in the request's memory.
+ * The session lookup in one statement (session-repository.ts) leaves its
+ * user under it, so findUserById of the same request answers from there.
+ */
+function userRequestKey(userId: string): string {
+  return `user:${userId}`;
+}
+
 class UserRepository implements IUserRepository {
   constructor(private prisma = database) {}
 
@@ -438,7 +447,7 @@ class UserRepository implements IUserRepository {
    * every write here calls `forgetRequestCache`.
    */
   async findUserById(userId: string): Promise<User | null> {
-    return remember(`user:${userId}`, () => this.loadUserById(userId));
+    return remember(userRequestKey(userId), () => this.loadUserById(userId));
   }
 
   /**
@@ -1167,4 +1176,4 @@ class UserRepository implements IUserRepository {
   }
 }
 
-export { UserRepository };
+export { UserRepository, userRequestKey };

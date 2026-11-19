@@ -30,6 +30,8 @@ import { IPermissionRepository } from "@/modules/permission/repositories/IPermis
 
 import { IUsersTokensRepository } from "@/modules/user/repositories/IUsers-tokens-repository";
 import { UserTokensRepository } from "@/modules/user/repositories/user-tokens-repository";
+import type { ISessionRepository } from "@/modules/user/repositories/ISession-repository";
+import { SessionRepository } from "@/modules/user/repositories/session-repository";
 import { DriverEnrollmentRepository } from "@/modules/user/repositories/driver-enrollment-repository";
 import type { IDriverEnrollmentRepository } from "@/modules/user/repositories/IDriver-enrollment-repository";
 import { DriverTrustedDeviceRepository } from "@/modules/user/repositories/driver-trusted-device-repository";
@@ -205,6 +207,12 @@ container.registerSingleton<IUserRepository>("UserRepository", UserRepository);
 container.registerSingleton<IUsersTokensRepository>(
   "UsersTokensRepository",
   UserTokensRepository,
+);
+// The session in one statement (plano-escala F4-04): the user, its relations
+// and the refresh-token family, for the middleware and the handshake.
+container.registerSingleton<ISessionRepository>(
+  "SessionRepository",
+  SessionRepository,
 );
 // Plan of 02/11/2026 (D3): the driver's one-time access by QR code.
 container.registerSingleton<IDriverEnrollmentRepository>(

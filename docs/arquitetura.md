@@ -5081,6 +5081,26 @@ quente, com relação muitas vezes ausente, segue o mesmo padrão. Provas:
 `tests/E2E/driver-positions-statement-budget.test.ts` e
 `tests/unitaires/database/related-rows.test.ts`.
 
+**Sessão num statement** (plano de escala F4-04): o `loadSession` de
+`src/modules/user/repositories/session-repository.ts` responde numa ida ao
+banco o que o `ensureAuthenticated` e o handshake do socket perguntam hoje em
+dois a cinco statements: o usuário com a empresa e os módulos contratados, o
+perfil e as permissões, o motorista e a filial, e se a família do refresh token
+ainda tem um token vivo. Cada relação é um `LEFT JOIN LATERAL` que não acha
+nada com a chave nula e volta como `json` (nunca `jsonb`, que reordena as
+chaves), com o formato e a ordem de chaves do `include`. Os parâmetros levam
+cast explícito (`::text`), porque o Prisma 7 os manda sem tipo, e o
+`relationJoins` fica desligado. Diferente do `include`, a ordem das listas é
+fixa: permissões por id e módulos por nome. O usuário lido fica na memória da
+requisição, com a chave do `findUserById`, e o caso de uso da mesma requisição
+não o lê de novo; de uma requisição para outra nada fica guardado. As colunas
+do usuário são escritas à mão e conferidas contra o modelo do Prisma
+(`tests/unitaires/user/session-lookup-one-statement.test.ts`). A equivalência
+com o caminho de hoje, em toda a matriz de sessões e num statement só, está em
+`tests/E2E/session-lookup-equivalence.test.ts`, e o contrato com o gêmeo
+in-memory em `tests/E2E/session-repository-contract.test.ts`. Por enquanto
+ninguém a chama: o middleware e o handshake passam a usá-la na F4-05.
+
 **Plano com os valores a cada execução**: o `pg` manda statements sem nome, e
 o Postgres planeja cada execução com os valores; o Prisma 6 nomeava os
 statements e, depois de cinco execuções, caía no plano genérico. Query cara de
