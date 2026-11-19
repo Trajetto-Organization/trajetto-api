@@ -84,6 +84,9 @@ interface PermissionSeed {
 /** The company as the session lookup selects it. */
 interface BusinessSeed {
   is_active: boolean;
+
+  /** The column, when a test gives it (the database always has one). */
+  timezone?: string;
   entitlements: { module: string; enabled: boolean }[];
 
   /** The names the CPF login's company picker shows (D8). */
@@ -629,6 +632,9 @@ class InMemoryUserRepository implements IUserRepository {
         // What the session lookup selects, never the picker's names.
         relations.business = {
           is_active: business.is_active,
+          ...(business.timezone !== undefined && {
+            timezone: business.timezone,
+          }),
           entitlements: business.entitlements,
         };
       }

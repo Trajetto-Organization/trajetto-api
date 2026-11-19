@@ -4,6 +4,7 @@ import { Prisma } from "@prisma/client";
 
 import { utcInstant } from "@/shared/database/utc-instant";
 import { rememberRow } from "@/shared/http/request-context";
+import { rememberBusinessZone } from "@/shared/time/business-time-zone";
 
 import type { User } from "../dtos/user-dto";
 
@@ -116,6 +117,7 @@ class SessionRepository implements ISessionRepository {
       LEFT JOIN LATERAL (
         SELECT json_build_object(
           'is_active', bu."is_active",
+          'timezone', bu."timezone",
           'entitlements', COALESCE((
             SELECT json_agg(
               json_build_object('module', e."module", 'enabled', e."enabled")
@@ -180,6 +182,9 @@ class SessionRepository implements ISessionRepository {
     const { hasActiveFamily, ...user } = row;
 
     rememberRow(userRequestKey(userId), user);
+    // The company's zone came with it: the use case's "today" reads it
+    // from here (storedBusinessZone), never again from the database.
+    rememberBusinessZone(user.businessId, user.business);
 
     return { user, hasActiveFamily: hasActiveFamily === true };
   }

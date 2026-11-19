@@ -26,6 +26,7 @@ import {
   requireIndex,
 } from "@/shared/in-memory/prisma-errors";
 import { afterCursor } from "@/shared/in-memory/cursor";
+import { forgetRequestCache } from "@/shared/http/request-context";
 
 import {
   CreateBusinessProps,
@@ -348,6 +349,10 @@ class InMemoryBusinessRepository implements IBusinessRepository {
     this.assertUnique(updatedBusiness);
 
     this.business[index] = updatedBusiness;
+
+    // As the repository: the zone this request held for it is the old one.
+    forgetRequestCache();
+
     return updatedBusiness;
   }
 
@@ -359,6 +364,9 @@ class InMemoryBusinessRepository implements IBusinessRepository {
     );
 
     const deletedBusiness = this.business.splice(index, 1)[0];
+
+    forgetRequestCache();
+
     return deletedBusiness;
   }
 

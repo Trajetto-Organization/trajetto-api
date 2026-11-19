@@ -24,6 +24,7 @@ import { buildSearchOr } from "@/shared/pagination/search-or";
 import { resolveOrderBy } from "@/shared/pagination/list-query";
 import { insensitiveEquals } from "@/shared/utils/like-pattern";
 import { deleteQueueRowsOfBusiness } from "@/shared/notifications/queue-row-cleanup";
+import { forgetRequestCache } from "@/shared/http/request-context";
 
 class BusinessRepository implements IBusinessRepository {
   constructor(private prisma = database) {}
@@ -301,6 +302,10 @@ class BusinessRepository implements IBusinessRepository {
       data: filteredData,
     });
 
+    // The zone this request may hold for the company (the session lookup
+    // brought it) is the old one now.
+    forgetRequestCache();
+
     return updateBusiness;
   }
 
@@ -314,7 +319,14 @@ class BusinessRepository implements IBusinessRepository {
     const remove = async (client: Prisma.TransactionClient) => {
       await deleteQueueRowsOfBusiness(client, businessId);
 
-      return client.business.delete({ where: { id: businessId } });
+      const removed = await client.business.delete({
+        where: { id: businessId },
+      });
+
+      // Nothing this request remembered of the company (its zone) holds.
+      forgetRequestCache();
+
+      return removed;
     };
 
     return tx ? remove(tx) : this.prisma.$transaction(remove);

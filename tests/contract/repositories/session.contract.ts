@@ -18,6 +18,13 @@ import { fixedId, type Kind } from "../support";
 const ALFA = fixedId("5e5500", 1);
 const BETA = fixedId("5e5500", 2);
 
+/**
+ * The companies' zones: ALFA's is not the default, so a statement that
+ * answered the platform's zone instead of the company's would show (the
+ * request's "today" is read from it, plano-escala F4-07).
+ */
+const ZONES = { alfa: "America/Manaus", beta: "America/Sao_Paulo" } as const;
+
 const USERS = {
   master: fixedId("5e5501", 1),
   admin: fixedId("5e5501", 2),
@@ -118,7 +125,7 @@ function sessionRepositoryContract(harness: () => SessionHarness): void {
   });
 
   describe("the company", () => {
-    it("carries its state and the hired modules, by module name", async () => {
+    it("carries its state, its zone and the hired modules, by module name", async () => {
       const { user } = await harness().repo.loadSession(
         USERS.admin,
         FAMILIES.active,
@@ -126,6 +133,7 @@ function sessionRepositoryContract(harness: () => SessionHarness): void {
 
       expect(user?.business).toEqual({
         is_active: true,
+        timezone: ZONES.alfa,
         entitlements: [
           { module: "DELIVERIES", enabled: false },
           { module: "FLEET", enabled: true },
@@ -139,7 +147,11 @@ function sessionRepositoryContract(harness: () => SessionHarness): void {
         FAMILIES.active,
       );
 
-      expect(user?.business).toEqual({ is_active: false, entitlements: [] });
+      expect(user?.business).toEqual({
+        is_active: false,
+        timezone: ZONES.beta,
+        entitlements: [],
+      });
     });
   });
 
@@ -229,6 +241,7 @@ export {
   PERMISSIONS,
   PROFILES,
   USERS,
+  ZONES,
   sessionRepositoryContract,
 };
 export type { SessionHarness };

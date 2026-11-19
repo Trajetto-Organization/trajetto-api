@@ -118,6 +118,9 @@ interface User {
   } | null;
   business?: {
     is_active: boolean;
+
+    /** The company's zone, when the session lookup read it. */
+    timezone?: string;
     entitlements?: { module: string; enabled: boolean }[];
   } | null;
 

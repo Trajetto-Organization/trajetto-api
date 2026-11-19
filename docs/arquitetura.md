@@ -5128,6 +5128,22 @@ requisição até o banco ficar quieto, então o que ela deixa rodando depois
 da resposta (a linha de atividade de um envio) entra no custo dela; `BEGIN`
 e `COMMIT` não contam. A sessão é a de `SESSION_LOOKUP_MODE=single`.
 
+**O fuso da empresa vem com a sessão** (plano de escala F4-07): todo "hoje"
+precisa de `Business.timezone`, e na carga da bancada essa leitura era mais
+um statement em dois terços das requisições (a lista de entregas, a torre, o
+resumo, as rotas, o dashboard e a lista do motorista), muitas vezes lendo a
+linha inteira da empresa por uma coluna. A sessão (nos dois modos) já lê a
+empresa de quem chama e agora traz o fuso junto, deixando-o na memória da
+requisição. Quem lê o fuso (`loadBusinessTimeZone` e os `timeZoneOf` dos
+repositórios de pausa, da operação do dia e de rotas) pergunta ali primeiro,
+por `storedBusinessZone` (`src/shared/time/business-time-zone.ts`): a
+empresa de quem chama não custa statement, e outra empresa (a do MASTER)
+custa um, uma vez por requisição. É memória de uma requisição só, por
+empresa, que uma escrita na empresa na mesma requisição esquece; de uma
+requisição para outra nada fica guardado. A prova está em
+`tests/unitaires/time/business-zone-per-request.test.ts`, e os números novos
+das rotas, em `tests/E2E/panel-statement-budgets.test.ts`.
+
 **Plano com os valores a cada execução**: o `pg` manda statements sem nome, e
 o Postgres planeja cada execução com os valores; o Prisma 6 nomeava os
 statements e, depois de cinco execuções, caía no plano genérico. Query cara de

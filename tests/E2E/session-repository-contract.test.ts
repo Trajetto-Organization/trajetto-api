@@ -15,6 +15,7 @@ import {
   PERMISSIONS,
   PROFILES,
   USERS,
+  ZONES,
   sessionRepositoryContract,
   type SessionHarness,
 } from "../contract/repositories/session.contract";
@@ -93,8 +94,11 @@ const USER_ROWS: UserRow[] = [
 beforeAll(async () => {
   const now = Date.now();
 
-  await seedBusiness(prisma, ALFA, 1);
-  await seedBusiness(prisma, BETA, 2, { is_active: false });
+  await seedBusiness(prisma, ALFA, 1, { timezone: ZONES.alfa });
+  await seedBusiness(prisma, BETA, 2, {
+    is_active: false,
+    timezone: ZONES.beta,
+  });
 
   for (const entitlement of ENTITLEMENTS) {
     await prisma.businessEntitlement.create({
@@ -187,9 +191,14 @@ beforeAll(async () => {
 
   users.businesses.set(ALFA, {
     is_active: true,
+    timezone: ZONES.alfa,
     entitlements: ENTITLEMENTS.map((item) => ({ ...item })),
   });
-  users.businesses.set(BETA, { is_active: false, entitlements: [] });
+  users.businesses.set(BETA, {
+    is_active: false,
+    timezone: ZONES.beta,
+    entitlements: [],
+  });
   users.profiles.set(PROFILES.full, { name: "Operação", businessId: ALFA });
   users.profiles.set(PROFILES.empty, { name: "Vazio", businessId: ALFA });
   users.profilePermissions.set(

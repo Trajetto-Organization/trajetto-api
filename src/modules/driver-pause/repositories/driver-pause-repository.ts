@@ -1,4 +1,5 @@
 import database from "@/../infra/database";
+import { storedBusinessZone } from "@/shared/time/business-time-zone";
 import {
   DEFAULT_PAUSE_TYPE_KEY,
   ensureDefaultOccurrenceTypes,
@@ -39,13 +40,17 @@ const LEFT_STATUSES = ["IN_PROGRESS", "COMPLETED", "CANCELLED"] as const;
 class DriverPauseRepository implements IDriverPauseRepository {
   constructor(private prisma = database) {}
 
+  // Once per request, and none on the driver's own company: the session
+  // lookup brought its zone (storedBusinessZone).
   async timeZoneOf(businessId: string): Promise<string | null> {
-    const business = await this.prisma.business.findUnique({
-      where: { id: businessId },
-      select: { timezone: true },
-    });
+    return storedBusinessZone(businessId, async () => {
+      const business = await this.prisma.business.findUnique({
+        where: { id: businessId },
+        select: { timezone: true },
+      });
 
-    return business?.timezone ?? null;
+      return business?.timezone ?? null;
+    });
   }
 
   async findByStartSubmission(

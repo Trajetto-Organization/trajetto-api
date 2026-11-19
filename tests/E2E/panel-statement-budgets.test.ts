@@ -312,47 +312,48 @@ afterAll(async () => {
 
 /**
  * The panel's reads, each with its budget and what its statements are. The
- * session's one statement is in every budget.
+ * session's one statement is in every budget, and since F4-07 it brings the
+ * company's zone too: no read below asks for it again.
  */
 const READS = [
   {
-    // The company's zone, the latest positions, the routes of the day with
+    // The latest positions, the routes of the day with
     // their drivers, vehicles and stops, the day's counts, then the feed:
     // events, occurrences and their routes, the occurrences awaiting
     // authorization with their types, deliveries and drivers, the routes'
     // milestones; and the open pauses.
     route: "GET /route/control-tower",
     url: "/route/control-tower",
-    budget: 17,
+    budget: 16,
   },
   {
-    // The zone, the day's counts, the drivers, the unassigned deliveries,
-    // the day's occurrences and the routes left open since another day.
+    // The day's counts, the drivers, the unassigned deliveries, the day's
+    // occurrences and the routes left open since another day.
     route: "GET /delivery/operation-summary",
     url: "/delivery/operation-summary",
-    budget: 7,
+    budget: 6,
   },
   {
-    // The zone, the routes with their counts and positions in one query,
-    // and the page's pending authorizations.
+    // The routes with their counts and positions in one query, and the
+    // page's pending authorizations.
     route: "GET /route/live",
     url: "/route/live",
-    budget: 4,
+    budget: 3,
   },
   {
-    // The company, the registries' totals and months, the fleet by status,
+    // The registries' totals and months, the fleet by status,
     // by maintenance standing and by type (with the types' names), the
     // maintenance costs, the operation of the day (counts, drivers,
     // unassigned, occurrences) and the recent activity with who did it.
     route: "GET /dashboard/overview",
     url: "/dashboard/overview",
-    budget: 17,
+    budget: 16,
   },
   {
-    // The company, its modules, the registries' series and the work's.
+    // The company's modules, the registries' series and the work's.
     route: "GET /dashboard/trends",
     url: "/dashboard/trends?period=30d",
-    budget: 5,
+    budget: 4,
   },
   {
     // The page of the bell, its unread count and its total.
@@ -361,19 +362,19 @@ const READS = [
     budget: 4,
   },
   {
-    // The company, the counts by status, shipper and driver in one grouped
+    // The counts by status, shipper and driver in one grouped
     // read, the page with its drivers and shippers, the filters' shippers
     // and drivers, and the routes left open since another day.
     route: "GET /delivery/list-delivery, page 1",
     url: "/delivery/list-delivery?page=1&pageSize=20",
-    budget: 9,
+    budget: 8,
   },
   {
     // The next page under the same filters (plano-escala F2-30): the
-    // company, the page and its drivers and shippers, no counts.
+    // page and its drivers and shippers, no counts.
     route: "GET /delivery/list-delivery, page 2 without the counts",
     url: "/delivery/list-delivery?page=2&pageSize=20&facets=skip",
-    budget: 5,
+    budget: 4,
   },
 ] as const;
 

@@ -19,6 +19,7 @@ import {
   type RouteStopStatus,
 } from "@/shared/route/route-rules";
 import { resolveTimeZone } from "@/shared/time/business-day";
+import { storedBusinessZone } from "@/shared/time/business-time-zone";
 import { utcInstant } from "@/shared/database/utc-instant";
 import type { DeliveryStatus } from "@/shared/delivery/delivery-rules";
 import { deliveryStatusTrailEnabled } from "@/shared/delivery/status-trail";
@@ -866,13 +867,19 @@ class RouteRepository implements IRouteRepository {
     });
   }
 
+  // Once per request, and none on the caller's own company: the session
+  // lookup brought its zone (storedBusinessZone).
   async businessTimeZone(businessId: string): Promise<string> {
-    const business = await this.prisma.business.findUnique({
-      where: { id: businessId },
-      select: { timezone: true },
+    const zone = await storedBusinessZone(businessId, async () => {
+      const business = await this.prisma.business.findUnique({
+        where: { id: businessId },
+        select: { timezone: true },
+      });
+
+      return business?.timezone ?? null;
     });
 
-    return resolveTimeZone(business?.timezone);
+    return resolveTimeZone(zone);
   }
 
   async assignmentContext(businessId: string): Promise<AssignmentContext> {

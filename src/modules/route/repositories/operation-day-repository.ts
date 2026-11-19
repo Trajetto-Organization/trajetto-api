@@ -5,6 +5,7 @@ import database from "@/../infra/database";
 import { relatedTo, rowsByKey } from "@/shared/database/related-rows";
 
 import { dateOnlyFromKey, dateOnlyKey } from "@/shared/time/business-day";
+import { storedBusinessZone } from "@/shared/time/business-time-zone";
 import { historyIdRange } from "@/shared/time/history-id-range";
 import { openStopsOnRoutesLeftOpen } from "@/shared/route/routes-left-open-query";
 import type { RoutePeriodDays } from "@/shared/route/route-period";
@@ -110,13 +111,17 @@ class OperationDayRepository implements IOperationDayRepository {
   // A client of its own only in the query-plan suite, which captures SQL.
   constructor(private prisma: PrismaClient = database) {}
 
+  // Once per request, and none on the caller's own company: the session
+  // lookup brought its zone (storedBusinessZone).
   async timeZoneOf(businessId: string): Promise<string | null> {
-    const business = await this.prisma.business.findUnique({
-      where: { id: businessId },
-      select: { timezone: true },
-    });
+    return storedBusinessZone(businessId, async () => {
+      const business = await this.prisma.business.findUnique({
+        where: { id: businessId },
+        select: { timezone: true },
+      });
 
-    return business?.timezone ?? null;
+      return business?.timezone ?? null;
+    });
   }
 
   /**

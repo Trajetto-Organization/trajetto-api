@@ -1,6 +1,7 @@
 import database, { databaseRead } from "@/../infra/database";
 
 import { forgetRequestCache, remember } from "@/shared/http/request-context";
+import { rememberBusinessZone } from "@/shared/time/business-time-zone";
 import { Prisma } from "@prisma/client";
 
 import {
@@ -471,6 +472,10 @@ class UserRepository implements IUserRepository {
         business: {
           select: {
             is_active: true,
+            // The company's zone, for the request's "today": every list,
+            // the tower and the driver's work list ask for it, and this row
+            // is already being read (storedBusinessZone).
+            timezone: true,
             // Hired modules ride along with the session lookup: the web app
             // gates its navigation with them, and a second round trip on
             // every navigation would buy nothing.
@@ -483,6 +488,8 @@ class UserRepository implements IUserRepository {
     });
 
     if (!user) return null;
+
+    rememberBusinessZone(user.businessId, user.business);
 
     const profileAccess = await this.loadProfilePermissions(
       user.profileAccessId,
