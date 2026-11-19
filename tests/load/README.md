@@ -1192,7 +1192,10 @@ O relatório vai para `docs/desempenho/bancada/<data>-<rótulo>.md` (uma
 segunda sessão no mesmo dia vira `-2`); os arquivos brutos ficam em
 `tests/load/results/abba-<…>`, fora do Git. A api fica com a imagem da
 última corrida e o `load_test` como ela o deixou. Saída: 0 o veredito
-passou, 1 não passou, 2 recusou começar ou uma corrida falhou.
+passou, 1 não passou, 2 recusou começar ou uma corrida falhou. As tabelas
+do relatório saem sem o alinhamento do Prettier, e o `lint:check` do CI
+confere a pasta `docs/`: antes do commit, rode
+`./node_modules/.bin/prettier --write` no arquivo.
 
 O `cpu-profile.sh` recria as réplicas com a flag `--cpu-prof` em
 `LOAD_API_NODE_FLAGS`, que só o `NODE_OPTIONS` da api lê no
