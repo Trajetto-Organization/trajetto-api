@@ -113,17 +113,23 @@ function activityRepositoryContract(harness: () => ActivityHarness): void {
     expect(second.nextCursor).toBeNull();
   });
 
-  it("answers a cursor that is not a row with nothing, never the first page again", async () => {
-    const page = await feed({ cursor: at(99) });
+  // The feed may read on the standby (plano-escala F4-42), and the page
+  // before may have come from the primary through another replica: its
+  // last row may not be on the standby yet. Prisma's `cursor` answered that
+  // with an empty page, which ended the feed without every older row; by
+  // its value, the feed goes on below it.
+  it("goes on below a cursor whose row this server does not have, by its position", async () => {
+    // at(6): the newest row, written on the primary a moment ago.
+    const page = await feed({ cursor: at(6) });
 
-    expect(page.data).toEqual([]);
-    expect(page.hasMore).toBe(false);
+    expect(idsOf(page.data)).toEqual([at(5), at(2)]);
+    expect(page.hasMore).toBe(true);
   });
 
-  it("positions on a cursor outside the reader's scope the way Prisma does", async () => {
-    // at(3) is company B's: Prisma reads the row, keeps what sorts after it
-    // in the reader's scope (at(2), at(1)) and skip: 1 drops at(2).
+  it("positions on a cursor outside the reader's scope by its value, dropping nothing", async () => {
+    // at(3) is company B's: what sorts below it in the reader's scope.
     expect(idsOf((await feed({ cursor: at(3), limit: 10 })).data)).toEqual([
+      at(2),
       at(1),
     ]);
   });

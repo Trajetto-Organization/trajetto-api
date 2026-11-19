@@ -245,4 +245,68 @@ describe("createReadRouter (readDatabase)", () => {
     // own fallback.
     expect(router.replicaDatabase()).toBeNull();
   });
+
+  // An export's batches page with Prisma's cursor, the last row of the
+  // batch before. A batch read on the primary may end on a row the standby
+  // has not replayed, and Prisma answers a missing cursor row with an
+  // empty batch: the export would end there, without the older rows that
+  // sort after it (plano-escala F4-42, the review of wave 17).
+  it("a walk never goes from the primary to the standby, but may go the other way", async () => {
+    const { probe } = scriptedProbe([0, 0, 0, 30_000, 0, 0, 0]);
+    const router = createReadRouter({
+      replicaUrl: () =>
+        "postgresql://trajetto_read:x@standby.example.com:5432/trajetto",
+      replica: () => REPLICA,
+      primaryRead: () => PRIMARY_READ,
+      probe: () => probe,
+    });
+
+    // A process that has just started: the guard is still on the primary.
+    const early = router.readWalk();
+
+    expect(early()).toBe(PRIMARY_READ);
+
+    const guard = router.guard()!;
+
+    guard.stop();
+    await vi.waitFor(() => expect(guard.snapshot().streak).toBe(1));
+    await guard.check();
+    await guard.check();
+    expect(router.readDatabase()).toBe(REPLICA);
+
+    // The guard now vouches for the standby, and a new walk reads there;
+    // the walk that began on the primary stays on it.
+    expect(early()).toBe(PRIMARY_READ);
+
+    const late = router.readWalk();
+
+    expect(late()).toBe(REPLICA);
+    expect(late()).toBe(REPLICA);
+
+    // The standby falls behind: the walk moves to the primary, and stays
+    // there after the guard comes back.
+    await guard.check();
+    expect(late()).toBe(PRIMARY_READ);
+    await guard.check();
+    await guard.check();
+    await guard.check();
+    expect(router.readDatabase()).toBe(REPLICA);
+    expect(late()).toBe(PRIMARY_READ);
+    expect(early()).toBe(PRIMARY_READ);
+  });
+
+  it("a walk without DATABASE_REPLICA_URL is the primary's bulkhead", () => {
+    const probe = vi.fn();
+    const router = createReadRouter({
+      replicaUrl: () => undefined,
+      replica: () => REPLICA,
+      primaryRead: () => PRIMARY_READ,
+      probe,
+    });
+    const walk = router.readWalk();
+
+    expect(walk()).toBe(PRIMARY_READ);
+    expect(walk()).toBe(PRIMARY_READ);
+    expect(probe).not.toHaveBeenCalled();
+  });
 });

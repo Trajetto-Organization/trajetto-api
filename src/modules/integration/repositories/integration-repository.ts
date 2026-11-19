@@ -125,6 +125,14 @@ const routeSelect = {
  * between two rows written in the same millisecond either repeats a document
  * or skips one — and an integration that silently loses a delivery is the
  * worst failure this API can have, because nobody notices for weeks.
+ *
+ * The next page is `id > cursor`, by the value, never Prisma's `cursor`,
+ * which looks the row up and answers an empty page when it is not there.
+ * These lists may read on the standby (plano-escala F4-42), and the page
+ * before may have come from the primary, through another replica: a
+ * standby that has not replayed that row yet would end the walk there,
+ * with every row after it, of any age, left out. By value, the walk goes
+ * on after the row wherever it is (and after a row deleted since).
  */
 function cursorPage<T extends { id: string }>(
   rows: T[],
@@ -351,13 +359,18 @@ class IntegrationRepository implements IIntegrationRepository {
     updated_since,
     status,
   }: IntegrationListProps): Promise<CursorPage<PublicDelivery>> {
-    const rows = await this.read.delivery.findMany({
+    // One server for the page and its stops: the standby may not have the
+    // stops of a delivery the primary just gave.
+    const read = this.read;
+    const rows = await read.delivery.findMany({
       where: {
         businessId,
         ...(status && {
           status: status as Prisma.EnumDeliveryStatusFilter["equals"],
         }),
         ...(updated_since && { updated_at: { gte: new Date(updated_since) } }),
+        // After the cursor by its value (cursorPage says why).
+        ...(cursor && { id: { gt: cursor } }),
       },
 
       select: deliverySelect,
@@ -365,12 +378,11 @@ class IntegrationRepository implements IIntegrationRepository {
 
       // One more than asked, so "is there another page?" costs nothing extra.
       take: limit + 1,
-      ...(cursor && { skip: 1, cursor: { id: cursor } }),
     });
 
     const { page, next_cursor } = cursorPage(rows, limit);
 
-    const data = await withStopRoutes(this.read, page);
+    const data = await withStopRoutes(read, page);
 
     return { data: data.map(toPublicDelivery), next_cursor };
   }
@@ -405,13 +417,13 @@ class IntegrationRepository implements IIntegrationRepository {
           status: status as Prisma.EnumRouteStatusFilter["equals"],
         }),
         ...(updated_since && { updated_at: { gte: new Date(updated_since) } }),
+        ...(cursor && { id: { gt: cursor } }),
       },
 
       select: routeSelect,
       orderBy: { id: "asc" },
 
       take: limit + 1,
-      ...(cursor && { skip: 1, cursor: { id: cursor } }),
     });
 
     const { page, next_cursor } = cursorPage(rows, limit);

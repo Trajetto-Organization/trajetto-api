@@ -32,7 +32,7 @@ import {
 } from "@/shared/time/business-day";
 
 import { compareForOrder } from "@/shared/pagination/in-memory-order";
-import { afterCursor } from "@/shared/in-memory/cursor";
+import { afterPosition } from "@/shared/in-memory/cursor";
 
 import { canonicalStatus, storedStatusesFor } from "../../activity-catalog";
 
@@ -442,14 +442,10 @@ class InMemoryActivityRepository implements IActivityRepository {
       periodDays,
     }).sort(byIdDesc);
 
-    // Prisma positions on the cursor ROW (wherever it is) and skips one; an
-    // unknown cursor used to restart the feed from the top here (index -1 + 1).
-    const window = afterCursor(
-      ordered,
-      this.activities,
-      cursor,
-      byIdDesc,
-    ).slice(0, limit + 1);
+    // By the cursor's value, as the repository: below its id, whether or
+    // not the row is there (an unknown cursor used to restart the feed from
+    // the top here, index -1 + 1).
+    const window = afterPosition(ordered, cursor, byIdDesc).slice(0, limit + 1);
 
     const hasMore = window.length > limit;
     const data = hasMore ? window.slice(0, limit) : window;

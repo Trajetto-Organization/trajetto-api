@@ -266,6 +266,33 @@ function createReadRouter<Client>(parts: ReadRouterParts<Client>) {
 
       return guard.onReplica ? parts.replica() : null;
     },
+    /**
+     * readDatabase() for the batches of one walk over Prisma's cursor (an
+     * export, plano-escala F4-42): each batch asks the guard again, but
+     * once a batch read the primary, the rest of the walk stays there.
+     *
+     * Prisma's cursor names the last row of the batch before. The primary
+     * has every row the standby has (the standby only replays it), so a
+     * walk may go from the standby to the primary; the other way, the
+     * standby may not have replayed that row yet, and Prisma answers a
+     * missing cursor row with an empty batch: the export would end early,
+     * without the rows of any age that come after it. Only for a cursor the
+     * walk produced itself: one that came in a request may be a row the
+     * standby has not replayed, so those lists page by value (the id
+     * keyset of /integration/v1/deliveries and of the activities).
+     */
+    readWalk(): () => Client {
+      let primary = false;
+
+      return () => {
+        const standby = primary ? null : this.replicaDatabase();
+
+        if (standby) return standby;
+        primary = true;
+
+        return parts.primaryRead();
+      };
+    },
     /** The running guard, or null while no read asked for it. */
     guard(): ReplicaGuard | null {
       return guard;

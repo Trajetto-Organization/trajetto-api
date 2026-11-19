@@ -1,4 +1,4 @@
-import database, { readDatabase } from "@/../infra/database";
+import database, { readDatabase, readDatabaseWalk } from "@/../infra/database";
 import { Prisma } from "@prisma/client";
 import { Decimal } from "@prisma/client/runtime/client";
 
@@ -62,6 +62,18 @@ class FineRepository implements IFineRepository {
    */
   private get read(): typeof this.prisma {
     return this.prisma === database ? readDatabase() : this.prisma;
+  }
+
+  /**
+   * The export's batches on the same bulkhead (or standby), one walk per
+   * export (plano-escala F4-42): they page with Prisma's cursor, the last
+   * row of the batch before, and a standby that has not replayed a row
+   * read on the primary would answer an empty batch and end the export
+   * early. So the walk never goes from the primary back to the standby
+   * (readDatabaseWalk).
+   */
+  private readWalk(): () => typeof this.prisma {
+    return this.prisma === database ? readDatabaseWalk() : () => this.prisma;
   }
 
   // `tx` lets the use case create the fine and its outbox event atomically.
@@ -244,12 +256,13 @@ class FineRepository implements IFineRepository {
   }: FineListQuery): AsyncGenerator<FineExportRow> {
     const where = fineListWhere(filters, { withFacets: true, todayStart });
 
+    const read = this.readWalk();
     let cursor: string | undefined = undefined;
 
     while (true) {
       const fines: Array<
         Prisma.FineGetPayload<{ include: typeof FINE_INCLUDE }>
-      > = await this.read.fine.findMany({
+      > = await read().fine.findMany({
         where,
         include: FINE_INCLUDE,
         orderBy: [{ created_at: "desc" }, { id: "desc" }],

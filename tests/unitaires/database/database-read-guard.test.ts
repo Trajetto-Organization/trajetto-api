@@ -156,8 +156,10 @@ function databaseImports(file: string, text: string): string[] {
 
 /**
  * The methods of a file that read through the bulkhead: those whose body
- * names `this.read` (the repositories' handle on it) or databaseRead. The
- * `read` getter, which only hands the handle out, is not a read.
+ * names `this.read` or `this.readWalk` (the repositories' handles on it, the
+ * second one for an export's batches), databaseRead, readDatabase or
+ * readDatabaseWalk. The handles, which only hand the client out, are not
+ * reads.
  */
 function bulkheadMethods(file: string, text: string): string[] {
   const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
@@ -172,9 +174,11 @@ function bulkheadMethods(file: string, text: string): string[] {
       if (
         (ts.isPropertyAccessExpression(child) &&
           child.expression.kind === ts.SyntaxKind.ThisKeyword &&
-          child.name.text === "read") ||
+          (child.name.text === "read" || child.name.text === "readWalk")) ||
         (ts.isIdentifier(child) &&
-          (child.text === "databaseRead" || child.text === "readDatabase"))
+          (child.text === "databaseRead" ||
+            child.text === "readDatabase" ||
+            child.text === "readDatabaseWalk"))
       ) {
         found = true;
 
@@ -193,6 +197,7 @@ function bulkheadMethods(file: string, text: string): string[] {
     if (
       (ts.isMethodDeclaration(node) || ts.isFunctionDeclaration(node)) &&
       node.name &&
+      node.name.getText(source) !== "readWalk" &&
       node.body &&
       readsBulkhead(node.body)
     ) {
@@ -224,10 +229,14 @@ describe("the side pools of infra/database.ts", () => {
     // readDatabase(), which is databaseRead unless a standby the replica
     // guard vouches for is configured; nobody imports databaseRead itself,
     // so no read skips that choice. What may go to the standby is
-    // read-routing-guard.test.ts's.
-    expect(importersOf("readDatabase")).toEqual(
-      Object.keys(READ_ALLOWED).sort(),
-    );
+    // read-routing-guard.test.ts's. An export's batches read through
+    // readDatabaseWalk(), the same choice made once per batch.
+    const routers = new Set([
+      ...importersOf("readDatabase"),
+      ...importersOf("readDatabaseWalk"),
+    ]);
+
+    expect([...routers].sort()).toEqual(Object.keys(READ_ALLOWED).sort());
     expect(importersOf("databaseRead")).toEqual([]);
   });
 

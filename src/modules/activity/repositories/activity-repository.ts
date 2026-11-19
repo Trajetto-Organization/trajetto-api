@@ -445,7 +445,8 @@ class ActivityRepository implements IActivityRepository {
    * and column filters. A feed is different: the audit log is written to
    * constantly, so by the time someone asks for "page 2" everything has
    * shifted down and rows already seen come back as duplicates. A cursor is
-   * immune to that: it asks for what comes *after a row*, not for a position.
+   * immune to that: it asks for what comes *after a row* (after its id, in
+   * the id order), not for an offset.
    */
   async listActivitiesWithCursor({
     currentUserRole,
@@ -466,10 +467,18 @@ class ActivityRepository implements IActivityRepository {
 
     // One row past the page: its existence is the only reliable way to know
     // whether a "load more" button should be there at all.
+    //
+    // The cursor by its value (id < cursor), not Prisma's `cursor`, which
+    // looks the row up and answers nothing when it is not there. Page 1 may
+    // come from the primary and "load more" from the standby (another
+    // replica, plano-escala F4-42), which may not have replayed that row
+    // yet: the feed would end there, with every older row left out. By
+    // value, it goes on below the row, wherever the row is.
     const activities = await this.read.activity.findMany({
-      where: whereCondition,
+      where: cursor
+        ? { AND: [whereCondition, { id: { lt: cursor } }] }
+        : whereCondition,
       take: limit + 1,
-      ...(cursor && { cursor: { id: cursor }, skip: 1 }),
       include: this.includeFor(currentUserRole),
       // uuid v7 ids are time-ordered, so this is creation order with a unique
       // tiebreaker — two activities written in the same millisecond still have

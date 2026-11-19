@@ -4977,7 +4977,19 @@ método que cada um é uma lista, uma exportação, uma contagem ou um resumo,
 que o `readDatabase` só aparece nesses getters, e que nenhum middleware,
 admissão de socket, claim ou worker de fila, idempotência, create ou
 cancelamento da integração (e o replay), coletor de uploads órfãos,
-expurgo de empresa, anonimização nem usecase que escreve chama um deles. Três exportações lentas seguram as 3 conexões do `databaseRead` e
+expurgo de empresa, anonimização nem usecase que escreve chama um deles.
+E como elas paginam: a escolha é a cada leitura, e cada processo (cada
+réplica da API) tem a sua, então a página anterior pode ter vindo do
+primário e a seguinte do standby, que talvez ainda não tenha a última
+linha dela. O `cursor` do Prisma procura essa linha e, sem ela, devolve
+uma página vazia, que encerraria a lista sem todas as linhas depois dela,
+de qualquer idade. Por isso a lista que recebe o cursor de fora (as
+atividades, o `/integration/v1/deliveries` e o `/routes`) pagina pelo
+valor do id (`id < cursor` ou `id > cursor`), e a exportação que pagina
+pelo `cursor` do Prisma lê os lotes por um `readWalk` do repositório (o
+`readDatabaseWalk()`), que pode ir do standby ao primário, nunca de
+volta. A guarda reprova o `cursor` do Prisma num método que lê pelo
+`read`, e um `readWalk` sobre um cursor recebido de fora. Três exportações lentas seguram as 3 conexões do `databaseRead` e
 nenhuma do pool principal (`tests/E2E/pool-pressure.test.ts`); a quarta
 espera a vez entre elas, até o `pool_timeout` da URL, e o pool principal
 segue livre para o resto. Cada statement tem o teto de 10 s do pool: uma

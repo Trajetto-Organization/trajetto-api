@@ -17,11 +17,21 @@ import { describe, expect, it } from "vitest";
  * So the standby gets a closed list of LISTS only: the exports, the
  * MASTER's lists, the activities, and the lists of /integration/v1/deliveries
  * and /routes, each a method of a repository reading through its `read`
- * getter. And these never reach it, directly (readDatabase) or through one
- * of those methods: a middleware, the socket admission, the queue's claims
- * and workers, idempotency, the integration's create and cancel (and their
- * replay), the orphan uploads' collector, a tenant's purge and a person's
- * anonymization, and every *-usecase that writes.
+ * getter (or, for an export's batches, its `readWalk`). And these never
+ * reach it, directly (readDatabase) or through one of those methods: a
+ * middleware, the socket admission, the queue's claims and workers,
+ * idempotency, the integration's create and cancel (and their replay), the
+ * orphan uploads' collector, a tenant's purge and a person's anonymization,
+ * and every *-usecase that writes.
+ *
+ * And a list there never pages with Prisma's `cursor` on a server chosen
+ * per call (the review of wave 17): Prisma looks the cursor's row up and
+ * answers an empty page when it is not there, and the page before may have
+ * come from the primary, with a row the standby has not replayed yet. The
+ * list would end there, without every row after it, of any age. A cursor
+ * that came in a request pages by value (`id > cursor`); an export's own
+ * batches go through one walk (readDatabaseWalk), which never goes from
+ * the primary back to the standby.
  *
  * Read from every .ts under src/ by the TypeScript parser where it names a
  * method, and by its text where it names a call.
@@ -110,6 +120,13 @@ const WRITES =
 /** Who may name readDatabase at all: the router and the lists' getters. */
 const ROUTER = "infra/database.ts";
 
+/**
+ * The router's functions, each named only inside its handle in a listed
+ * repository: the `read` getter (one choice per call) and the `readWalk`
+ * method (one walk per export).
+ */
+const HANDLES = { read: "readDatabase", readWalk: "readDatabaseWalk" } as const;
+
 interface SourceFile {
   path: string;
   text: string;
@@ -141,75 +158,191 @@ function codeOf(text: string): string {
   return text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
 }
 
-/**
- * The methods of a file that read through readDatabase: those whose body
- * names `this.read` (the repositories' handle on it) or readDatabase. The
- * `read` getter, which only hands the handle out, is not a read.
- */
-function replicaMethods(file: string, text: string): string[] {
-  const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
-  const methods = new Set<string>();
+/** Whether a node names one of `handles` on `this`, or one of `functions`. */
+function mentions(
+  node: ts.Node,
+  handles: readonly string[],
+  functions: readonly string[],
+): boolean {
+  let found = false;
 
-  const reads = (node: ts.Node): boolean => {
-    let found = false;
+  const visit = (child: ts.Node) => {
+    if (found) return;
+    if (
+      (ts.isPropertyAccessExpression(child) &&
+        child.expression.kind === ts.SyntaxKind.ThisKeyword &&
+        handles.includes(child.name.text)) ||
+      (ts.isIdentifier(child) && functions.includes(child.text))
+    ) {
+      found = true;
 
-    const visit = (child: ts.Node) => {
-      if (found) return;
-      if (
-        (ts.isPropertyAccessExpression(child) &&
-          child.expression.kind === ts.SyntaxKind.ThisKeyword &&
-          child.name.text === "read") ||
-        (ts.isIdentifier(child) && child.text === "readDatabase")
-      ) {
-        found = true;
-
-        return;
-      }
-      ts.forEachChild(child, visit);
-    };
-
-    visit(node);
-
-    return found;
+      return;
+    }
+    ts.forEachChild(child, visit);
   };
+
+  visit(node);
+
+  return found;
+}
+
+interface Method {
+  name: string;
+  node: ts.FunctionLikeDeclaration;
+  body: ts.Node;
+}
+
+/** The methods (and functions) of a file, by name, with their bodies. */
+function methodsOf(file: string, text: string): Method[] {
+  const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+  const found: Method[] = [];
 
   const visit = (node: ts.Node) => {
     if (
       (ts.isMethodDeclaration(node) || ts.isFunctionDeclaration(node)) &&
       node.name &&
-      node.body &&
-      reads(node.body)
+      node.body
     ) {
-      methods.add(node.name.getText(source));
+      found.push({ name: node.name.getText(source), node, body: node.body });
     }
     ts.forEachChild(node, visit);
   };
 
   visit(source);
 
+  return found;
+}
+
+/**
+ * The methods of a file that read through readDatabase: those whose body
+ * names `this.read` or `this.readWalk` (the repositories' handles on it),
+ * readDatabase or readDatabaseWalk. The handles themselves, which only hand
+ * the client out, are not reads.
+ */
+function replicaMethods(file: string, text: string): string[] {
+  const methods = new Set<string>();
+
+  for (const { name, body } of methodsOf(file, text)) {
+    if (name in HANDLES) continue;
+    if (mentions(body, Object.keys(HANDLES), Object.values(HANDLES))) {
+      methods.add(name);
+    }
+  }
+
   return [...methods].sort();
 }
 
-/** Whether a file's `read` getter (and nothing else of it) names readDatabase. */
+/**
+ * Whether a file names readDatabase outside its `read` getter, or
+ * readDatabaseWalk outside its `readWalk` method.
+ */
 function readDatabaseOutsideGetter(file: string, text: string): boolean {
   const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+  const routerNames: readonly string[] = Object.values(HANDLES);
   let outside = false;
 
-  const visit = (node: ts.Node, inGetter: boolean) => {
-    const getter =
-      ts.isGetAccessorDeclaration(node) && node.name.getText(source) === "read";
-
-    if (ts.isIdentifier(node) && node.text === "readDatabase") {
-      const inImport = ts.findAncestor(node, ts.isImportDeclaration);
-
-      if (!inGetter && !inImport) outside = true;
+  const handleOf = (node: ts.Node): keyof typeof HANDLES | null => {
+    if (
+      ts.isGetAccessorDeclaration(node) &&
+      node.name.getText(source) === "read"
+    ) {
+      return "read";
     }
-    ts.forEachChild(node, (child) => visit(child, inGetter || getter));
+    if (
+      ts.isMethodDeclaration(node) &&
+      node.name.getText(source) === "readWalk"
+    ) {
+      return "readWalk";
+    }
+
+    return null;
   };
 
-  visit(source, false);
+  const visit = (node: ts.Node, inHandle: keyof typeof HANDLES | null) => {
+    const handle = handleOf(node) ?? inHandle;
+
+    if (ts.isIdentifier(node) && routerNames.includes(node.text)) {
+      const inImport = ts.findAncestor(node, ts.isImportDeclaration);
+      const own = handle ? HANDLES[handle] : null;
+
+      if (!inImport && own !== node.text) outside = true;
+    }
+    ts.forEachChild(node, (child) => visit(child, handle));
+  };
+
+  visit(source, null);
 
   return outside;
+}
+
+/** Whether a node holds Prisma's `cursor: { ... }` (an object literal). */
+function prismaCursor(node: ts.Node): boolean {
+  let found = false;
+
+  const visit = (child: ts.Node) => {
+    if (found) return;
+    if (
+      ts.isPropertyAssignment(child) &&
+      ts.isIdentifier(child.name) &&
+      child.name.text === "cursor" &&
+      ts.isObjectLiteralExpression(child.initializer)
+    ) {
+      found = true;
+
+      return;
+    }
+    ts.forEachChild(child, visit);
+  };
+
+  visit(node);
+
+  return found;
+}
+
+/** Whether a function takes something named `cursor`, however bound. */
+function takesCursor(node: ts.FunctionLikeDeclaration): boolean {
+  const bound = (name: ts.BindingName): boolean =>
+    ts.isIdentifier(name)
+      ? name.text === "cursor"
+      : name.elements.some(
+          (element) =>
+            !ts.isOmittedExpression(element) &&
+            ((element.propertyName &&
+              ts.isIdentifier(element.propertyName) &&
+              element.propertyName.text === "cursor") ||
+              bound(element.name)),
+        );
+
+  return node.parameters.some((parameter) => bound(parameter.name));
+}
+
+/**
+ * The paging rules of the standby's lists, one line per problem: Prisma's
+ * cursor only inside a walk (never on `this.read`, chosen per call), and a
+ * walk never over a cursor that came in from outside.
+ */
+function pagingProblems(file: string, text: string): string[] {
+  const problems: string[] = [];
+
+  for (const { name, node, body } of methodsOf(file, text)) {
+    if (name in HANDLES) continue;
+
+    const perCall = mentions(body, ["read"], [HANDLES.read]);
+    const walk = mentions(body, ["readWalk"], [HANDLES.readWalk]);
+
+    if (perCall && prismaCursor(body)) {
+      problems.push(
+        `${file}#${name}: pagina com o cursor do Prisma numa leitura escolhida a cada chamada`,
+      );
+    }
+    if (walk && takesCursor(node)) {
+      problems.push(
+        `${file}#${name}: walk sobre um cursor que veio de fora (pagine pelo valor)`,
+      );
+    }
+  }
+
+  return problems;
 }
 
 /**
@@ -294,7 +427,9 @@ function routingProblems(tree: SourceFile[]): string[] {
 
   for (const { path, text } of tree) {
     const code = codeOf(text);
-    const names = importsReadDatabase(path, text);
+    const names =
+      importsReadDatabase(path, text) ||
+      importsReadDatabase(path, text, HANDLES.readWalk);
     const listed = path in REPLICA_LISTS;
 
     // readDatabase itself: only in the lists' getters.
@@ -304,6 +439,8 @@ function routingProblems(tree: SourceFile[]): string[] {
     if (listed && readDatabaseOutsideGetter(path, text)) {
       problems.push(`${path}: usa readDatabase fora do getter read`);
     }
+    // And how its lists page.
+    if (listed) problems.push(...pagingProblems(path, text));
 
     // replicaDatabase: the events' commit walk alone, behind its flag.
     const events = importsReadDatabase(path, text, "replicaDatabase");
@@ -470,17 +607,100 @@ export const key = () => replicaDatabase();
     ]);
   });
 
+  // The review of wave 17: page 1 of a list from the primary, "load more"
+  // on the standby, which has not replayed the cursor's row yet, and
+  // Prisma's empty answer ends the list there.
+  it("fails a list of the standby that pages with Prisma's cursor on a read chosen per call", () => {
+    const repository = at(
+      "src/modules/activity/repositories/activity-repository.ts",
+    );
+    // Line ends as on disk: a Windows checkout has CRLF.
+    const text = repository.text.replace(/\r\n/g, "\n");
+    const planted = {
+      path: repository.path,
+      text: text.replace(
+        "where: cursor\n        ? { AND: [whereCondition, { id: { lt: cursor } }] }\n        : whereCondition,",
+        "where: whereCondition,\n      ...(cursor && { cursor: { id: cursor }, skip: 1 }),",
+      ),
+    };
+
+    expect(planted.text).not.toBe(text);
+    expect(routingProblems([repository])).toEqual([]);
+    expect(routingProblems([planted])).toEqual([
+      `${repository.path}#listActivitiesWithCursor: pagina com o cursor do Prisma numa leitura escolhida a cada chamada`,
+    ]);
+  });
+
+  it("keeps Prisma's cursor to an export's own walk, never one over a cursor from outside", () => {
+    const repository = at(
+      "src/modules/driver/repositories/driver-repository.ts",
+    );
+    // The export back on `this.read`, chosen again for every batch.
+    const perBatch = {
+      path: repository.path,
+      text: repository.text.replace(
+        "await read().driver.findMany({",
+        "await this.read.driver.findMany({",
+      ),
+    };
+    const fromOutside = {
+      path: "src/modules/sample/repositories/sample-repository.ts",
+      text: `class SampleRepository {
+  private readWalk() { return readDatabaseWalk(); }
+  async listThings({ cursor }: { cursor?: string }) {
+    const read = this.readWalk();
+    return read().thing.findMany({ ...(cursor && { cursor: { id: cursor }, skip: 1 }) });
+  }
+}
+`,
+    };
+
+    expect(perBatch.text).not.toBe(repository.text);
+    expect(routingProblems([repository])).toEqual([]);
+    expect(routingProblems([perBatch])).toEqual([
+      `${repository.path}#streamDriversForExport: pagina com o cursor do Prisma numa leitura escolhida a cada chamada`,
+    ]);
+    expect(pagingProblems(fromOutside.path, fromOutside.text)).toEqual([
+      `${fromOutside.path}#listThings: walk sobre um cursor que veio de fora (pagine pelo valor)`,
+    ]);
+  });
+
+  it("fails a readDatabaseWalk outside the walk's handle, and an import of it outside the list", () => {
+    const repository = at("src/modules/fine/repositories/fine-repository.ts");
+    const bypass = {
+      path: repository.path,
+      text: `${repository.text}\nconst direct = () => readDatabaseWalk()().fine.findMany();\n`,
+    };
+    const elsewhere = {
+      path: "src/modules/middlewares/ensure-api-key.ts",
+      text: `import { readDatabaseWalk } from "@/../infra/database";
+export const key = () => readDatabaseWalk()();
+`,
+    };
+
+    expect(routingProblems([bypass, elsewhere])).toEqual([
+      `${repository.path}: usa readDatabase fora do getter read`,
+      `${elsewhere.path}: usa readDatabase fora da lista fechada`,
+      `${elsewhere.path}: readDatabase em middleware`,
+    ]);
+  });
+
   it("reads the methods it is meant to find", () => {
     const repository = `
       class Sample {
         constructor(private prisma = database) {}
         private get read() { return this.prisma === database ? readDatabase() : this.prisma; }
+        private readWalk() { return this.prisma === database ? readDatabaseWalk() : () => this.prisma; }
         async listThings() { return this.read.thing.findMany(); }
+        async *streamThings() { const read = this.readWalk(); yield read().thing.findMany(); }
         async findThing() { return this.prisma.thing.findFirst(); }
       }
     `;
 
-    expect(replicaMethods("sample.ts", repository)).toEqual(["listThings"]);
+    expect(replicaMethods("sample.ts", repository)).toEqual([
+      "listThings",
+      "streamThings",
+    ]);
     expect(readDatabaseOutsideGetter("sample.ts", repository)).toBe(false);
   });
 });

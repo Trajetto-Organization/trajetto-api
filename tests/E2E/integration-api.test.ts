@@ -361,6 +361,52 @@ describe("paging by cursor", () => {
     expect(seen.length).toBeGreaterThanOrEqual(8);
   }, 60_000);
 
+  // The lists may read on the standby (plano-escala F4-42), and the page
+  // before may have come from the primary through another replica: its
+  // last row may not be on this server yet. Prisma's `cursor` answered that
+  // with an empty page and a null next_cursor, ending the walk without
+  // every row after it, of any age. By its value, the walk goes on.
+  it("goes on after a cursor whose row this server does not have", async () => {
+    // Deliveries of its own, apart from the file's fixtures by updated_since.
+    const since = new Date().toISOString();
+
+    await prisma.delivery.createMany({
+      data: Array.from({ length: 5 }, (_, index) => ({
+        recipient_name: `Réplica ${index}`,
+        code: `REP-${index}`,
+        city: "São Paulo",
+        uf: "SP",
+        street: "Rua",
+        businessId: CARRIER,
+        shipperId: SHIPPER,
+      })),
+    });
+
+    const list = `/deliveries?updated_since=${encodeURIComponent(since)}`;
+    const all = (await call(`${list}&limit=200`, readKey)).json()
+      .data as Array<{ id: string }>;
+
+    expect(all).toHaveLength(5);
+
+    const first = (await call(`${list}&limit=2`, readKey)).json();
+    const cursor = first.next_cursor as string;
+
+    expect(cursor).toBe(all[1].id);
+
+    // The cursor's row, gone from what this server sees.
+    await prisma.delivery.delete({ where: { id: cursor } });
+
+    const second = (
+      await call(`${list}&limit=2&cursor=${cursor}`, readKey)
+    ).json();
+
+    expect(second.data.map((row: { id: string }) => row.id)).toEqual([
+      all[2].id,
+      all[3].id,
+    ]);
+    expect(second.next_cursor).toBe(all[3].id);
+  });
+
   it("says the walk is over with a null cursor", async () => {
     const response = await call("/deliveries?limit=200", readKey);
 

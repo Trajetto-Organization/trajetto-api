@@ -13,7 +13,7 @@ import {
   CursorPaginatedDriver,
 } from "../dtos/driver-dto";
 
-import database, { readDatabase } from "@/../infra/database";
+import database, { readDatabase, readDatabaseWalk } from "@/../infra/database";
 
 import { buildSearchOr } from "@/shared/pagination/search-or";
 import { resolveOrderBy } from "@/shared/pagination/list-query";
@@ -114,6 +114,18 @@ class DriverRepository implements IDriverRepository {
    */
   private get read(): typeof this.prisma {
     return this.prisma === database ? readDatabase() : this.prisma;
+  }
+
+  /**
+   * The export's batches on the same bulkhead (or standby), one walk per
+   * export (plano-escala F4-42): they page with Prisma's cursor, the last
+   * row of the batch before, and a standby that has not replayed a row
+   * read on the primary would answer an empty batch and end the export
+   * early. So the walk never goes from the primary back to the standby
+   * (readDatabaseWalk).
+   */
+  private readWalk(): () => typeof this.prisma {
+    return this.prisma === database ? readDatabaseWalk() : () => this.prisma;
   }
 
   async createDriver(driverData: CreateDriverProps): Promise<Driver> {
@@ -334,13 +346,14 @@ class DriverRepository implements IDriverRepository {
     const orderBy = resolveOrderBy(DRIVER_SORT, { sort, order });
 
     const batchSize = 1000;
+    const read = this.readWalk();
     let cursor: string | undefined = undefined;
 
     while (true) {
       // The list's own order: the id tiebreaker keeps the cursor stable.
       const drivers: Array<
         Driver & { branch: { corporate_reason: string } | null }
-      > = await this.read.driver.findMany({
+      > = await read().driver.findMany({
         where,
         include: { branch: { select: { corporate_reason: true } } },
         orderBy,

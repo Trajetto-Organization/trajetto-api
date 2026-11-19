@@ -154,6 +154,30 @@ describe("activity cursor feed", () => {
     );
   });
 
+  // The feed may read on the standby (plano-escala F4-42), and "load more"
+  // may land on another replica than page 1: a cursor row the primary gave
+  // a moment ago may not be on the standby yet. The feed goes on below it,
+  // by its value; Prisma's `cursor` answered an empty page there, and the
+  // feed ended without every older row.
+  it("goes on below a cursor whose row is not there", async () => {
+    const first = await feed();
+    const cursor = first.nextCursor!;
+
+    // The cursor's row, gone from this server's view.
+    repository.activities = repository.activities.filter(
+      (row) => row.id !== cursor,
+    );
+
+    const second = await feed(cursor);
+
+    expect(second.data.map((row) => row.description)).toEqual([
+      "Atividade 6",
+      "Atividade 5",
+      "Atividade 4",
+    ]);
+    expect(second.hasMore).toBe(true);
+  });
+
   it("reports hasMore only while another row exists", async () => {
     const page = await feed(undefined, 10);
 

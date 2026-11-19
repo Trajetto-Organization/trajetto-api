@@ -161,6 +161,13 @@ Seis peças, cada uma com um papel só, cada uma desligada até o dono ligar.
   `tests/unitaires/database/read-routing-guard.test.ts` confere método a
   método, e recusa o `readDatabase()` em middleware, admissão de socket,
   claim ou worker de fila, idempotência e usecase que escreve.
+- **Uma lista no standby pagina pelo valor do id**, nunca pelo `cursor`
+  do Prisma: a página anterior pode ter vindo do primário, por outra
+  réplica, e o standby que ainda não tem a linha do cursor devolveria uma
+  página vazia, encerrando a lista sem as linhas de qualquer idade depois
+  dela. A exportação, que gera o próprio cursor, lê os lotes por um walk
+  (`readDatabaseWalk()`) que pode ir do standby ao primário, nunca de
+  volta.
 - O feed de eventos só vai ao standby com
   `INTEGRATION_EVENTS_READ_REPLICA=true` e a ordem de commit, lendo a
   página inteira lá; sem o aval do replica-guard, ele lê onde lê hoje.

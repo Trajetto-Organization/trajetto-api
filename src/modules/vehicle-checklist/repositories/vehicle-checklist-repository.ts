@@ -1,4 +1,4 @@
-import database, { readDatabase } from "@/../infra/database";
+import database, { readDatabase, readDatabaseWalk } from "@/../infra/database";
 import { Prisma } from "@prisma/client";
 import {
   IVehicleChecklistRepository,
@@ -64,6 +64,18 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
    */
   private get read(): typeof this.prisma {
     return this.prisma === database ? readDatabase() : this.prisma;
+  }
+
+  /**
+   * The export's batches on the same bulkhead (or standby), one walk per
+   * export (plano-escala F4-42): they page with Prisma's cursor, the last
+   * row of the batch before, and a standby that has not replayed a row
+   * read on the primary would answer an empty batch and end the export
+   * early. So the walk never goes from the primary back to the standby
+   * (readDatabaseWalk).
+   */
+  private readWalk(): () => typeof this.prisma {
+    return this.prisma === database ? readDatabaseWalk() : () => this.prisma;
   }
 
   async createVehicleChecklist(
@@ -545,6 +557,7 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
     const whereCondition = checklistListWhere(filters);
 
     const batchSize = 1000;
+    const read = this.readWalk();
     let cursor: string | undefined = undefined;
 
     while (true) {
@@ -560,7 +573,7 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
           } | null;
           driver: { name: string; cnh: string } | null;
         }
-      > = await this.read.vehicleChecklist.findMany({
+      > = await read().vehicleChecklist.findMany({
         where: whereCondition,
         include: {
           branch: {

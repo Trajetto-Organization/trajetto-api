@@ -251,6 +251,19 @@ function readDatabase(): PrismaClient {
 }
 
 /**
+ * readDatabase() for the batches of one export that pages with Prisma's
+ * cursor (plano-escala F4-42): call it once per export and the returned
+ * function once per batch. The walk may go from the standby to the
+ * primary, never back: a batch read on the primary may end on a row the
+ * standby has not replayed, and Prisma answers that cursor with an empty
+ * batch, which would end the export early. A cursor that came in a request
+ * pages by value instead (the lists of the same closed list).
+ */
+function readDatabaseWalk(): () => PrismaClient {
+  return readRouter.readWalk();
+}
+
+/**
  * The standby while the replica guard vouches for it, else null
  * (plano-escala F4-43): /integration/v1/events, behind
  * INTEGRATION_EVENTS_READ_REPLICA, falls back to the application's pool,
@@ -276,6 +289,7 @@ export {
   databaseRead,
   databaseReadPool,
   readDatabase,
+  readDatabaseWalk,
   replicaDatabase,
   replicaGuard,
   setReplicaGuardLog,
