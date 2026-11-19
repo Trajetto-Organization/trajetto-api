@@ -5022,6 +5022,35 @@ que falta). Provas: `tests/unitaires/http/database-error-map.test.ts` e
 `tests/E2E/lock-timeout-mapping.test.ts` (uma disputa por chave de advisory
 lock, pela rota de verdade).
 
+**As recusas do PgBouncer também viram 503** (plano de escala, F4-32). O
+PgBouncer responde tudo o que ele mesmo diz com o SQLSTATE 08P01 (violação
+de protocolo), em FATAL, e fecha o cliente. O código sozinho não prova
+nada: uma violação de protocolo de verdade ou uma URL que ele recusa
+(`unsupported startup parameter`) também chegam assim, e continuam 500. Por
+isso o mapa confia numa lista fechada das palavras exatas do PgBouncer
+1.26, sempre num erro tipado:
+
+- `query_wait_timeout` (todas as conexões de servidor do pool ficaram
+  ocupadas além do `query_wait_timeout`, 5 s na imagem; o statement nunca
+  chegou ao Postgres) e `no more connections allowed (max_client_conn)`
+  (o teto de clientes do PgBouncer, no login) viram `SERVICE_BUSY`, com
+  `retry-after: 2`. O log é `warn` para o primeiro, que é carga, e `error`
+  para o segundo: milhares de clientes é vazamento ou orçamento errado.
+- `server login has been failing, … (server_login_retry)` (o PgBouncer não
+  consegue entrar no Postgres: reinício, failover), `server conn crashed?`
+  (a conexão de servidor morreu no meio do statement, que pode ter rodado)
+  e `pooler is shutting down` (a tarefa antiga de um rolling recusando um
+  login) são o banco indo embora: `SERVICE_UNAVAILABLE`, com
+  `retry-after: 5`, como uma queda com a conexão direta.
+
+A lista fica em `src/shared/errors/database-error-map.ts`, e o
+`database-unavailable.ts` lê dela as três de queda. Provas:
+`tests/unitaires/http/database-error-map.test.ts`,
+`tests/unitaires/http/database-unavailable.test.ts` e
+`tests/E2E/infra/pgbouncer-busy-errors.test.ts` (o pool do PgBouncer de
+verdade cheio; o cliente da API recebe o `query_wait_timeout` numa query
+crua, numa query de modelo e numa transação interativa).
+
 **Conflito de serialização no COMMIT chega sem classe do Prisma**: quando o
 Postgres recusa o COMMIT de uma `$transaction` interativa com 40001 — o caso
 comum do isolamento serializável entre duas transações que só leem e inserem,

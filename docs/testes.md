@@ -300,7 +300,10 @@ assume do PgBouncer e do standby, contra os de verdade:
 `pgbouncer-transaction-mode.test.ts` (o pool por transação, o login SCRAM
 pelo `auth_query` com os tetos do próprio role, o dono recusado, um `SET` de
 sessão que chega ao próximo cliente e o `SET LOCAL` que não chega, o cliente
-da API com transação interativa) e `streaming-standby.test.ts` (o standby em
+da API com transação interativa), `pgbouncer-busy-errors.test.ts` (o pool
+cheio de verdade: o `query_wait_timeout` que o cliente da API recebe numa
+query crua, numa de modelo e numa transação interativa vira 503
+`SERVICE_BUSY`, F4-32) e `streaming-standby.test.ts` (o standby em
 recuperação, recusando escrita e mostrando um commit do primário). As fases
 `shared` e de réplicas deixam esses arquivos de fora (`INFRA_E2E_GLOB`, em
 `tests/E2E/support/replica-files.ts`).

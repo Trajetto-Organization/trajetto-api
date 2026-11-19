@@ -906,16 +906,18 @@ app.setErrorHandler((thrown, request, reply) => {
     );
   } else if (databaseBusy) {
     // A message of its own, so an alert on bugs does not page for
-    // contention. A lock wait that ran out is load: warn. A statement that
-    // ran into its ceiling is still worth a look (a plan gone bad, a
-    // missing index), so that one stays at error level.
+    // contention. A lock wait that ran out, or a wait for one of
+    // PgBouncer's server connections, is load: warn. A statement that ran
+    // into its ceiling is still worth a look (a plan gone bad, a missing
+    // index), and so is PgBouncer out of client slots: error level
+    // (database-error-map.ts decides).
     const busyContext = {
       ...logContext,
       sqlState: databaseBusy.sqlState,
       reason: databaseBusy.reason,
     };
 
-    if (databaseBusy.reason === "statement_timeout") {
+    if (databaseBusy.logLevel === "error") {
       request.log.error(busyContext, "Database busy while processing request");
     } else {
       request.log.warn(busyContext, "Database busy while processing request");

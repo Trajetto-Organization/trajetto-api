@@ -208,6 +208,25 @@ const infrastructure: Record<string, () => Error> = {
     ),
   "v7-commit-connection-failure": () =>
     commitFailure(postgresCause("08006", "connection failure")),
+  // PgBouncer (plano-escala F4-32), always SQLSTATE 08P01 at FATAL, told
+  // apart by its exact words. It cannot log in to Postgres (a restart, a
+  // failover) and says so for server_login_retry:
+  "pgbouncer-server-login-retry": () =>
+    driverFailure(
+      "P2039",
+      postgresCause(
+        "08P01",
+        "server login has been failing, cached error: the database system is starting up (server_login_retry)",
+      ),
+    ),
+  // The server connection under the statement died (Postgres gone):
+  "pgbouncer-server-conn-crashed": () =>
+    driverFailure("P2010", postgresCause("08P01", "server conn crashed?")),
+  "pgbouncer-commit-server-conn-crashed": () =>
+    commitFailure(postgresCause("08P01", "server conn crashed?")),
+  // The old task of a rolling of PgBouncer, refusing a new login:
+  "pgbouncer-shutting-down": () =>
+    driverFailure("P2010", postgresCause("08P01", "pooler is shutting down")),
 };
 
 const notInfrastructure: Record<string, () => Error> = {
@@ -296,6 +315,21 @@ const notInfrastructure: Record<string, () => Error> = {
     Object.assign(new Error("ConnectionClosed"), {
       cause: { kind: "ConnectionClosed" },
     }),
+  // PgBouncer busy, not gone: SERVICE_BUSY's (database-error-map.ts).
+  "pgbouncer-query-wait-timeout": () =>
+    driverFailure("P2010", postgresCause("08P01", "query_wait_timeout")),
+  // Any other 08P01: a real protocol error, or a URL PgBouncer refuses.
+  "pgbouncer-other-refusal": () =>
+    driverFailure(
+      "P2010",
+      postgresCause(
+        "08P01",
+        "unsupported startup parameter in options: statement_timeout",
+      ),
+    ),
+  // PgBouncer's words on something nobody typed: untrusted.
+  "pgbouncer-words-on-a-plain-error": () =>
+    Object.assign(new Error("server conn crashed?"), { code: "08P01" }),
 };
 
 describe("isDatabaseUnavailable", () => {

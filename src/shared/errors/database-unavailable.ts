@@ -4,6 +4,7 @@ import {
   DatabaseUnavailableError,
   UNMAPPED_SOCKET_ERRNOS,
 } from "@/shared/database/pg-driver";
+import { pgBouncerRefusal } from "@/shared/errors/database-error-map";
 import {
   driverAdapterCauseOf,
   isDriverAdapterError,
@@ -115,7 +116,14 @@ function isAdapterVerdictWithoutAnswer(error: unknown): boolean {
 
   const state = sqlStateOf(error);
 
-  return state !== undefined && UNAVAILABLE_SQLSTATES.has(state);
+  if (state !== undefined && UNAVAILABLE_SQLSTATES.has(state)) return true;
+
+  // PgBouncer's 08P01 for the database (or the pooler) going away: it
+  // cannot log in to Postgres, the server connection died under the
+  // statement, or the old task of a rolling refuses a login (plano-escala
+  // F4-32). A closed list of its exact words, kept with the busy ones in
+  // database-error-map.ts; any other 08P01 is no outage.
+  return pgBouncerRefusal(error)?.answer === "outage";
 }
 
 /** P2010/P2039 whose driver-adapter cause is the database going away. */

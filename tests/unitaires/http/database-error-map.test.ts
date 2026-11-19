@@ -62,6 +62,28 @@ const prismaFailure = (
 const LOCK = "canceling statement due to lock timeout";
 const STATEMENT = "canceling statement due to statement timeout";
 
+/**
+ * PgBouncer's own refusals (plano-escala F4-32): every one is SQLSTATE
+ * 08P01, the code it uses for all it says, so only its exact words tell a
+ * full pool from a real protocol violation. Sent at FATAL: PgBouncer
+ * closes the client after it. The real ones, through the real PgBouncer,
+ * are in tests/E2E/infra/pgbouncer-busy-errors.test.ts.
+ */
+const pgBouncerCause = (message: string) => ({
+  ...postgresCause("08P01", message),
+  severity: "FATAL",
+});
+const QUERY_WAIT = "query_wait_timeout";
+const MAX_CLIENT_CONN = "no more connections allowed (max_client_conn)";
+
+/** The SQLSTATE and the log level each reason answers with. */
+const EXPECTED: Record<string, { sqlState: string; logLevel: string }> = {
+  lock_timeout: { sqlState: "55P03", logLevel: "warn" },
+  statement_timeout: { sqlState: "57014", logLevel: "error" },
+  pgbouncer_query_wait_timeout: { sqlState: "08P01", logLevel: "warn" },
+  pgbouncer_max_client_conn: { sqlState: "08P01", logLevel: "error" },
+};
+
 const busy: Record<string, [() => unknown, string]> = {
   // pg_advisory_xact_lock through $executeRaw: every advisory key site.
   "an advisory lock wait (P2010, 55P03)": [
@@ -96,6 +118,26 @@ const busy: Record<string, [() => unknown, string]> = {
     () => adapterError(postgresCause("57014", STATEMENT)),
     "statement_timeout",
   ],
+  // Every server connection of the pool busy past PgBouncer's
+  // query_wait_timeout: the statement never reached Postgres.
+  "PgBouncer's query_wait_timeout on a raw query (P2010, 08P01)": [
+    () => prismaFailure("P2010", pgBouncerCause(QUERY_WAIT)),
+    "pgbouncer_query_wait_timeout",
+  ],
+  "PgBouncer's query_wait_timeout on a model query (P2039, 08P01)": [
+    () => prismaFailure("P2039", pgBouncerCause(QUERY_WAIT)),
+    "pgbouncer_query_wait_timeout",
+  ],
+  "PgBouncer's query_wait_timeout at an interactive transaction (bare adapter error)":
+    [
+      () => adapterError(pgBouncerCause(QUERY_WAIT)),
+      "pgbouncer_query_wait_timeout",
+    ],
+  // PgBouncer's own ceiling of client connections, at the login.
+  "PgBouncer's max_client_conn (P2039, 08P01)": [
+    () => prismaFailure("P2039", pgBouncerCause(MAX_CLIENT_CONN)),
+    "pgbouncer_max_client_conn",
+  ],
 };
 
 const notBusy: Record<string, () => unknown> = {
@@ -111,6 +153,28 @@ const notBusy: Record<string, () => unknown> = {
   // The database going away is SERVICE_UNAVAILABLE's, not this map's.
   "a terminated backend": () =>
     prismaFailure("P2010", postgresCause("57P01", "terminating connection")),
+  // PgBouncer's 08P01 that are an outage (database-unavailable.ts).
+  "PgBouncer's server login failing": () =>
+    prismaFailure(
+      "P2039",
+      pgBouncerCause(
+        "server login has been failing, cached error: the database system is starting up (server_login_retry)",
+      ),
+    ),
+  // Any other 08P01 is a real protocol error, or a URL PgBouncer refuses:
+  // a bug to see, a 500.
+  "another PgBouncer refusal (08P01)": () =>
+    prismaFailure(
+      "P2010",
+      pgBouncerCause(
+        "unsupported startup parameter in options: statement_timeout",
+      ),
+    ),
+  "a 08P01 whose words only start like PgBouncer's": () =>
+    prismaFailure("P2010", pgBouncerCause("query_wait_timeout exceeded")),
+  // PgBouncer's words on something nobody typed: untrusted.
+  "PgBouncer's words on a plain Error": () =>
+    Object.assign(new Error(QUERY_WAIT), { code: "08P01" }),
   // The SQLSTATE on something that is neither Prisma's nor the adapter's.
   "a plain Error with the code": () =>
     Object.assign(new Error(LOCK), { code: "55P03" }),
@@ -132,7 +196,7 @@ describe("databaseBusyAnswer", () => {
         message: "O sistema está ocupado; tente de novo em instantes.",
         retryAfterSeconds: 2,
         reason,
-        sqlState: reason === "lock_timeout" ? "55P03" : "57014",
+        ...EXPECTED[reason],
       });
     });
   }
@@ -198,8 +262,10 @@ describe("the global error handler", () => {
         message: SERVICE_BUSY_MESSAGE,
         requestId: response.headers["x-request-id"],
       });
-      // Nothing of Postgres' or Prisma's words reaches the body.
-      expect(response.body).not.toMatch(/55P03|57014|P20|canceling/i);
+      // Nothing of Postgres', PgBouncer's or Prisma's words reaches the body.
+      expect(response.body).not.toMatch(
+        /55P03|57014|08P01|P20|canceling|query_wait|max_client/i,
+      );
     });
   }
 
@@ -216,6 +282,27 @@ describe("the global error handler", () => {
 
     expect(response.statusCode).toBe(503);
     expect(response.json().code).toBe("SERVICE_UNAVAILABLE");
+  });
+
+  it("answers SERVICE_UNAVAILABLE for PgBouncer failing to log in to Postgres", async () => {
+    const response = await call("PgBouncer's server login failing");
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json().code).toBe("SERVICE_UNAVAILABLE");
+    expect(response.headers["retry-after"]).toBe("5");
+  });
+
+  it("still answers 500 for any other refusal of PgBouncer", async () => {
+    for (const name of [
+      "another PgBouncer refusal (08P01)",
+      "a 08P01 whose words only start like PgBouncer's",
+      "PgBouncer's words on a plain Error",
+    ]) {
+      const response = await call(name);
+
+      expect(response.statusCode, name).toBe(500);
+      expect(response.headers["retry-after"], name).toBeUndefined();
+    }
   });
 
   it("still answers 500 for the SQLSTATE on an untyped error", async () => {
