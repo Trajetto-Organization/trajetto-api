@@ -106,7 +106,9 @@ describe("the stats login of the real PgBouncer", () => {
       false,
     );
     expect(metrics!.totals.server_connections).toBeGreaterThanOrEqual(1);
-    expect(metrics!.totals.server_usage_database).not.toBeNull();
+    // The budget is the real pool's: the readiness alias, full with its 2
+    // on a quiet minute, never pages the saturation alert.
+    expect(metrics!.totals.server_usage_database).toBe("trajetto");
   });
 
   it("is a down instance, never an exception, with the wrong password", async () => {

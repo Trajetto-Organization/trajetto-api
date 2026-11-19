@@ -4,7 +4,7 @@
 
 ## O que significa
 
-O PgBouncer abre no Postgres no máximo `max_db_connections` conexões por banco (60 na staging e na produção; o alias da readiness tem 2 próprias). Perto do teto, a próxima rajada não ganha conexão nova e entra na fila: o [pgbouncer-clients-waiting](./pgbouncer-clients-waiting.md) vem logo depois. O portão de carga do 1M pede menos de 70% sustentado.
+O PgBouncer abre no Postgres no máximo `max_db_connections` conexões por banco (60 na staging e na produção). O alias da readiness (`trajetto_probe`) tem 2 próprias e fica fora desta conta: num minuto calmo ele já está com as 2 ocupadas (a do login da sonda e a do `auth_query` do `pgbouncer_auth`), e isso não diz nada do orçamento. As conexões dele continuam somadas em `server_connections`. Perto do teto, a próxima rajada não ganha conexão nova e entra na fila: o [pgbouncer-clients-waiting](./pgbouncer-clients-waiting.md) vem logo depois. O portão de carga do 1M pede menos de 70% sustentado.
 
 ## Primeira ação
 

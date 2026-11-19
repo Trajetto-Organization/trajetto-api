@@ -7,6 +7,7 @@ import { Prisma } from "@prisma/client";
 import {
   CONSOLE_DATABASE,
   PGBOUNCER_MAX_INSTANCES,
+  PROBE_ALIAS_SUFFIX,
   type PgBouncerStatsConfig,
 } from "@/shared/health/pgbouncer-stats-config";
 import { logger } from "@/shared/logging/logger";
@@ -115,10 +116,14 @@ interface PgBouncerTotals {
   maxwait_seconds: number;
   /** The pool (database/user) of that wait; null without one. */
   maxwait_pool: string | null;
+  /** Every server connection, the readiness alias's included. */
   server_connections: number;
   /**
    * The busiest database against its max_db_connections, in percent, and
-   * which database it is; null when none has a ceiling.
+   * which database it is; null when none has a ceiling. The readiness
+   * alias (`<db>_probe`) is left out: its ceiling of 2 is its own pool,
+   * full with the probe's login and the auth_query's connection on any
+   * quiet minute, and not the budget this number pages on.
    */
   server_usage_percent: number | null;
   server_usage_database: string | null;
@@ -160,6 +165,21 @@ function numberOf(value: unknown): number {
 
 function textOf(value: unknown): string {
   return typeof value === "string" ? value : String(value ?? "");
+}
+
+/**
+ * Whether `name` is the readiness alias of another database of the list
+ * (`<db>_probe`, as the image names it). Its pool of 2 is full on a quiet
+ * minute (the probe's login, and the auth_query's connection PgBouncer
+ * keeps in the same database for pgbouncer_auth; two probes that overlap
+ * do it too), so it would read 100% of its own ceiling while the real pool
+ * idles.
+ */
+function isProbeAlias(name: string, names: ReadonlySet<string>): boolean {
+  return (
+    name.endsWith(PROBE_ALIAS_SUFFIX) &&
+    names.has(name.slice(0, -PROBE_ALIAS_SUFFIX.length))
+  );
 }
 
 function isApplicationDatabase(row: Record<string, unknown>, key: string) {
@@ -319,9 +339,12 @@ function totalsOf(instances: PgBouncerInstance[]): PgBouncerTotals {
 
   let usage: number | null = null;
   let usageDatabase: string | null = null;
+  const names = new Set(databases.map((database) => database.name));
 
   for (const database of databases) {
-    if (database.max_connections <= 0) continue;
+    if (database.max_connections <= 0 || isProbeAlias(database.name, names)) {
+      continue;
+    }
 
     const percent =
       (database.current_connections / database.max_connections) * 100;

@@ -13,6 +13,13 @@ const PGBOUNCER_MAX_INSTANCES = 8;
 /** The console's own database, which the SHOW commands list too. */
 const CONSOLE_DATABASE = "pgbouncer";
 
+/**
+ * The readiness alias's suffix: the image names it `<db>_probe`
+ * (infra/pgbouncer/entrypoint.sh, PROBE), a pool of 2 server connections
+ * of its own for /health/readiness (plano-escala F4-37).
+ */
+const PROBE_ALIAS_SUFFIX = "_probe";
+
 interface PgBouncerStatsConfig {
   /** postgresql://pgbouncer_stats:<password>@<host>:6432/pgbouncer */
   url: string;
@@ -102,6 +109,7 @@ function pgBouncerStatsConfig(env: {
 export {
   CONSOLE_DATABASE,
   PGBOUNCER_MAX_INSTANCES,
+  PROBE_ALIAS_SUFFIX,
   pgBouncerStatsConfig,
   pgBouncerStatsHostsProblem,
   pgBouncerStatsUrlProblem,

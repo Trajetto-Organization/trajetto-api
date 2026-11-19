@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -17,7 +20,10 @@ import {
   type ConsoleConnection,
   type PgBouncerMetrics,
 } from "@/shared/health/pgbouncer-metrics";
-import { pgBouncerStatsConfig } from "@/shared/health/pgbouncer-stats-config";
+import {
+  PROBE_ALIAS_SUFFIX,
+  pgBouncerStatsConfig,
+} from "@/shared/health/pgbouncer-stats-config";
 import { envSchema } from "@/schemas/env-schema";
 import { definedEnv } from "@/schemas/env-schema/defined-env";
 
@@ -113,11 +119,13 @@ const DATABASES = [
     paused: "0",
     disabled: "0",
   },
+  // The readiness alias as a quiet minute leaves it: full, with the
+  // probe's login and the auth_query's connection of pgbouncer_auth.
   {
     name: "trajetto_probe",
     pool_size: "2",
     max_connections: "2",
-    current_connections: "1",
+    current_connections: "2",
     paused: "0",
     disabled: "0",
   },
@@ -264,7 +272,7 @@ describe("readPgBouncerMetrics", () => {
         cl_waiting: 2,
         maxwait_seconds: 3.25,
         maxwait_pool: "trajetto/trajetto_http",
-        server_connections: 55,
+        server_connections: 56,
         server_usage_percent: 90,
         server_usage_database: "trajetto",
         paused_databases: 0,
@@ -307,6 +315,75 @@ describe("readPgBouncerMetrics", () => {
       paused: false,
       disabled: false,
     });
+  });
+
+  // The review of wave 17: the alias's 2 of 2 read 100%, above the 80% of
+  // pgbouncer-server-saturation, every minute the owner's
+  // READINESS_DATABASE_URL is set, while the real pool idled; the runbook
+  // then sent the operator to raise PGBOUNCER_MAX_DB_CONNECTIONS for
+  // nothing.
+  it("leaves the readiness alias out of the server usage, and the alert quiet on an idle pool", async () => {
+    // A quiet minute: nobody waiting, 6 of the real pool's 60 in use.
+    const idle: Record<string, Array<Record<string, unknown>>> = {
+      ...ANSWERS,
+      "SHOW POOLS": POOLS.map((row) => ({
+        ...row,
+        cl_waiting: 0,
+        maxwait: 0,
+        maxwait_us: 0,
+      })),
+      "SHOW DATABASES": DATABASES.map((row) =>
+        row.name === "trajetto" ? { ...row, current_connections: "6" } : row,
+      ),
+    };
+
+    const metrics = await readPgBouncerMetrics(
+      { url: STATS_URL, hosts: ["10.0.1.7"] },
+      {
+        connect: async () => ({
+          query: async (text) => ({ rows: idle[text] ?? [] }),
+          end: async () => {},
+        }),
+        now: () => NOW,
+      },
+    );
+
+    expect(metrics?.totals).toMatchObject({
+      // Every server connection is still counted: they are Postgres's.
+      server_connections: 8,
+      server_usage_percent: 10,
+      server_usage_database: "trajetto",
+    });
+    expect(codes(healthy(metrics))).toEqual([]);
+
+    // A database that only ends like the alias, with no database of that
+    // name beside it, is a database: it is judged.
+    const lone = await readPgBouncerMetrics(
+      { url: STATS_URL, hosts: ["10.0.1.7"] },
+      {
+        connect: async () => ({
+          query: async (text) => ({
+            rows:
+              text === "SHOW DATABASES"
+                ? [{ ...DATABASES[2], name: "frota_probe" }]
+                : [],
+          }),
+          end: async () => {},
+        }),
+      },
+    );
+
+    expect(lone?.totals.server_usage_database).toBe("frota_probe");
+    expect(lone?.totals.server_usage_percent).toBe(100);
+  });
+
+  it("names the alias as the image's entrypoint does", () => {
+    const entrypoint = readFileSync(
+      resolve(process.cwd(), "infra/pgbouncer/entrypoint.sh"),
+      "utf8",
+    );
+
+    expect(entrypoint).toContain(`PROBE=\${DATABASE}${PROBE_ALIAS_SUFFIX}`);
   });
 
   it("is partial when a task does not answer, with the reason and never the URL", async () => {
