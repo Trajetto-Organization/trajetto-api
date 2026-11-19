@@ -232,6 +232,19 @@ describe("a failover to the promoted standby", () => {
     const stale = await readClusterEpochState(promoted);
 
     expect(clusterEpochStaleReason(stale!)).toMatch(/timeline/);
+
+    // And the feed serves no page there meanwhile: the old poller's cursor,
+    // still of the current epoch, would be read as a position in this
+    // history (the review of wave 17). The runbook runs the step before
+    // traffic comes back; this holds even when it does not.
+    await expect(
+      drain(
+        new IntegrationRepository(promoted, () => null),
+        carrier,
+        old.cursor,
+      ),
+    ).rejects.toMatchObject({ statusCode: 503, code: "SERVICE_UNAVAILABLE" });
+
     expect(await epochStep(infraUrl("promote"))).toMatchObject({
       step: EPOCH_STEP,
       status: "applied",

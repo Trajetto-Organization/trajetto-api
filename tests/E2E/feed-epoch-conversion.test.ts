@@ -242,6 +242,55 @@ describe("a cursor of the epoch before", () => {
     expect(counts.stray_epoch_conversions).toBeGreaterThan(0);
   }, 60_000);
 
+  // A promote (or a PITR) before the release step bumps the epoch, as the
+  // failover runbook had it (the review of wave 17): the new history hands
+  // out transaction ids under the OLD epoch, and a cursor of the old history
+  // would be read as a position in this one, skipping events for good. The
+  // feed refuses the page until the row describes the cluster again.
+  it("refuses a page while the epoch row does not describe the cluster, and serves once it does", async () => {
+    await note("e");
+
+    const before = await vi.waitFor(
+      async () => {
+        const result = await drain();
+
+        expect(result.notes).toContain("e");
+
+        return result;
+      },
+      { timeout: 45_000, interval: 200 },
+    );
+    const page = (cursor: string | null) =>
+      app.inject({
+        method: "GET",
+        url: `/integration/v1/events?limit=200${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
+        headers: { authorization: `Bearer ${token}` },
+      });
+
+    // A promote, seen from the row: the timeline it was taken on is gone.
+    await prisma.$executeRaw`
+      UPDATE "cluster_epoch" SET "timeline" = "timeline" + 7 WHERE "id" = 1
+    `;
+
+    try {
+      for (const cursor of [before.resume, null]) {
+        const refused = await page(cursor);
+
+        expect(refused.statusCode, refused.body).toBe(503);
+        expect(refused.json().code).toBe("SERVICE_UNAVAILABLE");
+        expect(refused.headers["retry-after"]).toBeDefined();
+      }
+    } finally {
+      await prisma.$executeRaw`
+        UPDATE "cluster_epoch" SET "timeline" = "timeline" - 7 WHERE "id" = 1
+      `;
+    }
+
+    const served = await page(before.resume);
+
+    expect(served.statusCode, served.body).toBe(200);
+  }, 60_000);
+
   it("pages feed-epoch-conversion from the processes' rows", async () => {
     const { collectOperationalSnapshot } =
       await import("@/shared/health/operational-snapshot");

@@ -1,4 +1,4 @@
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 
 /**
  * Whether the cluster's epoch row still describes the cluster (plano-escala
@@ -24,6 +24,17 @@ import type { Prisma } from "@prisma/client";
  * the check works the same after the cut of the database roles. One row
  * and a few function calls a minute.
  */
+
+/**
+ * The timeline the cluster writes on now, as the release step reads it
+ * (infra/sql/50-cluster-epoch.sql), over `pg_control_checkpoint() c`. One
+ * text for this check and the events feed's (integration-repository.ts),
+ * which refuses a page while the row does not describe the cluster.
+ */
+const CURRENT_TIMELINE = Prisma.sql`CASE
+        WHEN pg_is_in_recovery() THEN c.timeline_id
+        ELSE ('x' || substr(pg_walfile_name(pg_current_wal_lsn()), 1, 8))::bit(32)::integer
+      END`;
 
 interface ClusterIdentity {
   /** pg_control_system().system_identifier, as text: it is a 64-bit id. */
@@ -68,10 +79,7 @@ async function readClusterEpochState(
       e."system_identifier"::text AS stored_system,
       e."timeline" AS stored_timeline,
       s.system_identifier::text AS system,
-      CASE
-        WHEN pg_is_in_recovery() THEN c.timeline_id
-        ELSE ('x' || substr(pg_walfile_name(pg_current_wal_lsn()), 1, 8))::bit(32)::integer
-      END AS timeline
+      ${CURRENT_TIMELINE} AS timeline
     FROM pg_control_system() s
     CROSS JOIN pg_control_checkpoint() c
     LEFT JOIN "cluster_epoch" e ON e."id" = 1
@@ -125,6 +133,7 @@ function clusterEpochStaleReason(state: ClusterEpochState): string | null {
 }
 
 export {
+  CURRENT_TIMELINE,
   clusterEpochStaleReason,
   readClusterEpochState,
   type ClusterEpochState,

@@ -18,7 +18,7 @@ Nenhum ensaio roda contra a produção sem uma janela combinada, e nenhum com os
 
 **Restauração (PITR), todo mês.** O Schedule Job roda sozinho; confira o ping do healthchecks.io (`PITR_DRILL_PING_URL`) e o resumo em JSON, e anote o RTO e a perda abaixo. Falhou, siga o [restore-drill](./restore-drill.md).
 
-**Failover, a cada trimestre.** Siga o [failover-standby](./failover-standby.md), parte "No ensaio da staging": o standby temporário, o failover sob o burn-in, as medidas e a volta planejada ao Database de sempre. A troca do primário no PgBouncer é o `infra/pgbouncer/retarget.sh`, e a época do cluster sobe na etapa de release (`force_release`).
+**Failover, a cada trimestre.** Siga o [failover-standby](./failover-standby.md), parte "No ensaio da staging": o standby temporário, o failover sob o burn-in, as medidas e a volta planejada ao Database de sempre. A época do cluster sobe na etapa de release (o **Deploy** da `trajetto-api-migrate`, direto no promovido), e só depois o PgBouncer passa ao promovido pelo `infra/pgbouncer/retarget.sh`.
 
 **Game day, a cada semestre**, na staging, com o burn-in limitado rodando do começo ao fim (`tests/load/staging-burn-in.sh`, o mesmo do portão do rolling) e uma pessoa olhando o `/health/metrics` e os alertas. Uma falha de cada vez, esperando a volta completa antes da próxima, com o horário de cada uma anotado:
 

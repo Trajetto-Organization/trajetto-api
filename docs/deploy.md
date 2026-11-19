@@ -2292,8 +2292,9 @@ de onde o Postgres lê o `pg_hba`:
     _Domain_, e sem `PITR_ARCHIVE` nem `PGBACKREST_*` num standby de ensaio:
     promovido, ele arquivaria na stanza do primário.
 - **Promover** é à mão, no `psql` do standby: `SELECT pg_promote();` e
-  depois `CHECKPOINT;`. O failover inteiro (o primário parado, o
-  `infra/pgbouncer/retarget.sh`, a etapa de release e a época do cluster)
+  depois `CHECKPOINT;`. O failover inteiro (o primário parado, a etapa de
+  release subindo a época do cluster direto no promovido e só então o
+  `infra/pgbouncer/retarget.sh`, que devolve o tráfego)
   está em [failover-standby](./runbooks/failover-standby.md), e o
   calendário dos ensaios em [drills](./runbooks/drills.md).
 

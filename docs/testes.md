@@ -330,9 +330,10 @@ standby depois de 3 medidas boas, F4-41), `events-on-standby.test.ts` (o
 `/integration/v1/events` pela ordem de commit no standby, com o horizonte
 dele: 2.000 eventos de quatro escritores lidos alternando standby e
 primário, nenhum pulado nem repetido, F4-43) e `failover-promote.test.ts` (o
-promote do standby do failover: a etapa de release logo depois sobe a
-época do cluster, sem esperar um checkpoint, e um cursor da época velha é
-convertido sem pular evento, F4-44). As fases
+promote do standby do failover: o feed recusa a página até a etapa de
+release, que logo depois sobe a época do cluster, sem esperar um
+checkpoint, e um cursor da época velha é convertido sem pular evento,
+F4-44). As fases
 `shared` e de réplicas deixam esses arquivos de fora (`INFRA_E2E_GLOB`, em
 `tests/E2E/support/replica-files.ts`).
 

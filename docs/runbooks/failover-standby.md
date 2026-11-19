@@ -9,14 +9,14 @@ O failover é manual e ensaiado (decisão D6 do plano de escala): uma pessoa dec
 Três coisas não podem acontecer:
 
 - **Dois primários.** O primário antigo fica parado de vez antes do promote e nunca volta como está: ele e o promovido escreveriam histórias diferentes, e com o PITR ligado os dois arquivariam na mesma stanza. A imagem nunca rebaixa um primário sozinha ([deploy.md, Standby](../deploy.md#standby-o-pg_hba-da-imagem-e-o-ramo-standby-onda-17)).
-- **A época do cluster parada.** Depois do promote os ids de transação seguem de onde o standby estava, e um integrador pode ter um cursor com um xid que o primário antigo deu e que esta história vai dar de novo. A etapa de release sobe a época (`infra/sql/50-cluster-epoch.sql`, pela timeline do WAL atual, que muda já no promote), e o feed converte o cursor velho a partir do piso dele: eventos se repetem, nenhum é pulado. Por isso a etapa roda **antes** de o tráfego voltar.
+- **A época do cluster parada.** Depois do promote os ids de transação seguem de onde o standby estava, e um integrador pode ter um cursor com um xid que o primário antigo deu e que esta história vai dar de novo. A etapa de release sobe a época (`infra/sql/50-cluster-epoch.sql`, pela timeline do WAL atual, que muda já no promote), e o feed converte o cursor velho a partir do piso dele: eventos se repetem, nenhum é pulado. Por isso a etapa roda **antes** de o tráfego voltar: ela vai direto ao promovido (passos 5 e 6), e só depois o PgBouncer passa a apontar para ele (passo 7). Se a ordem falhar, o feed se defende: enquanto a linha de `cluster_epoch` não descreve o cluster, o `/integration/v1/events` responde 503 com `Retry-After`, em vez de ler um cursor velho como posição da história nova.
 - **Um evento pulado.** O cursor de outra época nunca é confiado; o alerta [feed-epoch-conversion](./feed-epoch-conversion.md) avisa para falar com os integradores.
 
 Quanto se perde (RPO): o que o primário confirmou e ainda não tinha mandado ao standby. A linha-marcador é a `cluster` do `ops_sample`, gravada a cada minuto; o `pg_last_xact_replay_timestamp()` do standby diz até onde ele chegou.
 
 ## Primeira ação
 
-Anote cada horário em UTC: o RTO é do passo 1 ao passo 8.
+Anote cada horário em UTC: o RTO é do passo 1 ao passo 8. Do passo 2 ao 7, o runtime responde 503 com `Retry-After` (o PgBouncer ainda aponta para o primário parado), e o app guarda as escritas na fila dele.
 
 1. **t0.** Confirme que o primário se perdeu de verdade: o Swarm reinicia uma tarefa caída sozinho, e um Postgres em _crash recovery_ volta em minutos. Um failover por um soluço custa uma época nova e a conversão de todos os cursores.
 2. **Pare o primário antigo de vez.** Dokploy → Database do primário → **Stop**. Se o servidor dele sumiu, garanta que ele não volte ligado (o servidor desligado no painel da Contabo). Até o fim deste runbook, nada o liga.
@@ -38,18 +38,18 @@ Anote cada horário em UTC: o RTO é do passo 1 ao passo 8.
 
    `pg_promote()` responde `t` e o último `f`. O `CHECKPOINT` não é o que sobe a época (a etapa lê a timeline do WAL), mas encurta a recuperação se o promovido cair logo depois.
 
-5. **O PgBouncer para o promovido**, no host do Dokploy, com a chave de API do dono (Dokploy → Settings → Profile → API/CLI) e o `applicationId` da `trajetto-pgbouncer` do ambiente (o mesmo do secret `DOKPLOY_PGBOUNCER_APPLICATION_ID`). O script está no repositório, em `infra/pgbouncer/retarget.sh`; copie-o para o host como o `verify-rollout.sh` ([deploy.md, seção 14](../deploy.md#14-conferir-a-convergência)):
+5. **As URLs diretas**: na `DATABASE_URL` da `trajetto-api-migrate` e em cada Application com `BATCH_DATABASE_URL` (a `trajetto-api`, ou o worker e o scheduler depois da separação), troque só o host pelo App Name do promovido, **Save**, sem Deploy ainda.
+6. **A etapa de release**, antes de o tráfego voltar: Dokploy → `trajetto-api-migrate` → **Deploy**, esperando `Running`. Ela conecta direto ao promovido pela URL do passo 5, sem passar pelo PgBouncer. No log, a linha do `infra/sql/50-cluster-epoch.sql` diz `applied: época N para N+1`; ela também devolve os roles e os grants. Não use o _Run workflow_ com `force_release` aqui: ele valida e reconstrói antes da etapa e implanta o runtime depois dela, minutos além da meta.
+7. **O PgBouncer para o promovido**, só com a época já subida, no host do Dokploy, com a chave de API do dono (Dokploy → Settings → Profile → API/CLI) e o `applicationId` da `trajetto-pgbouncer` do ambiente (o mesmo do secret `DOKPLOY_PGBOUNCER_APPLICATION_ID`). O script está no repositório, em `infra/pgbouncer/retarget.sh`; copie-o para o host como o `verify-rollout.sh` ([deploy.md, seção 14](../deploy.md#14-conferir-a-convergência)):
 
    ```sh
    DOKPLOY_API_KEY=<chave> ./retarget.sh <applicationId> trajetto-postgres-standby-staging \
      --expect-current trajetto-postgres-staging
    ```
 
-   Ele recusa uma Application que não seja o PgBouncer e um host atual diferente do esperado, troca só a linha `PGBOUNCER_PRIMARY_HOST` do _Environment_, faz o **Deploy** (start-first: a tarefa antiga drena os clientes em até 90 s) e só termina quando uma tarefa nova, saudável, responde por dentro (`SHOW DATABASES`) que aponta para o promovido. Se o Dokploy recusar a troca (código 4), faça-a no painel (_Environment_ → a linha → **Save** → **Deploy**) e rode o mesmo comando com `--wait-only`.
+   Ele recusa uma Application que não seja o PgBouncer e um host atual diferente do esperado, troca só a linha `PGBOUNCER_PRIMARY_HOST` do _Environment_, faz o **Deploy** (start-first: a tarefa antiga drena os clientes em até 90 s) e só termina quando uma tarefa nova, saudável, responde por dentro (`SHOW DATABASES`) que aponta para o promovido. Se o Dokploy recusar a troca (código 4), faça-a no painel (_Environment_ → a linha → **Save** → **Deploy**) e rode o mesmo comando com `--wait-only`. Daqui em diante o runtime que passa pelo PgBouncer está no promovido.
 
-6. **As URLs diretas**: em cada Application com `BATCH_DATABASE_URL` (a `trajetto-api`, ou o worker e o scheduler depois da separação) e na `DATABASE_URL` da `trajetto-api-migrate`, troque só o host pelo App Name do promovido, **Save**, sem Deploy ainda.
-7. **A etapa de release**, antes de qualquer outro Deploy: GitHub → Actions → staging (ou production, com a `image_tag` que está no ar) → _Run workflow_ com `force_release` = true; ou Dokploy → `trajetto-api-migrate` → **Deploy**, esperando `Running`. No log, a linha do `infra/sql/50-cluster-epoch.sql` diz `applied: época N para N+1`. Ela também devolve os roles e os grants.
-8. **t1.** **Deploy** das Applications com `BATCH_DATABASE_URL`, uma por vez. O runtime que passa pelo PgBouncer já está no promovido desde o passo 5.
+8. **t1.** **Deploy** das Applications com `BATCH_DATABASE_URL`, uma por vez.
 9. **Depois, com calma**:
    - no _Environment_ do promovido, tire `POSTGRES_STANDBY_PRIMARY_HOST`, `POSTGRES_STANDBY_SLOT` e `POSTGRES_REPLICATION_PASSWORD` (a imagem já o sobe como primário, com um aviso no log enquanto elas estiverem lá);
    - com o PITR ligado, um backup completo (`trajetto-backup full`, [restore-drill](./restore-drill.md)): o promovido arquiva numa timeline nova da mesma stanza;
@@ -63,7 +63,7 @@ Antes, uma vez: no `psql` do primário da staging, `ALTER ROLE trajetto_replicat
 2. Com o burn-in limitado rodando (`tests/load/staging-burn-in.sh`), siga os passos 1 a 8 acima com o standby temporário. Anote o RTO e o RPO.
 3. **A volta**, planejada e sem perda:
    1. No host, com o Database antigo parado, apague o volume dele (`docker volume ls`, o volume de `trajetto-postgres-staging`; `docker volume rm <volume>`), e no _Environment_ dele ponha `POSTGRES_STANDBY_PRIMARY_HOST=trajetto-postgres-standby-staging`, a mesma senha e `POSTGRES_STANDBY_SLOT=trajetto_back`. **Deploy** do antigo: ele clona o temporário pelo slot, criado no clone, e o segue.
-   2. `PAUSE trajetto;` no console do PgBouncer, **Stop** do temporário (ele manda todo o WAL ao standby antes de parar), `SELECT pg_promote();` e `CHECKPOINT;` no antigo, `retarget.sh <applicationId> trajetto-postgres-staging --expect-current trajetto-postgres-standby-staging`, `RESUME trajetto;`, as URLs diretas de volta, a etapa de release (`applied: época N+1 para N+2`).
+   2. `PAUSE trajetto;` no console do PgBouncer, **Stop** do temporário (ele manda todo o WAL ao standby antes de parar), `SELECT pg_promote();` e `CHECKPOINT;` no antigo, as URLs diretas de volta, a etapa de release no antigo (**Deploy** da `trajetto-api-migrate`: `applied: época N+1 para N+2`), só então `retarget.sh <applicationId> trajetto-postgres-staging --expect-current trajetto-postgres-standby-staging` e `RESUME trajetto;`. Com a pausa longa, o `query_wait_timeout` (5 s) responde 503 aos clientes que esperam: é o esperado na volta.
    3. Tire as variáveis de standby do antigo, apague o Database temporário e, no primário, `SELECT pg_drop_replication_slot('trajetto_standby');` se o slot ainda existir.
 
 ## Como confirmar
@@ -82,10 +82,10 @@ SELECT max(ts) FROM ops_sample WHERE role = 'cluster';
 - Uma página do `/integration/v1/events` com o cursor guardado antes do failover volta com eventos (repetidos, nunca faltando) e o `feed.epoch_conversions` do `ops_sample` sobe: o poller antigo foi convertido. O alerta [feed-epoch-conversion](./feed-epoch-conversion.md) é esperado: avise os integradores que deduplicam pelo `id`.
 - **RPO**: o último `max(ts)` da linha `cluster` no promovido contra o instante em que o primário se perdeu. **RTO**: t1 − t0. Anote os dois na tabela de resultados de [drills](./drills.md).
 
-A fase infra do E2E faz o mesmo caminho a cada CI, num standby descartável: o promote, a etapa subindo a época logo depois dele e um cursor da época velha convertido sem pular (`tests/E2E/infra/failover-promote.test.ts`).
+A fase infra do E2E faz o mesmo caminho a cada CI, num standby descartável: o promote, o feed recusando a página até a etapa, a etapa subindo a época logo depois dele e um cursor da época velha convertido sem pular (`tests/E2E/infra/failover-promote.test.ts`).
 
 ## Quando escalar
 
 - O standby está muito atrás (o `replay` longe do `receive`, ou o `pg_last_xact_replay_timestamp()` de minutos antes da queda): o RPO passa da meta. Decida com o dono entre o failover com essa perda e esperar o primário, ou um PITR ([pitr-restore](./pitr-restore.md)).
 - O primário antigo voltou ligado depois do promote: pare-o na hora e chame o dono. Escritas nos dois são duas histórias, e só uma fica.
-- A etapa de release não subiu a época, ou falhou: não faça o Deploy do runtime direto (passo 8) até ela passar.
+- A etapa de release não subiu a época, ou falhou: não faça o retarget (passo 7) nem o Deploy do runtime (passo 8) até ela passar. Se o retarget já foi feito, o `/integration/v1/events` responde 503 até a etapa passar; o resto do runtime segue.

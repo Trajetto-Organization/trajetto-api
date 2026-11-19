@@ -1,5 +1,6 @@
 import { formatEventCursorV2, type EventCursor } from "./cursor";
 import { feedFloorMs } from "./feed-floor";
+import { AppError } from "@/shared/errors/AppError";
 import { uuid7Floor, uuid7Instant } from "@/shared/time/uuid7-floor";
 
 /**
@@ -39,6 +40,12 @@ import { uuid7Floor, uuid7Instant } from "@/shared/time/uuid7-floor";
  * ("stray": a cursor edited by hand, one carried over from another
  * environment, or an integrator back long after the change) is counted
  * apart and pages nobody: an API key alone must not raise an incident.
+ *
+ * And no page at all while cluster_epoch does not describe the cluster
+ * (FeedEpochStaleError): after a promote or a PITR, until the release step
+ * bumps the epoch, the transaction ids of the new history go out under the
+ * OLD epoch, and a cursor the old history gave would be read as a position
+ * in this one, skipping for good the events at or below its txid.
  */
 
 /**
@@ -198,6 +205,26 @@ function positionAfter(
   };
 }
 
+/**
+ * The feed's answer while cluster_epoch does not describe the cluster (its
+ * system_identifier or its timeline is not the cluster's: a promote, a
+ * PITR or a logical restore the release step has not recorded yet). Every
+ * epoch the feed would read is the history before, so any v2 cursor would
+ * be trusted as a position in the wrong history: a 503 with Retry-After,
+ * the answer of a database that is changing servers, until the step runs
+ * (the failover runbook runs it before traffic comes back; the ops
+ * heartbeat alerts cluster-epoch-stale meanwhile).
+ */
+class FeedEpochStaleError extends AppError {
+  constructor() {
+    super(
+      "O feed de eventos volta em instantes: o banco de dados acabou de trocar de servidor.",
+      503,
+      "SERVICE_UNAVAILABLE",
+    );
+  }
+}
+
 /** The opaque cursor of a position, in the current epoch. */
 function cursorOf(position: FeedPosition, epoch: number): string {
   return formatEventCursorV2({ epoch, ...position });
@@ -205,6 +232,7 @@ function cursorOf(position: FeedPosition, epoch: number): string {
 
 export {
   EPOCH_CHANGE_WINDOW_MS,
+  FeedEpochStaleError,
   ZERO_ID,
   backedByEpochChange,
   convertedPosition,

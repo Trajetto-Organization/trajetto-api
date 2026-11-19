@@ -9,7 +9,7 @@ O feed da integração anda pelo id da transação que gravou cada evento (`deli
 - o `system_identifier` (`pg_control_system()`) muda com um cluster novo: um restore lógico noutro Database, um `pg_upgrade`;
 - a timeline em que o cluster grava (os 8 primeiros dígitos de `pg_walfile_name(pg_current_wal_lsn())`) muda com um PITR e com um promote, na hora: a de `pg_control_checkpoint()` só mudaria no primeiro checkpoint da timeline nova, minutos depois.
 
-Enquanto a etapa não roda, os xids reaproveitados saem com a época velha. O `ops-heartbeat` confere o par a cada minuto e alerta até a etapa rodar. "Sem linha" quer dizer que a etapa nunca rodou neste banco (um banco restaurado de um dump de antes da tabela, ou a etapa falhou).
+Enquanto a etapa não roda, os xids reaproveitados sairiam com a época velha, e um cursor da história de antes seria lido como posição desta. Por isso o `/integration/v1/events` na ordem de commit não serve página nesse intervalo: responde 503 `SERVICE_UNAVAILABLE` com `Retry-After`, e o integrador tenta de novo depois da etapa. O `ops-heartbeat` confere o par a cada minuto e alerta até a etapa rodar. "Sem linha" quer dizer que a etapa nunca rodou neste banco (um banco restaurado de um dump de antes da tabela, ou a etapa falhou).
 
 ## Primeira ação
 

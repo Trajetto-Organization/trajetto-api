@@ -4,11 +4,13 @@ import { Prisma, type PrismaClient } from "@prisma/client";
 
 import { env } from "@/env";
 import { relatedTo, rowsByKey } from "@/shared/database/related-rows";
+import { CURRENT_TIMELINE } from "@/shared/health/cluster-epoch";
 import { countFeedConversion } from "@/shared/integration/feed-metrics";
 import { logger } from "@/shared/logging/logger";
 import { uuid7Floor } from "@/shared/time/uuid7-floor";
 
 import {
+  FeedEpochStaleError,
   convertedPosition,
   cursorOf,
   feedStart,
@@ -549,14 +551,39 @@ class IntegrationRepository implements IIntegrationRepository {
   ): Promise<EventPage> {
     const marginMs = env.FEED_FLOOR_MARGIN_MS;
 
+    // With the epoch, whether its row still describes the cluster: the
+    // same pair the release step and cluster-epoch-stale compare (null
+    // without a row).
     const [horizon] = await client.$queryRaw<
-      Array<{ epoch: number | null; changed_at: Date | null; xmin: string }>
+      Array<{
+        epoch: number | null;
+        changed_at: Date | null;
+        xmin: string;
+        describes_cluster: boolean | null;
+      }>
     >`
       SELECT e."epoch", e."changed_at",
-             (pg_snapshot_xmin(pg_current_snapshot()))::text AS "xmin"
-      FROM (SELECT 1) one
+             (pg_snapshot_xmin(pg_current_snapshot()))::text AS "xmin",
+             (e."system_identifier" = s.system_identifier
+               AND e."timeline" = ${CURRENT_TIMELINE}) AS "describes_cluster"
+      FROM pg_control_system() s
+      CROSS JOIN pg_control_checkpoint() c
       LEFT JOIN "cluster_epoch" e ON e."id" = 1
     `;
+
+    // A promote or a PITR the release step has not recorded (the review of
+    // wave 17): the epoch below is the history before, and a cursor of that
+    // history would be read as a position in this one, skipping its events
+    // for good. No page until the step runs (FeedEpochStaleError); on the
+    // standby, listEventsByCommit then asks the primary.
+    if (horizon?.describes_cluster === false) {
+      logger.warn(
+        { businessId, epoch: horizon.epoch },
+        "integration feed: cluster_epoch does not describe the cluster (a promote or a restore before the release step); page refused until the step runs",
+      );
+
+      throw new FeedEpochStaleError();
+    }
 
     // No epoch row yet (the release step has not run on this database):
     // epoch 0, which the first epoch (1) converts, at least once. When the

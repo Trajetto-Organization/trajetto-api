@@ -175,15 +175,17 @@ Seis peças, cada uma com um papel só, cada uma desligada até o dono ligar.
 ### 6. Failover manual, com a época do cluster
 
 - Manual e ensaiado a cada trimestre (D6): parar o primário antigo de vez,
-  promover o standby, apontar o PgBouncer para ele
+  promover o standby, as URLs diretas à mão, a etapa de release direto no
+  promovido e só então o PgBouncer apontando para ele
   (`infra/pgbouncer/retarget.sh`, que troca só o
-  `PGBOUNCER_PRIMARY_HOST`), as URLs diretas à mão, a etapa de release e só
-  então o tráfego. O passo a passo está em
-  [failover-standby](../runbooks/failover-standby.md).
+  `PGBOUNCER_PRIMARY_HOST`), que devolve o tráfego. O passo a passo está
+  em [failover-standby](../runbooks/failover-standby.md).
 - **A época do cluster sobe** depois de um promote, de um PITR ou de um
   restore (`infra/sql/50-cluster-epoch.sql`, pela timeline do WAL atual,
   que muda já no promote). Um cursor do feed de outra época é convertido a
   partir do piso dele: eventos podem se repetir, nenhum é pulado (D67).
+  Entre o promote e a etapa, o feed não serve página (503 com
+  `Retry-After`): a linha de `cluster_epoch` ainda é da história de antes.
 - Meta do ensaio: RTO < 15 min e RPO < 10 s. Failover automático
   (Patroni) só se um contrato pedir RTO < 5 min: ele exige um armazenamento
   de consenso em três nós.
