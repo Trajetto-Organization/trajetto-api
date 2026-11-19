@@ -5970,6 +5970,26 @@ orçamento de statements do envio não muda (o E2E
 a réplica anterior de um rolling deploy não o manda, e o app trata a
 ausência como o intervalo dele.
 
+**Group commit das posições** (F5-19,
+`src/modules/route/services/position-write-buffer.ts`): com
+`POSITION_GROUP_COMMIT=on`, os envios do `POST /route/positions` que chegam
+a um processo em 50 ms (ou até somarem 1.000 pontos) são gravados numa
+transação só, pelo `writeBatchMany` do repositório (F5-18): a trilha num
+`INSERT … SELECT FROM unnest(…) ON CONFLICT DO NOTHING` e as últimas
+posições num upsert de várias linhas, uma por motorista. A resposta de cada
+envio é a que ele teria sozinho, e só sai depois do COMMIT: um 200 continua
+querendo dizer que os pontos estão no banco. Um lote por vez: o que chega
+durante um commit vai no lote seguinte. Um lote que falha é refeito envio a
+envio pelo caminho de antes; depois de 5 lotes seguidos com falha, um
+disjuntor manda todo envio pelo caminho de antes por 1 minuto, e cada
+abertura é uma linha de log de erro e uma contagem em
+`position_group_commit.breaker_opens` no `ops_sample` (um ponto sem
+partição não conta: é dado do envio, não saúde do caminho). No
+desligamento, o que espera é gravado na hora em que o HTTP fecha, antes dos
+workers. Com `off`, o padrão, é uma transação por envio, como sempre. O E2E
+`position-group-commit` prova 50 envios simultâneos em no máximo 10
+commits, com cada ponto no banco antes do 200.
+
 **Descarte de carga** (`src/shared/http/load-shedding.ts` e
 `src/shared/http/shed-classes.ts`, F2-24): o `@fastify/under-pressure` fica
 registrado uma vez, com os limiares mais baixos (laço de eventos acima de

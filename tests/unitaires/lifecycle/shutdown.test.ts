@@ -124,6 +124,56 @@ describe("graceful shutdown sequence", () => {
   });
 
   /**
+   * The GPS group commit (plano-escala F5-19): a request in flight waits
+   * for the batch its points are in. The buffer is written out as HTTP
+   * closes, and finished before the workers stop and Redis goes, so the
+   * request is answered with its points committed.
+   */
+  it("writes the group commit's flushes as HTTP closes, before the workers stop", async () => {
+    const calls: string[] = [];
+    let releaseHttp: () => void = () => undefined;
+
+    await runShutdown(
+      {
+        markDraining: () => calls.push("drain"),
+        drainMs: 0,
+        drainImports: async () => undefined,
+        closeRealtime: () => calls.push("realtime"),
+        closeHttp: () =>
+          new Promise<void>((resolveHttp) => {
+            calls.push("http");
+            releaseHttp = resolveHttp;
+          }),
+        drainWrites: async () => {
+          calls.push("writes");
+          // The request waiting on the batch is answered now.
+          releaseHttp();
+          calls.push("writes:done");
+        },
+        httpMs: 10_000,
+        cutHttp: () => calls.push("cut"),
+        stopWorkers: async () => {
+          calls.push("workers");
+        },
+        closeRedis: async () => {
+          calls.push("redis");
+        },
+      },
+      async () => undefined,
+    );
+
+    expect(calls).toEqual([
+      "drain",
+      "realtime",
+      "http",
+      "writes",
+      "writes:done",
+      "workers",
+      "redis",
+    ]);
+  });
+
+  /**
    * The sockets in slices over the drain (plano-escala U-01): started with
    * it, over its whole window, before the wait, so the reconnections reach
    * the other replicas spread instead of all in the same second.

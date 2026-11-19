@@ -2162,6 +2162,24 @@ const envSchema = z
     ),
 
     /**
+     * The GPS group commit (plano-escala F5-19,
+     * modules/route/services/position-write-buffer.ts). `on`: the flushes
+     * of POST /route/positions that reach a process within 50 ms (or 1.000
+     * points) are written in ONE transaction, and each request is answered
+     * only after that COMMIT; a failed batch is redone flush by flush, and
+     * after 5 failed batches in a row a breaker sends every flush down the
+     * old path for a minute. `off` (the default): one transaction per
+     * flush, as before. Per process, in the roles that take the route
+     * (`all`, `api`, `ingest`). Staging first; production only after seven
+     * days of staging without the breaker opening and the gate's ABBA.
+     * Empty counts as absent.
+     */
+    POSITION_GROUP_COMMIT: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.enum(["off", "on"]).default("off"),
+    ),
+
+    /**
      * Lowest driver-app `contract` still served (the app's CLIENT_CONTRACT,
      * raised by every release that changes what it sends). Below it: 426
      * CLIENT_UPGRADE_REQUIRED, except login, 2FA, refresh and logout

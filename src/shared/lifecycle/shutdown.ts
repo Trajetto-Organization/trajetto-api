@@ -33,6 +33,10 @@ import { settlesWithin } from "./deadline";
  *    watchdog), and the workers stop inside the grace.
  * 4. REDIS LAST. Nothing publishes after the workers stopped.
  *
+ * With HTTP: the GPS group commit's buffer (plano-escala F5-19), written
+ * out as the listener closes, so the positions a request in flight is
+ * waiting for are committed before the process goes.
+ *
  * Alongside, from the first instant: the in-process IMPORT QUEUE
  * (import-queue.ts). A deploy dropped the running spreadsheet upload and up
  * to three waiting ones that had already been answered 202, and the user
@@ -84,6 +88,16 @@ interface ShutdownSteps {
   /** Ends every HTTP connection still open, in flight or not. */
   cutHttp: () => void;
 
+  /**
+   * Writes the flushes the GPS group commit holds (plano-escala F5-19,
+   * position-write-buffer.ts) at once, without waiting for the window, and
+   * sends every later one down the one-transaction path. Started as HTTP
+   * stops taking connections, awaited before the workers stop: a request
+   * in flight is answered only after its points are committed. Optional:
+   * without it, the window (50 ms) writes them anyway. Never rejects.
+   */
+  drainWrites?: () => Promise<void>;
+
   stopWorkers: () => Promise<void>;
   closeRedis: () => Promise<void>;
 }
@@ -113,10 +127,12 @@ async function runShutdown(
   steps.closeRealtime();
 
   const closing = steps.closeHttp();
+  const writes = steps.drainWrites?.().catch(() => undefined);
 
   if (!(await settlesWithin(closing, steps.httpMs))) steps.cutHttp();
 
   await closing;
+  await writes;
   await imports;
   await steps.stopWorkers();
   await steps.closeRedis();

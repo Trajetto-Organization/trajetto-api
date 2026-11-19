@@ -23,6 +23,7 @@ import {
   drainOptionsFrom,
   importQueue,
 } from "./modules/import/services/import-queue";
+import { drainPositionWriteBuffers } from "./modules/route/services/position-write-buffer";
 import { markDraining } from "./shared/lifecycle/draining";
 import { runShutdown } from "./shared/lifecycle/shutdown";
 import { shutdownPlanFor } from "./shared/lifecycle/shutdown-plan";
@@ -174,6 +175,8 @@ async function gracefulShutdown() {
         );
         app.server.closeAllConnections();
       },
+      // The GPS group commit's waiting flushes, at once (plano-escala F5-19).
+      drainWrites: drainPositionWriteBuffers,
       stopWorkers: () =>
         shutdownWorkers({ deadlineMs: shutdownPlan.workersMs }),
       // Closes the Redis pub/sub clients from the Socket.IO adapter

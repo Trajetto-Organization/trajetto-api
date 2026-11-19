@@ -15,6 +15,8 @@ import {
 
 import { sendDriverPositionToBusiness } from "@/shared/route/route-realtime";
 
+import { recordPositions } from "../../services/position-write-buffer";
+
 interface RecordDriverPositionsRequest {
   userId: string;
   pings: RawPing[];
@@ -118,13 +120,19 @@ class RecordDriverPositionsUseCase {
       return { stored: 0, rejected, tracking };
     }
 
-    const { stored, dropped, advanced } = await this.positions.recordBatch({
-      driverId,
-      businessId,
-      routeId: route.id,
-      routeStartedAt: route.started_at,
-      pings: accepted,
-    });
+    // One transaction per flush, or this process's group commit with
+    // POSITION_GROUP_COMMIT=on (plano-escala F5-19): either way the answer
+    // comes after the COMMIT.
+    const { stored, dropped, advanced } = await recordPositions(
+      this.positions,
+      {
+        driverId,
+        businessId,
+        routeId: route.id,
+        routeStartedAt: route.started_at,
+        pings: accepted,
+      },
+    );
 
     // Every point was older than any partition (INV-14): nothing new to
     // announce, and a dot from weeks ago is not where the truck is.

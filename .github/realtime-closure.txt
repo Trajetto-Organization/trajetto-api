@@ -163,6 +163,7 @@ src/modules/route/repositories/IRoute-repository.ts
 src/modules/route/repositories/driver-position-repository.ts
 src/modules/route/repositories/operation-day-repository.ts
 src/modules/route/repositories/route-repository.ts
+src/modules/route/services/position-write-buffer.ts
 src/modules/route/usecases/errors/route-errors.ts
 src/modules/route/usecases/list-routes/route-list.ts
 src/modules/route/usecases/list-unrouted-deliveries/unrouted-deliveries.ts
@@ -425,6 +426,7 @@ src/shared/notifications/policies/whatsapp-quota-policy.ts
 src/shared/notifications/provider-caps.ts
 src/shared/notifications/provider-rate-bucket.ts
 src/shared/notifications/provider-receipts.ts
+src/shared/notifications/push-batch-gate.ts
 src/shared/notifications/push-data.ts
 src/shared/notifications/push-provider.ts
 src/shared/notifications/push-validity.ts
