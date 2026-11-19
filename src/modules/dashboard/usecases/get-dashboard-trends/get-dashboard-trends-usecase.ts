@@ -22,6 +22,12 @@ import {
   visibleDashboardEntities,
   type DashboardModule,
 } from "../shared/dashboard-entities";
+import {
+  dashboardRollupMode,
+  deliveriesFromRollup,
+  readWithRollup,
+  shadowDeliveryRollup,
+} from "../shared/delivery-rollup";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { AppError } from "@/shared/errors/AppError";
@@ -134,7 +140,8 @@ class GetDashboardTrendsUseCase {
         businessId,
       );
 
-      const { granularity, window } = windowFor(period, new Date(), timeZone);
+      const now = new Date();
+      const { granularity, window } = windowFor(period, now, timeZone);
 
       // Same rule as the overview: a MASTER has no single company to ask.
       const entitlements = businessId
@@ -147,6 +154,13 @@ class GetDashboardTrendsUseCase {
 
       const visible = visibleDashboardEntities(user, moduleEnabled);
 
+      // The "Entregas" series from the closed days with "on", live and
+      // compared on the side with "shadow" (plano-escala F4-22).
+      const rollupMode = dashboardRollupMode();
+      const showsDeliveries = visible.some(
+        (entity) => entity.key === "delivery",
+      );
+
       /**
        * Every bucket of every entity, in ONE round trip. Then the costs, in a
        * second.
@@ -155,16 +169,40 @@ class GetDashboardTrendsUseCase {
        * parallel plus one cost query. Thirty days is 300 round trips to draw
        * one chart. Two queries, one connection at a time, identical numbers.
        */
-      const buckets = await this.dashboardRepository.countManyByPeriod(
-        {
-          entities: visible.map((entity) => entity.key),
-          from: window.start,
-          to: window.end,
-          granularity,
-          timeZone,
-        },
-        businessId,
+      const buckets = await readWithRollup(
+        deliveriesFromRollup(rollupMode, showsDeliveries, now),
+        (deliveries) =>
+          this.dashboardRepository.countManyByPeriod(
+            {
+              entities: visible.map((entity) => entity.key),
+              from: window.start,
+              to: window.end,
+              granularity,
+              timeZone,
+              deliveriesFromRollup: deliveries,
+            },
+            businessId,
+          ),
+        "trends",
       );
+
+      if (rollupMode === "shadow" && showsDeliveries) {
+        shadowDeliveryRollup({
+          repository: this.dashboardRepository,
+          screen: "trends",
+          businessId,
+          timeZone,
+          now,
+          windows: [
+            {
+              from: window.start,
+              to: window.end,
+              granularity,
+              served: buckets.delivery ?? [],
+            },
+          ],
+        });
+      }
 
       const byEntity = new Map<string, Map<string, number>>(
         Object.entries(buckets).map(([key, rows]) => [

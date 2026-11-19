@@ -1,6 +1,7 @@
 import { inject, injectable } from "tsyringe";
 
 import { IDashboardRepository } from "../../repositories/IDashboard-repository";
+import type { PeriodCountBucket } from "../../dtos/dashboard-dto";
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
 
@@ -36,6 +37,12 @@ import {
   visibleDashboardEntities,
   type DashboardModule,
 } from "../shared/dashboard-entities";
+import {
+  dashboardRollupMode,
+  deliveriesFromRollup,
+  readWithRollup,
+  shadowDeliveryRollup,
+} from "../shared/delivery-rollup";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { AppError } from "@/shared/errors/AppError";
@@ -184,6 +191,16 @@ class GetDashboardOverviewUseCase {
 
     const lastSpan = samePointLastMonth(now, timeZone);
 
+    /**
+     * The "Entregas" series (plano-escala F4-22, DASHBOARD_ROLLUP_MODE):
+     * with "on", its arm of the two grouped reads below adds up the closed
+     * days the rollup job stored instead of counting months of deliveries;
+     * with "shadow", it is counted live as before and compared on the side.
+     */
+    const rollupMode = dashboardRollupMode();
+    const showsDeliveries = visible.some((entity) => entity.key === "delivery");
+    const rollup = deliveriesFromRollup(rollupMode, showsDeliveries, now);
+
     const readsVehicles = canReadKey(user, "vehicle_manage");
     const readsCosts = fleetEnabled && canReadKey(user, "service_order_manage");
 
@@ -224,14 +241,20 @@ class GetDashboardOverviewUseCase {
       operationSummary,
     ] = await boundedAll(OVERVIEW_READ_LANES, [
       () =>
-        this.dashboardRepository.countManyByMonth(
-          {
-            entities: visible.map((entity) => entity.key),
-            from: months.start,
-            to: months.end,
-            timeZone,
-          },
-          businessId,
+        readWithRollup(
+          rollup,
+          (deliveries) =>
+            this.dashboardRepository.countManyByMonth(
+              {
+                entities: visible.map((entity) => entity.key),
+                from: months.start,
+                to: months.end,
+                timeZone,
+                deliveriesFromRollup: deliveries,
+              },
+              businessId,
+            ),
+          "overview",
         ),
       () =>
         this.dashboardRepository.countManyTotals(
@@ -243,15 +266,21 @@ class GetDashboardOverviewUseCase {
         ),
       async () =>
         flows.length > 0
-          ? this.dashboardRepository.countManyByPeriod(
-              {
-                entities: flows.map((entity) => entity.key),
-                from: lastSpan.from,
-                to: lastSpan.to,
-                granularity: "month",
-                timeZone,
-              },
-              businessId,
+          ? readWithRollup(
+              rollup,
+              (deliveries) =>
+                this.dashboardRepository.countManyByPeriod(
+                  {
+                    entities: flows.map((entity) => entity.key),
+                    from: lastSpan.from,
+                    to: lastSpan.to,
+                    granularity: "month",
+                    timeZone,
+                    deliveriesFromRollup: deliveries,
+                  },
+                  businessId,
+                ),
+              "overview",
             )
           : {},
       async () =>
@@ -291,6 +320,37 @@ class GetDashboardOverviewUseCase {
             )
           : null,
     ] as const);
+
+    // The card's months and its "same point last month", both served live
+    // and compared with the rollup after the answer, off the request.
+    if (rollupMode === "shadow" && showsDeliveries) {
+      shadowDeliveryRollup({
+        repository: this.dashboardRepository,
+        screen: "overview",
+        businessId,
+        timeZone,
+        now,
+        windows: [
+          {
+            from: months.start,
+            to: months.end,
+            granularity: "month",
+            served: (monthly.delivery ?? []).map((bucket) => ({
+              period: bucket.month,
+              count: bucket.count,
+            })),
+          },
+          {
+            from: lastSpan.from,
+            to: lastSpan.to,
+            granularity: "month",
+            served:
+              (lastSpanCounts as Record<string, PeriodCountBucket[]>)
+                .delivery ?? [],
+          },
+        ],
+      });
+    }
 
     const byEntity = new Map<string, Map<string, number>>(
       Object.entries(monthly).map(([key, buckets]) => [

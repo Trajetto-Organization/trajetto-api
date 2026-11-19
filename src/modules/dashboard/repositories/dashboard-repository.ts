@@ -3,6 +3,9 @@ import { Prisma } from "@prisma/client";
 import database from "@/../infra/database";
 import {
   DashboardEntity,
+  DeliveriesFromRollup,
+  DeliveryCountSource,
+  DeliveryWindow,
   VehicleStatusCountResult,
   MaintenanceStatsParams,
   MaintenanceStatsResult,
@@ -17,8 +20,14 @@ import {
 } from "../dtos/dashboard-dto";
 
 import { IDashboardRepository } from "./IDashboard-repository";
+import { deliveryPieces } from "./delivery-pieces";
 import { DUE_SOON_DAYS } from "./maintenance-standing";
 import { periodBuckets } from "./period-buckets";
+
+import {
+  PENDING_DELIVERY_METRIC,
+  deliveryMetric,
+} from "@/shared/rollup/tenant-day-rules";
 
 /**
  * A UTC timestamp column compared with an instant, whatever the session zone.
@@ -91,7 +100,11 @@ class DashboardRepository implements IDashboardRepository {
     route: { table: "route" },
   };
 
-  /** One arm of the union: an entity's rows of the window, per bucket. */
+  /**
+   * One arm of the union: an entity's rows of the window, per bucket.
+   * `label` names the arm's rows (the entity, unless the caller tells two
+   * arms of the same entity apart).
+   */
   private static countArm(
     entity: DashboardEntity,
     params: {
@@ -101,6 +114,7 @@ class DashboardRepository implements IDashboardRepository {
       timeZone: string;
     },
     businessId?: string,
+    label: string = entity,
   ): Prisma.Sql {
     const source = DashboardRepository.MONTHLY_SOURCES[entity];
 
@@ -142,7 +156,7 @@ class DashboardRepository implements IDashboardRepository {
 
     return Prisma.sql`
       SELECT
-        ${entity}::text AS entity,
+        ${label}::text AS entity,
         (ARRAY[${periods}]::text[])[width_bucket("created_at", ARRAY[${thresholds}]::timestamp[])] AS period,
         count(*)::bigint AS count
       FROM ${Prisma.raw(`"public"."${source.table}"`)}
@@ -151,6 +165,117 @@ class DashboardRepository implements IDashboardRepository {
         ${source.extra ?? Prisma.empty}
       GROUP BY 2
     `;
+  }
+
+  /**
+   * The deliveries of the window, per bucket, from the closed days the
+   * rollup job stored (plano-escala F4-22, decision D52): the same rows the
+   * live arm returns, with the same labels, and only buckets with deliveries.
+   *
+   * The window is cut into the company's civil days (delivery-pieces.ts).
+   * A day is read from its stored row in tenant_day_count only when the row
+   * is there and can be trusted: a whole day already over, of a company not
+   * being purged (the job skips those and only drops their marks), with no
+   * mark in tenant_day_dirty and no pending day of the job touching it. A
+   * mark holds the UTC day of the changed row's created_at, so it touches
+   * the civil days that overlap that UTC day. Every other day (today, a
+   * clipped one, one not stored yet, one changed since it was counted) is
+   * counted live on delivery's (businessId, created_at) index, in the same
+   * statement. So the answer is the live count of the same snapshot: the
+   * protocol of the marks (tenant-day-rollup.ts) makes a stored row with no
+   * mark the count of its day.
+   *
+   * A MASTER (no businessId) reads every company on the platform's calendar
+   * and adds them up, each company's untrusted days counted live by its own
+   * index range; the deliveries of a company being purged are all live.
+   */
+  private static rollupArm(
+    label: string,
+    params: {
+      from: Date;
+      to: Date;
+      granularity: PeriodGranularity;
+      timeZone: string;
+      now: Date;
+    },
+    businessId?: string,
+  ): Prisma.Sql {
+    const pieces = deliveryPieces(params);
+
+    if (pieces.length === 0) {
+      return Prisma.sql`SELECT NULL::text AS entity, NULL::text AS period, 0::bigint AS count WHERE FALSE`;
+    }
+
+    const rows = Prisma.join(
+      pieces.map(
+        (piece, index) =>
+          Prisma.sql`(${index}::int, ${piece.period}::text, ${utc(piece.from)}, ${utc(piece.to)}, ${piece.day}::date)`,
+      ),
+    );
+
+    // The UTC days a mark touching the window can hold, both ends included.
+    const firstUtcDay = pieces[0].from.toISOString().slice(0, 10);
+    const lastUtcDay = pieces[pieces.length - 1].to.toISOString().slice(0, 10);
+
+    const company = businessId
+      ? Prisma.sql`WHERE "id" = ${businessId}`
+      : Prisma.empty;
+    const markedCompany = businessId
+      ? Prisma.sql`AND "businessId" = ${businessId}`
+      : Prisma.empty;
+
+    // Parenthesised, so the arm can carry its own WITH inside the union.
+    return Prisma.sql`(
+      WITH "piece" ("idx", "period", "f", "t", "day") AS (
+        VALUES ${rows}
+      ), "scope" AS (
+        SELECT "id", ("purge_state" IS NULL OR "purge_state" = 'SCHEDULED') AS "counted"
+        FROM "public"."business"
+        ${company}
+      ), "touched" AS (
+        SELECT DISTINCT m."businessId", p."idx"
+        FROM (
+          SELECT "businessId", "day" FROM "public"."tenant_day_dirty"
+          WHERE "day" BETWEEN ${firstUtcDay}::date AND ${lastUtcDay}::date
+            ${markedCompany}
+          UNION ALL
+          SELECT "businessId", "day" FROM "public"."tenant_day_count"
+          WHERE "metric" = ${PENDING_DELIVERY_METRIC}
+            AND "day" BETWEEN ${firstUtcDay}::date AND ${lastUtcDay}::date
+            ${markedCompany}
+        ) AS m
+        JOIN "piece" AS p
+          ON p."day" IS NOT NULL
+          AND m."day"::timestamp < p."t"
+          AND m."day"::timestamp + interval '1 day' > p."f"
+      ), "cell" AS (
+        SELECT p."period", s."id", p."f", p."t",
+          CASE WHEN s."counted" AND tc."businessId" IS NULL THEN st."value" END AS "stored"
+        FROM "piece" AS p
+        CROSS JOIN "scope" AS s
+        LEFT JOIN "public"."tenant_day_count" AS st
+          ON st."businessId" = s."id"
+          AND st."metric" = ${deliveryMetric(params.timeZone)}
+          AND st."day" = p."day"
+        LEFT JOIN "touched" AS tc
+          ON tc."businessId" = s."id" AND tc."idx" = p."idx"
+      ), "summed" AS (
+        SELECT c."period", sum(COALESCE(
+          c."stored",
+          (
+            SELECT count(*) FROM "public"."delivery" AS d
+            WHERE d."businessId" = c."id"
+              AND d."created_at" >= c."f"
+              AND d."created_at" < c."t"
+          )
+        ))::bigint AS "count"
+        FROM "cell" AS c
+        GROUP BY c."period"
+      )
+      SELECT ${label}::text AS entity, "period", "count"
+      FROM "summed"
+      WHERE "count" > 0
+    )`;
   }
 
   /**
@@ -172,6 +297,7 @@ class DashboardRepository implements IDashboardRepository {
       from: Date;
       to: Date;
       timeZone: string;
+      deliveriesFromRollup?: DeliveriesFromRollup;
     },
     businessId?: string,
   ): Promise<Record<string, MonthlyCountBucket[]>> {
@@ -260,6 +386,7 @@ class DashboardRepository implements IDashboardRepository {
       to: Date;
       granularity: PeriodGranularity;
       timeZone: string;
+      deliveriesFromRollup?: DeliveriesFromRollup;
     },
     businessId?: string,
   ): Promise<Record<string, PeriodCountBucket[]>> {
@@ -275,8 +402,17 @@ class DashboardRepository implements IDashboardRepository {
 
     if (wanted.length === 0) return result;
 
+    // The rollup's arm stays inside the same statement: one round trip and
+    // one connection per view, as before (F4-22).
+    const rollup = params.deliveriesFromRollup;
     const parts = wanted.map((entity) =>
-      DashboardRepository.countArm(entity, params, businessId),
+      entity === "delivery" && rollup
+        ? DashboardRepository.rollupArm(
+            entity,
+            { ...params, now: rollup.now },
+            businessId,
+          )
+        : DashboardRepository.countArm(entity, params, businessId),
     );
 
     const rows = await this.prisma.$queryRaw<
@@ -285,6 +421,68 @@ class DashboardRepository implements IDashboardRepository {
 
     for (const row of rows) {
       (result[row.entity] ??= []).push({
+        period: row.period,
+        count: Number(row.count),
+      });
+    }
+
+    return result;
+  }
+
+  /**
+   * Each window's deliveries from each source asked, as arms of ONE union:
+   * one statement, one snapshot. The live arm is the dashboard's own
+   * (countArm); the rollup's is the arm countManyByPeriod uses when
+   * DASHBOARD_ROLLUP_MODE=on. Their labels carry the window and the source.
+   */
+  async countDeliveryWindows(
+    params: {
+      windows: readonly DeliveryWindow[];
+      timeZone: string;
+      now: Date;
+      sources: readonly DeliveryCountSource[];
+    },
+    businessId?: string,
+  ): Promise<Array<Partial<Record<DeliveryCountSource, PeriodCountBucket[]>>>> {
+    const result = params.windows.map(() => {
+      const entry: Partial<Record<DeliveryCountSource, PeriodCountBucket[]>> =
+        {};
+
+      for (const source of params.sources) entry[source] = [];
+
+      return entry;
+    });
+
+    if (params.windows.length === 0 || params.sources.length === 0) {
+      return result;
+    }
+
+    const parts = params.windows.flatMap((window, index) =>
+      params.sources.map((source) => {
+        const label = `${index}:${source}`;
+        const arm = { ...window, timeZone: params.timeZone };
+
+        return source === "rollup"
+          ? DashboardRepository.rollupArm(
+              label,
+              { ...arm, now: params.now },
+              businessId,
+            )
+          : DashboardRepository.countArm("delivery", arm, businessId, label);
+      }),
+    );
+
+    const rows = await this.prisma.$queryRaw<
+      Array<{ entity: string; period: string; count: bigint }>
+    >(Prisma.join(parts, " UNION ALL "));
+
+    for (const row of rows) {
+      const [index, source] = row.entity.split(":") as [
+        string,
+        DeliveryCountSource,
+      ];
+
+      result[Number(index)]?.[source]?.push({
         period: row.period,
         count: Number(row.count),
       });

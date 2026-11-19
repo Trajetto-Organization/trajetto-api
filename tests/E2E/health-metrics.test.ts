@@ -596,6 +596,34 @@ describe("the meeting-wave numbers", () => {
     ]);
   });
 
+  it("count the dashboard rollup's shadow windows, the gate before it serves", async () => {
+    // Plano-escala F4-22: the owner switches DASHBOARD_ROLLUP_MODE=on after
+    // seven days with windows_diverged at 0. Per replica, since it started.
+    const { countRollupWindow } =
+      await import("@/shared/rollup/dashboard-rollup-metrics");
+    const before = (await metrics(masterToken)).json().dashboard_rollup;
+
+    countRollupWindow("diverged");
+
+    const after = (await metrics(masterToken)).json().dashboard_rollup;
+
+    expect(before.mode).toBe("shadow");
+    expect(after.windows_diverged).toBe(before.windows_diverged + 1);
+    expect(after.windows_compared).toBe(before.windows_compared + 1);
+    expect(after.last_divergence_at).toEqual(expect.any(String));
+    expect(Object.keys(after).sort()).toEqual([
+      "failures",
+      "last_divergence_at",
+      "mode",
+      "on_fallbacks",
+      "views_skipped",
+      "windows_agreed",
+      "windows_compared",
+      "windows_diverged",
+      "windows_raced",
+    ]);
+  });
+
   it("show the proof signing certificate's state without its serial or CNPJ", async () => {
     const body = (await metrics(masterToken)).json();
 

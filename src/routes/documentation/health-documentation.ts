@@ -948,6 +948,48 @@ const healthResponses = {
       .describe(
         "How often the phone's offline pre-check agreed with the server's reading of the same photo, counted on this replica when the server's verdict is written (decision 14.2). The stored columns are the durable source.",
       ),
+    dashboard_rollup: z
+      .object({
+        mode: z
+          .enum(["off", "shadow", "on"])
+          .describe("DASHBOARD_ROLLUP_MODE of this replica."),
+        windows_compared: z
+          .number()
+          .describe(
+            "Windows of the overview and the trends whose deliveries the shadow compared with the rollup.",
+          ),
+        windows_agreed: z
+          .number()
+          .describe("Compared windows where the rollup gave what was served."),
+        windows_raced: z
+          .number()
+          .describe(
+            "Compared windows that differed from what was served but agreed with a live count read in the same statement: the data moved between the two reads.",
+          ),
+        windows_diverged: z
+          .number()
+          .describe(
+            "Compared windows where the rollup and a live count of the same snapshot disagreed: a stored day is wrong. The gate of DASHBOARD_ROLLUP_MODE=on is 0 here for 7 days, on every replica, and no 'dashboard rollup diverged from the live count' line in the log.",
+          ),
+        views_skipped: z
+          .number()
+          .describe(
+            "Views not compared because another comparison of this replica was running (one at a time).",
+          ),
+        failures: z.number().describe("Comparisons that failed with an error."),
+        on_fallbacks: z
+          .number()
+          .describe(
+            "With on: reads of the rollup that failed and were counted live.",
+          ),
+        last_divergence_at: z
+          .string()
+          .nullable()
+          .describe("When this replica last saw a divergence."),
+      })
+      .describe(
+        "The dashboard's closed days (plano-escala F4-22, decision D52), on this replica since it started: with shadow, how the rollup compared with the live count served; with on, the reads that fell back to the live count.",
+      ),
     proof_signing: z
       .object({
         state: z

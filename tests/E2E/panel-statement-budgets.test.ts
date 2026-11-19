@@ -74,6 +74,7 @@ let managerToken = "";
 
 const initialMode = env.SESSION_LOOKUP_MODE;
 const initialTowerTtl = env.TOWER_SNAPSHOT_TTL_MS;
+const initialRollupMode = env.DASHBOARD_ROLLUP_MODE;
 
 /**
  * How long the database must stay quiet for a request's window to close.
@@ -316,6 +317,7 @@ beforeAll(async () => {
 afterAll(async () => {
   env.SESSION_LOOKUP_MODE = initialMode;
   env.TOWER_SNAPSHOT_TTL_MS = initialTowerTtl;
+  env.DASHBOARD_ROLLUP_MODE = initialRollupMode;
 
   await Promise.allSettled(storedKeys.map((key) => uploads.deleteFile(key)));
   await app?.close();
@@ -358,15 +360,19 @@ const READS = [
     // by maintenance standing and by type (with the types' names), the
     // maintenance costs, the operation of the day (counts, drivers,
     // unassigned, occurrences) and the recent activity with who did it.
+    // After the answer, DASHBOARD_ROLLUP_MODE=shadow (the default) compares
+    // the deliveries of its two windows with the closed days, in one
+    // statement (plano-escala F4-22).
     route: "GET /dashboard/overview",
     url: "/dashboard/overview",
-    budget: 16,
+    budget: 17,
   },
   {
-    // The company's modules, the registries' series and the work's.
+    // The company's modules, the registries' series and the work's, and
+    // the shadow's one statement after the answer.
     route: "GET /dashboard/trends",
     url: "/dashboard/trends?period=30d",
-    budget: 4,
+    budget: 5,
   },
   {
     // The page of the bell, its unread count and its total.
@@ -405,6 +411,42 @@ describe("the panel's hot reads", () => {
     expect(work.filter(isSessionStatement), trace).toHaveLength(1);
     expect(work.length, trace).toBe(budget);
   });
+});
+
+/**
+ * The dashboard in the other modes of DASHBOARD_ROLLUP_MODE (plano-escala
+ * F4-22): off is the read before the shadow, without its statement after
+ * the answer; on reads the closed days inside the same grouped statements,
+ * so it costs no statement more than off.
+ */
+describe("the dashboard in each rollup mode", () => {
+  afterAll(() => {
+    env.DASHBOARD_ROLLUP_MODE = initialRollupMode;
+  });
+
+  it.each([
+    { mode: "off", url: "/dashboard/overview", budget: 16 },
+    { mode: "on", url: "/dashboard/overview", budget: 16 },
+    { mode: "off", url: "/dashboard/trends?period=30d", budget: 4 },
+    { mode: "on", url: "/dashboard/trends?period=30d", budget: 4 },
+  ] as const)(
+    "$url with $mode costs $budget statements",
+    async ({ mode, url, budget }) => {
+      env.DASHBOARD_ROLLUP_MODE = mode;
+
+      const { response, work, trace } = await cost(() =>
+        app.inject({
+          method: "GET",
+          url,
+          headers: { authorization: `Bearer ${managerToken}` },
+        }),
+      );
+
+      expect(response.statusCode, response.body).toBe(200);
+      expect(work.filter(isSessionStatement), trace).toHaveLength(1);
+      expect(work.length, trace).toBe(budget);
+    },
+  );
 });
 
 /**

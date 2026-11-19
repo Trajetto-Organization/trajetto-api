@@ -5191,7 +5191,8 @@ decisão D52): `tenant_day_count` guarda a contagem de um dia fechado por
 empresa e métrica (chave `(businessId, metric, day)`), para a visão geral e
 as tendências somarem dias em vez de contar meses de entregas a cada visita.
 O dia de hoje é sempre contado ao vivo. Quem escreve é o job da F4-21, e
-ninguém lê antes de `DASHBOARD_ROLLUP_MODE` (F4-22). Um dia já contado muda
+nada sai da tabela para a tela antes de `DASHBOARD_ROLLUP_MODE=on` (F4-22;
+o padrão, `shadow`, só compara). Um dia já contado muda
 quando uma entrega dele é apagada (o estorno de uma importação, o expurgo) ou
 muda de status. Dois gatilhos em `delivery` gravam então em `tenant_day_dirty`
 o dia UTC do `created_at` da linha antiga: `AFTER UPDATE OF status`, só
@@ -5243,6 +5244,42 @@ desliga o job. A prova está em `tests/unitaires/rollup/`, no contrato
 `tests/E2E/tenant-day-rollup-repository-contract.test.ts` e em
 `tests/E2E/tenant-day-rollup.test.ts`, que compara cada dia guardado com a
 contagem ao vivo do dashboard em três fusos.
+
+**A visão geral e as tendências leem os dias fechados** (plano de escala
+F4-22, decisão D52; `src/modules/dashboard/usecases/shared/delivery-rollup.ts`
+e o `rollupArm` de `dashboard-repository.ts`). A série "Entregas" vem de um
+braço próprio do mesmo statement agrupado que conta as outras séries: uma ida
+ao banco por leitura, como antes. O braço corta a janela nos dias civis da
+empresa (`delivery-pieces.ts`). Um dia sai da linha guardada em
+`tenant_day_count` só quando dá para confiar nela: um dia inteiro que já
+acabou, de uma empresa que não está em expurgo, sem marca em
+`tenant_day_dirty` e sem dia pendente do job que o toque. A marca guarda o dia
+UTC, então toca os dias civis que cruzam esse dia UTC. O resto (hoje, um dia
+cortado pela janela, um ainda não guardado, um mudado depois de contado) é
+contado ao vivo no índice `(businessId, created_at)` de `delivery`, no mesmo
+statement. A resposta é, portanto, a contagem ao vivo da mesma foto do banco,
+e não uma aproximação de até 15 min. O MASTER soma todas as empresas no fuso
+da plataforma, cada uma com os dias dela, e as entregas de uma empresa em
+expurgo são todas contadas ao vivo. `DASHBOARD_ROLLUP_MODE` decide quem serve.
+Com `shadow`, o padrão, a tela serve a contagem ao vivo de hoje e, depois da
+resposta, compara os números com o braço do rollup, uma visita por vez em cada
+processo (as outras ficam sem comparação). O que difere é lido de novo, as
+duas contagens num statement só. Se a diferença some, foi só o dado que mudou
+entre as duas leituras (`windows_raced`). Se continua, um dia guardado está
+errado (`windows_diverged` em `dashboard_rollup` do `/health/metrics`, mais a
+linha "dashboard rollup diverged from the live count" no log, com a janela e
+as duas contagens). Com `on`, a tela serve o braço do rollup; se essa leitura
+falhar, conta ao vivo (`on_fallbacks`). `off` nem lê nem compara. O dono liga
+o `on` depois de 7 dias de shadow sem divergência, primeiro na staging e uma
+semana depois na produção. O custo: com `shadow`, um statement a mais depois
+da resposta (a visão geral 17, as tendências 5); com `on` ou `off`, os mesmos
+16 e 4 de antes (`tests/E2E/panel-statement-budgets.test.ts`). A prova está em
+`tests/unitaires/dashboard/delivery-pieces.test.ts`, em
+`tests/unitaires/dashboard/delivery-rollup.test.ts` e em
+`tests/E2E/dashboard-rollup-equivalence.test.ts`. Esse último confere 300
+janelas idênticas à contagem ao vivo, com marcas, dias pendentes, empresa em
+expurgo, empresa que o job nunca viu e relógios atrás e à frente do job, e
+também as mesmas respostas HTTP nos três modos.
 
 **Plano com os valores a cada execução**: o `pg` manda statements sem nome, e
 o Postgres planeja cada execução com os valores; o Prisma 6 nomeava os

@@ -49,6 +49,7 @@ import { realtimeMetrics } from "@/websocket";
 import { gateStats } from "@/shared/security/bcrypt-gate";
 import { legacyContractUsage } from "@/shared/http/legacy-contract-usage";
 import { deviceAgreementTotals } from "@/shared/ai-precheck/device-agreement-metrics";
+import { dashboardRollupMetrics } from "@/shared/rollup/dashboard-rollup-metrics";
 // Side effect: registers "ProofSigningService" (@registry).
 import "@/shared/services/proof-signing/proof-signing-service";
 import type { ProofSigningService } from "@/shared/services/proof-signing/proof-signing-service";
@@ -316,6 +317,12 @@ async function collectOperationalMetrics() {
     // Per replica, since it started (decisions 14.2–14.4, 14.8).
     legacy_contracts: legacyContractUsage(),
     ai_device_agreement_total: deviceAgreementTotals(),
+    // The shadow of the dashboard's closed days (plano-escala F4-22): per
+    // replica, since it started; the log keeps every divergence.
+    dashboard_rollup: {
+      mode: env.DASHBOARD_ROLLUP_MODE,
+      ...dashboardRollupMetrics(),
+    },
     proof_signing: container
       .resolve<ProofSigningService>("ProofSigningService")
       .health(),

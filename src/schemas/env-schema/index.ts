@@ -1150,6 +1150,24 @@ const envSchema = z
       z.coerce.number().int().min(0).max(60_000).default(10_000),
     ),
 
+    // Where the overview and the trends take the "Entregas" series from
+    // (plano-escala F4-22, decision D52; modules/dashboard/usecases/shared/
+    // delivery-rollup.ts). `shadow`, the default, serves the live count as
+    // before and compares it, after the answer and one view at a time per
+    // process, with the closed days the tenant-day-rollup job stores: what
+    // differs is counted in /health/metrics (dashboard_rollup) and logged.
+    // `on` serves the stored days plus a live count of the rest (today, a
+    // day not stored or changed since): the same numbers without reading
+    // months of deliveries on every view, switched on by the owner after
+    // seven days of shadow with no divergence. `off` neither reads nor
+    // compares (the shadow's own kill switch). Read on every view, so a
+    // test can flip it; in a deployment, changing it is a redeploy. Empty
+    // counts as absent.
+    DASHBOARD_ROLLUP_MODE: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.enum(["off", "shadow", "on"]).default("shadow"),
+    ),
+
     // The graceful shutdown (plano-escala F1-14). STOP_GRACE_PERIOD_MS is the
     // Stop Grace Period the Swarm really gives this service, in ms: every
     // deadline of the sequence is derived from it (shared/lifecycle/
@@ -1673,8 +1691,9 @@ const envSchema = z
     // days of deliveries into tenant_day_count, on the maintenance pool and
     // within CRON_PURGE_RUN_BUDGET_MS, for the overview and the trends to
     // add days up instead of counting months (F4-22). On by default: it only
-    // writes its own tables, and nobody reads them before
-    // DASHBOARD_ROLLUP_MODE. false stops the job (a kill switch, should a
+    // writes its own tables, and nothing is served from them before
+    // DASHBOARD_ROLLUP_MODE=on (the default shadow only compares them with
+    // the live count). false stops the job (a kill switch, should a
     // run ever weigh on the database); the stored days stop moving forward,
     // and a reader counts live whatever is not stored.
     TENANT_DAY_ROLLUP_ENABLED: z
