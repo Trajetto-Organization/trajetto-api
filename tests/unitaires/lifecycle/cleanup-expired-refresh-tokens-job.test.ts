@@ -17,6 +17,8 @@ const calls: string[] = [];
 const purge = vi.hoisted(() => ({
   result: { deleted: 0, stoppedEarly: false },
   limits: null as unknown,
+  revocations: { deleted: 0, stoppedEarly: false },
+  revocationLimits: null as unknown,
 }));
 
 vi.mock("@/modules/user/repositories/user-tokens-repository", () => ({
@@ -36,6 +38,18 @@ vi.mock("@/modules/user/repositories/user-tokens-repository", () => ({
   },
 }));
 
+vi.mock("@/shared/auth/session-revocation", () => ({
+  purgeSessionRevocationLog: async (
+    _client: unknown,
+    limits: { deadline: number },
+  ) => {
+    calls.push("session_revocation_log");
+    purge.revocationLimits = limits;
+
+    return purge.revocations;
+  },
+}));
+
 vi.mock("@/modules/user/repositories/driver-trusted-device-repository", () => ({
   DriverTrustedDeviceRepository: class {
     async deleteStale() {
@@ -49,6 +63,8 @@ vi.mock("@/modules/user/repositories/driver-trusted-device-repository", () => ({
 beforeEach(() => {
   calls.length = 0;
   purge.limits = null;
+  purge.revocations = { deleted: 0, stoppedEarly: false };
+  purge.revocationLimits = null;
 });
 
 async function job() {
@@ -86,6 +102,7 @@ describe("the expired refresh tokens job", () => {
       "refresh_token",
       "push_device_token",
       "driver_trusted_device",
+      "session_revocation_log",
     ]);
     expect(outcome).toBeInstanceOf(PartialRunError);
     expect((outcome as Error).message).toMatch(/^\[partial\] .*refresh_token/);
@@ -95,6 +112,27 @@ describe("the expired refresh tokens job", () => {
     purge.result = { deleted: 3, stoppedEarly: false };
 
     await expect((await job()).handler()).resolves.toBeUndefined();
-    expect(calls).toHaveLength(3);
+    expect(calls).toHaveLength(4);
+  });
+
+  /**
+   * The session revocation log (plano-escala F5-21) keeps 7 days: purged
+   * last, inside the same budget, and partial like the tokens.
+   */
+  it("purges the session revocation log inside the budget, partial when rows are left", async () => {
+    purge.result = { deleted: 0, stoppedEarly: false };
+    purge.revocations = { deleted: 40_000, stoppedEarly: true };
+
+    const outcome = await (await job()).handler().then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+    const { deadline } = purge.revocationLimits as { deadline: number };
+
+    expect(deadline).toBeLessThanOrEqual(Date.now() + 300_000);
+    expect((outcome as Error).message).toMatch(
+      /^\[partial\] .*session_revocation_log/,
+    );
   });
 });

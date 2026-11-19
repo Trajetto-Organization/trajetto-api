@@ -1,6 +1,7 @@
 import { databaseBatch } from "@/../infra/database";
 import { DriverTrustedDeviceRepository } from "@/modules/user/repositories/driver-trusted-device-repository";
 import { UserTokensRepository } from "@/modules/user/repositories/user-tokens-repository";
+import { purgeSessionRevocationLog } from "@/shared/auth/session-revocation";
 import { throwIfPartial } from "@/shared/errors/partial-run-error";
 import { CronJobDefinition } from "@/shared/services/cron-scheduler-service";
 import { logger } from "@/shared/logging/logger";
@@ -23,6 +24,7 @@ const log = logger.child({
  * delete it used to be would run into the 30 s statement_timeout. When the
  * budget or the ceiling stops it with expired rows left, the other two steps
  * still run, and the run ends partial for the catch-up's morning window.
+ * Last, the session revocation log's rows older than 7 days (F5-21).
  */
 const cleanupExpiredRefreshTokensJob: CronJobDefinition = {
   name: "cleanup-expired-refresh-tokens",
@@ -50,8 +52,21 @@ const cleanupExpiredRefreshTokensJob: CronJobDefinition = {
     ).deleteStale();
     log.info({ deleted: phones }, "stale trusted driver phones removed");
 
+    // The session revocation log past its 7 days (plano-escala F5-21):
+    // the feed reads only the last second of it.
+    const revocations = await purgeSessionRevocationLog(databaseBatch, {
+      deadline: purgeDeadline(),
+    });
+    log.info(
+      { deleted: revocations.deleted },
+      "old session revocation rows removed",
+    );
+
     // Expired tokens left: FAILED "[partial]", after the other steps ran.
-    throwIfPartial({ refresh_token: expired });
+    throwIfPartial({
+      refresh_token: expired,
+      session_revocation_log: revocations,
+    });
   },
 };
 

@@ -4145,6 +4145,28 @@ Provas: `tests/unitaires/socket/socket-admission-race.test.ts` e o describe
 `"a revocation between the handshake's reads and its joins"` de
 `tests/E2E/socket-revocation.test.ts`.
 
+**Log de revogação de sessão** (plano de escala F5-21,
+`src/shared/auth/session-revocation.ts`): gatilhos no banco gravam uma
+linha em `session_revocation_log` (`id`, `kind`, `subject_id`, `at`) na
+mesma transação de toda escrita que encerra ou estreita uma sessão: no
+usuário, a senha, o acesso, o papel, a `session_version`, a empresa, o
+motorista, o perfil, a anonimização e a exclusão (`user`); na empresa, o
+`is_active`, os módulos e a exclusão (`business`); na filial, o
+`is_active` e a exclusão (`branch`); no motorista, o status, a empresa, a
+filial e a exclusão (`driver`); no perfil, as permissões e a exclusão
+(`profile`); e a família do refresh token cujo token vivo foi apagado ou
+revogado sem sucessor (`refresh_family`). A linha diz de quem são as
+sessões a reler, nunca o que mudou. A rotação normal do refresh não grava
+nada (o `revoked_at` dela vem com `replaced_by_jti`), nem o expurgo do que
+já estava vencido ou revogado. Cada gatilho só dispara quando uma coluna
+coberta muda de verdade (`UPDATE OF` com `WHEN`): o `last_seen_at`, os
+contadores de login e as preferências não chamam a função. A lista em
+`session-revocation.ts` é o contrato: o E2E `session-revocation-triggers`
+confere os gatilhos do banco contra ela, e o unitário
+`session-revocation-coverage` falha quando a conferência da sessão passa a
+ler um campo que nenhum gatilho cobre. O log guarda 7 dias (o expurgo
+noturno do refresh token apaga o resto).
+
 **Escala horizontal** ([ADR 0008](./adr/0008-escala-horizontal.md)): N
 réplicas idênticas atrás do Traefik, sem
 cookie sticky; o estado está no Postgres; os crons e as filas não duplicam
