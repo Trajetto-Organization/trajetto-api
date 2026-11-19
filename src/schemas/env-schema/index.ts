@@ -1452,6 +1452,9 @@ const envSchema = z
     // for the next sync. A row's updated_at is the moment its writer built
     // it, and the write commits later (60 s at most, the import reversal),
     // on a replica whose clock may differ; 2 min covers both. At least 60 s.
+    // The standby's own delay is not in it: with DATABASE_REPLICA_URL the
+    // watermark goes back up to 24 s more on its own (the replica guard's
+    // bound, integration-read-controller.ts).
     SYNC_WATERMARK_MARGIN_MS: z.preprocess(
       (value) => (value === "" ? undefined : value),
       z.coerce.number().int().min(60_000).max(86_400_000).default(120_000),

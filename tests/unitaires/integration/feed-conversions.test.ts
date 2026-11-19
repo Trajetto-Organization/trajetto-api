@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { env } from "@/env";
 import { syncWatermark } from "@/modules/integration/usecases/integration-read/integration-read-controller";
+import { REPLICA_MAX_STALENESS_MS } from "@/shared/database/replica-guard";
 import {
   collectAlerts,
   evaluateAlerts,
@@ -26,7 +27,8 @@ import {
  *    stray one (another epoch the cluster's history does not back), which
  *    anybody with an API key can send: it has a count of its own, outside
  *    the one the alert sums.
- *  - sync_watermark is the read's start minus SYNC_WATERMARK_MARGIN_MS.
+ *  - sync_watermark is the read's start minus SYNC_WATERMARK_MARGIN_MS,
+ *    and the standby's bound more with DATABASE_REPLICA_URL.
  */
 const NOW = new Date("2026-11-18T12:00:00Z");
 
@@ -96,6 +98,31 @@ describe("the feed-epoch-conversion alert", () => {
 describe("sync_watermark", () => {
   it("is the read's start minus the margin, as ISO 8601", () => {
     expect(env.SYNC_WATERMARK_MARGIN_MS).toBe(120_000);
+    expect(env.DATABASE_REPLICA_URL).toBeUndefined();
     expect(syncWatermark(NOW.getTime())).toBe("2026-11-18T11:58:00.000Z");
+  });
+
+  // With a standby, /deliveries and /routes may read data up to the replica
+  // guard's bound old (plano-escala F4-42, the review of wave 17): a write
+  // the primary committed in that time is not in the read, and a watermark
+  // of the margin alone would put the next sync past it for good, the
+  // margin being sized for the writes. It goes back that much more, at the
+  // smallest margin the schema takes too.
+  it("goes back the standby's bound more when the lists may read there", () => {
+    const margin = env.SYNC_WATERMARK_MARGIN_MS;
+
+    env.DATABASE_REPLICA_URL =
+      "postgresql://trajetto_read:x@standby.example.com:5432/trajetto";
+
+    try {
+      expect(REPLICA_MAX_STALENESS_MS).toBe(24_000);
+      expect(syncWatermark(NOW.getTime())).toBe("2026-11-18T11:57:36.000Z");
+
+      env.SYNC_WATERMARK_MARGIN_MS = 60_000;
+      expect(syncWatermark(NOW.getTime())).toBe("2026-11-18T11:58:36.000Z");
+    } finally {
+      env.DATABASE_REPLICA_URL = undefined;
+      env.SYNC_WATERMARK_MARGIN_MS = margin;
+    }
   });
 });

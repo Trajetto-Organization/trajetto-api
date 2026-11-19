@@ -23,7 +23,9 @@
  * after 3 good rounds in a row, so a standby hovering around the limit
  * does not flap; and a process starts on the primary until it has seen
  * those 3. A read that went to the standby is at most the limit plus one
- * round old.
+ * round old: REPLICA_MAX_STALENESS_MS, which a reader that hands out a
+ * position in time (the sync_watermark of /integration/v1/deliveries and
+ * /routes) counts on top of its own margin.
  *
  * The beat failing (the primary down, a grant missing) decides nothing by
  * itself: the age it no longer refreshes does. Without DATABASE_REPLICA_URL
@@ -43,6 +45,17 @@ const REPLICA_GUARD_DEFAULTS = {
   /** How long one beat or one age may take before it counts as failed. */
   checkTimeoutMs: 2_000,
 } as const;
+
+/**
+ * The oldest a read on the standby can be with those numbers: an age is at
+ * most maxLagMs when measured, and the next round that could send the
+ * reads back ends at most one interval and its two timeouts (the beat's,
+ * the age's) later. 15 + 5 + 2 + 2 = 24 s.
+ */
+const REPLICA_MAX_STALENESS_MS =
+  REPLICA_GUARD_DEFAULTS.maxLagMs +
+  REPLICA_GUARD_DEFAULTS.intervalMs +
+  2 * REPLICA_GUARD_DEFAULTS.checkTimeoutMs;
 
 type ReplicaGuardOptions = Partial<
   Record<keyof typeof REPLICA_GUARD_DEFAULTS, number>
@@ -302,6 +315,7 @@ function createReadRouter<Client>(parts: ReadRouterParts<Client>) {
 
 export {
   REPLICA_GUARD_DEFAULTS,
+  REPLICA_MAX_STALENESS_MS,
   ReplicaGuard,
   createReadRouter,
   prismaReplicaProbe,

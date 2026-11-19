@@ -12,6 +12,7 @@ import {
 } from "@/schemas/integration-schema";
 
 import { env } from "@/env";
+import { REPLICA_MAX_STALENESS_MS } from "@/shared/database/replica-guard";
 import { AppError } from "@/shared/errors/AppError";
 
 /**
@@ -24,9 +25,20 @@ import { AppError } from "@/shared/errors/AppError";
  * here sees it. The integrator keeps the watermark of the FIRST page of a
  * walk, not of the last one: a row of an early page that changes while
  * the walk goes on is above it.
+ *
+ * With DATABASE_REPLICA_URL these lists may read on the standby
+ * (plano-escala F4-42), which shows the primary of up to
+ * REPLICA_MAX_STALENESS_MS before: a write the primary committed in that
+ * time is not in this read, and the margin, sized for the writes alone,
+ * would put the next sync past it for good. So the watermark goes back
+ * that much more, whatever the margin is set to (the review of wave 17).
+ * A sync then reads up to 24 s again: duplicates, deduplicated by id,
+ * never a gap.
  */
 function syncWatermark(nowMs: number = Date.now()): string {
-  return new Date(nowMs - env.SYNC_WATERMARK_MARGIN_MS).toISOString();
+  const standby = env.DATABASE_REPLICA_URL ? REPLICA_MAX_STALENESS_MS : 0;
+
+  return new Date(nowMs - env.SYNC_WATERMARK_MARGIN_MS - standby).toISOString();
 }
 
 /**

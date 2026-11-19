@@ -4706,8 +4706,10 @@ OpenStreetMap são recusados.
   que voltou dias depois) é convertida igual, conta em
   `feed.stray_epoch_conversions` e não alerta. `resume_cursor` (onde a próxima consulta
   começa, também na última página) e o `sync_watermark` do `/deliveries` e
-  do `/routes` (a leitura menos `SYNC_WATERMARK_MARGIN_MS`, o
-  `updated_since` da próxima sincronização) saem nos dois modos. O `xmin` é
+  do `/routes` (a leitura menos `SYNC_WATERMARK_MARGIN_MS` e, com
+  `DATABASE_REPLICA_URL`, menos os 24 s que uma leitura no standby pode
+  ter de atraso; o `updated_since` da próxima sincronização) saem nos dois
+  modos. O `xmin` é
   do cluster inteiro: uma transação aberta em qualquer banco segura o feed
   (atrasa, não pula), por isso o E2E de duas conexões
   (`integration-feed-commit-order`) roda na fase de um arquivo por vez.
