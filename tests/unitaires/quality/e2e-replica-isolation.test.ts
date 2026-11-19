@@ -101,6 +101,39 @@ describe("the list of E2E files that start replicas", () => {
 });
 
 /**
+ * What makes a file wait on the cluster's xmin horizon. Before it settles a
+ * changed day, the dashboard's rollup (plano-escala F4-21) waits for every
+ * write transaction open ANYWHERE in the cluster when it started: in the
+ * parallel phase, a writer another file keeps open in its own database (a
+ * lock or 55P03 test, a bulk seed) holds the wait past the 5 s test timeout,
+ * a red that a run alone never shows. The job's entry point waits only when
+ * a mark is pending; a file that runs it before any delivery changes, as
+ * dashboard-rollup-equivalence does, never waits.
+ */
+const WAITS_ON_THE_HORIZON = [
+  /\brollUpTenantDays\(/,
+  /\.settledSince\(/,
+  /\bpg_current_snapshot\(/,
+  /\bpg_snapshot_xmin\(/,
+];
+
+/** The file and the shared suites it runs (../contract): their cases run in it. */
+function sourceWithSuites(name: string): string {
+  const source = readFileSync(join(E2E, name), "utf8");
+  const suites = [...source.matchAll(/from "(\.\.\/contract\/[^"]+)"/g)].map(
+    ([, path]) => readFileSync(`${resolve(E2E, path)}.ts`, "utf8"),
+  );
+
+  return [source, ...suites].join("\n");
+}
+
+function waitsOnTheHorizon(name: string): boolean {
+  const source = sourceWithSuites(name);
+
+  return WAITS_ON_THE_HORIZON.some((pattern) => pattern.test(source));
+}
+
+/**
  * The files that measure what the whole cluster disturbs (the xmin horizon
  * every database shares, plano-escala F2-13) run in the same
  * one-file-at-a-time phase, without starting replicas.
@@ -113,6 +146,26 @@ describe("the cluster-sensitive files", () => {
         true,
       );
     }
+  });
+
+  it("has every file that waits on the cluster's xmin horizon", () => {
+    const missing = e2eFiles.filter(
+      (name) =>
+        waitsOnTheHorizon(name) &&
+        !(SERIAL_E2E_FILES as readonly string[]).includes(name),
+    );
+
+    expect(missing).toEqual([]);
+  });
+
+  it("tells a file that waits on the horizon from one that only runs the job", () => {
+    expect(waitsOnTheHorizon("tenant-day-rollup.test.ts")).toBe(true);
+    expect(
+      waitsOnTheHorizon("tenant-day-rollup-repository-contract.test.ts"),
+    ).toBe(true);
+    expect(waitsOnTheHorizon("dashboard-rollup-equivalence.test.ts")).toBe(
+      false,
+    );
   });
 });
 

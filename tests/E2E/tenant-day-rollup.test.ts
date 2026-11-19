@@ -31,6 +31,11 @@ import { seedBusiness, seedShipper } from "../contract/seed";
  * day while the old mark was there (so the trigger left no mark of its own)
  * is waited for before the day is counted, and a run that cannot wait, or
  * dies after taking the marks, leaves their days for the next run.
+ *
+ * Runs in the one-file-at-a-time phase (SERIAL_E2E_FILES): that wait reads
+ * the snapshot's xmin, which belongs to the whole cluster, so a writer
+ * another file keeps open in its own database would hold it past the test's
+ * timeout, and this file's open writers would hold the other files back.
  */
 const prisma = createPrismaClient();
 const repo = new TenantDayRollupRepository(prisma);

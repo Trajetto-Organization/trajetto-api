@@ -17,6 +17,10 @@ import { seedBusiness, seedShipper } from "../contract/seed";
  * Plano-escala F4-21: the rollup's repository against Postgres (the counts,
  * the marks taken under SKIP LOCKED, the pending days in tenant_day_count)
  * and against the twin the job's unit tests run on.
+ *
+ * Runs in the one-file-at-a-time phase (SERIAL_E2E_FILES): the horizon case
+ * waits for every write transaction open in the cluster, in any database,
+ * which another file's open writer would hold past the test's timeout.
  */
 const prisma = createPrismaClient();
 const memory = new InMemoryTenantDayRollupRepository();

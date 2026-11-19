@@ -284,7 +284,14 @@ escrita aberta no banco de outro arquivo segura a limpeza de que o update HOT
 precisa (`driver-last-position-hot.test.ts`, plano de escala F2-13), e
 segura o horizonte do feed da integração pela ordem de commit
 (`integration-feed-commit-order.test.ts`, F2-05: as transações abertas de
-propósito dele também segurariam as dos outros arquivos).
+propósito dele também segurariam as dos outros arquivos). Pelo mesmo
+horizonte, o rollup do dashboard (F4-21) espera, antes de fechar um dia
+alterado, toda escrita aberta no cluster quando começou; ao lado de um
+arquivo que segura uma escrita (um teste de lock, um seed em lote), essa
+espera passaria do tempo limite do teste (`tenant-day-rollup.test.ts` e
+`tenant-day-rollup-repository-contract.test.ts`).
+`quality/e2e-replica-isolation.test.ts` falha se um arquivo que espera esse
+horizonte ficar fora da lista.
 
 A fase de réplicas é a que mais pede memória: `resilience-replica-drain.test.ts`
 sobe 10 réplicas ao mesmo tempo. Numa réplica Linux do CI (11/11/2026) o job

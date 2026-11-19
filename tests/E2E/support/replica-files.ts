@@ -38,12 +38,18 @@ const REPLICA_E2E_FILES = [
  * ANYWHERE in the cluster (the snapshot's xmin), not just in the file's own
  * database: a write transaction open in another file's database stops the
  * pruning a HOT update needs (plano-escala F2-13), as it would freeze the
- * integration feed's horizon (F2-05). Not checked for replicas.
+ * integration feed's horizon (F2-05) and hold the dashboard's rollup, which
+ * waits for every write transaction open in the cluster before it settles a
+ * changed day (F4-21), past the test's timeout. Not checked for replicas;
+ * tests/unitaires/quality/e2e-replica-isolation.test.ts fails when a file
+ * that waits on that horizon is missing here.
  */
 const SERIAL_E2E_FILES = [
   "driver-last-position-hot.test.ts",
   "integration-feed-commit-order.test.ts",
   "integration-feed-across-window.test.ts",
+  "tenant-day-rollup.test.ts",
+  "tenant-day-rollup-repository-contract.test.ts",
 ] as const;
 
 /** E2E_PHASE values (vite.config.mts). Unset: every file, as always. */
