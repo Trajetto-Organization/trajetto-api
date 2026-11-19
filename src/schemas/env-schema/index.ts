@@ -1115,6 +1115,26 @@ const envSchema = z
       z.enum(MEMORY_BUDGET_MODES).default("warn"),
     ),
 
+    // The bytes every tenant snapshot of the process may hold together
+    // (plano-escala F4-10, shared/cache/tenant-snapshot.ts; ADR 0002,
+    // addendum of 19/11/2026): the per-company copies of the screens every
+    // operator polls, in this process's memory only. Least recently used
+    // out first, never more than an eighth of the heap whatever this says
+    // (it lives inside --max-old-space-size, so the memory budget needs no
+    // new term), and 0 turns the snapshots off. 64 MiB; the ceiling of
+    // 1 GiB refuses a value typed in the wrong unit. Literals, not the
+    // module's constants: that module reads env, and the unit test holds
+    // the two equal. Empty counts as absent.
+    TENANT_SNAPSHOT_MAX_BYTES: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce
+        .number()
+        .int()
+        .min(0)
+        .max(1024 * 1024 * 1024)
+        .default(64 * 1024 * 1024),
+    ),
+
     // The graceful shutdown (plano-escala F1-14). STOP_GRACE_PERIOD_MS is the
     // Stop Grace Period the Swarm really gives this service, in ms: every
     // deadline of the sequence is derived from it (shared/lifecycle/

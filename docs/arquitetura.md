@@ -5144,6 +5144,20 @@ requisição para outra nada fica guardado. A prova está em
 `tests/unitaires/time/business-zone-per-request.test.ts`, e os números novos
 das rotas, em `tests/E2E/panel-statement-budgets.test.ts`.
 
+**Foto por empresa na memória do processo** (plano de escala F4-10):
+`src/shared/cache/tenant-snapshot.ts` responde uma vez por intervalo, em cada
+processo, a leitura que todos os operadores de uma empresa repetem (a F4-11
+liga a torre, o resumo e o `/route/live`; a F4-23, o dashboard). É irmã de
+`snapshot-cache.ts`, mas para dado de empresa, e por isso nunca vai ao Redis:
+a chave leva a foto, o `businessId` e a variante; a rota confere a permissão
+e resolve a empresa antes de olhar a foto; o cálculo roda fora da requisição
+de quem chegou primeiro; uma leitura por vez por chave; e guarda o corpo já
+serializado com o ETag, para a rota responder 304. O teto é um só para o
+processo, `TENANT_SNAPSHOT_MAX_BYTES` (64 MiB, nunca mais que um oitavo do
+heap), e sai primeiro a cópia usada há mais tempo. Intervalo ou teto 0
+desligam a foto. As regras e o porquê estão no adendo de 19/11/2026 do
+[ADR 0002](./adr/0002-redis-descartavel.md).
+
 **Plano com os valores a cada execução**: o `pg` manda statements sem nome, e
 o Postgres planeja cada execução com os valores; o Prisma 6 nomeava os
 statements e, depois de cinco execuções, caía no plano genérico. Query cara de

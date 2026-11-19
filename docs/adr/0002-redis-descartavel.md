@@ -2,8 +2,10 @@
 
 - **Status:** aceito. ADR da fase final, ampliado depois sem mudar a regra
   (veja _Os usos de hoje_), com o adendo de 10/11/2026 (as chaves do
-  geocodificador e o cache da busca de endereço) e o de 18/11/2026 (o canal
-  do despertar entre processos, [ADR 0012](./0012-papeis-de-processo.md)).
+  geocodificador e o cache da busca de endereço), o de 18/11/2026 (o canal
+  do despertar entre processos, [ADR 0012](./0012-papeis-de-processo.md)) e
+  o de 19/11/2026 (a foto por empresa, que fica na memória do processo e
+  não no Redis).
 - **Escopo:** `trajetto-api`.
 - **Origem deste arquivo:** o texto integral ficava na pasta `docs/` da raiz
   do workspace, que não é versionada e está vazia. Este arquivo foi
@@ -39,7 +41,8 @@ provedor (veja o adendo de 10/11/2026, abaixo).
 | geocodificador e busca de endereço (`geocoding:*`)             | `src/shared/delivery/geocoding/geocoding-keys.ts` (as chaves), `geocoding-gate.ts`, `geocoding-budget.ts` e `src/shared/services/address-search/address-search-limits.ts` | nada é perguntado ao provedor (falha fechada): a entrega espera o próximo minuto, a busca responde 503 e o clique no mapa continua gravando |
 
 Fora do cache da busca de endereço (adendo de 10/11/2026), nenhum dado de
-empresa nem de pessoa entra em cache. A trava de senha por conta fica no
+empresa nem de pessoa entra em cache no Redis. Na memória do processo, só a
+foto por empresa do adendo de 19/11/2026. A trava de senha por conta fica no
 Postgres justamente porque o rate limit do Redis falha aberto (comentário de
 `failed_login_attempts` em `prisma/schema.prisma`).
 
@@ -145,6 +148,63 @@ Nada muda na persistência (RDB e AOF desligados) nem no backup. Prova:
 `tests/unitaires/wake/wake-bus.test.ts` e o despertar entre réplicas de
 `tests/E2E/process-roles-replicas.test.ts`.
 
+## Adendo de 19/11/2026: a foto por empresa, na memória do processo
+
+As telas que os operadores de uma transportadora deixam abertas o dia todo
+(a torre de controle, o resumo da operação e a primeira página do mapa ao
+vivo) repetem a mesma pergunta a cada poucos segundos, e a resposta depende
+só da empresa. Cinquenta operadores olhando a torre de uma empresa fazem a
+mesma leitura cinquenta vezes a cada atualização. O plano de escala (F4-10)
+cria a foto por empresa, em `src/shared/cache/tenant-snapshot.ts`, irmã de
+`src/shared/cache/snapshot-cache.ts`: em cada processo, a leitura é feita
+uma vez por intervalo, e as outras requisições recebem a mesma resposta.
+Quem passa a ler por ela são a F4-11 (a torre, o resumo e o `/route/live`,
+com o intervalo em `TOWER_SNAPSHOT_TTL_MS`) e a F4-23 (a visão geral e as
+tendências do dashboard). Até lá, nenhuma rota usa a foto.
+
+**Fica fora do Redis de propósito.** A regra deste ADR não muda: no Redis,
+o único dado de empresa em cache continua sendo o da busca de endereço. As
+regras da foto:
+
+- **só na memória do processo**: a cópia morre com o processo. Um dump do
+  Redis nunca traz a operação de uma empresa, e nenhuma cópia compartilhada
+  passa de um deploy para o outro. Cada réplica calcula a sua, no máximo uma
+  vez por intervalo para cada empresa e variante. Com 10 s e sem pedido de
+  atualização, são no máximo seis cálculos por minuto em cada réplica;
+- **a chave leva a empresa**: é o nome da foto, o `businessId` e a variante
+  (a página e os filtros do `/route/live`, ou o que o perfil pode ver na
+  F4-23). Sem `businessId`, nada é guardado nem lido. Cada foto é criada uma
+  vez por processo, e uma segunda com o mesmo nome é recusada, para uma não
+  servir a cópia da outra;
+- **a permissão vem antes**: a rota confere a permissão e resolve a empresa
+  (`resolveOperationsBusiness`) em toda requisição, antes de olhar a foto.
+  Uma cópia nunca deixa uma requisição entrar. O cálculo depende só da
+  empresa e da variante, nunca de quem pergunta;
+- **o cálculo roda fora da requisição de quem chegou primeiro**: nada dela
+  (o usuário já lido, o host, o id da requisição) vai parar numa cópia
+  servida a outra pessoa;
+- **tem teto**: um orçamento para o processo inteiro,
+  `TENANT_SNAPSHOT_MAX_BYTES` (64 MiB, e nunca mais que um oitavo do heap),
+  que tira primeiro a cópia usada há mais tempo. Nenhuma cópia acima de um
+  quarto do orçamento é guardada, para uma empresa grande não expulsar as
+  outras. O teto fica dentro do heap principal, então a conta do orçamento
+  de memória do boot não ganha parcela nova;
+- **guarda o corpo pronto e o ETag**: um acerto não paga as consultas nem a
+  serialização, e a rota pode responder 304. O ETag sai só do corpo: o mesmo
+  corpo tem o mesmo ETag em qualquer réplica;
+- **uma leitura por vez** para cada chave (single-flight), e a cópia vale a
+  partir do começo da leitura, então nunca é servida por mais que o
+  intervalo depois de os dados terem sido lidos. Pedir para atualizar
+  recalcula só se a cópia tiver pelo menos 2 s;
+- **desliga sem deploy de código**: intervalo 0 ou orçamento 0, e cada
+  requisição volta a ler sozinha, como antes.
+
+Uma falha no cálculo chega a todos que esperavam por ele e não deixa cópia:
+a próxima requisição lê de novo. Nada muda no Redis, na persistência nem no
+backup. Prova: `tests/unitaires/cache/tenant-snapshot.test.ts` (50 leituras
+ao mesmo tempo fazem um cálculo, uma empresa nunca recebe a cópia de outra,
+o teto, a atualização e o desligamento).
+
 ## Fontes
 
 - [`arquitetura.md` → Redis e tempo real](../arquitetura.md#redis-e-tempo-real)
@@ -157,3 +217,5 @@ Nada muda na persistência (RDB e AOF desligados) nem no backup. Prova:
   `geocoding-budget.ts` e `address-search-limits.ts`.
 - Adendo de 18/11/2026: [`deploy.md` → 19. Papéis da mesma imagem](../deploy.md#19-papéis-da-mesma-imagem)
   (Despertar entre processos) e o comentário de `src/shared/wake/wake-bus.ts`.
+- Adendo de 19/11/2026: o plano de escala (F4-10) e o comentário de
+  `src/shared/cache/tenant-snapshot.ts`.
