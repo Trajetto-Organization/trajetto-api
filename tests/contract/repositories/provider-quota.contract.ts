@@ -116,6 +116,45 @@ function providerQuotaContract(harness: () => ProviderQuotaHarness): void {
     });
   });
 
+  it("gives a unit back, never below 0, and only to that scope's day", async () => {
+    const { repo } = harness();
+    const take = () =>
+      repo.take(OTHER_PROVIDER, DAY, [{ scope: "whatsapp:a", limit: 2 }]);
+
+    await take();
+    await take();
+    await repo.take(OTHER_PROVIDER, NEXT_DAY, [
+      { scope: "whatsapp:a", limit: 2 },
+    ]);
+
+    await repo.giveBack(OTHER_PROVIDER, DAY, "whatsapp:a");
+
+    expect(await repo.used(OTHER_PROVIDER, DAY, ["whatsapp:a"])).toEqual({
+      "whatsapp:a": 1,
+    });
+    expect(await repo.used(OTHER_PROVIDER, NEXT_DAY, ["whatsapp:a"])).toEqual({
+      "whatsapp:a": 1,
+    });
+
+    // The unit given back is taken again, up to the limit.
+    expect(await take()).toEqual({ granted: true, used: [2] });
+
+    await repo.giveBack(OTHER_PROVIDER, DAY, "whatsapp:a");
+    await repo.giveBack(OTHER_PROVIDER, DAY, "whatsapp:a");
+    await repo.giveBack(OTHER_PROVIDER, DAY, "whatsapp:a");
+
+    expect(await repo.used(OTHER_PROVIDER, DAY, ["whatsapp:a"])).toEqual({
+      "whatsapp:a": 0,
+    });
+
+    // Nothing for a day nobody took from.
+    await repo.giveBack(OTHER_PROVIDER, "2026-11-20", "whatsapp:a");
+
+    expect(
+      await repo.used(OTHER_PROVIDER, "2026-11-20", ["whatsapp:a"]),
+    ).toEqual({ "whatsapp:a": 0 });
+  });
+
   describe("several scopes in one take", () => {
     const search = (business: string, platformLimit = 10, businessLimit = 2) =>
       harness().repo.take(PROVIDER, DAY, [

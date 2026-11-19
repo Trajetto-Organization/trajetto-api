@@ -118,6 +118,9 @@ describe("the geocoding budget", () => {
       take: async () => {
         throw new Error("connection terminated");
       },
+      giveBack: async () => {
+        throw new Error("connection terminated");
+      },
     };
     const closed = budget(100, { quota: broken, errors });
 

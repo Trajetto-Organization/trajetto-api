@@ -367,7 +367,10 @@ de outra mensagem marcada para depois da meia-noite não empurra as
 guardadas. Nunca cai para o e-mail. Os
 administradores recebem o aviso `whatsapp-quota.reached` no sino, uma vez
 por dia: a chave do evento no outbox (`whatsapp-quota.reached:<empresa>:<dia>`)
-é a deduplicação.
+é a deduplicação. Uma chamada que a Meta recusa por taxa (o 130429, ou um 429) não foi aceita por ela e devolve a unidade ao dia de onde saiu:
+enquanto a Meta segura o ritmo, a linha volta sem gastar tentativa
+(F3-15c), e cada nova tentativa gastava uma unidade da empresa sem
+nenhuma mensagem entregue.
 
 - **DLQ:** o status `FAILED`.
   - `GET /health/dead-letter` com `POST /health/dead-letter/replay` cobre

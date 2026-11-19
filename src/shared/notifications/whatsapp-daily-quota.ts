@@ -30,7 +30,12 @@ import {
  * goes out then (subject to that day's quota). It never falls back to the
  * e-mail: the recipient chose WhatsApp, and an e-mail would be a second
  * channel nobody asked for. A call that fails at Meta still spent its unit:
- * the count is of calls, which is what the account is measured by.
+ * the count is of calls, which is what the account is measured by. Except
+ * a refusal for rate (130429, or a 429): Meta did not take that call, and
+ * while it throttles, a row put off by the rate bucket comes back without
+ * spending an attempt, so every retry spent another unit on a call Meta
+ * never counted, and the company's day ran out with nothing delivered.
+ * That unit goes back (giveBack).
  *
  * Off (0, the default) nothing is read nor written: the send of before.
  * Messages of no company (the platform's own) are never counted.
@@ -44,7 +49,16 @@ function whatsAppQuotaScope(businessId: string): string {
 }
 
 type WhatsAppQuotaVerdict =
-  | { allowed: true }
+  | {
+      allowed: true;
+
+      /**
+       * The company's business day the unit was taken from (YYYY-MM-DD),
+       * for giveBack; absent when nothing was counted (the quota off, a
+       * message of no company).
+       */
+      day?: string;
+    }
   | {
       allowed: false;
 
@@ -92,7 +106,7 @@ function createWhatsAppDailyQuota(deps: WhatsAppDailyQuotaDeps) {
         { scope: whatsAppQuotaScope(businessId), limit },
       ]);
 
-      if (taken.granted) return { allowed: true };
+      if (taken.granted) return { allowed: true, day };
 
       return {
         allowed: false,
@@ -100,6 +114,24 @@ function createWhatsAppDailyQuota(deps: WhatsAppDailyQuotaDeps) {
         limit,
         until: businessDayStart(shiftDateKey(day, 1), timeZone),
       };
+    },
+
+    /**
+     * Gives back the unit a take counted on `day` for a call Meta refused
+     * for rate (see the top of the file). Nothing with the quota off now,
+     * nor for a message of no company. Throws like the database; the
+     * caller decides that a unit not given back is only a unit spent.
+     */
+    async giveBack(businessId: string | null, day: string): Promise<void> {
+      const limit = Math.floor(deps.limit());
+
+      if (!businessId || !Number.isFinite(limit) || limit <= 0) return;
+
+      await deps.quota.giveBack(
+        WHATSAPP_QUOTA_PROVIDER,
+        day,
+        whatsAppQuotaScope(businessId),
+      );
     },
   };
 }

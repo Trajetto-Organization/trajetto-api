@@ -20,6 +20,7 @@ import {
  *    company's day waits for its next business day, without spending an
  *    attempt and without an e-mail in its place;
  *  - the admins hear of it in the bell once that day, however many wait;
+ *  - a call Meta refused for rate (130429) gives its unit back;
  *  - with 0, nothing changes: the four go out.
  */
 const prisma = createPrismaClient();
@@ -35,7 +36,12 @@ type Pipeline =
 let pipeline: Pipeline;
 let app: Awaited<typeof import("@/http")>["app"];
 
-const whatsapp = { sent: [] as Array<{ referenceId?: string }> };
+const whatsapp = {
+  sent: [] as Array<{ referenceId?: string }>,
+
+  /** How many of the next calls Meta refuses for rate (130429). */
+  refuseForRate: 0,
+};
 const mail = { sent: [] as Array<{ referenceId?: string }> };
 
 const saved = env.WHATSAPP_DAILY_QUOTA_PER_TENANT;
@@ -135,6 +141,18 @@ beforeAll(async () => {
   container.registerInstance("WhatsAppProvider", {
     isConfigured: () => true,
     sendMessage: async (props: { referenceId?: string }) => {
+      if (whatsapp.refuseForRate > 0) {
+        whatsapp.refuseForRate -= 1;
+
+        return {
+          success: false,
+          retryable: true,
+          httpStatus: 400,
+          errorCode: 130429,
+          message: "(#130429) Rate limit hit",
+        };
+      }
+
       whatsapp.sent.push(props);
       return { success: true, messageId: `wamid.${randomUUID()}` };
     },
@@ -148,6 +166,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   whatsapp.sent = [];
+  whatsapp.refuseForRate = 0;
   mail.sent = [];
 
   await prisma.notificationDelivery.deleteMany({});
@@ -301,6 +320,42 @@ describe("the company's daily WhatsApp quota", () => {
     expect(
       (await whatsAppRows()).filter((row) => row.status === "PENDING"),
     ).toHaveLength(3);
+  });
+
+  it("gives back the unit of a call Meta refused for rate", async () => {
+    // Meta did not take the call: counted, the retries while it throttles
+    // spent the company's day on nothing, and the rest of the day's
+    // messages waited for tomorrow.
+    env.WHATSAPP_DAILY_QUOTA_PER_TENANT = 2;
+    whatsapp.refuseForRate = 1;
+
+    const used = async () =>
+      (
+        await prisma.$queryRawUnsafe<Array<{ used: number }>>(
+          `SELECT "used" FROM "provider_quota_day" WHERE "provider" = 'whatsapp' AND "scope" = $1`,
+          `whatsapp:${BUSINESS}`,
+        )
+      ).reduce((total, row) => total + Number(row.used), 0);
+
+    await publish();
+    await drain();
+
+    const [refused] = await whatsAppRows();
+
+    expect(whatsapp.sent).toHaveLength(0);
+    expect(refused.status).toBe("PENDING");
+    expect(refused.lastError).toMatch(/130429/);
+    expect(await used()).toBe(0);
+
+    // Due again, Meta takes it, and only that call is counted.
+    await prisma.notificationDelivery.update({
+      where: { id: refused.id },
+      data: { availableAt: new Date(Date.now() - 1_000) },
+    });
+    await drain();
+
+    expect(whatsapp.sent).toHaveLength(1);
+    expect(await used()).toBe(1);
   });
 
   it("changes nothing with the quota off", async () => {

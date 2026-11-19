@@ -8,7 +8,8 @@ import { whatsAppQuotaReachedPolicy } from "@/shared/notifications/policies/what
  * Each company's daily WhatsApp quota (plano-escala F3-15b; decision D46):
  * counted per company and business day, in the company's own time zone;
  * past it, the wait runs to the start of the company's next business day;
- * off, or for the platform's own messages, nothing is counted.
+ * off, or for the platform's own messages, nothing is counted; a unit is
+ * given back to the day it was taken from (a call Meta refused for rate).
  */
 function quotaWith(limit: number, now: Date, timeZone = "America/Sao_Paulo") {
   const repository = new InMemoryProviderQuotaRepository();
@@ -29,7 +30,10 @@ describe("the company's daily WhatsApp quota", () => {
     const { quota } = quotaWith(3, new Date("2026-11-18T15:00:00Z"));
 
     for (let n = 0; n < 3; n += 1) {
-      expect(await quota.take("empresa-a")).toEqual({ allowed: true });
+      expect(await quota.take("empresa-a")).toEqual({
+        allowed: true,
+        day: "2026-11-18",
+      });
     }
 
     expect(await quota.take("empresa-a")).toEqual({
@@ -41,7 +45,10 @@ describe("the company's daily WhatsApp quota", () => {
     });
 
     // Another company's day is its own.
-    expect(await quota.take("empresa-b")).toEqual({ allowed: true });
+    expect(await quota.take("empresa-b")).toEqual({
+      allowed: true,
+      day: "2026-11-18",
+    });
   });
 
   it("counts by the company's business day, not the server's UTC day", async () => {
@@ -68,6 +75,43 @@ describe("the company's daily WhatsApp quota", () => {
 
     expect(await platform.quota.take(null)).toEqual({ allowed: true });
     expect(platform.repository.rows.size).toBe(0);
+  });
+});
+
+describe("a unit given back (a call Meta refused for rate)", () => {
+  // Meta's 130429 is a call it did not take: counted, the retries while
+  // it throttles spent the company's day on nothing.
+  it("returns to the day it was taken from, and is taken again", async () => {
+    const { quota, repository } = quotaWith(
+      2,
+      new Date("2026-11-19T01:30:00Z"),
+    );
+
+    await quota.take("empresa-a");
+    const taken = await quota.take("empresa-a");
+
+    expect(taken).toEqual({ allowed: true, day: "2026-11-18" });
+
+    await quota.giveBack("empresa-a", "2026-11-18");
+
+    expect(repository.rows.get("whatsapp|whatsapp:empresa-a|2026-11-18")).toBe(
+      1,
+    );
+    expect((await quota.take("empresa-a")).allowed).toBe(true);
+    expect((await quota.take("empresa-a")).allowed).toBe(false);
+  });
+
+  it("gives nothing back with the quota off, nor for the platform's own messages", async () => {
+    const off = quotaWith(0, new Date());
+
+    off.repository.rows.set("whatsapp|whatsapp:empresa-a|2026-11-18", 3);
+
+    await off.quota.giveBack("empresa-a", "2026-11-18");
+    await off.quota.giveBack(null, "2026-11-18");
+
+    expect(
+      off.repository.rows.get("whatsapp|whatsapp:empresa-a|2026-11-18"),
+    ).toBe(3);
   });
 });
 

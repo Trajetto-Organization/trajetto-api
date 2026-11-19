@@ -469,6 +469,12 @@ interface ClaimedDelivery {
    * granted ends no earlier than this plus DELIVERY_LEASE_SECONDS.
    */
   claimStartedAtMs?: number;
+
+  /**
+   * The company's business day this attempt took a unit of its daily
+   * WhatsApp quota from (F3-15b), until the unit is given back.
+   */
+  whatsAppQuotaDay?: string;
 }
 
 /** The slice of an outbox row a delivery needs to render itself. */
@@ -2482,7 +2488,10 @@ class NotificationPipelineService {
     const businessId = delivery.event?.businessId ?? null;
     const verdict = await whatsAppDailyQuota.take(businessId);
 
-    if (verdict.allowed) return;
+    if (verdict.allowed) {
+      delivery.whatsAppQuotaDay = verdict.day;
+      return;
+    }
 
     await this.noticeWhatsAppQuota(businessId!, verdict).catch((error) => {
       log.error(
@@ -2962,6 +2971,8 @@ class NotificationPipelineService {
   ): Promise<void> {
     const message = error instanceof Error ? error.message : String(error);
 
+    await this.giveBackWhatsAppQuota(delivery, error);
+
     const deferred =
       error instanceof DeferredDeliveryError
         ? error
@@ -3046,6 +3057,42 @@ class NotificationPipelineService {
         "notification delivery failure could not be recorded",
       );
     });
+  }
+
+  /**
+   * The unit of the company's daily WhatsApp quota this attempt took, given
+   * back when Meta refused the call for rate (130429 or a 429; F3-15b with
+   * F3-15c): Meta did not take it, and with the rate bucket on the row
+   * comes back without spending an attempt, so each retry while Meta
+   * throttles spent another unit of the company's day on nothing. Any
+   * other failure keeps its unit (whatsapp-daily-quota.ts). A unit that
+   * cannot be given back only logs: it is a unit spent, as before.
+   */
+  private async giveBackWhatsAppQuota(
+    delivery: ClaimedDelivery,
+    error: unknown,
+  ): Promise<void> {
+    const day = delivery.whatsAppQuotaDay;
+
+    if (day === undefined) return;
+
+    if (
+      throttledProviderOf(providerDetailOf(error, delivery.channel)) !==
+      "whatsapp"
+    ) {
+      return;
+    }
+
+    delivery.whatsAppQuotaDay = undefined;
+
+    await whatsAppDailyQuota
+      .giveBack(delivery.event?.businessId ?? null, day)
+      .catch((giveBackError) => {
+        log.warn(
+          { ...this.deliveryLogFields(delivery), err: giveBackError },
+          "the WhatsApp quota unit of a call Meta refused for rate could not be given back",
+        );
+      });
   }
 
   /**

@@ -64,6 +64,13 @@ interface IProviderQuotaRepository {
     day: string,
     units: readonly QuotaUnit[],
   ): Promise<QuotaTake>;
+
+  /**
+   * One unit of a scope's day back, never below 0 (plano-escala F3-15b):
+   * a call the provider refused without counting it (Meta's 130429) must
+   * not spend the day. Nothing for a row that does not exist.
+   */
+  giveBack(provider: string, day: string, scope: string): Promise<void>;
 }
 
 /** The UTC day a quota counts in, as the row's `day` (YYYY-MM-DD). */
@@ -144,6 +151,20 @@ class ProviderQuotaRepository implements IProviderQuotaRepository {
     }
 
     return this.takeAll(provider, day, units);
+  }
+
+  async giveBack(provider: string, day: string, scope: string): Promise<void> {
+    // The primary key, and the row's lock: a concurrent take re-checks the
+    // limit on the count this leaves.
+    await this.prisma.$executeRaw`
+      UPDATE "provider_quota_day"
+      SET "used" = GREATEST("used" - 1, 0),
+          "updated_at" = CURRENT_TIMESTAMP
+      WHERE "provider" = ${provider}
+        AND "scope" = ${scope}
+        AND "day" = ${day}::date
+        AND "used" > 0
+    `;
   }
 
   /**

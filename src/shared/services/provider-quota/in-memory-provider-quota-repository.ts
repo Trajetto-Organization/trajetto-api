@@ -62,6 +62,13 @@ class InMemoryProviderQuotaRepository implements IProviderQuotaRepository {
 
     return { granted: true, used: after };
   }
+
+  async giveBack(provider: string, day: string, scope: string): Promise<void> {
+    const key = this.key(provider, scope, day);
+    const used = this.rows.get(key);
+
+    if (used !== undefined && used > 0) this.rows.set(key, used - 1);
+  }
 }
 
 export { InMemoryProviderQuotaRepository };
