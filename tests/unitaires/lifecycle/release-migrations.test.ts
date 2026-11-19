@@ -348,7 +348,12 @@ describe.skipIf(!bash)("the promote's release image, read", () => {
   const read = (
     tag: string,
     event: string,
-    stubs: { migrate?: string; ai?: string; postgres?: string } = {},
+    stubs: {
+      migrate?: string;
+      ai?: string;
+      postgres?: string;
+      pgbouncer?: string;
+    } = {},
   ) => {
     box.file(
       ".github/scripts/ghcr.sh",
@@ -357,6 +362,7 @@ describe.skipIf(!bash)("the promote's release image, read", () => {
         '  *trajetto-api-migrate:*) printf "%s" "${STUB_MIGRATE:-}" ;;',
         '  *trajetto-api:*) printf "%s" "${STUB_API:-}" ;;',
         '  *trajetto-ai:*) printf "%s" "${STUB_AI:-}" ;;',
+        '  *trajetto-pgbouncer:*) printf "%s" "${STUB_PGBOUNCER:-}" ;;',
         '  *trajetto-postgres:src-*) [ "${2##*:src-}" = "${STUB_POSTGRES_TREE:-none}" ] && printf "%s" "${STUB_POSTGRES:-}" ;;',
         "esac",
       ].join("\n"),
@@ -371,6 +377,7 @@ describe.skipIf(!bash)("the promote's release image, read", () => {
         STUB_API: `sha256:${"1".repeat(64)}`,
         STUB_MIGRATE: stubs.migrate ?? "",
         STUB_AI: stubs.ai ?? "",
+        STUB_PGBOUNCER: stubs.pgbouncer ?? "",
         STUB_POSTGRES: stubs.postgres ?? "",
         STUB_POSTGRES_TREE: stubs.postgres
           ? git("rev-parse", `${tag.slice(4)}:infra/postgres`)
@@ -393,8 +400,28 @@ describe.skipIf(!bash)("the promote's release image, read", () => {
       presplit: "false",
       ai: OLDER,
       postgres: "",
+      pgbouncer: "",
       expected: after.slice(0, 7),
     });
+  });
+
+  // The PgBouncer's image of the build (plano-escala F4-35), by its
+  // sha-<7> like the AI's: what the deploy rolls out, only if production
+  // runs another digest. A build older than the image has none, and the
+  // PgBouncer stays where it is.
+  it("reads the PgBouncer's image of the build, for the deploy", () => {
+    const PGBOUNCER = `sha256:${"d".repeat(64)}`;
+    const result = read(`sha-${after.slice(0, 7)}`, "push", {
+      migrate: DIGEST,
+      pgbouncer: PGBOUNCER,
+    });
+
+    expect(result.status, result.log).toBe(0);
+    expect(result.outputs.pgbouncer).toBe(PGBOUNCER);
+    expect(result.summary).toContain(`trajetto-pgbouncer@${PGBOUNCER}`);
+    expect(stepOf(evidence, "Read the digests to promote").run).toContain(
+      '"ghcr.io/trajetto-organization/trajetto-pgbouncer:${IMAGE_TAG}"',
+    );
   });
 
   // The Database's image of the promoted commit, by its infra/postgres:

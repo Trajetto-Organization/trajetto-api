@@ -129,8 +129,12 @@ describe("the build (once, on staging)", () => {
       "type=sha,prefix=sha-\n            type=raw,value=src-${{ steps.migrate-source.outputs.key }}",
       "type=sha,prefix=sha-\n            type=raw,value=src-${{ steps.ai-source.outputs.tree }}",
       "type=sha,prefix=sha-\n            type=raw,value=src-${{ steps.postgres-source.outputs.tree }}",
+      // The PgBouncer's (plano-escala F4-35), reused like the AI's: every
+      // commit gets its `sha-<7>` (registry-side, on the reused digest),
+      // because the PR check and the promote find it by that name.
+      "type=sha,prefix=sha-\n            type=raw,value=src-${{ steps.pgbouncer-source.outputs.tree }}",
     ]);
-    expect(build.match(/flavor: latest=false/g)).toHaveLength(4);
+    expect(build.match(/flavor: latest=false/g)).toHaveLength(5);
     expect(build).not.toContain("Tag the reused Postgres image");
   });
 
@@ -161,6 +165,22 @@ describe("the build (once, on staging)", () => {
       expect(text).not.toMatch(/DOKPLOY_(POSTGRES|DATABASE)/);
     }
     expect(deploy.text).not.toContain("trajetto-postgres");
+  });
+
+  // The PgBouncer's image (plano-escala F4-35) is promoted like the AI's:
+  // the digest staging ran for the commit, read before the approval, and
+  // rolled out by the deploy only when production runs another one.
+  it("promotes the PgBouncer's image staging ran, through the deploy", () => {
+    expect(evidence.text).toContain(
+      "pgbouncer_digest: ${{ steps.digests.outputs.pgbouncer }}",
+    );
+    expect(promote.text).toContain(
+      "pgbouncer-digest: ${{ needs.evidence.outputs.pgbouncer_digest }}",
+    );
+    // The PR check and the promote require its staged-<7> too.
+    expect(readFileSync(".github/scripts/staged-build.sh", "utf8")).toContain(
+      "IMAGES=${STAGED_IMAGES:-trajetto-api trajetto-ai trajetto-pgbouncer}",
+    );
   });
 });
 
@@ -386,6 +406,9 @@ describe("the deploy target (DEPLOY-1)", () => {
       "dokploy-migrate-application-id":
         "${{ secrets.DOKPLOY_MIGRATE_APPLICATION_ID }}",
       "dokploy-ai-application-id": "${{ secrets.DOKPLOY_AI_APPLICATION_ID }}",
+      "dokploy-pgbouncer-application-id":
+        "${{ secrets.DOKPLOY_PGBOUNCER_APPLICATION_ID }}",
+      "swarm-pgbouncer-service": "${{ vars.SWARM_PGBOUNCER_SERVICE }}",
       "deploy-ssh-host": "${{ secrets.DEPLOY_SSH_HOST }}",
       "deploy-ssh-user": "${{ secrets.DEPLOY_SSH_USER }}",
       "deploy-verify-ssh-key": "${{ secrets.DEPLOY_VERIFY_SSH_KEY }}",

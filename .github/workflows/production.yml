@@ -7,7 +7,8 @@ name: Production
 #                      digests read — before anyone is asked to approve
 #                   ─▶ Deploy (the `production` environment: its required
 #                      reviewers approve here; .github/actions/deploy, the
-#                      same one staging runs): migrations when needed, then
+#                      same one staging runs): the PgBouncer when its
+#                      digest changed, migrations when needed, then
 #                      the AI, then the API, each `stable` tag moved by digest
 #                      right before its deploy; then wait until Swarm runs it
 #                   ─▶ Release (tag, CHANGELOG, GitHub Release)
@@ -82,6 +83,7 @@ jobs:
       migrate_presplit: ${{ steps.digests.outputs.presplit }}
       ai_digest: ${{ steps.digests.outputs.ai }}
       postgres_digest: ${{ steps.digests.outputs.postgres }}
+      pgbouncer_digest: ${{ steps.digests.outputs.pgbouncer }}
 
     steps:
       # Which build ships. On a merge commit, its second parent: the PR head,
@@ -301,7 +303,9 @@ jobs:
       #
       # The AI: a build older than the service has no trajetto-ai image, and
       # the AI stays where it is. GHCR not answering is not "no image":
-      # ghcr.sh fails the step.
+      # ghcr.sh fails the step. The PgBouncer's the same way (plano-escala
+      # F4-35): its `sha-<7>`, the digest staging ran (staged-build.sh
+      # checked its marker), rolled out only when production runs another.
       #
       # The Database's image of the same commit (its infra/postgres, by the
       # `src-<tree>` staging published): only what `trajetto-postgres:stable`
@@ -338,6 +342,7 @@ jobs:
             echo "::notice::${IMAGE_TAG} é anterior à imagem de migração (trajetto-api-migrate): a produção já aplicou todas as migrations desse build, e a etapa de release não roda."
           fi
           ai=$(bash .github/scripts/ghcr.sh digest "ghcr.io/trajetto-organization/trajetto-ai:${IMAGE_TAG}")
+          pgbouncer=$(bash .github/scripts/ghcr.sh digest "ghcr.io/trajetto-organization/trajetto-pgbouncer:${IMAGE_TAG}")
           postgres=""
           if commit=$(git rev-parse --verify --quiet "${IMAGE_TAG#*-}^{commit}") \
             && tree=$(git rev-parse --verify --quiet "${commit}:infra/postgres"); then
@@ -353,6 +358,7 @@ jobs:
             echo "presplit=${presplit}"
             echo "ai=${ai}"
             echo "postgres=${postgres}"
+            echo "pgbouncer=${pgbouncer}"
             echo "expected=${IMAGE_TAG#*-}"
           } >> "$GITHUB_OUTPUT"
           {
@@ -360,6 +366,7 @@ jobs:
             echo "trajetto-api@${api}"
             echo "trajetto-api-migrate@${migrate:-(anterior à imagem de migração)}"
             echo "trajetto-ai@${ai:-(anterior ao serviço de IA)}"
+            echo "trajetto-pgbouncer@${pgbouncer:-(anterior à imagem do PgBouncer)}"
             echo "trajetto-postgres@${postgres:-(nenhuma para este commit)} (só referência: a troca do Database é do dono)"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -408,6 +415,7 @@ jobs:
           migrate-digest: ${{ needs.evidence.outputs.migrate_digest }}
           migrate-presplit: ${{ needs.evidence.outputs.migrate_presplit }}
           ai-digest: ${{ needs.evidence.outputs.ai_digest }}
+          pgbouncer-digest: ${{ needs.evidence.outputs.pgbouncer_digest }}
           force-ai: ${{ inputs.force_ai_build == true }}
           expected-commit: ${{ needs.evidence.outputs.expected }}
           verify-default: ssh
@@ -419,6 +427,7 @@ jobs:
           swarm-worker-external-service: ${{ vars.SWARM_WORKER_EXTERNAL_SERVICE }}
           swarm-ingest-service: ${{ vars.SWARM_INGEST_SERVICE }}
           swarm-realtime-service: ${{ vars.SWARM_REALTIME_SERVICE }}
+          swarm-pgbouncer-service: ${{ vars.SWARM_PGBOUNCER_SERVICE }}
           release-timeout-seconds: ${{ vars.RELEASE_TIMEOUT_SECONDS }}
           force-release: ${{ inputs.force_release == true }}
           rollout-status-token: ${{ secrets.ROLLOUT_STATUS_TOKEN }}
@@ -432,6 +441,7 @@ jobs:
           dokploy-api-application-id: ${{ secrets.DOKPLOY_API_APPLICATION_ID }}
           dokploy-migrate-application-id: ${{ secrets.DOKPLOY_MIGRATE_APPLICATION_ID }}
           dokploy-ai-application-id: ${{ secrets.DOKPLOY_AI_APPLICATION_ID }}
+          dokploy-pgbouncer-application-id: ${{ secrets.DOKPLOY_PGBOUNCER_APPLICATION_ID }}
           dokploy-worker-application-id: ${{ secrets.DOKPLOY_WORKER_APPLICATION_ID }}
           dokploy-scheduler-application-id: ${{ secrets.DOKPLOY_SCHEDULER_APPLICATION_ID }}
           dokploy-worker-external-application-id: ${{ secrets.DOKPLOY_WORKER_EXTERNAL_APPLICATION_ID }}

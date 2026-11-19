@@ -11,6 +11,7 @@ import {
   allWorkflows,
   conditionOf,
   jobOf,
+  needsOf,
   readAction,
   readWorkflow,
   stepNames,
@@ -649,11 +650,7 @@ describe("the staging road", () => {
 
     for (const each of staging.jobs) {
       const condition = jobIf(each);
-      const needs = (/^ {4}needs: (.+)$/m.exec(each.text)?.[1] ?? "")
-        .replace(/[[\]]/g, "")
-        .split(",")
-        .map((name) => name.trim())
-        .filter(Boolean);
+      const needs = needsOf(each.text);
 
       if (condition.includes(ON_STAGING)) {
         guarded.add(each.name);
@@ -699,12 +696,6 @@ describe("the staging road", () => {
 describe("a job downstream of one that runs past a skip", () => {
   const STATUS = /\b(?:always|cancelled|failure)\(\)/;
   const ownIf = (text: string) => /^ {4}if: (.+)$/m.exec(text)?.[1] ?? "";
-  const needsOf = (text: string) =>
-    (/^ {4}needs: (.+)$/m.exec(text)?.[1] ?? "")
-      .replace(/[[\]]/g, "")
-      .split(",")
-      .map((name) => name.trim())
-      .filter(Boolean);
   // Job keys are [\w-]+: nothing in them to escape.
   const cites = (job: string, need: string) =>
     new RegExp(`needs\\.${need}\\.(?:result|outputs)\\b`).test(job);
@@ -1008,10 +999,12 @@ describe.skipIf(!hasShell("bash"))("the blocks that decide, run", () => {
       WANT_E2E: "true",
       WANT_AI_LOCAL: "false",
       WANT_POSTGRES: "true",
+      WANT_PGBOUNCER: "true",
       VALIDATE: "success",
       E2E: "success",
       AI_OCR: "success",
       POSTGRES_JOB: "success",
+      PGBOUNCER_JOB: "success",
       DOCS_JOB: "skipped",
       AI_LOCAL: "skipped",
     };
@@ -1022,6 +1015,7 @@ describe.skipIf(!hasShell("bash"))("the blocks that decide, run", () => {
       E2E: "skipped",
       AI_OCR: "skipped",
       POSTGRES_JOB: "skipped",
+      PGBOUNCER_JOB: "skipped",
       DOCS_JOB: "success",
     };
 
@@ -1032,7 +1026,8 @@ describe.skipIf(!hasShell("bash"))("the blocks that decide, run", () => {
         .map((job) => job.name)
         .filter((name) => name !== "result");
 
-      expect(result.text).toContain(`\n    needs: [${others.join(", ")}]\n`);
+      // In file order, on one line or wrapped by Prettier.
+      expect(needsOf(result.text)).toEqual(others);
       expect(result.text).toContain("\n    if: ${{ !cancelled() }}\n");
       expect(result.text).toContain(
         "\n    outputs:\n      passed: ${{ steps.check.outputs.passed }}\n",
@@ -1057,6 +1052,10 @@ describe.skipIf(!hasShell("bash"))("the blocks that decide, run", () => {
       [
         "a push that leaves infra/postgres alone (its image already published)",
         { ...code, WANT_POSTGRES: "false", POSTGRES_JOB: "skipped" },
+      ],
+      [
+        "a push that leaves infra/pgbouncer alone (its image already published)",
+        { ...code, WANT_PGBOUNCER: "false", PGBOUNCER_JOB: "skipped" },
       ],
       ["a push of documentation", docs],
     ])("passes %s", (_, env) => {
@@ -1093,6 +1092,21 @@ describe.skipIf(!hasShell("bash"))("the blocks that decide, run", () => {
         "the Postgres image ran on documentation",
         { ...docs, POSTGRES_JOB: "success" },
         "Postgres image (success)",
+      ],
+      [
+        "the PgBouncer image failed its tests",
+        { ...code, PGBOUNCER_JOB: "failure" },
+        "PgBouncer image (failure)",
+      ],
+      [
+        "the PgBouncer image was asked for and skipped",
+        { ...code, PGBOUNCER_JOB: "skipped" },
+        "PgBouncer image (skipped)",
+      ],
+      [
+        "the PgBouncer image ran on documentation",
+        { ...docs, PGBOUNCER_JOB: "success" },
+        "PgBouncer image (success)",
       ],
       ["Docs ran on code", { ...code, DOCS_JOB: "success" }, "Docs (success)"],
       [
@@ -1576,6 +1590,97 @@ describe.skipIf(!hasShell("bash"))("the blocks that decide, run", () => {
       }
       expect(validate.text).toMatch(
         /\n {6}postgres:\n {8}description: .+\n {8}type: boolean\n {8}default: true\n/,
+      );
+    });
+  });
+
+  // The trajetto-pgbouncer image (plano-escala F4-35): its `test` stage
+  // (the real PgBouncer, offline, every value read back) only for an
+  // infra/pgbouncer with no published image, as the Database's.
+  describe("the PgBouncer image, tested only for a new infra/pgbouncer", () => {
+    const job = jobOf(validate, "pgbouncer-image");
+    const LOOKUP = stepOf(
+      job,
+      "Look up the PgBouncer image for this source",
+    ).run;
+    const TREE = "0123456789abcdef0123456789abcdef01234567";
+
+    beforeEach(() => {
+      box.stub("git", `printf '%s\\n' "${TREE}"`);
+      box.file(".github/scripts/ghcr.sh", 'exec sh "$STUB_GHCR" "$@"\n');
+    });
+
+    const lookup = (ghcr: string, loggedIn = "true") =>
+      exec(
+        LOOKUP,
+        { LOGGED_IN: loggedIn, STUB_GHCR: box.file("ghcr-stub.sh", ghcr) },
+        box.root,
+      );
+
+    it("ends the job when an image of the same infra/pgbouncer exists", () => {
+      const result = lookup(`printf 'sha256:${"c".repeat(64)}\\n'`);
+
+      expect(result.status, result.log).toBe(0);
+      expect(result.output).toBe("test=false\n");
+      expect(result.summary).toContain(
+        `trajetto-pgbouncer: infra/pgbouncer igual ao de src-${TREE.slice(0, 12)}`,
+      );
+    });
+
+    it("tests when there is none, when GHCR does not answer, or without a login", () => {
+      expect(lookup("exit 0").output).toBe("test=true\n");
+
+      const down = lookup("exit 1");
+
+      expect(down.status, down.log).toBe(0);
+      expect(down.output).toBe("test=true\n");
+      expect(down.log).toMatch(
+        /::warning::O GHCR não respondeu sobre trajetto-pgbouncer/,
+      );
+
+      const noLogin = lookup(`printf 'sha256:${"c".repeat(64)}\\n'`, "false");
+
+      expect(noLogin.output).toBe("test=true\n");
+      expect(noLogin.log).toMatch(/::warning::Sem login no GHCR/);
+    });
+
+    it("runs only when asked, and builds and tests only on the lookup's answer", () => {
+      expect(job.text).toContain(
+        "\n    if: ${{ !inputs.docs && inputs.pgbouncer }}\n",
+      );
+      expect(timeoutOf(job)).toBeGreaterThanOrEqual(10);
+      expect(job.text).toContain("packages: read");
+      for (const name of [
+        "Set up Docker Buildx",
+        "Build the image and run its tests",
+      ]) {
+        expect(conditionOf(stepOf(job, name)), name).toBe(
+          "steps.pgbouncer-source.outputs.test == 'true'",
+        );
+      }
+      const test = stepOf(job, "Build the image and run its tests").text;
+
+      expect(test).toContain("context: ./infra/pgbouncer");
+      expect(test).toContain("target: test");
+      expect(test).toContain("push: false");
+      // Its own scope, which the staging Build reads back.
+      expect(test).toContain("cache-from: type=gha,scope=pgbouncer-test");
+      expect(test).toContain(
+        "cache-to: type=gha,mode=max,scope=pgbouncer-test,ignore-error=true",
+      );
+    });
+
+    it("takes changes.sh's answer in both workflows, running when it is missing", () => {
+      for (const workflow of [ci, staging]) {
+        expect(jobOf(workflow, "changes").text, workflow.file).toContain(
+          "pgbouncer: ${{ steps.changes.outputs.pgbouncer }}",
+        );
+        expect(jobOf(workflow, "validate").text, workflow.file).toContain(
+          "pgbouncer: ${{ needs.changes.outputs.pgbouncer != 'false' }}",
+        );
+      }
+      expect(validate.text).toMatch(
+        /\n {6}pgbouncer:\n {8}description: .+\n {8}type: boolean\n {8}default: true\n/,
       );
     });
   });

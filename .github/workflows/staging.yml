@@ -13,9 +13,13 @@ name: Staging
 #              trajetto-postgres: `src-<tree>` and `sha-<7>`, scanned, its
 #              digest in the summary; never deployed here — the owner swaps
 #              the Database by that digest
+#           ─▶ the PgBouncer's image, trajetto-pgbouncer: reused by its
+#              `src-<tree>` (infra/pgbouncer), built only for a tree the
+#              PgBouncer image job tested; `sha-<7>` on every commit
 #           ─▶ Image scan (Trivy, by digest)
 #           ─▶ Deploy (the `staging` environment, .github/actions/deploy):
-#              the migrations through the Dokploy Application
+#              the PgBouncer first (only if its digest changed), then the
+#              migrations through the Dokploy Application
 #              trajetto-api-migrate when staging's database has not applied
 #              that release image, then the AI (only if its digest changed),
 #              then the API, each `staging` tag moved by digest right before
@@ -108,6 +112,7 @@ jobs:
       docs: ${{ steps.changes.outputs.docs }}
       audit_base: ${{ steps.changes.outputs.audit_base }}
       postgres: ${{ steps.changes.outputs.postgres }}
+      pgbouncer: ${{ steps.changes.outputs.pgbouncer }}
 
     steps:
       # The history the comparison walks (commits and trees) and the scripts.
@@ -187,6 +192,7 @@ jobs:
       force_ai: ${{ inputs.force_ai_build == true }}
       audit_base: ${{ needs.changes.outputs.audit_base }}
       postgres: ${{ needs.changes.outputs.postgres != 'false' }}
+      pgbouncer: ${{ needs.changes.outputs.pgbouncer != 'false' }}
     secrets:
       CLIENT_REPOS_READ_TOKEN: ${{ secrets.CLIENT_REPOS_READ_TOKEN }}
 
@@ -263,6 +269,10 @@ jobs:
       # owner's swap.
       postgres_digest: ${{ steps.build-postgres.outputs.digest || steps.postgres-source.outputs.digest }}
       postgres_built: ${{ steps.build-postgres.outputs.digest != '' }}
+      # The PgBouncer's image, built or reused by its source; empty only
+      # for a tree the PgBouncer image job did not test, and then the
+      # deploy leaves the PgBouncer where it is.
+      pgbouncer_digest: ${{ steps.build-pgbouncer.outputs.digest || steps.pgbouncer-source.outputs.digest }}
 
     steps:
       - name: Check out the repository
@@ -883,6 +893,145 @@ jobs:
           build-args: |
             GIT_SHA=${{ github.sha }}
 
+      # The PgBouncer's image (infra/pgbouncer, plano-escala F4-35), the
+      # endpoint every Application reaches Postgres through once the owner
+      # points the URLs at it. Unlike the Database's, the deploys roll it
+      # out, so it follows the AI's rules: reused by the git hash of
+      # infra/pgbouncer (`src-<tree>`) with this commit's `sha-<7>` added
+      # to the same digest, so the PR check and the promote find it by the
+      # API's name; built only for a tree the `PgBouncer image` job tested
+      # (changes.sh said `pgbouncer` true) and from that job's cache, the
+      # layers its test stage ran. The deploy redeploys it only when its
+      # digest changes: a push that leaves infra/pgbouncer alone does not
+      # restart the endpoint of every Application.
+      #
+      # GHCR not answering fails the step, as the lookups of the images
+      # that deploy (the push right after needs GHCR anyway). A tree that
+      # vanished from GHCR after Changes, untested, is never published:
+      # this build carries no PgBouncer image, and the deploy keeps the one
+      # running.
+      - name: Look up the PgBouncer image for this source
+        id: pgbouncer-source
+        env:
+          TESTED: ${{ needs.changes.outputs.pgbouncer }}
+        run: |
+          tree=$(git rev-parse HEAD:infra/pgbouncer)
+          echo "tree=${tree}" >> "$GITHUB_OUTPUT"
+          digest=$(bash .github/scripts/ghcr.sh digest "ghcr.io/trajetto-organization/trajetto-pgbouncer:src-${tree}")
+          if [ -n "$digest" ]; then
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+            echo "trajetto-pgbouncer: infra/pgbouncer igual ao de src-${tree::12}; imagem reaproveitada (${digest}), sem rebuild." >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$TESTED" = "false" ]; then
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::trajetto-pgbouncer:src-${tree::12} sumiu do GHCR depois do Changes, e o job PgBouncer image não testou esta fonte: este build não leva imagem do PgBouncer, e o deploy deixa o PgBouncer onde está. Rode o pipeline de novo."
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Registry-side, by digest, nothing pulled: this commit's `sha-<sha>`
+      # names the reused image, as the AI's.
+      - name: Tag the reused PgBouncer image for this commit
+        if: steps.pgbouncer-source.outputs.build == 'false' && steps.pgbouncer-source.outputs.digest != ''
+        env:
+          DIGEST: ${{ steps.pgbouncer-source.outputs.digest }}
+        run: |
+          bash .github/scripts/ghcr.sh tag \
+            "ghcr.io/trajetto-organization/trajetto-pgbouncer:sha-${GITHUB_SHA::7}" \
+            "ghcr.io/trajetto-organization/trajetto-pgbouncer@${DIGEST}"
+
+      - name: Extract metadata (pgbouncer)
+        id: meta-pgbouncer
+        if: steps.pgbouncer-source.outputs.build == 'true'
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
+        with:
+          images: ghcr.io/trajetto-organization/trajetto-pgbouncer
+          flavor: latest=false
+          tags: |
+            type=sha,prefix=sha-
+            type=raw,value=src-${{ steps.pgbouncer-source.outputs.tree }}
+
+      # Into the runner's Docker for the smoke test, as the other images;
+      # the push below gets the same build back from the cache. The runtime
+      # stage (the Dockerfile's last) shares every layer with the test
+      # stage the PgBouncer image job ran, but for the commit it records.
+      - name: Build the PgBouncer image for the smoke test
+        if: steps.pgbouncer-source.outputs.build == 'true'
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5.4.0
+        with:
+          context: ./infra/pgbouncer
+          push: false
+          load: true
+          tags: trajetto-pgbouncer:smoke
+          labels: ${{ steps.meta-pgbouncer.outputs.labels }}
+          cache-from: |
+            type=gha,scope=pgbouncer
+            type=gha,scope=pgbouncer-test
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+
+      # Started as staging's Application will be (its 32 MiB cap and the
+      # minimal Environment, with throwaway passwords), with no network:
+      # PgBouncer never reaches the Database at start, so it must turn
+      # healthy by its own HEALTHCHECK (the stats login on the console),
+      # run as its own user, record this commit and pool transactions. The
+      # whole configuration is read back in the PgBouncer image job.
+      - name: Smoke test the PgBouncer image
+        if: steps.pgbouncer-source.outputs.build == 'true'
+        env:
+          IMAGE: trajetto-pgbouncer:smoke
+        run: |
+          auth=$(openssl rand -hex 24)
+          stats=$(openssl rand -hex 24)
+          cid=$(docker run -d --network none --memory 33554432 \
+            --health-interval 2s \
+            -e PGBOUNCER_PRIMARY_HOST=trajetto-postgres-staging \
+            -e PGBOUNCER_AUTH_PASSWORD="$auth" \
+            -e PGBOUNCER_STATS_PASSWORD="$stats" "$IMAGE")
+          trap 'docker rm -f "$cid" > /dev/null 2>&1 || true' EXIT
+          fail() {
+            echo "::error::Smoke test da imagem trajetto-pgbouncer: $1. Nada foi publicado, e o ambiente segue com o PgBouncer que já roda."
+            docker logs "$cid" 2>&1 | tail -n 60 || true
+            exit 1
+          }
+          state=""
+          for _ in $(seq 1 30); do
+            state=$(docker inspect --format '{{.State.Status}}/{{if .State.Health}}{{.State.Health.Status}}{{else}}sem-healthcheck{{end}}' "$cid")
+            [ "$state" = "running/starting" ] || break
+            sleep 2
+          done
+          [ "$state" = "running/healthy" ] || fail "o container não ficou saudável (${state})"
+          uid=$(docker exec "$cid" id -u) || fail "id -u não respondeu"
+          [ "$uid" = 6432 ] || fail "o PgBouncer roda com o uid ${uid}, não com o usuário pgbouncer (6432)"
+          log=$(docker logs "$cid" 2>&1) || fail "docker logs não respondeu"
+          grep -qF "trajetto-pgbouncer: imagem ${GITHUB_SHA};" <<< "$log" \
+            || fail "a partida não registrou o commit ${GITHUB_SHA}"
+          mode=$(docker exec -e PGPASSWORD="$stats" "$cid" \
+            psql -X -h 127.0.0.1 -p 6432 -U pgbouncer_stats -d pgbouncer -Atc "SHOW CONFIG" \
+            | awk -F '|' '$1 == "pool_mode" { print $2 }') || fail "SHOW CONFIG não respondeu pelo login de estatística"
+          [ "$mode" = transaction ] || fail "pool_mode ${mode:-ausente}, esperado transaction"
+          echo "trajetto-pgbouncer: smoke test OK (32 MiB, healthy sem rede, uid 6432, pool_mode transaction, commit ${GITHUB_SHA::7})" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build and push the PgBouncer image
+        id: build-pgbouncer
+        if: steps.pgbouncer-source.outputs.build == 'true'
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5.4.0
+        with:
+          context: ./infra/pgbouncer
+          push: true
+          tags: ${{ steps.meta-pgbouncer.outputs.tags }}
+          labels: ${{ steps.meta-pgbouncer.outputs.labels }}
+          cache-from: |
+            type=gha,scope=pgbouncer
+            type=gha,scope=pgbouncer-test
+          cache-to: type=gha,mode=max,scope=pgbouncer,ignore-error=true
+          sbom: true
+          provenance: mode=max
+          # The entrypoint prints it at start (APP_COMMIT_SHA, declared in
+          # the last stage, after every layer).
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+
       - name: Summary
         env:
           API_DIGEST: ${{ steps.build.outputs.digest }}
@@ -890,6 +1039,8 @@ jobs:
           AI_DIGEST: ${{ steps.build-ai.outputs.digest || steps.ai-source.outputs.digest }}
           POSTGRES_BUILT: ${{ steps.build-postgres.outputs.digest }}
           POSTGRES_DIGEST: ${{ steps.build-postgres.outputs.digest || steps.postgres-source.outputs.digest }}
+          PGBOUNCER_BUILT: ${{ steps.build-pgbouncer.outputs.digest }}
+          PGBOUNCER_DIGEST: ${{ steps.build-pgbouncer.outputs.digest || steps.pgbouncer-source.outputs.digest }}
         run: |
           {
             echo "Imagens deste commit (sha-${GITHUB_SHA::7}): trajetto-api, trajetto-api-migrate e trajetto-ai (as duas últimas construídas ou reaproveitadas)."
@@ -900,6 +1051,13 @@ jobs:
               echo "trajetto-postgres@${POSTGRES_DIGEST} (nova, publicada neste run). Troca no Database: ação do dono, pelo digest, com o Command e o Args vazios."
             elif [ -n "$POSTGRES_DIGEST" ]; then
               echo "trajetto-postgres@${POSTGRES_DIGEST} (a mesma infra/postgres de antes; nada a trocar)."
+            fi
+            if [ -n "$PGBOUNCER_BUILT" ]; then
+              echo "trajetto-pgbouncer@${PGBOUNCER_DIGEST} (nova, publicada neste run; o deploy a implanta antes das migrations)."
+            elif [ -n "$PGBOUNCER_DIGEST" ]; then
+              echo "trajetto-pgbouncer@${PGBOUNCER_DIGEST} (reaproveitada: a mesma infra/pgbouncer de antes; reimplantada só se o ambiente roda outra)."
+            else
+              echo "trajetto-pgbouncer: nenhuma imagem neste build; o PgBouncer fica onde está."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -998,6 +1156,9 @@ jobs:
           # and its finding must not hold the API's deploy; the owner reads
           # it next to the digest before swapping the Database.
           DATABASE_IMAGE: ${{ needs.build.outputs.postgres_built == 'true' && format('ghcr.io/trajetto-organization/trajetto-postgres@{0}', needs.build.outputs.postgres_digest) || '' }}
+          # The PgBouncer's, built or reused, as the AI's: it deploys, so
+          # its finding holds the deploy when enforced, as any other.
+          PGBOUNCER_IMAGE: ${{ needs.build.outputs.pgbouncer_digest != '' && format('ghcr.io/trajetto-organization/trajetto-pgbouncer@{0}', needs.build.outputs.pgbouncer_digest) || '' }}
           ENFORCE: ${{ vars.IMAGE_SCAN_ENFORCE == 'true' }}
           DB: ${{ steps.trivy-db.outputs.db }}
         run: |
@@ -1013,6 +1174,7 @@ jobs:
           cache="$HOME/.cache/trivy"
           found=""
           images=("$API_IMAGE" "$MIGRATE_IMAGE" "$AI_IMAGE")
+          [ -z "$PGBOUNCER_IMAGE" ] || images+=("$PGBOUNCER_IMAGE")
           [ -z "$DATABASE_IMAGE" ] || images+=("$DATABASE_IMAGE")
           for image in "${images[@]}"; do
             name="${image%@*}"
@@ -1071,8 +1233,10 @@ jobs:
 
   # Staging redeploys on its own, with no approval: that is the whole point of
   # having it, and the environment is cheap to break. The deploy itself is
-  # .github/actions/deploy, the same one production runs: the migrations
-  # first, when staging's database has not applied this release image yet
+  # .github/actions/deploy, the same one production runs: the PgBouncer
+  # first, only when its digest changed (without
+  # DOKPLOY_PGBOUNCER_APPLICATION_ID only its tag moves), then the
+  # migrations, when staging's database has not applied this release image yet
   # (a failing migration stops the run there, before any tag of the API or
   # the AI moves), then the AI (only when its digest changed), then the API,
   # each tag moved right before its own deploy; then the wait until the
@@ -1126,6 +1290,7 @@ jobs:
           api-digest: ${{ needs.build.outputs.api_digest }}
           migrate-digest: ${{ needs.build.outputs.migrate_digest }}
           ai-digest: ${{ needs.build.outputs.ai_digest }}
+          pgbouncer-digest: ${{ needs.build.outputs.pgbouncer_digest }}
           force-ai: ${{ inputs.force_ai_build == true }}
           expected-commit: ${{ github.sha }}
           verify-default: http
@@ -1137,6 +1302,7 @@ jobs:
           swarm-worker-external-service: ${{ vars.SWARM_WORKER_EXTERNAL_SERVICE }}
           swarm-ingest-service: ${{ vars.SWARM_INGEST_SERVICE }}
           swarm-realtime-service: ${{ vars.SWARM_REALTIME_SERVICE }}
+          swarm-pgbouncer-service: ${{ vars.SWARM_PGBOUNCER_SERVICE }}
           release-timeout-seconds: ${{ vars.RELEASE_TIMEOUT_SECONDS }}
           force-release: ${{ inputs.force_release == true }}
           rollout-status-token: ${{ secrets.ROLLOUT_STATUS_TOKEN }}
@@ -1150,6 +1316,7 @@ jobs:
           dokploy-api-application-id: ${{ secrets.DOKPLOY_API_APPLICATION_ID }}
           dokploy-migrate-application-id: ${{ secrets.DOKPLOY_MIGRATE_APPLICATION_ID }}
           dokploy-ai-application-id: ${{ secrets.DOKPLOY_AI_APPLICATION_ID }}
+          dokploy-pgbouncer-application-id: ${{ secrets.DOKPLOY_PGBOUNCER_APPLICATION_ID }}
           dokploy-worker-application-id: ${{ secrets.DOKPLOY_WORKER_APPLICATION_ID }}
           dokploy-scheduler-application-id: ${{ secrets.DOKPLOY_SCHEDULER_APPLICATION_ID }}
           dokploy-worker-external-application-id: ${{ secrets.DOKPLOY_WORKER_EXTERNAL_APPLICATION_ID }}

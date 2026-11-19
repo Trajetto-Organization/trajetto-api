@@ -101,6 +101,8 @@ describe("the release order the three repositories share", () => {
 
   it("reads the deploy from the action and the roles' script", () => {
     expect(order).toEqual([
+      // Its own image, before the migrations (plano-escala F4-35).
+      "trajetto-pgbouncer",
       "trajetto-api-migrate",
       "trajetto-ai",
       "trajetto-worker",

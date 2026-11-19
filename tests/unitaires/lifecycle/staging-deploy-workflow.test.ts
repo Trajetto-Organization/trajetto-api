@@ -423,6 +423,445 @@ exit 0`,
       });
     });
 
+    // The PgBouncer's image (trajetto-pgbouncer, plano-escala F4-35):
+    // reused by the git hash of infra/pgbouncer like the AI's, published
+    // only for a tree the PgBouncer image job tested, scanned as an image
+    // that deploys, and rolled out before the migrations only when its
+    // digest changed: a push that leaves infra/pgbouncer alone redeploys
+    // nothing.
+    describe("the PgBouncer's image, reused by its source and deployed only on a new digest", () => {
+      const SOURCE = "Look up the PgBouncer image for this source";
+      const DECIDE = "Decide the PgBouncer deploy";
+
+      it("is reused when an image was built from the same infra/pgbouncer, and tagged for this commit", () => {
+        const result = step(
+          build,
+          SOURCE,
+          { [`trajetto-pgbouncer:src-${TREE}`]: digest("d") },
+          { TESTED: "false" },
+        );
+
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.outputs).toEqual({
+          tree: TREE,
+          build: "false",
+          digest: digest("d"),
+        });
+
+        const tag = "Tag the reused PgBouncer image for this commit";
+
+        expect(conditionOf(stepOf(build, tag))).toBe(
+          "steps.pgbouncer-source.outputs.build == 'false' && steps.pgbouncer-source.outputs.digest != ''",
+        );
+        expect(step(build, tag, {}, { DIGEST: digest("d") }).created).toEqual([
+          `docker buildx imagetools create --tag ${REPO}/trajetto-pgbouncer:sha-abcdef0 ${REPO}/trajetto-pgbouncer@${digest("d")}`,
+        ]);
+      });
+
+      it("is built for a new source the PgBouncer image job tested", () => {
+        const result = step(build, SOURCE, {}, { TESTED: "true" });
+
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.outputs).toEqual({ tree: TREE, build: "true" });
+      });
+
+      it("never publishes a source the job did not test: the PgBouncer stays where it is", () => {
+        const result = step(build, SOURCE, {}, { TESTED: "false" });
+
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.outputs).toEqual({ tree: TREE, build: "false" });
+        expect(result.stdout).toMatch(/::warning::trajetto-pgbouncer:src-/);
+      });
+
+      it("fails when GHCR does not answer, as the other images that deploy", () => {
+        const result = step(
+          build,
+          SOURCE,
+          { [`trajetto-pgbouncer:src-${TREE}`]: "garbage" },
+          { TESTED: "true", GHCR_ATTEMPTS: "1" },
+        );
+
+        expect(result.status).not.toBe(0);
+      });
+
+      it("is smoke-tested, pushed with attestations from the tested layers, and handed to the deploy", () => {
+        for (const name of [
+          "Extract metadata (pgbouncer)",
+          "Build the PgBouncer image for the smoke test",
+          "Smoke test the PgBouncer image",
+          "Build and push the PgBouncer image",
+        ]) {
+          expect(conditionOf(stepOf(build, name)), name).toBe(
+            "steps.pgbouncer-source.outputs.build == 'true'",
+          );
+        }
+        const push = stepOf(build, "Build and push the PgBouncer image").text;
+
+        expect(push).toContain("context: ./infra/pgbouncer");
+        expect(push).toContain("push: true");
+        expect(push).toContain("sbom: true");
+        expect(push).toContain("provenance: mode=max");
+        expect(push).toContain("GIT_SHA=${{ github.sha }}");
+        expect(push).toContain("type=gha,scope=pgbouncer-test");
+        expect(push).toContain(
+          "cache-to: type=gha,mode=max,scope=pgbouncer,ignore-error=true",
+        );
+        expect(stepOf(build, SOURCE).text).toContain(
+          "TESTED: ${{ needs.changes.outputs.pgbouncer }}",
+        );
+        expect(build.text).toContain(
+          "pgbouncer_digest: ${{ steps.build-pgbouncer.outputs.digest || steps.pgbouncer-source.outputs.digest }}",
+        );
+        expect(
+          input(jobOf(staging, "deploy-staging"), "pgbouncer-digest"),
+        ).toBe("${{ needs.build.outputs.pgbouncer_digest }}");
+      });
+
+      describe("its smoke test", () => {
+        const SMOKE = stepOf(build, "Smoke test the PgBouncer image").run;
+
+        function smoke(answers: Record<string, string>) {
+          box.stub(
+            "docker",
+            `
+case "$1" in
+  run) echo cid-pgbouncer ;;
+  inspect) echo "${answers.state ?? "running/healthy"}" ;;
+  logs) echo "trajetto-pgbouncer: imagem ${answers.revision ?? SHA}; trajetto e trajetto_probe em trajetto-postgres-staging:5432" ;;
+  exec)
+    case "$*" in
+      *"id -u"*) echo "${answers.uid ?? "6432"}" ;;
+      *"SHOW CONFIG"*) printf 'auth_type|hba|md5|yes\\npool_mode|${answers.pool_mode ?? "transaction"}|session|yes\\n' ;;
+    esac ;;
+esac
+exit 0`,
+          );
+
+          return runBlock(
+            box,
+            SMOKE,
+            { GITHUB_SHA: SHA, IMAGE: "trajetto-pgbouncer:smoke" },
+            process.cwd(),
+          );
+        }
+
+        it("starts it under staging's cap, offline, and reads back that it is healthy, unprivileged, on this commit and pooling transactions", () => {
+          const result = smoke({});
+
+          expect(result.status, result.stdout).toBe(0);
+          const run =
+            box.calls("docker").find((call) => call.startsWith("docker run")) ??
+            "";
+          expect(run).toContain("--network none --memory 33554432");
+          expect(run).toContain("--health-interval 2s");
+          expect(run).toContain("PGBOUNCER_PRIMARY_HOST=");
+          // Throwaway passwords, never a value of any environment.
+          expect(SMOKE).toContain("openssl rand -hex");
+          expect(result.summary).toContain("trajetto-pgbouncer: smoke test OK");
+        });
+
+        it.each([
+          [
+            "a container that never turns healthy",
+            { state: "running/unhealthy" },
+          ],
+          ["a container that exits", { state: "exited/unhealthy" }],
+          ["a process running as root", { uid: "0" }],
+          ["another commit's image", { revision: "0".repeat(40) }],
+          ["a pool mode other than transaction", { pool_mode: "session" }],
+        ])("fails on %s, before anything is pushed", (_, answers) => {
+          const result = smoke(answers);
+
+          expect(result.status).toBe(1);
+          expect(result.stdout).toContain(
+            "::error::Smoke test da imagem trajetto-pgbouncer",
+          );
+        });
+      });
+
+      it("is scanned as an image that deploys: an enforced finding holds the deploy", () => {
+        const scanStep = stepOf(
+          jobOf(staging, "image-scan"),
+          "Scan the images",
+        );
+
+        expect(scanStep.text).toContain(
+          "PGBOUNCER_IMAGE: ${{ needs.build.outputs.pgbouncer_digest != '' && format('ghcr.io/trajetto-organization/trajetto-pgbouncer@{0}', needs.build.outputs.pgbouncer_digest) || '' }}",
+        );
+        box.stub(
+          "docker",
+          'case "$*" in *trajetto-pgbouncer*) exit 3 ;; esac\nexit 0',
+        );
+        const env = {
+          DB: "fresh",
+          TRIVY_IMAGE: "aquasec/trivy:test",
+          API_IMAGE: `${REPO}/trajetto-api@${digest("1")}`,
+          MIGRATE_IMAGE: `${REPO}/trajetto-api-migrate@${digest("2")}`,
+          AI_IMAGE: `${REPO}/trajetto-ai@${digest("3")}`,
+          DATABASE_IMAGE: "",
+          PGBOUNCER_IMAGE: `${REPO}/trajetto-pgbouncer@${digest("5")}`,
+        };
+
+        const enforced = runBlock(
+          box,
+          scanStep.run,
+          { ...env, ENFORCE: "true" },
+          process.cwd(),
+        );
+
+        expect(enforced.status).toBe(1);
+        expect(enforced.stdout).toMatch(
+          /::error::Trivy: CRITICAL corrigível em trajetto-pgbouncer/,
+        );
+
+        const absent = runBlock(
+          box,
+          scanStep.run,
+          { ...env, PGBOUNCER_IMAGE: "", ENFORCE: "true" },
+          process.cwd(),
+        );
+
+        expect(absent.status, absent.stdout).toBe(0);
+      });
+
+      it("is redeployed only when the environment runs another digest", () => {
+        const same = step(
+          deploy,
+          DECIDE,
+          { "trajetto-pgbouncer:staging": digest("d") },
+          { TAG: "staging", PGBOUNCER_DIGEST: digest("d") },
+        );
+
+        expect(same.status, same.stderr).toBe(0);
+        expect(same.outputs).toEqual({
+          previous: digest("d"),
+          deploy: "false",
+        });
+        expect(same.summary).toContain("deploy do PgBouncer pulado");
+
+        const runs: Array<Record<string, string>> = [
+          { "trajetto-pgbouncer:staging": digest("e") },
+          {},
+        ];
+
+        for (const tags of runs) {
+          const changed = step(deploy, DECIDE, tags, {
+            TAG: "staging",
+            PGBOUNCER_DIGEST: digest("d"),
+          });
+
+          expect(changed.status, changed.stderr).toBe(0);
+          expect(changed.outputs.deploy, JSON.stringify(tags)).toBe("true");
+        }
+      });
+
+      it("reads the tag of the environment it deploys, and leaves the PgBouncer where it is for a build without its image", () => {
+        const stable = step(
+          deploy,
+          DECIDE,
+          {
+            "trajetto-pgbouncer:stable": digest("e"),
+            "trajetto-pgbouncer:staging": digest("d"),
+          },
+          { TAG: "stable", PGBOUNCER_DIGEST: digest("d") },
+        );
+
+        expect(stable.outputs).toEqual({
+          previous: digest("e"),
+          deploy: "true",
+        });
+
+        const older = step(
+          deploy,
+          DECIDE,
+          { "trajetto-pgbouncer:stable": digest("e") },
+          { TAG: "stable", PGBOUNCER_DIGEST: "" },
+        );
+
+        expect(older.status, older.stderr).toBe(0);
+        expect(older.outputs).toEqual({ deploy: "false" });
+        expect(older.stdout).toContain(
+          "::notice::Este build não tem imagem trajetto-pgbouncer",
+        );
+        expect(older.created).toEqual([]);
+      });
+
+      it("rolls out before the migrations, its tag moved right before its deploy, and moves the tag without Dokploy", () => {
+        const names = stepNames(deploy);
+        const at = (name: string) => names.indexOf(name);
+        const order = [
+          "Check deploy settings",
+          "Pick the rollout check",
+          "Decide migrations",
+          DECIDE,
+          "Move the PgBouncer tag to this build",
+          "Deploy the PgBouncer (Dokploy)",
+          "Wait for the PgBouncer to converge",
+          "Move the release image tag to this build",
+          "Run the database migrations (Dokploy)",
+        ];
+
+        for (const [index, name] of order.entries()) {
+          expect(at(name), name).toBeGreaterThan(-1);
+          if (index > 0) {
+            expect(at(order[index - 1]), name).toBeLessThan(at(name));
+          }
+        }
+        const move = conditionOf(
+          stepOf(deploy, "Move the PgBouncer tag to this build"),
+        );
+
+        expect(move).toContain("steps.pgbouncer.outputs.deploy == 'true'");
+        // Without the secret (or without Dokploy at all) the tag still
+        // moves, as every other service's.
+        expect(move).not.toContain("dokploy");
+        expect(
+          step(
+            deploy,
+            "Move the PgBouncer tag to this build",
+            {},
+            { TAG: "staging", PGBOUNCER_DIGEST: digest("d") },
+          ).created,
+        ).toEqual([
+          `docker buildx imagetools create --tag ${REPO}/trajetto-pgbouncer:staging ${REPO}/trajetto-pgbouncer@${digest("d")}`,
+        ]);
+
+        const dokploy = stepOf(deploy, "Deploy the PgBouncer (Dokploy)");
+
+        expect(conditionOf(dokploy)).toBe(
+          "steps.head.outputs.current == 'true' && steps.dokploy.outputs.enabled == 'true' && steps.pgbouncer.outputs.deploy == 'true'",
+        );
+        expect(dokploy.text).toContain(
+          "DOKPLOY_APPLICATION_ID: ${{ inputs.dokploy-pgbouncer-application-id }}",
+        );
+        expect(dokploy.text).toContain("DOKPLOY_APP_LABEL: trajetto-pgbouncer");
+        expect(dokploy.text).toContain('DOKPLOY_OPTIONAL: "true"');
+        expect(dokploy.run).toBe("node .github/scripts/dokploy-deploy.mjs");
+      });
+
+      describe("its convergence", () => {
+        const WAIT = "Wait for the PgBouncer to converge";
+        const ssh = {
+          MODE: "ssh",
+          DIGEST: digest("d"),
+          APPLICATION_ID: "app-pgbouncer",
+          SERVICE: "trajetto-pgbouncer-staging",
+          SSH_HOST: "host.example.com",
+          SSH_USER: "deploy",
+          SSH_KEY: "key-never-printed",
+          SSH_KNOWN_HOSTS: "host.example.com ssh-ed25519 AAAA",
+        };
+
+        function wait(env: Record<string, string>, code = 0) {
+          box.stub("ssh", `exit ${code}`);
+          // `install -m 700 -d`: Git Bash on Windows cannot set the mode.
+          box.stub("install", 'for last in "$@"; do :; done; mkdir -p "$last"');
+
+          // HOME is the sandbox: the key the step writes lands there.
+          return runBlock(
+            box,
+            stepOf(deploy, WAIT).run,
+            { HOME: box.root, ...env },
+            process.cwd(),
+          );
+        }
+
+        it("asks the host's verify-rollout about the PgBouncer's own image and service", () => {
+          expect(conditionOf(stepOf(deploy, WAIT))).toBe(
+            "steps.head.outputs.current == 'true' && steps.dokploy.outputs.enabled == 'true' && steps.pgbouncer.outputs.deploy == 'true' && steps.verify.outputs.mode != 'off'",
+          );
+
+          const result = wait(ssh);
+
+          expect(result.status, result.stdout).toBe(0);
+          expect(box.calls("ssh")).toHaveLength(1);
+          expect(box.calls("ssh")[0]).toContain(
+            `trajetto-pgbouncer-staging ${REPO}/trajetto-pgbouncer@${digest("d")}`,
+          );
+          expect(result.stdout).not.toContain("key-never-printed");
+          expect(result.summary).toContain("trajetto-pgbouncer");
+        });
+
+        it("fails, holding the migrations and the API, when it does not converge", () => {
+          const result = wait(ssh, 1);
+
+          expect(result.status).toBe(1);
+          expect(result.stdout).toContain(
+            "::error::trajetto-pgbouncer (trajetto-pgbouncer-staging) não convergiu",
+          );
+        });
+
+        it("checks nothing for a PgBouncer that was not deployed, says so without SSH, and warns without its service name", () => {
+          const skipped = wait({ ...ssh, APPLICATION_ID: "" });
+
+          expect(skipped.status, skipped.stdout).toBe(0);
+
+          const http = wait({ ...ssh, MODE: "http" });
+
+          expect(http.status, http.stdout).toBe(0);
+          expect(http.stdout).toContain("::notice::");
+
+          const unnamed = wait({ ...ssh, SERVICE: "" });
+
+          expect(unnamed.status, unnamed.stdout).toBe(0);
+          expect(unnamed.stdout).toContain(
+            "::warning::trajetto-pgbouncer foi implantada, mas falta a variável SWARM_PGBOUNCER_SERVICE",
+          );
+          expect(box.calls("ssh")).toEqual([]);
+
+          const keyless = wait({ ...ssh, SSH_KEY: "" });
+
+          expect(keyless.status).toBe(1);
+          expect(keyless.stdout).toContain("secrets.DEPLOY_VERIFY_SSH_KEY");
+        });
+      });
+
+      it("is marked staged with the others, and its tag put back after its own failed deploy", () => {
+        const marked = step(
+          deploy,
+          "Mark this build as staged",
+          {},
+          {
+            API_DIGEST: digest("1"),
+            AI_DIGEST: digest("a"),
+            PGBOUNCER_DIGEST: digest("d"),
+          },
+        );
+
+        expect(marked.status, marked.stderr).toBe(0);
+        expect(marked.created).toContain(
+          `docker buildx imagetools create --tag ${REPO}/trajetto-pgbouncer:staged-abcdef0 ${REPO}/trajetto-pgbouncer@${digest("d")}`,
+        );
+
+        for (const tag of ["staging", "stable"]) {
+          box.dispose();
+          box = sandbox();
+          box.stub("docker", "exit 0");
+
+          const restored = step(
+            deploy,
+            "Put the tags back after a failed deploy",
+            {},
+            {
+              TAG: tag,
+              RESTORE_API: tag === "staging" ? "true" : "false",
+              PREVIOUS_API: digest("1"),
+              PREVIOUS_AI: digest("a"),
+              PREVIOUS_PGBOUNCER: digest("e"),
+              PGBOUNCER_DEPLOY: "failure",
+              AI_DEPLOY: "skipped",
+              API_DEPLOY: "skipped",
+            },
+          );
+
+          expect(restored.status, restored.stderr).toBe(0);
+          expect(restored.created).toEqual([
+            `docker buildx imagetools create --tag ${REPO}/trajetto-pgbouncer:${tag} ${REPO}/trajetto-pgbouncer@${digest("e")}`,
+          ]);
+        }
+      });
+    });
+
     describe("the AI deploy, only when its digest changed", () => {
       const CURRENT = "Read what the environment runs now";
 
@@ -999,14 +1438,23 @@ describe.skipIf(!hasShell("bash"))("the rollout check of the deploy", () => {
     expect(result.output).toBe("");
   });
 
-  // Picked before the worker roles' deploy: their own check runs before
-  // the API's tag moves, in the same mode (review of wave 12).
+  // Picked before anything deploys: the PgBouncer's check runs before the
+  // migrations (plano-escala F4-35), and the worker roles' before the
+  // API's tag moves, all in the same mode (review of wave 12).
   it("follows the pick, each check on its own value, after the API's deploy", () => {
     const names = stepNames(deploy);
 
     expect(names.indexOf(PICK)).toBe(
-      names.indexOf("Deploy the worker roles (Dokploy)") - 1,
+      names.indexOf("Check deploy settings") + 1,
     );
+    for (const later of [
+      "Deploy the PgBouncer (Dokploy)",
+      "Run the database migrations (Dokploy)",
+      "Deploy the AI service (Dokploy)",
+      "Deploy the worker roles (Dokploy)",
+    ]) {
+      expect(names.indexOf(PICK), later).toBeLessThan(names.indexOf(later));
+    }
     expect(names.indexOf(PICK)).toBeLessThan(
       names.indexOf("Deploy the API (Dokploy)"),
     );

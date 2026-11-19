@@ -1,8 +1,9 @@
 name: Deploy the API
 description: >-
   The deploy of one environment, the same for staging and production: the
-  migrations through the Dokploy Application trajetto-api-migrate when the
-  database has not applied this release image, then the AI, then the
+  PgBouncer when its digest changed, then the migrations through the
+  Dokploy Application trajetto-api-migrate when the database has not
+  applied this release image, then the AI, then the
   Applications of the API's image in another role (worker, scheduler,
   worker-external), then the API and the proof that the environment serves
   this build, then the edge roles (ingest, realtime), each tag moved by
@@ -22,9 +23,13 @@ description: >-
 #              Dokploy deploy, the public liveness as the default check,
 #              and `staged-<7>` written last;
 #   production tag `stable`, the digests `Staging evidence` read before the
-#              approval, only the AI's tag put back (a failed promote is
-#              fixed by promoting again), the Swarm check over SSH as the
-#              default, no marker.
+#              approval, only the AI's and the PgBouncer's tags put back (a
+#              failed promote is fixed by promoting again), the Swarm check
+#              over SSH as the default, no marker.
+#
+# The PgBouncer (trajetto-pgbouncer, plano-escala F4-35) runs its own image,
+# not the API's: deployed only when its digest changed, before the
+# migrations; without DOKPLOY_PGBOUNCER_APPLICATION_ID only its tag moves.
 #
 # The roles (worker, scheduler, worker-external, ingest, realtime) run the
 # API's digest under `<tag>-<role>`, so a rollback (production.yml with
@@ -55,6 +60,9 @@ inputs:
   force-ai:
     description: "true: reimplanta a IA mesmo com o mesmo digest"
     default: "false"
+  pgbouncer-digest:
+    description: "Digest da imagem trajetto-pgbouncer do build; vazio = build sem ela (o PgBouncer fica onde está)"
+    default: ""
   expected-commit:
     description: "O commit (ou prefixo) que a liveness pública tem de responder"
     required: true
@@ -81,6 +89,9 @@ inputs:
     default: ""
   swarm-ingest-service:
     description: "vars.SWARM_INGEST_SERVICE: o App Name da trajetto-ingest (idem)"
+    default: ""
+  swarm-pgbouncer-service:
+    description: "vars.SWARM_PGBOUNCER_SERVICE: o App Name da trajetto-pgbouncer, para a conferência por SSH dela"
     default: ""
   swarm-realtime-service:
     description: "vars.SWARM_REALTIME_SERVICE: o App Name da trajetto-realtime (idem)"
@@ -123,6 +134,9 @@ inputs:
     default: ""
   dokploy-ai-application-id:
     description: "secrets.DOKPLOY_AI_APPLICATION_ID"
+    default: ""
+  dokploy-pgbouncer-application-id:
+    description: "secrets.DOKPLOY_PGBOUNCER_APPLICATION_ID: a trajetto-pgbouncer (vazio = só a tag dela anda)"
     default: ""
   dokploy-worker-application-id:
     description: "secrets.DOKPLOY_WORKER_APPLICATION_ID: a trajetto-worker (vazio = o papel não é implantado; a tag dele segue a da API)"
@@ -316,6 +330,38 @@ runs:
           exit 1
         fi
 
+    # Which proof of the rollout runs: the environment's ROLLOUT_VERIFY, or
+    # its default when the variable is empty (staging: the public liveness;
+    # production: the Swarm tasks over SSH). Exactly one check runs — an
+    # unknown value falls back to the default, with a warning, never to
+    # none — and only `off` skips them, logged. Picked before anything is
+    # deployed: the PgBouncer's check runs before the migrations, and the
+    # roles' before the API's tag moves.
+    - name: Pick the rollout check
+      id: verify
+      if: steps.head.outputs.current == 'true' && steps.dokploy.outputs.enabled == 'true'
+      shell: bash
+      env:
+        ROLLOUT_VERIFY: ${{ inputs.rollout-verify }}
+        DEFAULT: ${{ inputs.verify-default }}
+      run: |
+        case "$DEFAULT" in
+          http | ssh) ;;
+          *)
+            echo "::error::verify-default precisa ser http ou ssh (recebido: '${DEFAULT}')."
+            exit 1
+            ;;
+        esac
+        case "$ROLLOUT_VERIFY" in
+          http | ssh | off) mode=$ROLLOUT_VERIFY ;;
+          "") mode=$DEFAULT ;;
+          *)
+            mode=$DEFAULT
+            echo "::warning::ROLLOUT_VERIFY='${ROLLOUT_VERIFY}' não é http, ssh nem off: vale a conferência padrão deste ambiente (${DEFAULT})."
+            ;;
+        esac
+        echo "mode=${mode}" >> "$GITHUB_OUTPUT"
+
     # The release step runs only when the database has not applied this
     # release image yet. `trajetto-api-migrate:<tag>-applied` names the last
     # one that FINISHED here: it moves only after the step succeeded
@@ -404,6 +450,126 @@ runs:
           echo "::warning::Não deu para ler os passos pendentes de ${where} (${reason}); a etapa só roda com uma imagem de migração nova ou com force_release, como antes."
         fi
 
+    # The PgBouncer (plano-escala F4-35), the endpoint every Application
+    # reaches Postgres through once the owner points the URLs at it, goes
+    # first: before the migrations and before any code that runs on it. It
+    # runs its own image, trajetto-pgbouncer, reused by its source, so a
+    # push that leaves infra/pgbouncer alone hands the same digest back,
+    # and an environment that already runs it is not redeployed: every
+    # redeploy moves the clients of every Application to a new task. A
+    # build with no PgBouncer image (one older than it, or a tree the
+    # validation did not test) leaves it where it is. What `<tag>` names
+    # now is what a failed deploy puts back; GHCR not answering fails
+    # here, before anything moved.
+    - name: Decide the PgBouncer deploy
+      id: pgbouncer
+      if: steps.head.outputs.current == 'true'
+      shell: bash
+      env:
+        TAG: ${{ inputs.tag }}
+        PGBOUNCER_DIGEST: ${{ inputs.pgbouncer-digest }}
+      run: |
+        if [ -z "$PGBOUNCER_DIGEST" ]; then
+          echo "deploy=false" >> "$GITHUB_OUTPUT"
+          echo "::notice::Este build não tem imagem trajetto-pgbouncer (anterior a ela, ou uma fonte que a validação não testou); trajetto-pgbouncer:${TAG} não muda."
+          exit 0
+        fi
+        previous=$(bash .github/scripts/ghcr.sh digest "ghcr.io/trajetto-organization/trajetto-pgbouncer:${TAG}")
+        echo "previous=${previous}" >> "$GITHUB_OUTPUT"
+        if [ -n "$previous" ] && [ "$previous" = "$PGBOUNCER_DIGEST" ]; then
+          echo "deploy=false" >> "$GITHUB_OUTPUT"
+          echo "::notice::trajetto-pgbouncer: ${TAG} já aponta para ${PGBOUNCER_DIGEST} (infra/pgbouncer sem mudança); o PgBouncer não é reimplantado."
+          echo "trajetto-pgbouncer: sem mudança (${PGBOUNCER_DIGEST}); deploy do PgBouncer pulado." >> "$GITHUB_STEP_SUMMARY"
+        else
+          echo "deploy=true" >> "$GITHUB_OUTPUT"
+        fi
+
+    # By digest, right before its own deploy, and without Dokploy too: the
+    # tag always names the build the environment would run, and an
+    # Application created later starts on it. Without
+    # DOKPLOY_PGBOUNCER_APPLICATION_ID only this moves.
+    - name: Move the PgBouncer tag to this build
+      if: steps.head.outputs.current == 'true' && steps.pgbouncer.outputs.deploy == 'true'
+      shell: bash
+      env:
+        TAG: ${{ inputs.tag }}
+        PGBOUNCER_DIGEST: ${{ inputs.pgbouncer-digest }}
+      run: |
+        bash .github/scripts/ghcr.sh tag \
+          "ghcr.io/trajetto-organization/trajetto-pgbouncer:${TAG}" \
+          "ghcr.io/trajetto-organization/trajetto-pgbouncer@${PGBOUNCER_DIGEST}"
+        echo "trajetto-pgbouncer:${TAG} → ${PGBOUNCER_DIGEST}" >> "$GITHUB_STEP_SUMMARY"
+
+    # Its Application rolls start-first: the new task turns healthy before
+    # the old one gets SIGTERM and drains its clients (SHUTDOWN
+    # WAIT_FOR_CLIENTS, inside the 90 s Stop Grace Period), and a new task
+    # that refuses its configuration (exit 64) leaves the old one serving.
+    # A failed deploy fails here: nothing after it runs, the migrations
+    # included. Not created yet (no id) = a notice.
+    - name: Deploy the PgBouncer (Dokploy)
+      id: deploy-pgbouncer
+      if: steps.head.outputs.current == 'true' && steps.dokploy.outputs.enabled == 'true' && steps.pgbouncer.outputs.deploy == 'true'
+      shell: bash
+      env:
+        DOKPLOY_URL: ${{ inputs.dokploy-url }}
+        DOKPLOY_API_KEY: ${{ inputs.dokploy-api-key }}
+        DOKPLOY_APPLICATION_ID: ${{ inputs.dokploy-pgbouncer-application-id }}
+        DOKPLOY_APP_LABEL: trajetto-pgbouncer
+        DOKPLOY_OPTIONAL: "true"
+      run: node .github/scripts/dokploy-deploy.mjs
+
+    # The proof the PgBouncer came up on this digest, before the migrations:
+    # Dokploy's `done` only means the manager accepted the spec, and Swarm
+    # rolls a task that fails its healthcheck back on its own. Over SSH,
+    # the host's verify-rollout for its own image and service
+    # (SWARM_PGBOUNCER_SERVICE), which also reads its Stop Grace Period.
+    # There is no public check for it: without SSH (the http mode) it is a
+    # notice, and the API's own checks follow.
+    - name: Wait for the PgBouncer to converge
+      if: steps.head.outputs.current == 'true' && steps.dokploy.outputs.enabled == 'true' && steps.pgbouncer.outputs.deploy == 'true' && steps.verify.outputs.mode != 'off'
+      shell: bash
+      env:
+        MODE: ${{ steps.verify.outputs.mode }}
+        DIGEST: ${{ inputs.pgbouncer-digest }}
+        APPLICATION_ID: ${{ inputs.dokploy-pgbouncer-application-id }}
+        SERVICE: ${{ inputs.swarm-pgbouncer-service }}
+        SSH_HOST: ${{ inputs.deploy-ssh-host }}
+        SSH_USER: ${{ inputs.deploy-ssh-user }}
+        SSH_KEY: ${{ inputs.deploy-verify-ssh-key }}
+        SSH_KNOWN_HOSTS: ${{ inputs.deploy-ssh-known-hosts }}
+      run: |
+        # Not deployed (no Application id): nothing to wait for.
+        [ -n "$APPLICATION_ID" ] || exit 0
+        if [ "$MODE" != "ssh" ]; then
+          echo "::notice::trajetto-pgbouncer: a conferência do rollout dele só existe por SSH (ROLLOUT_VERIFY=ssh); neste modo (${MODE}) ela não roda."
+          exit 0
+        fi
+        if [ -z "$SERVICE" ]; then
+          echo "::warning::trajetto-pgbouncer foi implantada, mas falta a variável SWARM_PGBOUNCER_SERVICE (o App Name dela) no environment do GitHub: a conferência por SSH dela não roda (docs/deploy.md, seção 14)."
+          exit 0
+        fi
+        missing=""
+        [ -n "$DIGEST" ] || missing="$missing DIGEST"
+        [ -n "$SSH_HOST" ] || missing="$missing secrets.DEPLOY_SSH_HOST"
+        [ -n "$SSH_USER" ] || missing="$missing secrets.DEPLOY_SSH_USER"
+        [ -n "$SSH_KEY" ] || missing="$missing secrets.DEPLOY_VERIFY_SSH_KEY"
+        [ -n "$SSH_KNOWN_HOSTS" ] || missing="$missing secrets.DEPLOY_SSH_KNOWN_HOSTS"
+        if [ -n "$missing" ]; then
+          echo "::error::Faltam${missing}: sem eles o run não prova que o Swarm terminou o rollout do PgBouncer, e nada depois dele é implantado (docs/deploy.md, \"Conferir a convergência\"). Sem SSH, use ROLLOUT_VERIFY=http; para pular de propósito: ROLLOUT_VERIFY=off."
+          exit 1
+        fi
+        install -m 700 -d ~/.ssh
+        printf '%s\n' "$SSH_KEY" > ~/.ssh/verify_key
+        chmod 600 ~/.ssh/verify_key
+        printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+        if ! ssh -i ~/.ssh/verify_key -o BatchMode=yes -o StrictHostKeyChecking=yes \
+          -o ServerAliveInterval=30 -o ServerAliveCountMax=6 \
+          "$SSH_USER@$SSH_HOST" "$SERVICE ghcr.io/trajetto-organization/trajetto-pgbouncer@${DIGEST}"; then
+          echo "::error::trajetto-pgbouncer (${SERVICE}) não convergiu para ${DIGEST}: o Swarm reverteu o update ou ele não terminou no prazo, e nada depois dele é implantado. Detalhe no host: docker service ps --no-trunc ${SERVICE}."
+          exit 1
+        fi
+        echo "trajetto-pgbouncer: ${SERVICE} convergiu para ${DIGEST}." >> "$GITHUB_STEP_SUMMARY"
+
     # The release Application runs `:<tag>`: the tag moves to this build's
     # release image, by digest, right before its deploy.
     - name: Move the release image tag to this build
@@ -488,37 +654,6 @@ runs:
         DOKPLOY_APP_LABEL: trajetto-ai
         DOKPLOY_OPTIONAL: "true"
       run: node .github/scripts/dokploy-deploy.mjs
-
-    # Which proof of the rollout runs: the environment's ROLLOUT_VERIFY, or
-    # its default when the variable is empty (staging: the public liveness;
-    # production: the Swarm tasks over SSH). Exactly one check runs — an
-    # unknown value falls back to the default, with a warning, never to
-    # none — and only `off` skips them, logged. Picked before the roles'
-    # deploy: their own check runs before the API's tag moves.
-    - name: Pick the rollout check
-      id: verify
-      if: steps.head.outputs.current == 'true' && steps.dokploy.outputs.enabled == 'true'
-      shell: bash
-      env:
-        ROLLOUT_VERIFY: ${{ inputs.rollout-verify }}
-        DEFAULT: ${{ inputs.verify-default }}
-      run: |
-        case "$DEFAULT" in
-          http | ssh) ;;
-          *)
-            echo "::error::verify-default precisa ser http ou ssh (recebido: '${DEFAULT}')."
-            exit 1
-            ;;
-        esac
-        case "$ROLLOUT_VERIFY" in
-          http | ssh | off) mode=$ROLLOUT_VERIFY ;;
-          "") mode=$DEFAULT ;;
-          *)
-            mode=$DEFAULT
-            echo "::warning::ROLLOUT_VERIFY='${ROLLOUT_VERIFY}' não é http, ssh nem off: vale a conferência padrão deste ambiente (${DEFAULT})."
-            ;;
-        esac
-        echo "mode=${mode}" >> "$GITHUB_OUTPUT"
 
     # The Applications that run the API's image in another role
     # (plano-escala F3-31a), before the API: the worker that expands what
@@ -787,6 +922,7 @@ runs:
       env:
         API_DIGEST: ${{ inputs.api-digest }}
         AI_DIGEST: ${{ inputs.ai-digest }}
+        PGBOUNCER_DIGEST: ${{ inputs.pgbouncer-digest }}
       run: |
         bash .github/scripts/ghcr.sh tag \
           "ghcr.io/trajetto-organization/trajetto-api:staged-${GITHUB_SHA::7}" \
@@ -795,11 +931,20 @@ runs:
           "ghcr.io/trajetto-organization/trajetto-ai:staged-${GITHUB_SHA::7}" \
           "ghcr.io/trajetto-organization/trajetto-ai@${AI_DIGEST}"
         echo "staged-${GITHUB_SHA::7}: trajetto-api → ${API_DIGEST}, trajetto-ai → ${AI_DIGEST}" >> "$GITHUB_STEP_SUMMARY"
+        # The PgBouncer's, when the build has one (staged-build.sh leaves an
+        # image with neither tag out, as the AI of a build older than it).
+        if [ -n "$PGBOUNCER_DIGEST" ]; then
+          bash .github/scripts/ghcr.sh tag \
+            "ghcr.io/trajetto-organization/trajetto-pgbouncer:staged-${GITHUB_SHA::7}" \
+            "ghcr.io/trajetto-organization/trajetto-pgbouncer@${PGBOUNCER_DIGEST}"
+          echo "staged-${GITHUB_SHA::7}: trajetto-pgbouncer → ${PGBOUNCER_DIGEST}" >> "$GITHUB_STEP_SUMMARY"
+        fi
 
     # A Dokploy deploy that failed left Swarm on the old spec, so its tag
-    # goes back to what the environment still runs: the next run's AI skip
-    # compares against it, and a manual Deploy in the panel must not pull a
-    # build that never came up. Only a failed Dokploy step, never a failed
+    # goes back to what the environment still runs: the next run's AI and
+    # PgBouncer skips compare against it, and a manual Deploy in the panel
+    # must not pull a build that never came up (the PgBouncer's and the
+    # AI's in both environments). Only a failed Dokploy step, never a failed
     # check: a check that timed out may sit on a build that did converge.
     # The API's tag only where restore-api-tag says so (staging): in
     # production a failed promote is fixed by promoting again (or rolling
@@ -814,8 +959,10 @@ runs:
         RESTORE_API: ${{ inputs.restore-api-tag }}
         PREVIOUS_API: ${{ steps.current.outputs.api }}
         PREVIOUS_AI: ${{ steps.current.outputs.ai }}
+        PREVIOUS_PGBOUNCER: ${{ steps.pgbouncer.outputs.previous }}
         API_DEPLOY: ${{ steps.deploy-api.outcome }}
         AI_DEPLOY: ${{ steps.deploy-ai.outcome }}
+        PGBOUNCER_DEPLOY: ${{ steps.deploy-pgbouncer.outcome }}
         STATE_FILE: ${{ runner.temp }}/deploy-roles.state
       run: |
         restore() {
@@ -827,6 +974,7 @@ runs:
             "ghcr.io/trajetto-organization/$1:${TAG}" "ghcr.io/trajetto-organization/$1@$2"
           echo "$1:${TAG} voltou para $2 (o deploy falhou; o ambiente segue no build anterior)." >> "$GITHUB_STEP_SUMMARY"
         }
+        if [ "$PGBOUNCER_DEPLOY" = "failure" ]; then restore trajetto-pgbouncer "$PREVIOUS_PGBOUNCER"; fi
         if [ "$AI_DEPLOY" = "failure" ]; then restore trajetto-ai "$PREVIOUS_AI"; fi
         if [ "$API_DEPLOY" = "failure" ] && [ "$RESTORE_API" = "true" ]; then restore trajetto-api "$PREVIOUS_API"; fi
         RESTORE_TAGS="$RESTORE_API" bash .github/scripts/deploy-roles.sh restore

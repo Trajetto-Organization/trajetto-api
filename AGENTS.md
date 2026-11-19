@@ -243,8 +243,8 @@ checksum). Detalhes: `docs/arquitetura.md` ("Migrations: expandir e contrair").
   push de código embaixo dele. Só na branch `staging`: o _Run workflow_ em
   outra branch não roda nada. Depois do `Gate`, constrói **uma vez** as imagens `trajetto-api`,
   `trajetto-api-migrate` e `trajetto-ai` (`sha-<sha>`, SBOM, proveniência,
-  Trivy; a de migração e a da IA são reaproveitadas por `src-<hash>` quando o
-  que rodam não mudou), roda as migrations pela Application
+  Trivy; a de migração, a da IA e a `trajetto-pgbouncer` são reaproveitadas
+  por `src-<hash>` quando o que rodam não mudou), roda as migrations pela Application
   `trajetto-api-migrate` do Dokploy (só se o banco ainda não aplicou aquela
   imagem; `dokploy-release.mjs` espera a etapa terminar), move `staging` por
   digest e faz o deploy do staging no Dokploy (a ação composta
@@ -280,15 +280,16 @@ checksum). Detalhes: `docs/arquitetura.md` ("Migrations: expandir e contrair").
   de ajustar o teste.
 - O deploy chama a API do Dokploy por `.github/scripts/dokploy-deploy.mjs`
   (`application.deploy` com a chave de API e o id de cada Application, na
-  ordem IA → papéis de fila → API → papéis de borda, por
+  ordem PgBouncer (só com digest novo) → IA → papéis de fila → API →
+  papéis de borda, por
   `.github/scripts/deploy-roles.sh`); a web usa o mesmo script, numa cópia
   idêntica (um teste da web compara as duas), e repete até 6 vezes, com
   espera crescente (20 → 160 s), um deploy que termina em erro, registrando
   o motivo que o Dokploy deu.
 - Entre repositórios: a ordem do primeiro deploy (bancos → IA → migrations →
   API → backup do banco → web → app), a ordem de cada release (**API → web →
-  app**; dentro da API, migrate → IA → papéis de fila → API → papéis de
-  borda), as regras de compatibilidade (expandir antes e contrair só num
+  app**; dentro da API, PgBouncer (só com digest novo) → migrate → IA →
+  papéis de fila → API → papéis de borda), as regras de compatibilidade (expandir antes e contrair só num
   release seguinte, porque a imagem anterior serve durante o rolling e volta
   num rollback; o app por `CLIENT_CONTRACT`) e os valores que
   precisam casar com a web e o app (`HTTP_REQUEST` = origem da web,

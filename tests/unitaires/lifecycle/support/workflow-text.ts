@@ -192,6 +192,25 @@ export function timeoutOf(job: Job): number | undefined {
   return match ? Number(match[1]) : undefined;
 }
 
+/**
+ * A job's `needs`, from its text: `needs: a`, `needs: [a, b]`, or the same
+ * list wrapped one name per line, which Prettier writes once the line
+ * passes 80 columns (validate.yml's Result since the PgBouncer image job).
+ */
+export function needsOf(text: string): string[] {
+  const head = /^ {4}needs:(.*)$/m.exec(text);
+
+  if (!head) return [];
+
+  const rest = text.slice(head.index + head[0].length + 1);
+  const wrapped = /^(?: {6,}.*(?:\n|$))*/.exec(rest)?.[0] ?? "";
+
+  return `${head[1]}\n${wrapped}`
+    .replace(/[[\],]/g, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
 /** A step's `if:` expression, or "" when it has none. */
 export function conditionOf(step: Step): string {
   return /\n\s+if: (.+)\n/.exec(`${step.text}\n`)?.[1]?.trim() ?? "";

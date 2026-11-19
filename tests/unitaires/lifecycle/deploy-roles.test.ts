@@ -547,9 +547,13 @@ describe("the deploy action", () => {
   const at = (name: string) => stepNames(deploy).indexOf(name);
 
   it("deploys the workers after the AI and proves them up before the API, the edge roles once the API's check passed", () => {
+    // The check is picked before anything deploys: the PgBouncer's own
+    // check runs before the migrations (plano-escala F4-35).
     const order = [
-      "Deploy the AI service (Dokploy)",
       "Pick the rollout check",
+      "Deploy the PgBouncer (Dokploy)",
+      "Wait for the PgBouncer to converge",
+      "Deploy the AI service (Dokploy)",
       "Deploy the worker roles (Dokploy)",
       "Wait for the worker roles to converge",
       "Move the API tag to this build",

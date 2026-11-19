@@ -14,6 +14,9 @@ name: Validate
 #        ─▶ Postgres image (the trajetto-postgres image's own tests and its
 #                      proof against an S3 server; only for an infra/postgres
 #                      that has no published image yet, changes.sh)
+#        ─▶ PgBouncer image (the trajetto-pgbouncer image's own tests; only
+#                      for an infra/pgbouncer that has no published image
+#                      yet, changes.sh)
 #   docs ─▶ Docs      (Prettier and the unit tests without coverage: some of
 #                      them read the documentation, and the siblings)
 #        ─▶ Result    (after all of them: the verdict of this call)
@@ -47,6 +50,10 @@ on:
         default: false
       postgres:
         description: "Roda o job Postgres image (o changes.sh diz false quando infra/postgres já tem imagem publicada)"
+        type: boolean
+        default: true
+      pgbouncer:
+        description: "Roda o job PgBouncer image (o changes.sh diz false quando infra/pgbouncer já tem imagem publicada)"
         type: boolean
         default: true
       audit_base:
@@ -510,6 +517,91 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$status"
 
+  # The trajetto-pgbouncer image (infra/pgbouncer, plano-escala F4-34/F4-35):
+  # the PgBouncer in front of the Database, which the deploys roll out only
+  # when its digest changes. Its `test` stage starts the real PgBouncer
+  # from the entrypoint the image ships, offline and as its own user, and
+  # reads every value back through the console (SHOW CONFIG, SHOW
+  # DATABASES); every branch of the entrypoint is the unit suite's
+  # (pgbouncer-image.test.ts). The Build of staging reads this job's cache
+  # back, so the image it publishes is built from the layers tested here.
+  #
+  # Like the Database's: the whole build input is infra/pgbouncer, git
+  # names it with one hash, and the Build of staging publishes
+  # `src-<hash>` only after this job passed. changes.sh does the lookup
+  # first (`pgbouncer` false: the job does not even start); the lookup
+  # below is the job's own second look.
+  pgbouncer-image:
+    name: PgBouncer image
+    if: ${{ !inputs.docs && inputs.pgbouncer }}
+    runs-on: ubuntu-24.04
+    # Measured 29 s with nothing cached on a workstation (the base, the
+    # build tools, the source download and the compile; the test stage
+    # itself takes ~1.5 s); a cold cache on a 2-vCPU runner fits well
+    # inside this.
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Log in to GitHub Container Registry
+        id: ghcr
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if bash .github/scripts/ghcr.sh login; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Look up the PgBouncer image for this source
+        id: pgbouncer-source
+        env:
+          LOGGED_IN: ${{ steps.ghcr.outputs.ok }}
+        run: |
+          tree=$(git rev-parse HEAD:infra/pgbouncer)
+          if [ "$LOGGED_IN" != "true" ]; then
+            echo "test=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::Sem login no GHCR, não deu para procurar trajetto-pgbouncer:src-${tree::12}: a imagem é testada."
+            exit 0
+          fi
+          status=0
+          digest=$(bash .github/scripts/ghcr.sh digest "ghcr.io/trajetto-organization/trajetto-pgbouncer:src-${tree}") || status=$?
+          if [ "$status" -ne 0 ]; then
+            echo "test=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::O GHCR não respondeu sobre trajetto-pgbouncer:src-${tree::12}: a imagem é testada."
+          elif [ -n "$digest" ]; then
+            echo "test=false" >> "$GITHUB_OUTPUT"
+            echo "trajetto-pgbouncer: infra/pgbouncer igual ao de src-${tree::12} (${digest}), que já passou; nada a testar." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "test=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Docker Buildx
+        if: steps.pgbouncer-source.outputs.test == 'true'
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+        with:
+          driver-opts: image=moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
+
+      # No output: the result stays in the builder. Offline after the
+      # download of PgBouncer's source (checked by SHA-256): the compile and
+      # the test run with no network.
+      - name: Build the image and run its tests
+        if: steps.pgbouncer-source.outputs.test == 'true'
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5.4.0
+        with:
+          context: ./infra/pgbouncer
+          target: test
+          push: false
+          cache-from: type=gha,scope=pgbouncer-test
+          cache-to: type=gha,mode=max,scope=pgbouncer-test,ignore-error=true
+
   # A push that changes only documentation: no type-check, no E2E, no
   # image. Prettier still runs (`lint:check` covers *.md and docs/), and so
   # does the unit suite, without coverage, because some of its tests read
@@ -594,7 +686,16 @@ jobs:
   # validation cancelled by a newer push cancels this one with it.
   result:
     name: Result
-    needs: [validate, e2e, ai-ocr, postgres-image, docs, ai-local-e2e]
+    needs:
+      [
+        validate,
+        e2e,
+        ai-ocr,
+        postgres-image,
+        pgbouncer-image,
+        docs,
+        ai-local-e2e,
+      ]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -609,10 +710,12 @@ jobs:
           WANT_E2E: ${{ inputs.e2e }}
           WANT_AI_LOCAL: ${{ inputs.ai_local }}
           WANT_POSTGRES: ${{ inputs.postgres }}
+          WANT_PGBOUNCER: ${{ inputs.pgbouncer }}
           VALIDATE: ${{ needs.validate.result }}
           E2E: ${{ needs.e2e.result }}
           AI_OCR: ${{ needs.ai-ocr.result }}
           POSTGRES_JOB: ${{ needs.postgres-image.result }}
+          PGBOUNCER_JOB: ${{ needs.pgbouncer-image.result }}
           DOCS_JOB: ${{ needs.docs.result }}
           AI_LOCAL: ${{ needs.ai-local-e2e.result }}
         run: |
@@ -630,12 +733,14 @@ jobs:
             expect E2E "$E2E" skipped
             expect "AI OCR" "$AI_OCR" skipped
             expect "Postgres image" "$POSTGRES_JOB" skipped
+            expect "PgBouncer image" "$PGBOUNCER_JOB" skipped
             expect "AI local contract" "$AI_LOCAL" skipped
           else
             expect Validate "$VALIDATE" success
             expect E2E "$E2E" "$(asked "$WANT_E2E")"
             expect "AI OCR" "$AI_OCR" success
             expect "Postgres image" "$POSTGRES_JOB" "$(asked "$WANT_POSTGRES")"
+            expect "PgBouncer image" "$PGBOUNCER_JOB" "$(asked "$WANT_PGBOUNCER")"
             expect "AI local contract" "$AI_LOCAL" "$(asked "$WANT_AI_LOCAL")"
             expect Docs "$DOCS_JOB" skipped
           fi
