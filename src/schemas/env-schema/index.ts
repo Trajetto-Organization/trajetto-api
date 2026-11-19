@@ -1668,6 +1668,22 @@ const envSchema = z
         .default(DEFAULT_PARTIAL_RETRIES_PER_DAY),
     ),
 
+    // The dashboard's closed days (plano-escala F4-21, decision D52): every
+    // 15 minutes, the process with the cron counts each company's closed
+    // days of deliveries into tenant_day_count, on the maintenance pool and
+    // within CRON_PURGE_RUN_BUDGET_MS, for the overview and the trends to
+    // add days up instead of counting months (F4-22). On by default: it only
+    // writes its own tables, and nobody reads them before
+    // DASHBOARD_ROLLUP_MODE. false stops the job (a kill switch, should a
+    // run ever weigh on the database); the stored days stop moving forward,
+    // and a reader counts live whatever is not stored.
+    TENANT_DAY_ROLLUP_ENABLED: z
+      .preprocess(
+        (value) => (value === "" ? undefined : value),
+        z.enum(["true", "false"]).default("true"),
+      )
+      .transform((value) => value === "true"),
+
     /**
      * The internal reference at /docs.
      *

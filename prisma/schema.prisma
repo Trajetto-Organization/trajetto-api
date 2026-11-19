@@ -4815,7 +4815,11 @@ model TenantDayCount {
   business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
   businessId String
 
-  /// What was counted (the entity of the dashboard), named by the job.
+  /// What was counted, named by the job (src/shared/rollup/tenant-day-rules.ts):
+  /// `delivery@<IANA zone>`, the company's deliveries created on `day` in that
+  /// zone, with a row (zero too) for every day between the first and the
+  /// last; and `pending:delivery`, a marked UTC day the job took and has not
+  /// counted yet (value 0), kept here so that a run that dies loses none.
   metric String
 
   /// The civil day the count is of.

@@ -24,6 +24,7 @@ import { cleanupDeliveryEventSubmissionsJob } from "./cleanup-delivery-event-sub
 import { cleanupBackgroundJobsJob } from "./cleanup-background-jobs-job";
 import { remindBusinessPurgeJob } from "./remind-business-purge-job";
 import { purgeChatMessagesJob } from "./purge-chat-messages-job";
+import { tenantDayRollupJob } from "./tenant-day-rollup-job";
 
 /**
  * It records all the application's cron jobs.
@@ -116,6 +117,11 @@ function registerCronJobs(): void {
   // Nightly (04:45): the trail's submission keys past their retention (90
   // days), in batches and partial when rows are left (F2-14).
   scheduler.registerJob(cleanupDeliveryEventSubmissionsJob);
+
+  // Every 15 min (:09, :24, :39, :54): each company's closed days of
+  // deliveries into tenant_day_count, for the dashboard (F4-21). Partial
+  // while the history is still being filled.
+  scheduler.registerJob(tenantDayRollupJob);
 }
 
 export { registerCronJobs };

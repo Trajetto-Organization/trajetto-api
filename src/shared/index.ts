@@ -97,6 +97,10 @@ import {
   BackgroundJobRepository,
   type IBackgroundJobRepository,
 } from "@/shared/jobs/background-job-repository";
+import {
+  TenantDayRollupRepository,
+  type ITenantDayRollupRepository,
+} from "@/shared/rollup/tenant-day-rollup-repository";
 
 import { ChatRepository } from "@/modules/chat/repositories/chat-repository";
 import { IChatRepository } from "@/modules/chat/repositories/IChat-repository";
@@ -385,6 +389,14 @@ container.registerSingleton<IProviderQuotaRepository>(
 container.registerSingleton<IBackgroundJobRepository>(
   "BackgroundJobRepository",
   BackgroundJobRepository,
+);
+
+// The dashboard's closed days (plano-escala F4-21). The cron builds its own
+// on databaseBatch (tenant-day-rollup-job.ts); this one, on the primary,
+// is for a reader that injects it.
+container.registerSingleton<ITenantDayRollupRepository>(
+  "TenantDayRollupRepository",
+  TenantDayRollupRepository,
 );
 
 // Separate from the route repository on purpose: a write-heavy stream

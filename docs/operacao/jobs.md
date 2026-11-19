@@ -58,6 +58,7 @@ Colunas:
 | `reconcile-proof-analysis`           | `src/jobs/cron`                                 | `*/10 * * * *`             | todo dia              | —                      | não    | hoje                           |
 | `reconcile-record-analysis`          | `src/jobs/cron`                                 | `5,15,25,35,45,55 * * * *` | todo dia              | —                      | não    | hoje                           |
 | `check-push-receipts`                | `src/jobs/cron`                                 | `*/15 * * * *`             | todo dia              | —                      | não    | hoje                           |
+| `tenant-day-rollup`                  | `src/jobs/cron`                                 | `9,24,39,54 * * * *`       | todo dia              | —                      | não    | onda 15                        |
 | `alert-routes-left-open`             | `src/jobs/cron`                                 | `7 * * * *`                | todo dia              | —                      | não    | hoje                           |
 | `snapshot-query-stats`               | `src/jobs/cron`                                 | `13 * * * *`               | todo dia              | —                      | não    | hoje                           |
 | `remind-business-purge`              | `src/jobs/cron`                                 | `0 12 * * *`               | todo dia              | —                      | não    | onda 14                        |
@@ -104,6 +105,10 @@ Colunas:
   servidor.
 
 Os crons de minuto e de hora (heartbeat, escalonamento das ocorrências,
-geocodificação, recibos do push, reconciliações, rotas abertas e o
-`pg_stat_statements`) são leves e rodam o dia todo; o que cada um faz está em
-[arquitetura.md, Crons](../arquitetura.md#crons).
+geocodificação, recibos do push, reconciliações, rotas abertas, a contagem
+por dia fechado do dashboard e o `pg_stat_statements`) são leves e rodam o dia
+todo; o que cada um faz está em
+[arquitetura.md, Crons](../arquitetura.md#crons). O `tenant-day-rollup` usa o
+mesmo orçamento dos expurgos e, com sobra (o histórico de uma empresa nova,
+nas primeiras execuções), fica parcial e continua na execução seguinte, 15 min
+depois.
