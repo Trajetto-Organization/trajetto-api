@@ -423,6 +423,20 @@ const TENANT_PURGE_PLAN: readonly PurgeStep[] = [
   { kind: "direct", table: "profile_access", column: "businessId" },
   { kind: "direct", table: "branch", column: "businessId" },
   { kind: "direct", table: "business_entitlement", column: "businessId" },
+
+  // The dashboard's days (plano-escala F4-20), last of all. Every DELETE
+  // of a delivery above wrote its day into tenant_day_dirty by trigger, and
+  // that table has no key to the company: before the deliveries' step it
+  // would keep the rows of the batches after it. Appended at the end, so a
+  // purge stopped half-way by the image of before resumes with every step
+  // number of that image still meaning the same table.
+  {
+    kind: "direct",
+    table: "tenant_day_count",
+    column: "businessId",
+    key: ["businessId", "metric", "day"],
+  },
+  { kind: "direct", table: "tenant_day_dirty", column: "businessId" },
 ];
 
 function isDeletingStep(step: PurgeStep): step is DeletingStep {

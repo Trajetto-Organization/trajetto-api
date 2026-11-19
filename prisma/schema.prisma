@@ -206,6 +206,8 @@ model Business {
   settings               BusinessSettings?
   driverEnrollmentTokens DriverEnrollmentToken[]
 
+  tenantDayCounts TenantDayCount[]
+
   @@map("business")
 }
 
@@ -4800,4 +4802,58 @@ model DriverPause {
   // SET NULL when a route is deleted.
   @@index([routeId])
   @@map("driver_pause")
+}
+
+/// The dashboard's count of one closed day (plano-escala F4-20): how many
+/// rows of `metric` the company had on `day`, so the overview and the trends
+/// add closed days up instead of counting months of deliveries on every
+/// view. Only closed days: today is always counted live. Written by the
+/// rollup job (F4-21); nothing reads it before DASHBOARD_ROLLUP_MODE (F4-22).
+/// CASCADE, like the API's daily usage: a number is nothing without its
+/// company, and the purge deletes these rows before it (purge-plan.ts).
+model TenantDayCount {
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  businessId String
+
+  /// What was counted (the entity of the dashboard), named by the job.
+  metric String
+
+  /// The civil day the count is of.
+  day DateTime @db.Date
+
+  value BigInt
+
+  computed_at DateTime @default(now())
+
+  @@id([businessId, metric, day])
+  @@map("tenant_day_count")
+}
+
+/// A closed day whose rows changed after it was counted (plano-escala
+/// F4-20): written by the triggers of migration
+/// 20261119130100_delivery_day_dirty_trigger when a delivery changes status
+/// or is deleted, with the UTC day of its created_at. The rollup job
+/// (F4-21) counts the marked days again and takes their rows away.
+///
+/// No foreign key: the row is written inside the DELETE of the company's
+/// own deliveries (the purge, the cascade of a company deleted by hand),
+/// where a key to the company would fail that DELETE. And no unique key
+/// on (businessId, day): a trigger that inserted under one would wait for
+/// the open transaction that marked the same day first, and two
+/// transactions marking two days in opposite orders would deadlock. The
+/// trigger skips a day already marked instead, so a duplicate is rare and
+/// harmless: the job reads the days, not the rows.
+model TenantDayDirty {
+  id BigInt @id @default(autoincrement())
+
+  businessId String
+
+  /// The UTC day of the changed row's created_at.
+  day DateTime @db.Date
+
+  marked_at DateTime @default(now())
+
+  // The trigger's "already marked?" and the purge, by company.
+  @@index([businessId, day])
+  @@map("tenant_day_dirty")
 }

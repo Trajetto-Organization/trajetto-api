@@ -206,6 +206,20 @@ describe("the purge plan of a company", () => {
     expect(outOfOrder(reordered)).toContain("driver_pause → driver");
   });
 
+  it("removes the dirty days after the deliveries, whose DELETE marks them", () => {
+    // tenant_day_dirty has no foreign key (plano-escala F4-20): a trigger on
+    // delivery writes a row for each day the purge's batches delete from,
+    // so a step before the deliveries' would leave those rows behind.
+    const at = (table: string) =>
+      TENANT_PURGE_PLAN.findIndex(
+        (step) => isDeletingStep(step) && step.table === table,
+      );
+
+    expect(at("delivery")).toBeGreaterThanOrEqual(0);
+    expect(at("tenant_day_count")).toBeGreaterThanOrEqual(0);
+    expect(at("tenant_day_dirty")).toBeGreaterThan(at("delivery"));
+  });
+
   it("names only tables of the model, but the shells of a copy window", () => {
     const unknown = TENANT_PURGE_PLAN.filter(
       (step) =>

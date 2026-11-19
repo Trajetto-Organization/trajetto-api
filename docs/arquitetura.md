@@ -3000,6 +3000,10 @@ o caminho que resolve.
       `schema.prisma`) e o `tenant-offboard` (E2E, pelo catálogo do banco)
       falham quando uma tabela com linhas da empresa fica fora do plano ou
       um filho vem depois do pai;
+    - no fim do plano, as contagens por dia do dashboard (`tenant_day_count`)
+      e os dias marcados (`tenant_day_dirty`, F4-20): cada DELETE de entrega
+      marca o dia dela por gatilho, e essa tabela não tem chave para a
+      empresa;
     - o que ele deixa, e o que leva: as filas sem índice por empresa (os
       eventos publicados, as chaves de envio, o sino dos usuários da
       plataforma sobre a empresa) saem pela retenção de cada uma; a trilha
@@ -5180,6 +5184,29 @@ empresa de novo: são as leituras da rota mais uma, uma vez por intervalo. Um
 acerto custa só a sessão. Os números estão em
 `tests/E2E/panel-statement-budgets.test.ts`, e a prova HTTP em
 `tests/E2E/control-tower-snapshot-http.test.ts`.
+
+**Contagem por dia fechado e o marcador de dia sujo** (plano de escala F4-20,
+decisão D52): `tenant_day_count` guarda a contagem de um dia fechado por
+empresa e métrica (chave `(businessId, metric, day)`), para a visão geral e
+as tendências somarem dias em vez de contar meses de entregas a cada visita.
+O dia de hoje é sempre contado ao vivo. Quem escreve é o job da F4-21, e
+ninguém lê antes de `DASHBOARD_ROLLUP_MODE` (F4-22). Um dia já contado muda
+quando uma entrega dele é apagada (o estorno de uma importação, o expurgo) ou
+muda de status. Dois gatilhos em `delivery` gravam então em `tenant_day_dirty`
+o dia UTC do `created_at` da linha antiga: `AFTER UPDATE OF status`, só
+quando o status muda de fato, e `AFTER DELETE` (migration
+`20261119130100_delivery_day_dirty_trigger`). O job conta esse dia de novo,
+em cada dia civil que ele toca no fuso da empresa e no da plataforma. A
+tabela não tem chave estrangeira: a linha nasce dentro do DELETE das
+entregas da própria empresa, e a chave faria esse DELETE falhar. Também não
+tem chave única por dia: um gatilho que inserisse sob ela esperaria a
+transação aberta que marcou o mesmo dia, e duas transações marcando dois dias
+em ordens opostas se travariam. O gatilho pula um dia já marcado, e uma linha
+repetida é lida como o mesmo dia. Para quem escreve, o custo é uma consulta
+ao índice por linha mudada e um INSERT por empresa e dia a cada passada do
+job. O expurgo apaga as duas tabelas no fim do plano, depois das entregas. A
+prova está em `tests/E2E/tenant-day-dirty.test.ts` e em
+`tests/E2E/tenant-offboard.test.ts`.
 
 **Plano com os valores a cada execução**: o `pg` manda statements sem nome, e
 o Postgres planeja cada execução com os valores; o Prisma 6 nomeava os

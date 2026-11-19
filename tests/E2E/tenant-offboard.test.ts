@@ -360,6 +360,21 @@ async function seedExtras(ids: CarrierIds): Promise<void> {
             ${ids.businessId}, ${key}, 'ARCHIVED'::"ArchiveObjectStatus", 30,
             now(), now())
   `;
+
+  // A closed day of the dashboard and a day marked dirty (F4-20). The
+  // purge's own DELETEs of the deliveries mark more days by trigger: the
+  // counts below prove those leave too.
+  await prisma.tenantDayCount.create({
+    data: {
+      businessId: ids.businessId,
+      metric: "delivery",
+      day: new Date("2026-11-01T00:00:00Z"),
+      value: 3n,
+    },
+  });
+  await prisma.tenantDayDirty.create({
+    data: { businessId: ids.businessId, day: new Date("2026-10-31T00:00:00Z") },
+  });
 }
 
 /** Row counts of every table the plan deletes from. */
@@ -577,6 +592,20 @@ describe("purging a company", () => {
 
     // The platform's own audit line about the purge is the one row more.
     expect(after).toEqual({ ...before, activity: before.activity + 1 });
+
+    // Its deliveries' DELETEs marked their days by trigger (F4-20), and
+    // the last steps took those marks too; the other company keeps its own.
+    for (const [businessId, rows] of [
+      [gone.businessId, 0],
+      [kept.businessId, 1],
+    ] as const) {
+      expect(await prisma.tenantDayDirty.count({ where: { businessId } })).toBe(
+        rows,
+      );
+      expect(await prisma.tenantDayCount.count({ where: { businessId } })).toBe(
+        rows,
+      );
+    }
 
     // Its uploads went, but the proof the bucket's lock holds (retained);
     // the other company's are all there.
