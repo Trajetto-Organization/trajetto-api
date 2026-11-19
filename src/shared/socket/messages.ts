@@ -23,7 +23,8 @@
  *
  * What travels between processes: the Socket.IO adapter's `serverSideEmit`
  * frames (below), the WhatsApp template lane's own channel
- * (template-lane-bus.ts) and the wake hints (wake-bus.ts). The adapter's
+ * (template-lane-bus.ts), the wake hints (wake-bus.ts) and the revocation
+ * feed's hint (shared/auth/revocation-feed.ts). The adapter's
  * own frames (emits to rooms, `disconnectSockets` revocations) are the
  * library's protocol, pinned with @socket.io/redis-adapter and
  * @socket.io/redis-emitter in package.json: any bump of either is in the
@@ -37,6 +38,8 @@ const MESSAGE_VERSIONS = {
   "whatsapp-template-lane": 1,
   "template-lane-channel": 1,
   wake: 1,
+  // The revocation feed's hint (plano-escala F5-22, revocation-feed.ts).
+  "revocation-hint": 1,
 } as const;
 
 type MessageName = keyof typeof MESSAGE_VERSIONS;

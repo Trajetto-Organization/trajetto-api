@@ -18,6 +18,10 @@ import {
   templateLaneFrame,
 } from "@/shared/socket/messages";
 import { parseWakeMessage } from "@/shared/wake/wake-bus";
+import {
+  parseRevocationHint,
+  revocationHint,
+} from "@/shared/auth/revocation-feed";
 import { parseLaneMessage } from "@/shared/providers/whatsapp-provider/template-lane-bus";
 
 /**
@@ -52,6 +56,7 @@ const PINNED: Record<
   },
   "template-lane-channel": { version: 1, keys: ["change", "replica", "v"] },
   wake: { version: 1, keys: ["replica", "v"] },
+  "revocation-hint": { version: 1, keys: ["replica", "v"] },
 };
 
 const sorted = (value: object) => Object.keys(value).sort();
@@ -73,6 +78,7 @@ function shapes(): Record<keyof typeof MESSAGE_VERSIONS, string[]> {
     // (template-lane-bus.ts, wake-bus.ts; their own tests check the bytes).
     "template-lane-channel": ["change", "replica", "v"],
     wake: ["replica", "v"],
+    "revocation-hint": sorted(JSON.parse(revocationHint("r-1"))),
   };
 }
 
@@ -189,6 +195,17 @@ describe("the current code reads the version before its own", () => {
     expect(
       parseWakeMessage(JSON.stringify({ v: 2, replica: "r", extra: 1 })),
     ).toEqual({ v: 2, replica: "r" });
+  });
+
+  it("revocation-hint: its first version, and a newer one", () => {
+    expect(parseRevocationHint(revocationHint("r-1"))).toEqual({
+      replica: "r-1",
+    });
+    expect(
+      parseRevocationHint(JSON.stringify({ v: 2, replica: "r", extra: 1 })),
+    ).toEqual({ replica: "r" });
+    expect(parseRevocationHint("not json")).toBeNull();
+    expect(parseRevocationHint(JSON.stringify({ replica: "r" }))).toBeNull();
   });
 
   it("the image of before still reads what this one writes", () => {

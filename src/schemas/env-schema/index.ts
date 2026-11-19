@@ -2058,6 +2058,30 @@ const envSchema = z
     SOCKET_REVALIDATE_MS: z.coerce.number().int().min(1_000).default(180_000),
 
     /**
+     * How often each process with sockets reads session_revocation_log
+     * (plano-escala F5-22, shared/auth/revocation-feed.ts), in ms: the
+     * ceiling for a revocation written by SQL to reach a socket (F5-24)
+     * and, later, the session cache (F5-23). A revocation made by the app
+     * travels at once through the hint on the pub/sub; this is for the one
+     * that did not. 0 turns the feed off (the sockets go back to the
+     * periodic sweep alone). Between 250 and 10000 otherwise: below it the
+     * reads cost more than they save. Empty counts as absent.
+     */
+    REVOCATION_FEED_POLL_MS: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce
+        .number()
+        .int()
+        .min(0)
+        .max(10_000)
+        .refine(
+          (value) => value === 0 || value >= 250,
+          "REVOCATION_FEED_POLL_MS é 0 (desligado) ou de 250 a 10000",
+        )
+        .default(1_000),
+    ),
+
+    /**
      * Socket handshakes one replica runs at once (plano-escala U-01,
      * shared/socket/admission.ts): past it, the next is refused with
      * SOCKET_UNAVAILABLE and `retryAfterMs` (5 to 10 s), which the web and

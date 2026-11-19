@@ -3969,7 +3969,10 @@ nenhum é fonte de verdade:
 - as dicas de despertar entre processos (`<SOCKET_ADAPTER_KEY>:wake:<fila>`,
   `src/shared/wake/`), no mesmo cliente de pub/sub: quem grava numa fila que
   não consome avisa quem consome. Perdida, custa a varredura da fila (ver
-  [O despertar e a fila no Postgres](#o-despertar-e-a-fila-no-postgres));
+  [O despertar e a fila no Postgres](#o-despertar-e-a-fila-no-postgres)).
+  No mesmo cliente, a dica do feed de revogação
+  (`<SOCKET_ADAPTER_KEY>:revocation`, F5-22): só `{ v, replica }`, e
+  perdida custa o próximo poll de 1 s;
 - os tickets de socket da web (`src/shared/socket/socket-ticket.ts`): o
   servidor da web troca o token da sessão por um ticket de uso único, que
   vale 30 s e abre um socket só; o Redis guarda só o hash. Sem Redis, a web
@@ -4166,6 +4169,27 @@ confere os gatilhos do banco contra ela, e o unitário
 `session-revocation-coverage` falha quando a conferência da sessão passa a
 ler um campo que nenhum gatilho cobre. O log guarda 7 dias (o expurgo
 noturno do refresh token apaga o resto).
+
+**Feed de revogação** (F5-22, `src/shared/auth/revocation-feed.ts`): cada
+processo que guarda sessões (hoje os sockets; o cache de sessão da F5-23
+depois) lê o log no primário a cada `REVOCATION_FEED_POLL_MS` (1 s), a
+partir do último id visto, e entrega `(kind, subject)` uma vez a quem
+escuta. É o caminho de uma revogação feita direto no banco: chega em até
+2 s. O caminho rápido são os helpers de segurança do `src/websocket.ts`
+(`sendSecurityEventToUser`, `…ToSession`, `…ToBusiness` e
+`sendEntitlementsChangedEvent`), que toda revogação já chama depois do
+commit: eles cutucam o feed, que lê na hora e publica uma dica no pub/sub,
+e os outros processos leem na hora também (menos de 100 ms). A ordem de
+commit não é a ordem dos ids: o cursor para antes de um buraco e espera a
+linha dele; um buraco aberto por mais de 10 s (um insert desfeito ou uma
+transação longa) chama o `gap` de quem escuta, que falha fechado (relê tudo),
+e o id fica vigiado por 5 minutos para um commit atrasado. Mais de 1.000
+linhas numa leitura (uma empresa expurgada) também é `gap`. Um processo que
+não consegue ler o log guarda o cursor e lê tudo quando o banco volta;
+`fresh()` diz se a última leitura é recente o bastante para confiar num
+cache. `REVOCATION_FEED_POLL_MS=0` desliga o feed. Provas: os unitários
+`revocation-feed` e o E2E `revocation-feed` (dois processos: pelo SQL em
+até 2 s, pelo app em menos de 100 ms).
 
 **Escala horizontal** ([ADR 0008](./adr/0008-escala-horizontal.md)): N
 réplicas idênticas atrás do Traefik, sem

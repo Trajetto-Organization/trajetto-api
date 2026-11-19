@@ -124,6 +124,7 @@ import {
   keepAdmitted,
 } from "@/shared/socket/admission-recheck";
 import { withoutRequestContext } from "@/shared/http/request-context";
+import { revocationFeed } from "@/shared/auth/revocation-feed";
 import { logger } from "@/shared/logging/logger";
 import { createOutageReport } from "@/shared/logging/outage-report";
 import {
@@ -1876,8 +1877,27 @@ function endSessionsIn(room: string): void {
   out.in(room).disconnectSockets(true);
 }
 
+/**
+ * The publishers of the revocation feed (plano-escala F5-22) are these
+ * helpers: every revocation already calls one of them after its commit.
+ * The nudge reads session_revocation_log at once in this process and
+ * hints the others to (shared/auth/revocation-feed.ts), whether or not
+ * this process holds sockets. The row itself was written by a trigger in
+ * the revoking transaction; the nudge only makes it travel faster.
+ */
+function nudgeRevocationFeed(): void {
+  try {
+    revocationFeed().nudge();
+  } catch (error) {
+    // The next poll still reads the row.
+    log.warn({ err: error }, "the revocation feed could not be nudged");
+  }
+}
+
 // Function to send security event to a specific user
 const sendSecurityEventToUser = (userId: string, event: { reason: string }) => {
+  nudgeRevocationFeed();
+
   if (out) {
     out.to(`user:${userId}`).emit("securityAction", event);
 
@@ -1892,6 +1912,8 @@ const sendSecurityEventToSession = (
   sessionId: string,
   event: { reason: string },
 ) => {
+  nudgeRevocationFeed();
+
   if (out) {
     out.to(`session:${sessionId}`).emit("securityAction", event);
 
@@ -2076,6 +2098,8 @@ const sendSecurityEventToBusiness = (
   businessId: string,
   event: { reason: string },
 ) => {
+  nudgeRevocationFeed();
+
   if (out) {
     out.to(`business:${businessId}`).emit("securityAction", event);
 
@@ -2110,6 +2134,9 @@ const sendEntitlementsChangedEvent = (
   businessId: string,
   event: { module: string; enabled: boolean },
 ) => {
+  // A module switched off narrows every session of the company.
+  nudgeRevocationFeed();
+
   if (out) {
     out.to(`business:${businessId}`).emit("entitlementsChanged", event);
   }
