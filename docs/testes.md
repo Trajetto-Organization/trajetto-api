@@ -308,7 +308,10 @@ recusado em `PAUSE`, `KILL` e `SHUTDOWN`, e os pools, o tráfego e as
 conexões de servidor lidos do console de verdade, F4-36),
 `readiness-probe-pool.test.ts` (com o pool das requisições cheio, a
 readiness no alias `trajetto_probe` responde "sim" e no pool das
-requisições, "não", F4-37) e `streaming-standby.test.ts` (o standby em
+requisições, "não", F4-37), `pgbouncer-session-names.test.ts` (a sessão
+do `auth_query` e as do cliente da API chegam ao banco com nome, para a
+checagem das contrações não as ler como a imagem antiga) e
+`streaming-standby.test.ts` (o standby em
 recuperação, recusando escrita e mostrando um commit do primário). As fases
 `shared` e de réplicas deixam esses arquivos de fora (`INFRA_E2E_GLOB`, em
 `tests/E2E/support/replica-files.ts`).

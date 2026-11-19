@@ -30,6 +30,16 @@
 -- roles section). Until then nothing calls the function, and the image
 -- before this one does not notice it.
 --
+-- The sessions PgBouncer opens as pgbouncer_auth (the auth_query's) carry
+-- a name, trajetto-pgbouncer-auth, by a default of the role: PgBouncer
+-- sends none for them, and the release step's trajetto_capability_ready
+-- (prisma/post-deploy/00-queue-swap-ready.sql) reads an unnamed session in
+-- this database as the image from before the scale plan, holding every
+-- contraction back for as long as PgBouncer runs (measured on the infra
+-- stack of the E2E: the auth session was the one unnamed). A client that
+-- sends its own name still wins. Never on a runtime role: its unnamed
+-- sessions are exactly that old image, which the check must keep seeing.
+--
 -- The schema and the function must be a superuser's (one a role made first
 -- is taken back, and an overload under the same name is dropped): their
 -- owner could rewrite the body and read every verifier. Only a superuser
@@ -43,6 +53,7 @@ DECLARE
   lookup_schema CONSTANT name := 'pgbouncer';
   lookup_function CONSTANT name := 'user_lookup';
   auth_role CONSTANT name := 'pgbouncer_auth';
+  auth_session_name CONSTANT text := 'trajetto-pgbouncer-auth';
   -- Never served, whatever their attributes say.
   refused_roles CONSTANT text[] := ARRAY['pgbouncer_auth', 'trajetto_replication'];
   pinned_path CONSTANT text := 'search_path=pg_catalog, pg_temp';
@@ -72,6 +83,19 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles r WHERE r.rolname = auth_role) THEN
     EXECUTE format('CREATE ROLE %I NOLOGIN', auth_role);
     done := done || format('role %I (NOLOGIN)', auth_role);
+  END IF;
+
+  -- 1b. A name for its sessions, the auth_query's (see the header).
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_db_role_setting s
+    JOIN pg_catalog.pg_roles r ON r.oid = s.setrole
+    WHERE s.setdatabase = 0
+      AND r.rolname = auth_role
+      AND format('application_name=%s', auth_session_name) = ANY (s.setconfig)
+  ) THEN
+    EXECUTE format('ALTER ROLE %I SET application_name = %L', auth_role, auth_session_name);
+    done := done || format('application_name %s nas sessões do %s', auth_session_name, auth_role);
   END IF;
 
   -- 2. The schema, a superuser's.

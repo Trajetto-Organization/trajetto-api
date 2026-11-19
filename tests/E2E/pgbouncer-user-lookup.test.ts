@@ -152,6 +152,27 @@ async function state() {
   return rows[0] ?? null;
 }
 
+/** The name the sessions of pgbouncer_auth carry by its role's default. */
+const AUTH_SESSION_NAME = "trajetto-pgbouncer-auth";
+
+/** pgbouncer_auth's default application_name, for every database. */
+async function authSessionName(): Promise<string | null> {
+  const { rows } = await admin.query<{ name: string | null }>(
+    `SELECT (
+       SELECT split_part(c, '=', 2)
+         FROM pg_db_role_setting s
+         JOIN pg_roles r ON r.oid = s.setrole,
+              unnest(s.setconfig) c
+        WHERE r.rolname = $1
+          AND s.setdatabase = 0
+          AND c LIKE 'application\\_name=%'
+     ) AS name`,
+    [AUTH_ROLE],
+  );
+
+  return rows[0]?.name ?? null;
+}
+
 const CLOSED = {
   ownerIsSuperuser: true,
   schemaOwnerIsSuperuser: true,
@@ -180,7 +201,45 @@ describe("infra/sql/30-pgbouncer-auth.sql", () => {
     );
 
     expect(rows).toEqual([{ rolsuper: false }]);
+    expect(await authSessionName()).toBe(AUTH_SESSION_NAME);
     expect(await runStep()).toMatchObject({ step: STEP, status: "skipped" });
+  });
+
+  /**
+   * PgBouncer sends no application_name for the sessions it opens as
+   * pgbouncer_auth (the auth_query's), and the release's
+   * trajetto_capability_ready reads an unnamed session in the database as
+   * the image from before the scale plan, holding every contraction back
+   * while PgBouncer runs. The role's default names them; the step puts it
+   * back when it goes. Inside a transaction rolled back: the role is the
+   * cluster's.
+   */
+  it("names the auth login's sessions by a default of the role, and puts it back when it goes", async () => {
+    await admin.query("BEGIN");
+
+    try {
+      await admin.query(`ALTER ROLE ${AUTH_ROLE} RESET application_name`);
+      expect(await authSessionName()).toBeNull();
+
+      await admin.query(readFileSync(resolve(process.cwd(), STEP), "utf8"));
+      expect(await authSessionName()).toBe(AUTH_SESSION_NAME);
+    } finally {
+      await admin.query("ROLLBACK");
+    }
+
+    // Never on a runtime role: an unnamed session of theirs is the old
+    // image the check must keep seeing.
+    const { rows } = await admin.query<{ rolname: string }>(
+      `SELECT r.rolname
+         FROM pg_db_role_setting s
+         JOIN pg_roles r ON r.oid = s.setrole
+        WHERE r.rolname LIKE 'trajetto\\_%'
+          AND EXISTS (
+            SELECT 1 FROM unnest(s.setconfig) c WHERE c LIKE 'application\\_name=%'
+          )`,
+    );
+
+    expect(rows).toEqual([]);
   });
 
   it("serves the SCRAM verifier of a runtime login, and nothing for the owner nor for the roles it must never serve", async () => {

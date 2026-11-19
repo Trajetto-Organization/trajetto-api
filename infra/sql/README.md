@@ -116,6 +116,14 @@ login e a senha do `pgbouncer_auth` são do dono, à mão, antes de criar a
 Application `trajetto-pgbouncer` (`docs/deploy.md`, seção dos roles do
 banco).
 
+O mesmo arquivo dá às sessões do `pgbouncer_auth` (as do `auth_query`) o
+nome `trajetto-pgbouncer-auth`, por um padrão do role
+(`ALTER ROLE … SET application_name`). O PgBouncer não manda nome nelas,
+e o `trajetto_capability_ready` da etapa de release lê uma sessão sem
+nome no banco como a imagem de antes do plano de escala: sem o nome, ela
+seguraria todas as contrações enquanto o PgBouncer estivesse no ar. Nunca
+num role do runtime, cuja sessão sem nome é justamente a imagem antiga.
+
 O `20-runtime-roles.sql` compara o catálogo com o que deve ser e muda só a
 diferença: o que falta é concedido, e o que sobra para um dos cinco roles
 (um grant feito à mão, uma partição criada pelo usuário da migração) é
