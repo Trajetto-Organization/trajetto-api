@@ -217,7 +217,11 @@ function readDatabaseOutsideGetter(file: string, text: string): boolean {
  * path is spelled. (A property of the same name, the metrics reader of
  * shared/health/cluster-sample.ts, is something else.)
  */
-function importsReadDatabase(file: string, text: string): boolean {
+function importsReadDatabase(
+  file: string,
+  text: string,
+  name = "readDatabase",
+): boolean {
   const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest);
 
   return source.statements.some((statement) => {
@@ -235,11 +239,45 @@ function importsReadDatabase(file: string, text: string): boolean {
       !!bindings &&
       ts.isNamedImports(bindings) &&
       bindings.elements.some(
-        (element) =>
-          (element.propertyName ?? element.name).text === "readDatabase",
+        (element) => (element.propertyName ?? element.name).text === name,
       )
     );
   });
+}
+
+/**
+ * /integration/v1/events on the standby (plano-escala F4-43): not one of
+ * the lists (its cursor must never skip a commit), so not through
+ * readDatabase. Only the commit walk, only behind
+ * INTEGRATION_EVENTS_READ_REPLICA, through replicaDatabase(), whose
+ * fallback is the application's pool; its horizon is the standby's own
+ * snapshot (tests/E2E/infra/events-on-standby.test.ts).
+ */
+const EVENTS_ON_REPLICA = {
+  file: "src/modules/integration/repositories/integration-repository.ts",
+  method: "listEventsByCommit",
+  flag: "env.INTEGRATION_EVENTS_READ_REPLICA",
+};
+
+/** The methods of a file whose body calls `this.standby(` (the events' handle). */
+function standbyMethods(file: string, text: string): string[] {
+  const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+  const methods: string[] = [];
+
+  const visit = (node: ts.Node) => {
+    if (
+      ts.isMethodDeclaration(node) &&
+      node.body &&
+      /\bthis\.standby\(/.test(node.body.getText(source))
+    ) {
+      methods.push(node.name.getText(source));
+    }
+    ts.forEachChild(node, visit);
+  };
+
+  visit(source);
+
+  return methods;
 }
 
 /** The replica's method names, called anywhere in a file's code. */
@@ -267,9 +305,29 @@ function routingProblems(tree: SourceFile[]): string[] {
       problems.push(`${path}: usa readDatabase fora do getter read`);
     }
 
+    // replicaDatabase: the events' commit walk alone, behind its flag.
+    const events = importsReadDatabase(path, text, "replicaDatabase");
+
+    if (events && path !== EVENTS_ON_REPLICA.file) {
+      problems.push(`${path}: usa replicaDatabase fora do feed de eventos`);
+    }
+    if (path === EVENTS_ON_REPLICA.file) {
+      const callers = standbyMethods(path, text);
+
+      if (callers.join() !== EVENTS_ON_REPLICA.method) {
+        problems.push(
+          `${path}: o standby dos eventos lido em ${callers.join(", ") || "nenhum método"}`,
+        );
+      }
+      if (!code.includes(`${EVENTS_ON_REPLICA.flag} ? this.standby() : null`)) {
+        problems.push(`${path}: o standby dos eventos sem a variável`);
+      }
+    }
+
     for (const [pattern, place] of NEVER_ON_REPLICA) {
       if (!pattern.test(path)) continue;
       if (names) problems.push(`${path}: readDatabase em ${place}`);
+      if (events) problems.push(`${path}: replicaDatabase em ${place}`);
       for (const call of replicaCalls(text)) {
         problems.push(`${path}: ${call} (lê do standby) em ${place}`);
       }
@@ -385,6 +443,30 @@ describe("the guard itself", () => {
     expect(routingProblems([usecase, bypass])).toEqual([
       `${usecase.path}: listActivitiesWithCursor (lê do standby) num usecase que escreve`,
       `${repository.path}: usa readDatabase fora do getter read`,
+    ]);
+  });
+
+  it("keeps the events' standby to the commit walk behind its flag, and fails it anywhere else", () => {
+    const repository = at(EVENTS_ON_REPLICA.file);
+    const ungated = {
+      path: repository.path,
+      text: repository.text.replace(
+        `${EVENTS_ON_REPLICA.flag} ? this.standby() : null`,
+        "this.standby()",
+      ),
+    };
+    const elsewhere = {
+      path: "src/modules/middlewares/ensure-api-key.ts",
+      text: `import { replicaDatabase } from "@/../infra/database";
+export const key = () => replicaDatabase();
+`,
+    };
+
+    expect(routingProblems([repository])).toEqual([]);
+    expect(routingProblems([ungated, elsewhere])).toEqual([
+      `${repository.path}: o standby dos eventos sem a variável`,
+      `${elsewhere.path}: usa replicaDatabase fora do feed de eventos`,
+      `${elsewhere.path}: replicaDatabase em middleware`,
     ]);
   });
 

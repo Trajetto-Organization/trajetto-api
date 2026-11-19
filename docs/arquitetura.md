@@ -4653,6 +4653,20 @@ OpenStreetMap são recusados.
   do cluster inteiro: uma transação aberta em qualquer banco segura o feed
   (atrasa, não pula), por isso o E2E de duas conexões
   (`integration-feed-commit-order`) roda na fase de um arquivo por vez.
+- **Feed no standby** (plano de escala F4-43, com
+  `INTEGRATION_EVENTS_READ_REPLICA=true`; `false` por padrão): a ordem de
+  commit lê a página inteira no standby enquanto o replica-guard o abona
+  (`replicaDatabase()` de `infra/database.ts`; sem ele, o pool da
+  aplicação, como sempre), e o horizonte é o `pg_current_snapshot()` do
+  próprio standby. Tudo abaixo do `xmin` dele já foi reaplicado ali: uma
+  transação aberta no primário, ou cujo commit o standby ainda não
+  reaplicou, fica no `xmin` ou acima. Um cursor de uma página do primário,
+  mais à frente, só espera no standby até ele passar, sem voltar. A página
+  que o standby falhar (um conflito com a recuperação, o standby fora) sai
+  do primário. O caminho por id e o resto do feed ficam no primário.
+  Prova: `tests/E2E/infra/events-on-standby.test.ts`, 2.000 eventos de
+  quatro escritores lidos alternando standby e primário, nenhum pulado nem
+  repetido.
 - **WhatsApp (Meta Cloud API)**: cada mensagem tem o seu modelo de
   utilidade em `pt_BR` (plano de 02/11/2026, B1/B2): 17 internos, um por
   evento e público (`src/shared/notifications/whatsapp-templates.ts`), e 4 ao

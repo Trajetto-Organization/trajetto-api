@@ -212,6 +212,7 @@ describe("createReadRouter (readDatabase)", () => {
 
     expect(router.readDatabase()).toBe(PRIMARY_READ);
     expect(router.readDatabase()).toBe(PRIMARY_READ);
+    expect(router.replicaDatabase()).toBeNull();
     expect(probe).not.toHaveBeenCalled();
     expect(router.guard()).toBeNull();
   });
@@ -236,8 +237,12 @@ describe("createReadRouter (readDatabase)", () => {
     await guard.check();
     await guard.check();
     expect(router.readDatabase()).toBe(REPLICA);
+    expect(router.replicaDatabase()).toBe(REPLICA);
 
     await guard.check();
     expect(router.readDatabase()).toBe(PRIMARY_READ);
+    // Without the guard's word, no standby at all: the caller picks its
+    // own fallback.
+    expect(router.replicaDatabase()).toBeNull();
   });
 });

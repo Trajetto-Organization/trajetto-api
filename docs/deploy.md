@@ -4174,6 +4174,14 @@ do início da transação é recusado (`TJ001`,
 [runbook](./runbooks/delivery-event-writer-bound.md)): é o que mantém o
 piso do feed seguro.
 
+**O feed no standby** (onda 17, F4-43) só existe com a ordem de commit e
+um standby na `DATABASE_REPLICA_URL`: `INTEGRATION_EVENTS_READ_REPLICA=true`
+no _Environment_ da `trajetto-api` manda as páginas ao standby enquanto o
+replica-guard o abona, com o horizonte do próprio standby, e ao primário no
+resto do tempo. `false` por padrão; até o standby do prod-db-2 (onda 23),
+só no ensaio de failover da staging, para medir. Voltar é `false` e
+**Deploy**: os cursores são os mesmos nos dois servidores.
+
 ### Contrações que esperam a capability (onda 10)
 
 O plano de escala sai num push só, e a imagem que ainda serve durante o

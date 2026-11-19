@@ -316,10 +316,13 @@ recuperação, recusando escrita e mostrando um commit do primário),
 `replication-hba.test.ts` (o `pg_hba` da imagem: as regras oficiais e uma
 linha de replicação só para o endereço do standby, de onde vem o
 streaming; o mesmo login, com a senha certa, recusado de fora dele; o
-standby clonado pelo ramo da imagem, com a senha só no passfile, F4-40) e
+standby clonado pelo ramo da imagem, com a senha só no passfile, F4-40),
 `replica-guard.test.ts` (com o replay do standby pausado, o replica-guard
 manda as leituras do `readDatabase()` ao primário; retomado, de volta ao
-standby depois de 3 medidas boas, F4-41). As fases
+standby depois de 3 medidas boas, F4-41) e `events-on-standby.test.ts` (o
+`/integration/v1/events` pela ordem de commit no standby, com o horizonte
+dele: 2.000 eventos de quatro escritores lidos alternando standby e
+primário, nenhum pulado nem repetido, F4-43). As fases
 `shared` e de réplicas deixam esses arquivos de fora (`INFRA_E2E_GLOB`, em
 `tests/E2E/support/replica-files.ts`).
 

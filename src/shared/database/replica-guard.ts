@@ -249,14 +249,22 @@ function createReadRouter<Client>(parts: ReadRouterParts<Client>) {
 
   return {
     readDatabase(): Client {
-      if (!parts.replicaUrl()) return parts.primaryRead();
+      return this.replicaDatabase() ?? parts.primaryRead();
+    },
+    /**
+     * The standby while the guard vouches for it, else null: for a read
+     * whose fallback is not the bulkhead (the events feed, F4-43, stays on
+     * the application's pool without it).
+     */
+    replicaDatabase(): Client | null {
+      if (!parts.replicaUrl()) return null;
 
       if (!guard) {
         guard = new ReplicaGuard(parts.probe(), parts.options, parts.log);
         guard.start();
       }
 
-      return guard.onReplica ? parts.replica() : parts.primaryRead();
+      return guard.onReplica ? parts.replica() : null;
     },
     /** The running guard, or null while no read asked for it. */
     guard(): ReplicaGuard | null {

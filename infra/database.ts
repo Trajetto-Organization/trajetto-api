@@ -250,6 +250,16 @@ function readDatabase(): PrismaClient {
   return readRouter.readDatabase();
 }
 
+/**
+ * The standby while the replica guard vouches for it, else null
+ * (plano-escala F4-43): /integration/v1/events, behind
+ * INTEGRATION_EVENTS_READ_REPLICA, falls back to the application's pool,
+ * where it reads today, not to the bulkhead.
+ */
+function replicaDatabase(): PrismaClient | null {
+  return readRouter.replicaDatabase();
+}
+
 /** The guard, once a read started it (a test, a log line). */
 function replicaGuard() {
   return readRouter.guard();
@@ -266,6 +276,7 @@ export {
   databaseRead,
   databaseReadPool,
   readDatabase,
+  replicaDatabase,
   replicaGuard,
   setReplicaGuardLog,
 };

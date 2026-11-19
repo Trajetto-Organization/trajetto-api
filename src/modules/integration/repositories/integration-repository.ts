@@ -1,4 +1,4 @@
-import database, { readDatabase } from "@/../infra/database";
+import database, { readDatabase, replicaDatabase } from "@/../infra/database";
 
 import { Prisma, type PrismaClient } from "@prisma/client";
 
@@ -317,7 +317,15 @@ function maxId(a: string | null, b: string | null): string | null {
 }
 
 class IntegrationRepository implements IIntegrationRepository {
-  constructor(private prisma = database) {}
+  constructor(
+    private prisma = database,
+    /**
+     * The standby for /integration/v1/events (plano-escala F4-43): the
+     * replica guard's client while it vouches for it, else null. Read only
+     * with INTEGRATION_EVENTS_READ_REPLICA, by the commit walk alone.
+     */
+    private standby: () => PrismaClient | null = replicaDatabase,
+  ) {}
 
   /**
    * The heavy reads' bulkhead (plano-escala F3-17), for the LISTS of
@@ -492,15 +500,44 @@ class IntegrationRepository implements IIntegrationRepository {
    * A conversion (a legacy cursor, or one of another epoch) adds one: the
    * smallest txid among the events that may be unseen.
    */
-  private async listEventsByCommit({
-    businessId,
-    limit,
-    position,
-    updated_since,
-  }: IntegrationEventListProps): Promise<EventPage> {
+  private async listEventsByCommit(
+    props: IntegrationEventListProps,
+  ): Promise<EventPage> {
+    // On the standby (plano-escala F4-43), behind its own flag: a page
+    // there is whole, every read of it on the standby, so its horizon is
+    // the standby's own pg_current_snapshot(). Everything below that xmin
+    // has been replayed there (a transaction still open on the primary, or
+    // whose commit the standby has not replayed yet, is at or above it),
+    // so nothing is skipped; a cursor from a fresher primary page only
+    // waits there until the standby passes it, never going back.
+    // tests/E2E/infra/events-on-standby.test.ts interleaves both servers.
+    const standby = env.INTEGRATION_EVENTS_READ_REPLICA ? this.standby() : null;
+
+    if (!standby) return this.walkByCommit(this.prisma, props);
+
+    try {
+      return await this.walkByCommit(standby, props);
+    } catch (error) {
+      // A read the standby cancelled (a conflict with its recovery) or a
+      // standby gone mid-page: the same page from the primary, which has
+      // everything the standby has.
+      logger.warn(
+        { code: (error as { code?: unknown })?.code ?? null },
+        "integration feed: the standby failed the page; served by the primary",
+      );
+
+      return this.walkByCommit(this.prisma, props);
+    }
+  }
+
+  /** One page of the commit walk, every read of it on `client`. */
+  private async walkByCommit(
+    client: PrismaClient,
+    { businessId, limit, position, updated_since }: IntegrationEventListProps,
+  ): Promise<EventPage> {
     const marginMs = env.FEED_FLOOR_MARGIN_MS;
 
-    const [horizon] = await this.prisma.$queryRaw<
+    const [horizon] = await client.$queryRaw<
       Array<{ epoch: number | null; changed_at: Date | null; xmin: string }>
     >`
       SELECT e."epoch", e."changed_at",
@@ -526,9 +563,7 @@ class IntegrationRepository implements IIntegrationRepository {
       start.kind === "position" ? start.position : null;
 
     if (start.kind === "convert") {
-      const [smallest] = await this.prisma.$queryRaw<
-        Array<{ txid: string | null }>
-      >`
+      const [smallest] = await client.$queryRaw<Array<{ txid: string | null }>>`
         SELECT (min(COALESCE("txid", 0)))::text AS "txid"
         FROM "delivery_event"
         WHERE "businessId" = ${businessId}::text
@@ -577,7 +612,7 @@ class IntegrationRepository implements IIntegrationRepository {
       since ? eventIdFloor(since) : null,
     );
 
-    const keys = await this.prisma.$queryRaw<
+    const keys = await client.$queryRaw<
       Array<{ id: string; txid: string; created_at: Date }>
     >`
       SELECT "id", (COALESCE("txid", 0))::text AS "txid", "created_at"
@@ -598,7 +633,7 @@ class IntegrationRepository implements IIntegrationRepository {
     const pageKeys = keys.slice(0, limit);
 
     const found = pageKeys.length
-      ? await this.prisma.deliveryEvent.findMany({
+      ? await client.deliveryEvent.findMany({
           where: { businessId, id: { in: pageKeys.map((key) => key.id) } },
           select: EVENT_SELECT,
         })

@@ -1416,6 +1416,21 @@ const envSchema = z
       z.enum(["id", "commit"]).default("id"),
     ),
 
+    // /integration/v1/events on the standby (plano-escala F4-43): with
+    // `true`, the commit walk (INTEGRATION_FEED_ORDER=commit) reads its
+    // pages on DATABASE_REPLICA_URL while the replica guard vouches for it,
+    // its horizon being the standby's own pg_current_snapshot(); the id
+    // walk and every other read of the feed stay on the primary. A page the
+    // standby fails is served by the primary. `false` (the default): the
+    // feed reads the primary, as before, whatever the replica does. Empty
+    // counts as absent.
+    INTEGRATION_EVENTS_READ_REPLICA: z
+      .preprocess(
+        (value) => (value === "" ? undefined : value),
+        z.enum(["true", "false"]).default("false"),
+      )
+      .transform((value) => value === "true"),
+
     // How far behind the request /integration/v1/deliveries and /routes put
     // their sync_watermark (plano-escala F2-05): the updated_since to use
     // for the next sync. A row's updated_at is the moment its writer built
