@@ -11,3 +11,7 @@
 # extension, and pgBackRest's ini and the params file break on a carriage
 # return too.
 infra/postgres/** text eol=lf
+
+# The trajetto-pgbouncer image (infra/pgbouncer): its entrypoint and test
+# script run in the container; a carriage return breaks them.
+infra/pgbouncer/** text eol=lf

@@ -129,6 +129,10 @@ updates:
     directories:
       - "/"
       - "/infra/ai-ocr"
+      # trajetto-pgbouncer (Alpine by digest): its libraries (OpenSSL,
+      # c-ares, libevent) only move when this digest does, because CI
+      # rebuilds the image only for a new tree of infra/pgbouncer.
+      - "/infra/pgbouncer"
     schedule:
       interval: monthly
       time: "06:00"

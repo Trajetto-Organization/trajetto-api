@@ -245,6 +245,7 @@ describe("the images", () => {
     "Dockerfile",
     "infra/ai-ocr/Dockerfile",
     "infra/postgres/Dockerfile",
+    "infra/pgbouncer/Dockerfile",
   ])("%s pins every base image by digest", (path) => {
     const bases = baseImages(read(path));
 

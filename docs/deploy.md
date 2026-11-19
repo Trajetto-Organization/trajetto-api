@@ -2062,6 +2062,76 @@ produção ([seção 27](#f1b-o-pitr-na-produção-fim-da-onda-6)) só depois de
 usuário do Database → **Deploy**. Os roles e os logins ficam, sem uso;
 para tirar o acesso de um login, `ALTER ROLE <role> NOLOGIN;` à mão.
 
+### PgBouncer: a imagem `trajetto-pgbouncer` (onda 17)
+
+Da onda 17 em diante, as Applications chegam ao Postgres pela Application
+`trajetto-pgbouncer`, e o failover troca só o host para onde ela aponta.
+Nada usa a imagem antes de o dono criar a Application. A imagem
+(`infra/pgbouncer`, plano de escala F4-34) é o PgBouncer compilado da
+fonte sobre Alpine, por digest, rodando com um usuário sem privilégio:
+
+- **Versão**: 1.26.1 ou mais nova, nunca abaixo. A 1.26.1 corrige o laço
+  infinito com um nome de opção vazio no `options` da partida
+  (CVE-2026-107349, alcançável antes do login com esta configuração) e a
+  troca de identidade no SCRAM por um segundo pacote de partida
+  (CVE-2026-107350). A versão e o SHA-256 do código-fonte ficam num `ARG`
+  só do `Dockerfile` e sobem à mão, juntos, a partir do arquivo `.sha256`
+  da própria release; a base Alpine sobe pelo Dependabot.
+- **Configuração gerada a cada partida** pelo `entrypoint.sh`, a partir
+  das variáveis do _Environment_
+  ([variaveis-de-ambiente.md → PgBouncer](./variaveis-de-ambiente.md#pgbouncer-application-trajetto-pgbouncer-onda-17)):
+  `pool_mode=transaction`; o banco (`trajetto`) e o alias
+  `trajetto_probe`, no mesmo banco, com pool de 2 (a readiness nunca
+  espera atrás do tráfego); `max_client_conn` 2000, `default_pool_size`
+  20 e `max_db_connections` 60 por padrão; `query_wait_timeout` de 5 s,
+  `server_lifetime` de 3600 s e `ignore_startup_parameters` só com
+  `extra_float_digits`. O `options` da partida passa só com o que o
+  PgBouncer rastreia (o TimeZone): um `-c statement_timeout` ali é
+  recusado, e os timeouts vêm do `ALTER ROLE` de cada login.
+- **Senhas fora do PgBouncer**: o verificador SCRAM de cada login vem do
+  próprio banco, pelo `auth_query`
+  (`SELECT * FROM pgbouncer.user_lookup($1)`, a função fechada do
+  `infra/sql/30-pgbouncer-auth.sql`), lido com o login `pgbouncer_auth`. O
+  `auth_file` guarda só a senha do `pgbouncer_auth` (em claro: sem ela o
+  PgBouncer não entra no banco) e os dois logins de console:
+  `pgbouncer_admin` (PAUSE, RESUME e KILL), só quando a senha dele está no
+  _Environment_, e `pgbouncer_stats` (só `SHOW`), sempre; sem a senha de
+  estatística, ele fica com uma senha aleatória que ninguém tem.
+- **Quem entra por onde** (`pg_hba.conf` gerado): SCRAM para todos; o
+  console de administração só de dentro do contêiner (`127.0.0.1`), nunca
+  pela rede; o de estatística pela rede (a API lê as métricas por ele);
+  replicação física recusada; `pgbouncer_auth` e os dois logins de console
+  nunca chegam ao banco da aplicação; um banco fora do `trajetto` e do
+  alias não existe. Uma replicação lógica (`replication=database`) chega
+  ao banco como no Postgres e é recusada lá, porque nenhum login do
+  runtime tem `REPLICATION`.
+- **Partida recusada (saída 64)** quando falta ou está malformado o que
+  decide para onde as conexões vão e quem entra: host, porta e banco, a
+  senha do `pgbouncer_auth` (em claro, 16 caracteres ou mais), as senhas
+  de console com menos de 16 caracteres ou a de administração igual à de
+  estatística. Num rolling start-first, a tarefa antiga continua servindo.
+  Um número inválido volta ao padrão, com aviso no log. Nenhuma senha
+  aparece no log, e nenhuma fica no ambiente do processo do PgBouncer.
+- **HEALTHCHECK**: `pg_isready` no console da porta local 6432, sem senha
+  e sem tocar o Postgres: o PgBouncer continua saudável enquanto o banco
+  reinicia (sob PAUSE ou num failover), e o Swarm não derruba o endpoint
+  de todas as Applications por causa do banco. A checagem não deixa linha
+  no log.
+- **Desligamento**: o SIGTERM do Swarm é o `SHUTDOWN WAIT_FOR_CLIENTS`: a
+  tarefa antiga recusa conexões novas, termina as que tem e sai quando o
+  último cliente vai embora (os pools do runtime renovam cada conexão em
+  até um minuto), dentro do _Stop Grace Period_ de 90 s da Application.
+- **Log**: sem as linhas de login e de desconexão (seriam centenas por
+  minuto, com cada conexão renovada a cada minuto). Os erros mandados aos
+  clientes, o login recusado inclusive, e as falhas de login no Postgres
+  continuam no log; as contagens ficam no `SHOW STATS`.
+
+Conferência sem Docker: `tests/unitaires/lifecycle/pgbouncer-image.test.ts`
+roda o `entrypoint.sh` com o PgBouncer simulado e compara os arquivos
+gerados. Com Docker, `docker build --target test infra/pgbouncer` sobe o
+PgBouncer de verdade, sem rede, e lê cada valor de volta pelo console
+(`SHOW CONFIG`, `SHOW DATABASES`).
+
 ### Redis
 
 - **Senha obrigatória**: o Database Redis sempre nasce com senha. Qualquer
