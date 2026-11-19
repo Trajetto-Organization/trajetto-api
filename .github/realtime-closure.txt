@@ -337,6 +337,7 @@ src/shared/health/pgbouncer-stats-config.ts
 src/shared/health/pool-metrics.ts
 src/shared/health/pressure-level.ts
 src/shared/health/process-heartbeat.ts
+src/shared/health/prometheus.ts
 src/shared/health/provider-metrics.ts
 src/shared/health/provider-readiness.ts
 src/shared/health/readiness-probe.ts

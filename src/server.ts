@@ -50,7 +50,18 @@ import {
   opsSampleIdentity,
   registerSampleSection,
 } from "./shared/health/ops-sample";
-import { httpMetrics } from "./shared/health/http-metrics";
+import {
+  HTTP_LATENCY_BUCKETS_MS,
+  httpMetrics,
+} from "./shared/health/http-metrics";
+import {
+  metricsServerSettings,
+  processFamilies,
+  registerPrometheusFamilies,
+  startMetricsServer,
+  type MetricsServer,
+} from "./shared/health/prometheus";
+import { buildInfo } from "./shared/build-info";
 import {
   startRuntimeProcessHeartbeat,
   type ProcessHeartbeat,
@@ -87,6 +98,71 @@ const log = logger.child({ component: "process" });
  * (GAP3-10). Started once the listener is up.
  */
 let stopRuntimeMetrics: (() => void) | null = null;
+
+/**
+ * The `/metrics` server on METRICS_PORT (plano-escala F5-29), when the
+ * port is set; closed with the runtime metrics on the way out.
+ */
+let metricsServer: MetricsServer | null = null;
+
+/**
+ * Opens `/metrics` on METRICS_PORT with this process's families. The boot
+ * already refused a port without its token (env-schema). A port that
+ * cannot be bound is an error in the log, never a reason to stop serving:
+ * the metrics are for the operator, the requests are for the customers.
+ */
+async function startPrometheus(): Promise<void> {
+  const settings = metricsServerSettings(env);
+
+  if (!settings) return;
+
+  registerPrometheusFamilies("process", async () => {
+    const runtime = runtimeMetrics.snapshot();
+    const memory = process.memoryUsage();
+    const pool = await readPrismaPool(
+      databasePool,
+      process.env.DATABASE_URL,
+    ).catch(() => null);
+    const sockets = realtimeMetrics();
+
+    return processFamilies({
+      identity: {
+        role: env.PROCESS_ROLE,
+        appEnv:
+          env.APP_ENV ??
+          (env.NODE_ENV === "production" ? "production" : "development"),
+        commit: buildInfo.commit,
+      },
+      uptimeSeconds: process.uptime(),
+      memory: { rss: memory.rss, heapUsed: memory.heapUsed },
+      eventLoop: {
+        lagP99Ms: runtime.event_loop.lag_p99_ms,
+        utilization: runtime.event_loop.utilization,
+      },
+      latencyBucketsMs: HTTP_LATENCY_BUCKETS_MS,
+      http: httpMetrics.lifetime(),
+      pool,
+      sockets:
+        sockets.adapter === "off"
+          ? null
+          : {
+              local: sockets.local_connections,
+              cap: sockets.socket_cap,
+              adapter: sockets.adapter,
+            },
+    });
+  });
+
+  try {
+    metricsServer = await startMetricsServer(settings);
+    log.info({ port: metricsServer.port }, "metrics listening");
+  } catch (error) {
+    log.error(
+      { err: error, port: env.METRICS_PORT },
+      "metrics port could not be opened: /metrics is unavailable on this replica",
+    );
+  }
+}
 
 /**
  * This process's row in process_heartbeat (plano-escala F3-03): its role,
@@ -130,6 +206,11 @@ async function gracefulShutdown() {
 
   stopRuntimeMetrics?.();
   stopRuntimeMetrics = null;
+
+  // Off the network first: a scrape during the drain reads a replica
+  // that is leaving.
+  void metricsServer?.close();
+  metricsServer = null;
 
   // The row goes first, in parallel with the drain: a process on its way
   // out stops counting as a queue's consumer now, not 90 s later, so the
@@ -392,6 +473,9 @@ async function bootstrap() {
       // Who this process is, for the others and for the deploy's check:
       // every role writes it, the HTTP-only ones included (F3-03).
       processHeartbeat = startRuntimeProcessHeartbeat();
+
+      // `/metrics` on its own port, only when METRICS_PORT is set (F5-29).
+      await startPrometheus();
     },
 
     // Installs the Redis adapter before the first socket can connect. It no

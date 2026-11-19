@@ -1935,6 +1935,31 @@ const envSchema = z
     ),
 
     /**
+     * `/metrics` in the Prometheus format (plano-escala F5-29,
+     * shared/health/prometheus.ts), for the metrics stack of F5-30: the
+     * port of a second, tiny HTTP server of this process, outside Fastify
+     * and outside every Domain. Empty (the default): no port is opened.
+     * Set, METRICS_TOKEN is required, or the boot refuses: the
+     * dokploy-network is shared by staging and production, so a scrape
+     * always carries `Authorization: Bearer <METRICS_TOKEN>`. Never the
+     * same as PORT. Only infrastructure numbers, never a company's or a
+     * person's.
+     */
+    METRICS_PORT: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.coerce.number().int().min(1024).max(65_535).optional(),
+    ),
+
+    /**
+     * The scrape's token, 32 characters or more (`openssl rand -hex 32`),
+     * a different one per environment. Required with METRICS_PORT.
+     */
+    METRICS_TOKEN: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.string().optional(),
+    ),
+
+    /**
      * Cloudflare Turnstile, verified by the API on the public quote form
      * (src/shared/security/turnstile.ts). The same secret the web holds.
      *
@@ -2546,6 +2571,29 @@ const envSchema = z
             "job de partições guarda os dias vencidos da trilha em vez de " +
             "apagá-los sem arquivo.",
         );
+      }
+    }
+
+    // `/metrics` is never open (F5-29): the network under it is shared by
+    // the two environments, so its port needs its token, and never the
+    // API's own port.
+    if (env.METRICS_PORT !== undefined) {
+      if (!env.METRICS_TOKEN || env.METRICS_TOKEN.length < 32) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["METRICS_TOKEN"],
+          message:
+            "METRICS_TOKEN (32 caracteres ou mais, openssl rand -hex 32) é obrigatório com METRICS_PORT: a dokploy-network é dividida entre staging e produção.",
+        });
+      }
+
+      if (env.METRICS_PORT === env.PORT) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["METRICS_PORT"],
+          message:
+            "METRICS_PORT não pode ser a PORT da API: o /metrics fica numa porta própria, fora das Domains.",
+        });
       }
     }
 

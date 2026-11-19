@@ -114,6 +114,24 @@ describe("the HTTP counters", () => {
 
     expect(metrics.servedTotal()).toBe(2);
   });
+
+  // /metrics (plano-escala F5-29): Prometheus counters never go back, and
+  // the minute row rotates its own window every minute.
+  it("keep every group's counts since the start, untouched by the minute's rotation", () => {
+    const metrics = createHttpMetrics({ now: clock().now });
+
+    metrics.record("positions", 200, 30, false);
+    metrics.rotate();
+    metrics.record("positions", 503, 3000, false);
+    metrics.rotate();
+
+    const positions = metrics.lifetime().positions;
+
+    expect(positions.requests).toBe(2);
+    expect(positions.classes).toMatchObject({ "2xx": 1, "5xx": 1, "503": 1 });
+    expect(positions.latency_ms.sum).toBe(3030);
+    expect(metrics.lifetime().tower.requests).toBe(0);
+  });
 });
 
 describe("the positions contracts", () => {

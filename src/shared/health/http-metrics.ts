@@ -119,6 +119,13 @@ interface HttpMetrics {
 
   /** Requests outside /health since the process started (CPU per request). */
   servedTotal(): number;
+
+  /**
+   * Every group's counts since the process started, never reset: the
+   * counters of `/metrics` (plano-escala F5-29), which Prometheus turns
+   * into rates itself. Copies, every group zero-filled.
+   */
+  lifetime(): Record<RouteGroup, HttpGroupWindow>;
 }
 
 const emptyClasses = (): HttpClassCounts => ({
@@ -176,6 +183,9 @@ function createHttpMetrics({
     ROUTE_GROUPS.map((group) => [group, emptyGroup()]),
   );
   let served = 0;
+  const lifetime = new Map<RouteGroup, HttpGroupWindow>(
+    ROUTE_GROUPS.map((group) => [group, emptyGroup()]),
+  );
 
   // The contracts' sliding window: one slot per minute that had a POST, and
   // the window's totals kept beside them, so a POST costs one slot update.
@@ -251,6 +261,13 @@ function createHttpMetrics({
       counters.latency_ms.counts[bucketOf(ms)] += 1;
       counters.latency_ms.sum += ms;
 
+      const total = lifetime.get(group) ?? lifetime.get("other")!;
+
+      total.requests += 1;
+      countClass(total.classes, statusCode);
+      total.latency_ms.counts[bucketOf(ms)] += 1;
+      total.latency_ms.sum += ms;
+
       if (!health) served += 1;
     },
 
@@ -305,6 +322,16 @@ function createHttpMetrics({
     },
 
     servedTotal: () => served,
+
+    lifetime() {
+      const all = {} as Record<RouteGroup, HttpGroupWindow>;
+
+      for (const group of ROUTE_GROUPS) {
+        all[group] = copyGroup(lifetime.get(group)!);
+      }
+
+      return all;
+    },
   };
 }
 

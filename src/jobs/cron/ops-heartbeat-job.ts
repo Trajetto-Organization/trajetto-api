@@ -3,8 +3,10 @@ import { CronJobDefinition } from "@/shared/services/cron-scheduler-service";
 
 import { env } from "@/env";
 import {
+  ALERT_KINDS,
   alertThresholdsFromEnv,
-  evaluateAlerts,
+  collectAlerts,
+  formatAlert,
   type OperationalSnapshot,
 } from "@/shared/health/alert-rules";
 import {
@@ -16,6 +18,7 @@ import {
 import { collectDatabaseMetrics } from "@/shared/health/database-metrics";
 import { sendHeartbeat } from "@/shared/health/heartbeat-client";
 import { collectOperationalSnapshot } from "@/shared/health/operational-snapshot";
+import { recordAlertVerdict } from "@/shared/health/prometheus";
 
 /**
  * The dead man's switch (OBS-03).
@@ -69,11 +72,21 @@ function heartbeatReasons(
   snapshot: OperationalSnapshot,
   readings: ClusterReadings,
 ): string[] {
-  return evaluateAlerts(
+  const alerts = collectAlerts(
     withClusterReadings(snapshot, readings),
     alertThresholdsFromEnv(env),
     { pitrExpected: env.PITR_EXPECTED },
   );
+
+  // The same verdict on /metrics, by code (plano-escala F5-29): the
+  // vmalert rules of F5-30 page on what this ping pages on.
+  recordAlertVerdict(
+    ALERT_KINDS,
+    alerts.map((alert) => alert.code),
+    snapshot.now,
+  );
+
+  return alerts.map(formatAlert);
 }
 
 const opsHeartbeatJob: CronJobDefinition = {

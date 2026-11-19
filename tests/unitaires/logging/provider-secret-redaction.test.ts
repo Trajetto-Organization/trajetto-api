@@ -49,6 +49,8 @@ const PROVIDER_SECRETS = [
   "JWT_SECRET",
   "HEALTHCHECK_PING_URL",
   "WEBHOOK_SECRETS_KEY",
+  // The scrape's token of /metrics (plano-escala F5-29).
+  "METRICS_TOKEN",
 ] as const;
 
 describe("the process logger and the provider credentials", () => {

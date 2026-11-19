@@ -57,6 +57,8 @@ const SECRET_ENV_KEYS = [
   "DOCS_PASSWORD",
   // Opens GET /health/rollout (U-11).
   "ROLLOUT_STATUS_TOKEN",
+  // Opens /metrics on METRICS_PORT (plano-escala F5-29).
+  "METRICS_TOKEN",
   "TURNSTILE_SECRET_KEY",
   "RATE_LIMIT_FORWARDER_SECRET",
   "RATE_LIMIT_EDGE_SECRET",

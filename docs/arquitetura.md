@@ -6116,6 +6116,30 @@ orçamento de statements do envio não muda (o E2E
 a réplica anterior de um rolling deploy não o manda, e o app trata a
 ausência como o intervalo dele.
 
+**Métricas para o Prometheus** (F5-29, `src/shared/health/prometheus.ts`).
+Com `METRICS_PORT`, cada processo abre um segundo servidor HTTP, fora do
+Fastify e de toda Domain, só com `GET /metrics` no formato texto do
+Prometheus, para o vmagent da pilha de métricas (F5-30), que acha cada
+réplica por `tasks.<App Name>`. Sem a variável, nenhuma porta é aberta. A
+`dokploy-network` é dividida entre staging e produção, então a porta nunca
+fica aberta: todo scrape leva `Authorization: Bearer <METRICS_TOKEN>`,
+comparado em tempo constante, e o boot recusa a porta sem um token de 32
+caracteres ou mais (ou igual à `PORT`). Sem o token certo, 401 sem corpo;
+fora de `/metrics`, 404. O que sai: quem é o processo
+(`trajetto_build_info` com papel, ambiente e commit curto), memória e event
+loop, as respostas HTTP desde o início do processo por grupo de rota e
+classe (contadores, com o histograma da duração), o pool do Prisma, os
+sockets e, no processo que rodou o heartbeat do minuto,
+`trajetto_alert_active{code}` de todo código do `alert-rules` (1 para os
+que ele julgou ativos), para o vmalert paginar pelos mesmos códigos do
+healthchecks.io. Nenhum rótulo de empresa nem de pessoa: um nome fora da
+lista (`role`, `app_env`, `commit`, `group`, `class`, `pool`, `adapter`,
+`code`, `le`) ou um valor que pareça id, e-mail, IP ou documento é recusado
+na hora de escrever e contado em `trajetto_metrics_refused_series`. Uma
+porta que não abre é um erro no log, nunca um motivo para parar de
+atender. Prova: o unitário `prometheus` (o formato, a guarda dos rótulos,
+o 401 e a recusa do boot).
+
 **Group commit das posições** (F5-19,
 `src/modules/route/services/position-write-buffer.ts`): com
 `POSITION_GROUP_COMMIT=on`, os envios do `POST /route/positions` que chegam
