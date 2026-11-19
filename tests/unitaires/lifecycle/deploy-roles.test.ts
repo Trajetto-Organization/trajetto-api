@@ -50,9 +50,22 @@ describe.skipIf(!hasShell("bash"))("deploy-roles.sh", () => {
     // GHCR: `imagetools inspect <ref>` answers from the tag table and
     // `imagetools create --tag <new> <source>` writes it there, failing
     // for any ref listed in `refuse`.
+    //
+    // The labels (ghcr.sh labels, plano-escala F3-31c): a `--format` that
+    // reads Labels answers from the labels table, by digest, a tag being
+    // read through the tag table first.
     box.stub(
       "docker",
       [
+        'if [ "$1 $2 $3 $5" = "buildx imagetools inspect --format" ] && case "$6" in *Labels*) true ;; *) false ;; esac; then',
+        '  case "$4" in',
+        '    *@*) key="${4#*@}" ;;',
+        `    *) key=$(awk -v ref="$4" '$1 == ref { value = $2 } END { print value }' "${box.root}/tags") ;;`,
+        "  esac",
+        '  [ -n "$key" ] || { echo "not found" >&2; exit 1; }',
+        `  awk -v key="$key" '$1 == key { value = $2 } END { print value }' "${box.root}/labels" 2>/dev/null`,
+        "  exit 0",
+        "fi",
         'if [ "$1 $2 $3" = "buildx imagetools inspect" ]; then',
         `  found=$(awk -v ref="$4" '$1 == ref { value = $2 } END { print value }' "${box.root}/tags")`,
         '  [ -n "$found" ] || { echo "not found" >&2; exit 1; }',
@@ -222,6 +235,153 @@ describe.skipIf(!hasShell("bash"))("deploy-roles.sh", () => {
       // Only the realtime had no id: one tag moved by the follow step.
       expect(created() - before).toBe(1);
       expect(tagOf("staging-realtime")).toBe(API);
+    });
+  });
+
+  /**
+   * The realtime is deployed only when what it runs changed (plano-escala
+   * F3-31c, decision D7): its deploy drops every socket. The labels of the
+   * image it runs against the new one's, force-realtime, or 7 days.
+   */
+  describe("the realtime", () => {
+    const RUNNING = digest("9");
+    const NOW = Date.parse("2026-11-19T12:00:00Z") / 1000;
+    const daysAgo = (days: number) =>
+      new Date((NOW - days * 86400) * 1000).toISOString();
+
+    /** The labels of each image: source|epoch|created. */
+    function labels(table: Record<string, string>) {
+      writeFileSync(
+        `${box.root}/labels`,
+        Object.entries(table)
+          .map(([key, value]) => `${key} ${value}\n`)
+          .join(""),
+      );
+    }
+
+    const realtime = (env: Record<string, string> = {}) =>
+      roles("after-api", {
+        DOKPLOY_REALTIME_APPLICATION_ID: "app-realtime",
+        NOW_EPOCH: String(NOW),
+        ...env,
+      });
+
+    const summary = () =>
+      existsSync(`${box.root}/summary`)
+        ? readFileSync(`${box.root}/summary`, "utf8")
+        : "";
+
+    it("is held on its build when its source and epoch did not change, and says why", () => {
+      tags({ "staging-realtime": RUNNING });
+      labels({
+        [RUNNING]: `src-a|10|${daysAgo(2)}`,
+        [API]: `src-a|10|${daysAgo(0)}`,
+      });
+
+      const result = realtime();
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(deploys()).toEqual([]);
+      // Its tag stays on the build it runs, and the follow leaves it there.
+      expect(tagOf("staging-realtime")).toBe(RUNNING);
+      expect(recorded()).toContain(`realtime held ${RUNNING}`);
+      expect(result.stdout).toContain(
+        "::notice::trajetto-realtime não foi implantada: fonte e época iguais (época 10), imagem em uso com 2 dia(s)",
+      );
+      expect(summary()).toContain(`trajetto-realtime mantida em ${RUNNING}`);
+
+      expect(roles("follow").status).toBe(0);
+      expect(tagOf("staging-realtime")).toBe(RUNNING);
+
+      // Named for the convergence check, which accepts it on its commit.
+      expect(roles("held").stdout).toBe("realtime\n");
+    });
+
+    it.each([
+      [
+        "its code changed",
+        { running: `src-a|10|${daysAgo(1)}`, fresh: `src-b|10|${daysAgo(0)}` },
+        "o código que o realtime executa mudou",
+      ],
+      [
+        "the contract epoch moved",
+        { running: `src-a|10|${daysAgo(1)}`, fresh: `src-a|11|${daysAgo(0)}` },
+        "a época de contract mudou (10 → 11)",
+      ],
+      [
+        "the image it runs is older than 7 days",
+        { running: `src-a|10|${daysAgo(8)}`, fresh: `src-a|10|${daysAgo(0)}` },
+        "a imagem em uso tem 8 dias (o máximo é 7)",
+      ],
+      [
+        "the image it runs has no labels (the first with them always deploys)",
+        { running: `||${daysAgo(1)}`, fresh: `src-a|10|${daysAgo(0)}` },
+        "a imagem em uso não tem os labels do realtime",
+      ],
+      [
+        "the new image has no labels",
+        { running: `src-a|10|${daysAgo(1)}`, fresh: `||${daysAgo(0)}` },
+        "a imagem nova não tem os labels do realtime",
+      ],
+    ])("is deployed when %s", (_, images, reason) => {
+      tags({ "staging-realtime": RUNNING });
+      labels({ [RUNNING]: images.running, [API]: images.fresh });
+
+      const result = realtime();
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(deploys()).toEqual(["trajetto-realtime app-realtime"]);
+      expect(tagOf("staging-realtime")).toBe(API);
+      expect(recorded()).toContain(`realtime deployed ${RUNNING}`);
+      expect(summary()).toContain(`trajetto-realtime implantada: ${reason}`);
+      expect(roles("held").stdout).toBe("\n");
+    });
+
+    it("is deployed when its tag does not exist yet", () => {
+      labels({ [API]: `src-a|10|${daysAgo(0)}` });
+
+      const result = realtime();
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(deploys()).toEqual(["trajetto-realtime app-realtime"]);
+      expect(summary()).toContain("a tag staging-realtime ainda não existe");
+    });
+
+    it("is deployed with force-realtime, whatever the labels say", () => {
+      tags({ "staging-realtime": RUNNING });
+      labels({
+        [RUNNING]: `src-a|10|${daysAgo(0)}`,
+        [API]: `src-a|10|${daysAgo(0)}`,
+      });
+
+      const result = realtime({ FORCE_REALTIME: "true" });
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(deploys()).toEqual(["trajetto-realtime app-realtime"]);
+      expect(summary()).toContain(
+        "trajetto-realtime implantada: force-realtime",
+      );
+      // Not even read: nothing to compare.
+      expect(
+        box.calls("docker").filter((call) => call.includes("Labels")),
+      ).toEqual([]);
+    });
+
+    it("never holds the ingest, whose deploy drops nothing", () => {
+      tags({ "staging-ingest": digest("8"), "staging-realtime": RUNNING });
+      labels({
+        [RUNNING]: `src-a|10|${daysAgo(0)}`,
+        [API]: `src-a|10|${daysAgo(0)}`,
+      });
+
+      const result = realtime({ DOKPLOY_INGEST_APPLICATION_ID: "app-ingest" });
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(deploys()).toEqual(["trajetto-ingest app-ingest"]);
+      expect(recorded()).toEqual([
+        `ingest deployed ${digest("8")}`,
+        `realtime held ${RUNNING}`,
+      ]);
     });
   });
 
@@ -726,6 +886,28 @@ describe("the deploy action", () => {
     expect(stepOf(deploy, "Deploy the worker roles (Dokploy)").text).toContain(
       "API_DIGEST: ${{ inputs.api-digest }}",
     );
+  });
+
+  it("holds the realtime unless force-realtime, and lets the roles' check accept it held (F3-31c)", () => {
+    expect(stepOf(deploy, "Deploy the edge roles (Dokploy)").text).toContain(
+      "FORCE_REALTIME: ${{ inputs.force-realtime }}",
+    );
+
+    const wait = stepOf(deploy, "Wait for every role to run this build").text;
+
+    expect(wait).toContain("STATE_FILE: ${{ runner.temp }}/deploy-roles.state");
+    expect(wait).toContain(
+      "ROLLOUT_ROLES_HELD=$(bash .github/scripts/deploy-roles.sh held)",
+    );
+
+    for (const file of ["staging.yml", "production.yml"]) {
+      const workflow = readWorkflow(file);
+
+      expect(workflow.text, file).toContain("force_realtime:");
+      expect(workflow.text, file).toContain(
+        "force-realtime: ${{ inputs.force_realtime == true }}",
+      );
+    }
   });
 
   it("puts a failed role's tag back where the API's would go back", () => {

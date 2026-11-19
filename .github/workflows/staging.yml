@@ -71,6 +71,10 @@ on:
         description: "Roda a etapa de release (migrations e passos) mesmo com a imagem de migração já aplicada"
         type: boolean
         required: false
+      force_realtime:
+        description: "Implanta a trajetto-realtime mesmo sem mudança no código que ela executa"
+        type: boolean
+        required: false
 
 # Least privilege by default; the jobs that push to GHCR ask for more
 # themselves.
@@ -291,6 +295,19 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # What the realtime role runs and the contract it speaks, as two
+      # labels of the API image (plano-escala F3-31c): the deploy holds the
+      # realtime on its build while both match the image it runs. Node of
+      # the runner, no dependencies.
+      - name: Compute the realtime labels
+        id: realtime
+        run: |
+          source=$(node .github/scripts/realtime-closure.mjs --source)
+          epoch=$(node .github/scripts/realtime-closure.mjs --epoch)
+          echo "source=${source}" >> "$GITHUB_OUTPUT"
+          echo "epoch=${epoch}" >> "$GITHUB_OUTPUT"
+          echo "trajetto-realtime: fonte ${source::12}, época de contract ${epoch}." >> "$GITHUB_STEP_SUMMARY"
+
       # Only the immutable `sha-<short sha>`. The mutable tags are pointers
       # the deploy jobs move by digest: `staging` (every push to staging) and
       # `stable` (the promote). The promote finds this build again by the
@@ -366,6 +383,8 @@ jobs:
           cache-from: type=gha
           build-args: |
             GIT_SHA=${{ github.sha }}
+            REALTIME_SOURCE=${{ steps.realtime.outputs.source }}
+            CONTRACT_EPOCH=${{ steps.realtime.outputs.epoch }}
 
       # On top of the API image just built: every layer up to the runner is
       # CACHED, only the release image's own layers are new.
@@ -578,6 +597,8 @@ jobs:
           # Declared after the Dockerfile's last RUN, so no layer depends on it.
           build-args: |
             GIT_SHA=${{ github.sha }}
+            REALTIME_SOURCE=${{ steps.realtime.outputs.source }}
+            CONTRACT_EPOCH=${{ steps.realtime.outputs.epoch }}
 
       # The same build of the release image the smoke test ran, from the
       # cache, with its own attestations. Its cache export is a superset of
@@ -1305,6 +1326,7 @@ jobs:
           swarm-pgbouncer-service: ${{ vars.SWARM_PGBOUNCER_SERVICE }}
           release-timeout-seconds: ${{ vars.RELEASE_TIMEOUT_SECONDS }}
           force-release: ${{ inputs.force_release == true }}
+          force-realtime: ${{ inputs.force_realtime == true }}
           rollout-status-token: ${{ secrets.ROLLOUT_STATUS_TOKEN }}
           rollout-roles-expected: ${{ vars.ROLLOUT_ROLES_EXPECTED }}
           release-serialize-with-application-id: ${{ vars.RELEASE_SERIALIZE_WITH_APPLICATION_ID }}

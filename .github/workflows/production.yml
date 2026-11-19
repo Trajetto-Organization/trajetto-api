@@ -44,6 +44,10 @@ on:
         description: "Roda a etapa de release (migrations e passos) mesmo com a imagem de migração já aplicada"
         type: boolean
         required: false
+      force_realtime:
+        description: "Implanta a trajetto-realtime mesmo sem mudança no código que ela executa (num rollback, leva ela junto)"
+        type: boolean
+        required: false
 
 # Least privilege by default; the jobs that move tags or write releases ask
 # for more themselves.
@@ -430,6 +434,7 @@ jobs:
           swarm-pgbouncer-service: ${{ vars.SWARM_PGBOUNCER_SERVICE }}
           release-timeout-seconds: ${{ vars.RELEASE_TIMEOUT_SECONDS }}
           force-release: ${{ inputs.force_release == true }}
+          force-realtime: ${{ inputs.force_realtime == true }}
           rollout-status-token: ${{ secrets.ROLLOUT_STATUS_TOKEN }}
           rollout-roles-expected: ${{ vars.ROLLOUT_ROLES_EXPECTED }}
           release-serialize-with-application-id: ${{ vars.RELEASE_SERIALIZE_WITH_APPLICATION_ID }}

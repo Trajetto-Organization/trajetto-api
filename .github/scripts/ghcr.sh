@@ -7,6 +7,12 @@
 #                                    or nothing when the tag does not exist
 #   ghcr.sh tag <new-ref> <source>   points <new-ref> at <source>,
 #                                    registry-side (nothing is pulled)
+#   ghcr.sh labels <ref> <name>...   the image's labels with those names,
+#                                    joined by `|` in that order (an absent
+#                                    label is empty), or nothing when the
+#                                    tag does not exist (plano-escala
+#                                    F3-31c: the realtime's deploy reads
+#                                    the source and epoch it runs)
 #   ghcr.sh login                    logs Docker in to ghcr.io as GHCR_USER
 #                                    with GHCR_TOKEN (through stdin, never
 #                                    the command line)
@@ -36,7 +42,7 @@ ATTEMPTS=${GHCR_ATTEMPTS:-5}
 PAUSE=${GHCR_RETRY_SECONDS:-5}
 
 usage() {
-  echo "uso: ghcr.sh digest <ref> | ghcr.sh tag <nova-ref> <origem> | ghcr.sh login" >&2
+  echo "uso: ghcr.sh digest <ref> | ghcr.sh tag <nova-ref> <origem> | ghcr.sh labels <ref> <nome>... | ghcr.sh login" >&2
   exit 2
 }
 
@@ -92,6 +98,21 @@ case "$command" in
     source=$3
     action="apontar ${target} para ${source}"
     ;;
+  labels)
+    [ $# -ge 3 ] || usage
+    ref=$2
+    shift 2
+    # One Go template for every name: `index` of a label the image does not
+    # carry (or of an image with no labels) is empty, never an error.
+    template=""
+    for name in "$@"; do
+      case "$name" in
+        *[!A-Za-z0-9._-]* | "") usage ;;
+      esac
+      template="${template:+${template}|}{{index .Image.Config.Labels \"${name}\"}}"
+    done
+    action="ler os labels de ${ref}"
+    ;;
   login)
     [ $# -eq 1 ] || usage
     : "${GHCR_USER:?GHCR_USER ausente}" "${GHCR_TOKEN:?GHCR_TOKEN ausente}"
@@ -115,6 +136,13 @@ for ((attempt = 1; attempt <= ATTEMPTS; attempt++)); do
       printf 'resposta ilegível do GHCR: %s\n' "$(printf '%s' "$out" | tr -d '\r' | tr '\n' ' ' | cut -c1-200)" > "$err"
     elif absent "$err"; then
       # The tag does not exist: an answer, not a failure.
+      exit 0
+    fi
+  elif [ "$command" = labels ]; then
+    if out=$(docker buildx imagetools inspect "$ref" --format "$template" 2> "$err"); then
+      printf '%s\n' "$(printf '%s' "$out" | tr -d '\r' | sed -n 1p)"
+      exit 0
+    elif absent "$err"; then
       exit 0
     fi
   elif [ "$command" = login ]; then

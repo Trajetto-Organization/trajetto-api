@@ -662,7 +662,15 @@ um worker precisa, vai também pelo canal `<SOCKET_ADAPTER_KEY>:lane`
 processos que drenam `external` sem o adapter assinam. O frame do adapter
 continua para quem tem o adapter (o `all` e a imagem anterior durante o
 rolling), e ninguém aplica a mesma pausa duas vezes. Com
-`SOCKETS_ENABLED=true` (o `all` de hoje), nada disso roda. O papel `realtime` recebe o `/socket.io` por uma
+`SOCKETS_ENABLED=true` (o `all` de hoje), nada disso roda.
+
+Toda mensagem entre processos (os `serverSideEmit`, o canal da pausa de
+template e o despertar) leva `v`, a versão dela
+(`src/shared/socket/messages.ts`, plano de escala F3-31c): quem lê aceita
+a versão anterior e as mais novas (uma versão nova só acrescenta campos),
+e mudar uma delas sobe a época de contract, que implanta o `realtime`
+junto. É o que deixa o `realtime` ficar num build mais velho que o da
+`api` quando o código dele não mudou ([seção 19 do deploy](deploy.md#19-papéis-da-mesma-imagem)). O papel `realtime` recebe o `/socket.io` por uma
 _Domain_ com _Path_ no mesmo host da API; depois do corte, a `api` passa a
 `SOCKETS_ENABLED=false`. A sala `positions:<businessId>` não muda com o
 papel: o `driverPosition` sai `volatile` do processo que recebeu o

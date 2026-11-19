@@ -45,6 +45,17 @@ import {
 import { startGradualClose } from "@/shared/socket/gradual-close";
 import { createSocketEmitter, type Broadcaster } from "@/shared/socket/emitter";
 import {
+  ADOPT_SESSION_VERSION_EVENT,
+  REFRESH_DELIVERY_ROOMS_EVENT,
+  WHATSAPP_TEMPLATE_LANE_EVENT,
+  adoptSessionVersionMessage,
+  readAdoptSessionVersion,
+  readRefreshDeliveryRooms,
+  readTemplateLaneFrame,
+  refreshDeliveryRoomsArgs,
+  templateLaneFrame,
+} from "@/shared/socket/messages";
+import {
   createPresenceStore,
   createPresenceTracker,
   readOnlineUserIds,
@@ -1743,9 +1754,12 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
   });
 
   // Another replica changed a permission of a company whose sockets may be
-  // here. Only this replica can touch them for real.
-  io.on(REFRESH_DELIVERY_ROOMS_EVENT, (businessId: unknown) => {
-    if (typeof businessId !== "string") return;
+  // here. Only this replica can touch them for real. Any version of the
+  // message (shared/socket/messages.ts, F3-31c).
+  io.on(REFRESH_DELIVERY_ROOMS_EVENT, (raw: unknown, meta?: unknown) => {
+    const businessId = readRefreshDeliveryRooms(raw, meta);
+
+    if (!businessId) return;
 
     void refreshLocalDeliveryRooms(businessId).catch((error) =>
       log.error(
@@ -1758,19 +1772,19 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
   // Meta's template status callback reached another replica: this one's
   // WhatsApp sender pauses or resumes the template too. Validated there —
   // what comes off the adapter is input like any other.
-  io.on(WHATSAPP_TEMPLATE_LANE_EVENT, (change: unknown) => {
-    applyWhatsAppTemplateLaneChange(change);
+  io.on(WHATSAPP_TEMPLATE_LANE_EVENT, (frame: unknown) => {
+    applyWhatsAppTemplateLaneChange(readTemplateLaneFrame(frame));
   });
 
   // A session changed its own password on another replica: this one's
   // sockets of that session keep going with the new version. Validated: what
   // comes off the adapter is input like any other.
   io.on(ADOPT_SESSION_VERSION_EVENT, (frame: unknown) => {
-    const { sessionId, version } = (frame ?? {}) as Record<string, unknown>;
+    const adopted = readAdoptSessionVersion(frame);
 
-    if (typeof sessionId !== "string" || !Number.isInteger(version)) return;
+    if (!adopted) return;
 
-    adoptLocalSessionVersion(sessionId, version as number);
+    adoptLocalSessionVersion(adopted.sessionId, adopted.version);
   });
 
   revalidationStopped = false;
@@ -1887,9 +1901,6 @@ const sendSecurityEventToSession = (
   }
 };
 
-/** The server-side event a kept session's new version crosses replicas on. */
-const ADOPT_SESSION_VERSION_EVENT = "trajetto:adopt-session-version";
-
 /**
  * A session that changed its own password keeps going (wave 2): the change
  * bumped session_version and re-issued THIS session's tokens, and its open
@@ -1914,7 +1925,10 @@ const adoptSessionVersion = (sessionId: string, version: number): void => {
   if (!out) return;
 
   try {
-    out.serverSideEmit(ADOPT_SESSION_VERSION_EVENT, { sessionId, version });
+    out.serverSideEmit(
+      ADOPT_SESSION_VERSION_EVENT,
+      adoptSessionVersionMessage(sessionId, version),
+    );
   } catch (error) {
     // No cluster to tell: this replica is the only one, and it runs below.
     log.warn(
@@ -1925,9 +1939,6 @@ const adoptSessionVersion = (sessionId: string, version: number): void => {
 
   adoptLocalSessionVersion(sessionId, version);
 };
-
-/** The server-side event each replica re-evaluates its own sockets on. */
-const REFRESH_DELIVERY_ROOMS_EVENT = "trajetto:refresh-delivery-rooms";
 
 /**
  * Pulls out of the dispatch rooms whoever is no longer dispatch staff.
@@ -1953,7 +1964,10 @@ const refreshDeliveryRooms = async (businessId: string): Promise<void> => {
   if (!out) return;
 
   try {
-    out.serverSideEmit(REFRESH_DELIVERY_ROOMS_EVENT, businessId);
+    out.serverSideEmit(
+      REFRESH_DELIVERY_ROOMS_EVENT,
+      ...refreshDeliveryRoomsArgs(businessId),
+    );
   } catch (error) {
     // No cluster to tell: this replica is the only one, and it runs below.
     log.error(
@@ -1964,9 +1978,6 @@ const refreshDeliveryRooms = async (businessId: string): Promise<void> => {
 
   await refreshLocalDeliveryRooms(businessId);
 };
-
-/** The server-side event a WhatsApp template's pause crosses replicas on. */
-const WHATSAPP_TEMPLATE_LANE_EVENT = "trajetto:whatsapp-template-lane";
 
 /**
  * Tells the other processes that Meta paused or reinstated a template, so
@@ -1989,7 +2000,7 @@ const broadcastWhatsAppTemplateLaneChange = (
   if (!out) return;
 
   try {
-    out.serverSideEmit(WHATSAPP_TEMPLATE_LANE_EVENT, change);
+    out.serverSideEmit(WHATSAPP_TEMPLATE_LANE_EVENT, templateLaneFrame(change));
   } catch (error) {
     log.warn(
       { err: error, ...change },

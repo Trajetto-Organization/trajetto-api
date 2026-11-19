@@ -9,6 +9,7 @@ import {
 import { withoutRequestContext } from "@/shared/http/request-context";
 import { logger } from "@/shared/logging/logger";
 import { publisher } from "@/shared/redis/pubsub-redis";
+import { MESSAGE_VERSIONS } from "@/shared/socket/messages";
 
 const log = logger.child({ component: "wake-bus" });
 
@@ -43,8 +44,11 @@ const log = logger.child({ component: "wake-bus" });
 /** Hints of one queue within this window are one PUBLISH. */
 const WAKE_DEBOUNCE_MS = 100;
 
-/** The version of the message: a reader knows its shape by it. */
-const WAKE_MESSAGE_VERSION = 1;
+/**
+ * The version of the message: a reader knows its shape by it
+ * (shared/socket/messages.ts, plano-escala F3-31c).
+ */
+const WAKE_MESSAGE_VERSION = MESSAGE_VERSIONS.wake;
 
 interface WakeMessage {
   v: number;

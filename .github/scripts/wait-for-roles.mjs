@@ -40,11 +40,17 @@
  * of before, never a worker) — and an API too old to list the processes
  * makes it step aside with a notice, whatever commit it answers.
  *
+ * ROLLOUT_ROLES_HELD names the roles the deploy kept on their build on
+ * purpose (the realtime whose code did not change, plano-escala F3-31c,
+ * deploy-roles.sh): each still needs a live process, on any commit, and
+ * is neither "stale" nor counted for the queues and the cron.
+ *
  * Environment:
  *   API_URL                 the environment's public API origin (vars.API_PUBLIC_URL)
  *   ROLLOUT_STATUS_TOKEN    the environment's secret (the same as the API's)
  *   ROLLOUT_ROLES_EXPECTED  vars.ROLLOUT_ROLES_EXPECTED, e.g. `all` or `api,worker`
  *   WAIT_ROLES_SCOPE        `environment` (default) or `roles` (above)
+ *   ROLLOUT_ROLES_HELD      roles kept on their build by this deploy (above), comma-separated
  *   EXPECTED_SHA            the commit the deployed image was built from (7-40 hex)
  *   WAIT_TIMEOUT_SECONDS    how long to wait in total (default 600, at most 600)
  *   WAIT_POLL_SECONDS       interval between requests (default 5)
@@ -125,6 +131,14 @@ if (scopeRaw !== "" && scopeRaw !== "environment" && scopeRaw !== "roles") {
     `WAIT_ROLES_SCOPE='${scopeRaw.slice(0, 40)}' precisa ser environment ou roles.`,
   );
 }
+
+/** The roles this deploy kept on their build on purpose (see the top). */
+const HELD = new Set(
+  (env.ROLLOUT_ROLES_HELD ?? "")
+    .split(",")
+    .map((role) => role.trim().toLowerCase())
+    .filter((role) => ROLES.includes(role)),
+);
 
 /** Only the listed roles, before the API's deploy (see the top). */
 const ROLES_ONLY = scopeRaw === "roles";
@@ -272,7 +286,9 @@ function pendingOf(roles) {
     );
   }
 
-  const stale = own.filter((group) => !isExpected(group.commit));
+  const stale = own.filter(
+    (group) => !isExpected(group.commit) && !HELD.has(group.role),
+  );
 
   for (const group of stale) {
     reasons.push(
@@ -281,6 +297,17 @@ function pendingOf(roles) {
   }
 
   for (const role of NEEDED) {
+    // Held on its build: alive is enough, on whichever commit it runs.
+    if (HELD.has(role)) {
+      if (!own.some((group) => group.role === role)) {
+        reasons.push(
+          `nenhum processo vivo do papel ${role} (mantido no build dele)`,
+        );
+      }
+
+      continue;
+    }
+
     if (!current.some((group) => covers(group.role).includes(role))) {
       reasons.push(`nenhum processo vivo cobre o papel ${role} no commit novo`);
     }

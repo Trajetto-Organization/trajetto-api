@@ -14,6 +14,8 @@
 #                                Dokploy deploy failed goes back to what it
 #                                named before (only with RESTORE_TAGS=true,
 #                                staging)
+#   deploy-roles.sh held         the roles this run held on their build
+#                                (the realtime, F3-31c), comma-separated
 #   deploy-roles.sh verify before-api | after-api
 #                                the proof the roles this run deployed came
 #                                up on the build: over SSH (X-07), one call
@@ -35,16 +37,30 @@
 # deployed before. A role's failed deploy fails the step: nothing after it
 # is deployed, the API included.
 #
+# The realtime (plano-escala F3-31c, decision D7) is deployed only when
+# what it runs changed, because its deploy drops every socket: the image
+# carries `trajetto.realtime-source` (its import closure, the dependencies,
+# the schema) and `trajetto.contract-epoch` (the contractions and the
+# versions of the messages between processes), from
+# .github/scripts/realtime-closure.mjs. It is deployed with FORCE_REALTIME,
+# when the image it runs has no labels (or no tag yet), when either label
+# differs, or when that image is older than REALTIME_MAX_LAG_DAYS (7);
+# otherwise it is `held`: it keeps its tag and its build, and the run says
+# why in the summary. The roles' convergence check is told to accept it on
+# its older commit (ROLLOUT_ROLES_HELD, wait-for-roles.mjs).
+#
 # The state of each role is written to STATE_FILE, one `<role> <status>
-# <previous digest or ->` per line (status: deployed, failed, absent), for
-# the `follow` and `restore` phases of the same run. Without STATE_FILE,
-# nothing was recorded and both phases find nothing to do.
+# <previous digest or ->` per line (status: deployed, failed, absent,
+# held), for the `follow` and `restore` phases of the same run. Without
+# STATE_FILE, nothing was recorded and both phases find nothing to do.
 #
 # Environment: TAG, API_DIGEST, STATE_FILE, RESTORE_TAGS, DOKPLOY_ENABLED
 # (`true` when the environment has Dokploy), DOKPLOY_URL, DOKPLOY_API_KEY,
 # DOKPLOY_WORKER_APPLICATION_ID, DOKPLOY_SCHEDULER_APPLICATION_ID,
 # DOKPLOY_WORKER_EXTERNAL_APPLICATION_ID, DOKPLOY_INGEST_APPLICATION_ID and
 # DOKPLOY_REALTIME_APPLICATION_ID. DEPLOY_SCRIPT is dokploy-deploy.mjs.
+# The realtime's: FORCE_REALTIME (`true` deploys it whatever the labels),
+# REALTIME_MAX_LAG_DAYS (default 7) and NOW_EPOCH (the clock, for tests).
 # The `verify` phase: VERIFY_MODE (`ssh`, the default, or `http`); over
 # SSH, SSH_TARGET (`user@host`), SSH_KEY_FILE (default ~/.ssh/verify_key,
 # written by the action's SSH step) and each role's App Name in
@@ -62,7 +78,7 @@ AFTER_API=(ingest realtime)
 ROLES=("${BEFORE_API[@]}" "${AFTER_API[@]}")
 
 usage() {
-  echo "uso: deploy-roles.sh before-api | after-api | follow | restore | verify before-api|after-api" >&2
+  echo "uso: deploy-roles.sh before-api | after-api | follow | restore | held | verify before-api|after-api" >&2
   exit 2
 }
 
@@ -99,8 +115,60 @@ status_of() {
   fi
 }
 
+# Whether the realtime must be deployed: `deploy <reason>` or `held
+# <reason>` on stdout. Reads the labels of the image its tag names now and
+# of the API's new one; GHCR not answering fails the step, as any read of
+# a tag does, before anything moved.
+realtime_verdict() {
+  local current fresh source epoch created new_source new_epoch now age days
+  local max_days=${REALTIME_MAX_LAG_DAYS:-7}
+  local names=(trajetto.realtime-source trajetto.contract-epoch org.opencontainers.image.created)
+
+  if [ "${FORCE_REALTIME:-false}" = "true" ]; then
+    echo "deploy force-realtime"
+    return 0
+  fi
+
+  current=$(bash .github/scripts/ghcr.sh labels "${REPO}:${TAG}-realtime" "${names[@]}") || return 1
+
+  if [ -z "$current" ]; then
+    echo "deploy a tag ${TAG}-realtime ainda não existe"
+    return 0
+  fi
+
+  fresh=$(bash .github/scripts/ghcr.sh labels "${REPO}@${API_DIGEST}" "${names[@]}") || return 1
+
+  IFS='|' read -r source epoch created <<< "$current"
+  IFS='|' read -r new_source new_epoch _ <<< "$fresh"
+
+  if [ -z "$source" ] || [ -z "$epoch" ]; then
+    echo "deploy a imagem em uso não tem os labels do realtime (a primeira com eles sempre implanta)"
+  elif [ -z "$new_source" ] || [ -z "$new_epoch" ]; then
+    echo "deploy a imagem nova não tem os labels do realtime"
+  elif [ "$new_epoch" != "$epoch" ]; then
+    echo "deploy a época de contract mudou (${epoch} → ${new_epoch})"
+  elif [ "$new_source" != "$source" ]; then
+    echo "deploy o código que o realtime executa mudou"
+  else
+    now=${NOW_EPOCH:-$(date -u +%s)}
+
+    if ! age=$(date -u -d "$created" +%s 2>/dev/null) || [ -z "$created" ]; then
+      echo "deploy a idade da imagem em uso não se lê (org.opencontainers.image.created='${created}')"
+      return 0
+    fi
+
+    days=$(((now - age) / 86400))
+
+    if [ "$days" -gt "$max_days" ]; then
+      echo "deploy a imagem em uso tem ${days} dias (o máximo é ${max_days})"
+    else
+      echo "held fonte e época iguais (época ${epoch}), imagem em uso com ${days} dia(s)"
+    fi
+  fi
+}
+
 deploy_phase() {
-  local role id previous absent=""
+  local role id previous verdict absent=""
 
   if [ -z "${API_DIGEST:-}" ] || [ -z "${TAG:-}" ]; then
     echo "::error::deploy-roles.sh precisa de TAG e API_DIGEST." >&2
@@ -119,6 +187,22 @@ deploy_phase() {
     # What the role's tag names before it moves: a failed deploy on
     # staging puts it back. GHCR not answering fails here, before the move.
     previous=$(bash .github/scripts/ghcr.sh digest "${REPO}:${TAG}-${role}")
+
+    if [ "$role" = realtime ]; then
+      if ! verdict=$(realtime_verdict); then
+        echo "::error::Não deu para ler os labels da trajetto-realtime no GHCR: nada depois dela foi implantado."
+        exit 1
+      fi
+
+      if [ "${verdict%% *}" = held ]; then
+        record "$role" held "$previous"
+        echo "::notice::trajetto-realtime não foi implantada: ${verdict#* }. Ela segue em ${previous}; FORCE_REALTIME (Run workflow com force_realtime) implanta mesmo assim."
+        summary "trajetto-realtime mantida em ${previous}: ${verdict#* }."
+        continue
+      fi
+
+      summary "trajetto-realtime implantada: ${verdict#* }."
+    fi
 
     bash .github/scripts/ghcr.sh tag "${REPO}:${TAG}-${role}" "${REPO}@${API_DIGEST}"
     summary "trajetto-api:${TAG}-${role} → ${API_DIGEST}"
@@ -149,8 +233,10 @@ follow() {
   for role in "${ROLES[@]}"; do
     status=$(status_of "$role")
 
-    # Deployed: its tag already moved, right before its deploy.
+    # Deployed: its tag already moved, right before its deploy. Held (the
+    # realtime whose code did not change): its tag stays on its build.
     [ "$status" = "deployed" ] && continue
+    [ "$status" = "held" ] && continue
 
     # A role's tag is a convenience for an Application that does not
     # deploy here yet: GHCR not answering must not turn a deploy that
@@ -272,6 +358,14 @@ verify_http() {
     node "${WAIT_ROLES_SCRIPT:-.github/scripts/wait-for-roles.mjs}"
 }
 
+# The roles held on their build in this run, comma-separated, for
+# wait-for-roles.mjs (ROLLOUT_ROLES_HELD).
+held() {
+  if [ -n "$STATE_FILE" ] && [ -f "$STATE_FILE" ]; then
+    awk '$2 == "held" { printf "%s%s", (n++ ? "," : ""), $1 } END { print "" }' "$STATE_FILE"
+  fi
+}
+
 case "${1:-}" in
   before-api) deploy_phase "${BEFORE_API[@]}" ;;
   after-api) deploy_phase "${AFTER_API[@]}" ;;
@@ -284,5 +378,6 @@ case "${1:-}" in
     ;;
   follow) follow ;;
   restore) restore ;;
+  held) held ;;
   *) usage ;;
 esac

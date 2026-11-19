@@ -19,6 +19,10 @@ import { container } from "tsyringe";
 import { env } from "@/env";
 import { MetaCloudApiProvider } from "@/shared/providers/whatsapp-provider/implementations/meta-cloud-api-provider";
 import { socketAdapterOptions } from "@/shared/socket/adapter-redis";
+import {
+  MESSAGE_VERSIONS,
+  readTemplateLaneFrame,
+} from "@/shared/socket/messages";
 
 /**
  * Meta says a template is paused — and the lane stops before a send is
@@ -132,8 +136,13 @@ const send = () =>
  * a previous test published can still be on its way when the next one runs.
  */
 function heard(change: unknown): boolean {
+  // The frame carries its version since plano-escala F3-31c; the change is
+  // what is left, read as any replica reads it.
   return otherReplica.heard.some(
-    (entry) => JSON.stringify(entry) === JSON.stringify(change),
+    (entry) =>
+      (entry as { v?: unknown }).v ===
+        MESSAGE_VERSIONS["whatsapp-template-lane"] &&
+      JSON.stringify(readTemplateLaneFrame(entry)) === JSON.stringify(change),
   );
 }
 

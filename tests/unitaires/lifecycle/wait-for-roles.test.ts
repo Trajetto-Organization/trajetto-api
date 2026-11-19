@@ -360,6 +360,70 @@ describe("waiting for every role to run the deployed build", () => {
     expect(result.status).not.toBe(0);
     expect(result.output).toContain("a API não leu o process_heartbeat");
   });
+
+  /**
+   * The realtime held on its build by this deploy (plano-escala F3-31c):
+   * its code did not change, so it was not deployed, and its processes
+   * run the previous commit on purpose. Alive is all it owes the check.
+   */
+  describe("with a role held on its build (ROLLOUT_ROLES_HELD)", () => {
+    const realtime = (extra: Partial<Group> = {}) =>
+      process_({ role: "realtime", sockets: true, commit: OLD, ...extra });
+
+    it("accepts it on its previous commit", async () => {
+      const fake = await fakeApi([rollout([api(), worker(), realtime()])]);
+
+      const result = await wait({
+        API_URL: fake.url,
+        ROLLOUT_ROLES_EXPECTED: "api,worker,realtime",
+        ROLLOUT_ROLES_HELD: "realtime",
+      });
+
+      expect(result.status, result.output).toBe(0);
+    });
+
+    it("still fails a realtime on an old commit that was not held", async () => {
+      const fake = await fakeApi([rollout([api(), worker(), realtime()])]);
+
+      const result = await wait({
+        API_URL: fake.url,
+        ROLLOUT_ROLES_EXPECTED: "api,worker,realtime",
+      });
+
+      expect(result.status).not.toBe(0);
+      expect(result.output).toContain("processo(s) realtime ainda em");
+    });
+
+    it("still needs it alive", async () => {
+      const fake = await fakeApi([rollout([api(), worker()])]);
+
+      const result = await wait({
+        API_URL: fake.url,
+        ROLLOUT_ROLES_EXPECTED: "api,worker,realtime",
+        ROLLOUT_ROLES_HELD: "realtime",
+      });
+
+      expect(result.status).not.toBe(0);
+      expect(result.output).toContain(
+        "nenhum processo vivo do papel realtime (mantido no build dele)",
+      );
+    });
+
+    it("holds nothing for another role's old commit", async () => {
+      const fake = await fakeApi([
+        rollout([api(), worker({ commit: OLD }), realtime()]),
+      ]);
+
+      const result = await wait({
+        API_URL: fake.url,
+        ROLLOUT_ROLES_EXPECTED: "api,worker,realtime",
+        ROLLOUT_ROLES_HELD: "realtime",
+      });
+
+      expect(result.status).not.toBe(0);
+      expect(result.output).toContain("processo(s) worker ainda em");
+    });
+  });
 });
 
 /**

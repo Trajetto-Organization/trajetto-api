@@ -2,6 +2,7 @@ import { env } from "@/env";
 import { consumesQueue } from "@/shared/lifecycle/process-role";
 import { logger } from "@/shared/logging/logger";
 import { publisher, subscribe } from "@/shared/redis/pubsub-redis";
+import { MESSAGE_VERSIONS } from "@/shared/socket/messages";
 import { selfReplica } from "@/shared/wake/wake-bus";
 
 import {
@@ -39,8 +40,11 @@ const log = logger.child({ component: "whatsapp-template-lane-bus" });
  *    learns the pause from its own first refused send, as it always did.
  */
 
-/** The version of the message: a reader knows its shape by it. */
-const LANE_MESSAGE_VERSION = 1;
+/**
+ * The version of the message: a reader knows its shape by it
+ * (shared/socket/messages.ts, plano-escala F3-31c).
+ */
+const LANE_MESSAGE_VERSION = MESSAGE_VERSIONS["template-lane-channel"];
 
 interface LaneMessage {
   v: number;

@@ -748,7 +748,9 @@ que não aconteceu. Para forçar (correção que chegou à imagem base sem mudar
 o digest, IA fora do lugar): _Actions_ → _Staging_ → _Run workflow_ com
 **force_ai_build** marcado testa, reconstrói e reimplanta a IA de staging;
 _Actions_ → _Production_ → _Run workflow_ (na `main`), junto com o
-`image_tag`, reimplanta a IA de produção.
+`image_tag`, reimplanta a IA de produção. Do mesmo jeito,
+**force_realtime** implanta a `trajetto-realtime` mesmo sem mudança no
+código que ela executa (ver o papel `realtime`, na seção 19).
 
 ## 4. A topologia no servidor
 
@@ -5147,6 +5149,25 @@ passa ao papel `api` (subseção acima).
   512 MiB (`536870912`) no prod-1.
 - **GitHub**: `DOKPLOY_REALTIME_APPLICATION_ID`, `SWARM_REALTIME_SERVICE`
   e `realtime` no `ROLLOUT_ROLES_EXPECTED`. É o último do deploy.
+- **Só quando o código dele muda** (plano de escala F3-31c, decisão D7):
+  o deploy do realtime derruba todos os sockets (eles voltam ao longo do
+  dreno), então ele só é implantado quando o que ele executa mudou. A
+  imagem leva dois labels, calculados no job `Build` por
+  `.github/scripts/realtime-closure.mjs`: `trajetto.realtime-source` (o
+  hash do fecho de imports a partir de `src/websocket.ts` e do boot,
+  listado em `.github/realtime-closure.txt`, mais as dependências, o
+  `schema.prisma` e a configuração do build) e `trajetto.contract-epoch`
+  (as migrations de contract mais as versões das mensagens entre
+  processos, `src/shared/socket/messages.ts`). O deploy compara com a
+  imagem que a tag `<tag>-realtime` aponta e implanta quando: o _Run
+  workflow_ veio com **force_realtime**; essa imagem não tem os labels
+  (a primeira com eles sempre implanta) ou a tag não existe; a fonte ou
+  a época diferem; ou ela tem mais de 7 dias. Senão o realtime fica no
+  build dele (a tag não anda), o resumo do run diz por quê, e a
+  conferência por papel o aceita no commit anterior. Num rollback
+  (`production.yml` com `image_tag`), ele só volta junto se o código ou a
+  época diferirem; para levá-lo de qualquer jeito, marque
+  **force_realtime**.
 - **Corte**: com a _Domain_ e o LOAD-05 aprovado, `SOCKETS_ENABLED=false`
   na `trajetto-api`. A partir daí a api emite pelo emissor do Redis, sem
   assinar nada do adapter (U-07). Meça antes e depois, no console do
