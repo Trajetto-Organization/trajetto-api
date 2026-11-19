@@ -2,7 +2,12 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { randomUUID } from "node:crypto";
 
-import { generateApiKey } from "@/shared/integration/api-key-rules";
+import Redis from "ioredis";
+
+import {
+  BUSINESS_API_RATE_PER_MINUTE,
+  generateApiKey,
+} from "@/shared/integration/api-key-rules";
 import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
@@ -26,6 +31,11 @@ const OTHER = "018f6200-0000-7000-8000-00000000000b";
 
 const SHIPPER = "018f6200-0000-7000-8000-0000000000f1";
 const OTHER_SHIPPER = "018f6200-0000-7000-8000-0000000000f2";
+
+// A company of its own for the company's minute, so filling it touches no
+// other case.
+const THIRD = "018f6200-0000-7000-8000-00000000000c";
+const THIRD_SHIPPER = "018f6200-0000-7000-8000-0000000000f3";
 
 let writeKey: string;
 let readOnlyKey: string;
@@ -363,5 +373,90 @@ describe("the limits", () => {
     expect(three.statusCode, three.body).toBe(429);
     expect(Number(three.headers["retry-after"])).toBeGreaterThan(0);
     expect(await deliveriesOf(CARRIER)).toBe(before);
+  });
+
+  // A refused batch used to keep the N - 1 units it was refused for: a key
+  // whose minute could not take the batch was locked out of its single
+  // calls for the rest of the minute, and an ERP retrying the batch every
+  // few seconds kept it locked out every minute.
+  it("a refused batch spends none of its extra units: the key's single calls go on", async () => {
+    const limited = await seedKey(
+      CARRIER,
+      ["deliveries:write", "deliveries:read"],
+      5,
+    );
+
+    const six = await batch(limited, {
+      deliveries: Array.from({ length: 6 }, () => document(randomUUID())),
+    });
+
+    expect(six.statusCode, six.body).toBe(429);
+    // Only the call itself was counted, as for any single call.
+    expect(six.headers["x-ratelimit-remaining"]).toBe("4");
+
+    const read = await app.inject({
+      method: "GET",
+      url: "/integration/v1/deliveries",
+      headers: { authorization: `Bearer ${limited}` },
+    });
+
+    expect(read.statusCode, read.body).toBe(200);
+    expect(read.headers["x-ratelimit-remaining"]).toBe("3");
+
+    // What is left still takes a batch that fits.
+    const three = await batch(limited, {
+      deliveries: Array.from({ length: 3 }, () => document(randomUUID())),
+    });
+
+    expect(three.statusCode, three.body).toBe(200);
+    expect(three.headers["x-ratelimit-remaining"]).toBe("0");
+  });
+
+  it("a batch the company's minute cannot take spends neither the company's units nor the key's", async () => {
+    await seedBusiness(THIRD);
+    await prisma.shipper.create({
+      data: { id: THIRD_SHIPPER, name: "Embarcador", businessId: THIRD },
+    });
+
+    const key = await seedKey(
+      THIRD,
+      ["deliveries:write", "deliveries:read"],
+      60,
+    );
+
+    // The company's other keys spent all but two units of its minute.
+    const redis = new Redis(process.env.REDIS_URL ?? "redis://localhost:6379");
+
+    try {
+      await redis.set(
+        `integration:business:${THIRD}`,
+        BUSINESS_API_RATE_PER_MINUTE - 2,
+        "EX",
+        60,
+      );
+    } finally {
+      redis.disconnect();
+    }
+
+    // The call's own unit fits; its three deliveries do not.
+    const refused = await batch(key, {
+      deliveries: Array.from({ length: 3 }, () =>
+        document(randomUUID(), { shipper_id: THIRD_SHIPPER }),
+      ),
+    });
+
+    expect(refused.statusCode, refused.body).toBe(429);
+    expect(await deliveriesOf(THIRD)).toBe(0);
+
+    // The unit left is still there for a single call, and the key's
+    // minute lost only the refused call's own unit.
+    const read = await app.inject({
+      method: "GET",
+      url: "/integration/v1/deliveries",
+      headers: { authorization: `Bearer ${key}` },
+    });
+
+    expect(read.statusCode, read.body).toBe(200);
+    expect(read.headers["x-ratelimit-remaining"]).toBe("58");
   });
 });

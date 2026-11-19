@@ -4789,7 +4789,10 @@ OpenStreetMap são recusados.
   minuto da chave e da empresa: o lote gasta as outras N − 1 depois de ler
   o envelope e antes de gravar qualquer coisa
   (`src/shared/integration/integration-units.ts`), no mesmo balde da chave
-  que as chamadas avulsas usam.
+  que as chamadas avulsas usam, e só quando elas cabem nos dois minutos (um
+  script só no Redis confere e gasta os dois juntos): o lote recusado com
+  429 não gasta nada além da própria chamada, e as chamadas avulsas da
+  chave seguem com o que sobrou.
 - **Cancelamento pela API** (L9, D49): `POST /integration/v1/deliveries/:id/cancel`,
   com o escopo próprio `deliveries:cancel` (`deliveries:write` não cancela:
   nenhuma chave já emitida ganha o poder em silêncio, e chave não se edita) e

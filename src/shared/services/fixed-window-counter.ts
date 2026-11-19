@@ -72,9 +72,89 @@ async function spendInFixedWindow(
   };
 }
 
+/**
+ * The same windows, spending `cost` units on EVERY key only when each one
+ * still fits it (`count + cost <= its max`), all in one script: either all
+ * spend or none does. The public API's batch (plano-escala U-04) spends N
+ * units of the key's minute and of the company's; spending first and
+ * checking after kept the units of a refused batch, and a key whose minute
+ * could not take the batch was locked out of its single calls until the
+ * minute turned.
+ *
+ * KEYS are the windows, ARGV[1] the window in seconds, ARGV[2] the cost
+ * and ARGV[3..] each key's max. Returns the 1-based index of the first
+ * key that did not fit (0 when all spent), then each key's count (after
+ * the spend, or as it stands when refused) and its remaining ms.
+ */
+const SPEND_WITHIN_WINDOWS = [
+  "local cost = tonumber(ARGV[2])",
+  "local counts = {}",
+  "local refused = 0",
+  "for i = 1, #KEYS do",
+  "  counts[i] = tonumber(redis.call('GET', KEYS[i]) or '0') or 0",
+  "  if refused == 0 and counts[i] + cost > tonumber(ARGV[2 + i]) then",
+  "    refused = i",
+  "  end",
+  "end",
+  "local out = { refused }",
+  "for i = 1, #KEYS do",
+  "  if refused == 0 then",
+  "    counts[i] = redis.call('INCRBY', KEYS[i], cost)",
+  "  end",
+  "  local ttl = redis.call('PTTL', KEYS[i])",
+  "  if refused == 0 and ttl == -1 then",
+  "    redis.call('EXPIRE', KEYS[i], ARGV[1])",
+  "    ttl = tonumber(ARGV[1]) * 1000",
+  "  end",
+  "  out[#out + 1] = counts[i]",
+  "  out[#out + 1] = ttl",
+  "end",
+  "return out",
+].join("\n");
+
+interface WindowSpend {
+  /** The count after the spend, or as it stands when the call was refused. */
+  total: number;
+  resetInMs: number;
+}
+
+/** Throws when Redis does: callers fail open. */
+async function spendWithinFixedWindows(
+  redis: Pick<Redis, "eval">,
+  windows: ReadonlyArray<{ key: string; max: number }>,
+  windowSeconds: number,
+  cost: number,
+): Promise<{ refusedIndex: number | null; windows: WindowSpend[] }> {
+  const reply = (await redis.eval(
+    SPEND_WITHIN_WINDOWS,
+    windows.length,
+    ...windows.map((window) => window.key),
+    windowSeconds,
+    cost,
+    ...windows.map((window) => window.max),
+  )) as number[];
+
+  const refused = Number(reply[0]);
+
+  return {
+    refusedIndex: refused > 0 ? refused - 1 : null,
+    windows: windows.map((_, index) => {
+      const ttl = Number(reply[2 + index * 2]);
+
+      return {
+        total: Number(reply[1 + index * 2]),
+        resetInMs: ttl > 0 ? ttl : windowSeconds * 1000,
+      };
+    }),
+  };
+}
+
 export {
   COUNT_AND_ARM_WINDOW,
   SPEND_AND_ARM_WINDOW,
+  SPEND_WITHIN_WINDOWS,
   countInFixedWindow,
   spendInFixedWindow,
+  spendWithinFixedWindows,
 };
+export type { WindowSpend };

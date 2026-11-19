@@ -428,7 +428,7 @@ async function integrationRoutes(app: FastifyInstance) {
           "",
           "Reenviar o mesmo lote com as mesmas `idempotency_key` devolve os mesmos resultados, as já criadas como 200 com o mesmo `delivery_id`, sem duplicar nem avisar de novo. Se a chamada falhar no meio (500 ou 503), reenvie o lote inteiro do mesmo jeito.",
           "",
-          `Cada entrega conta como uma requisição nos limites por minuto da chave e da empresa: um lote de ${MAX_BATCH_DELIVERIES} gasta ${MAX_BATCH_DELIVERIES}, e um lote que passa do que sobra do minuto é recusado inteiro com 429 e \`retry-after\`.`,
+          `Cada entrega conta como uma requisição nos limites por minuto da chave e da empresa: um lote de ${MAX_BATCH_DELIVERIES} gasta ${MAX_BATCH_DELIVERIES}, e um lote que passa do que sobra do minuto é recusado inteiro com 429 e \`retry-after\`, sem gastar as unidades das entregas: só a chamada conta, e as chamadas avulsas seguem com o que sobrou.`,
           "",
           CREATE_DELIVERIES_BATCH_REQUEST_EXAMPLE,
         ].join("\n"),

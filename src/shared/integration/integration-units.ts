@@ -13,9 +13,12 @@ import { integrationRateGuard } from "@/shared/integration/integration-rate-guar
  *
  * The route's own hooks already spent one unit of each (`perKeyCeiling`,
  * `limitBusinessApiRate` in integration-routes.ts); this spends the other
- * N - 1, once the body says how many, before any delivery is written. Both
- * counters are the ones those hooks use, so the batch and the single calls
- * share one budget:
+ * N - 1, once the body says how many, before any delivery is written, and
+ * only when both minutes still take them: a batch that does not fit is
+ * refused whole and spends nothing more than the call's own unit, so the
+ * key's single calls go on with what was left (spendWithinFixedWindows).
+ * Both counters are the ones those hooks use, so the batch and the single
+ * calls share one budget:
  *
  *  - the key's is the bucket @fastify/rate-limit keeps for the shared
  *    `app.rateLimit()` handler: its Redis key is the plugin's prefix, the
@@ -48,7 +51,8 @@ const COMPANY_REFUSAL_HIDDEN_HEADERS = [
 
 /**
  * Spends `extra` more units of the key's and the company's minute, or
- * refuses the call with 429 and the wait. Never throws for Redis.
+ * refuses the call with 429 and the wait, spending none of them. Never
+ * throws for Redis.
  */
 async function spendExtraUnits(
   request: FastifyRequest,
@@ -59,36 +63,37 @@ async function spendExtraUnits(
 
   if (!key || extra <= 0) return;
 
-  const perKey = await integrationRateGuard.spendUnits(
-    perKeyRateKey(key.prefix),
-    extra,
+  const max = key.rateLimitPerMinute;
+
+  const spent = await integrationRateGuard.spendBatchUnits({
+    keyWindow: perKeyRateKey(key.prefix),
+    keyMax: max,
+    businessId: key.businessId,
+    businessMax: BUSINESS_API_RATE_PER_MINUTE,
+    cost: extra,
+  });
+
+  if (!spent) return;
+
+  // The plugin wrote what one unit left; the batch spent more, or, when
+  // refused, nothing more: what is left is what the single calls get.
+  reply.header(
+    "x-ratelimit-remaining",
+    String(Math.max(0, max - spent.key.total)),
   );
 
-  if (perKey) {
-    const max = key.rateLimitPerMinute;
-    const resetSeconds = Math.max(1, Math.ceil(perKey.resetInMs / 1000));
-
-    // The plugin wrote what one unit left; the batch spent more.
+  if (spent.refused === "key") {
     reply.header(
-      "x-ratelimit-remaining",
-      String(Math.max(0, max - perKey.total)),
+      "retry-after",
+      String(Math.max(1, Math.ceil(spent.key.resetInMs / 1000))),
     );
 
-    if (perKey.total > max) {
-      reply.header("retry-after", String(resetSeconds));
-
-      throw rateLimitExceeded(
-        "O lote passou do limite por minuto desta chave: cada entrega do lote conta como uma requisição. Envie menos entregas ou tente novamente quando o minuto virar.",
-      );
-    }
+    throw rateLimitExceeded(
+      "O lote passou do limite por minuto desta chave: cada entrega do lote conta como uma requisição. Envie menos entregas ou tente novamente quando o minuto virar.",
+    );
   }
 
-  const company = await integrationRateGuard.spendBusiness(
-    key.businessId,
-    extra,
-  );
-
-  if (company && company.total > BUSINESS_API_RATE_PER_MINUTE) {
+  if (spent.refused === "company") {
     // As limitBusinessApiRate: the key's headers would invite more calls.
     for (const header of COMPANY_REFUSAL_HIDDEN_HEADERS) {
       reply.removeHeader(header);
@@ -96,7 +101,7 @@ async function spendExtraUnits(
 
     reply.header(
       "retry-after",
-      String(Math.max(1, Math.ceil(company.resetInMs / 1000))),
+      String(Math.max(1, Math.ceil(spent.company.resetInMs / 1000))),
     );
 
     throw rateLimitExceeded(

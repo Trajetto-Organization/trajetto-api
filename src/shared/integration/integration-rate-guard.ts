@@ -3,6 +3,8 @@ import type { Redis } from "ioredis";
 import {
   countInFixedWindow,
   spendInFixedWindow,
+  spendWithinFixedWindows,
+  type WindowSpend,
 } from "@/shared/services/fixed-window-counter";
 
 /**
@@ -51,19 +53,28 @@ interface IntegrationRateGuard {
     cost: number,
   ): Promise<{ total: number; resetInMs: number } | null>;
   /**
-   * Spends `cost` more units of a minute's counter (plano-escala U-04: a
-   * batch of N deliveries counts N calls): the total after it and when the
+   * Spends `cost` more units of the key's minute (`keyWindow`, the
+   * per-key limiter's own counter) and of the company's (`allowBusiness`'s)
+   * at once, only when both still fit (plano-escala U-04: a batch of N
+   * deliveries counts N calls). A batch either fit, and spent on both, or
+   * was refused, and spent nothing: `refused` names the first that did not
+   * fit, the key's before the company's. Each window comes back with its
+   * count (after the spend, or as it stands when refused) and when the
    * minute ends. Null when Redis did not answer: the caller fails open.
    */
-  spendUnits(
-    key: string,
-    cost: number,
-  ): Promise<{ total: number; resetInMs: number } | null>;
-  /** The same spend on the company's minute (`allowBusiness`'s counter). */
-  spendBusiness(
-    businessId: string,
-    cost: number,
-  ): Promise<{ total: number; resetInMs: number } | null>;
+  spendBatchUnits(input: {
+    keyWindow: string;
+    keyMax: number;
+    businessId: string;
+    businessMax: number;
+    cost: number;
+  }): Promise<BatchUnitsSpend | null>;
+}
+
+interface BatchUnitsSpend {
+  refused: "key" | "company" | null;
+  key: WindowSpend;
+  company: WindowSpend;
 }
 
 const authFailureKey = (address: string): string =>
@@ -106,22 +117,34 @@ function createIntegrationRateGuard(
       }
     },
 
-    async spendUnits(key, cost) {
+    async spendBatchUnits({
+      keyWindow,
+      keyMax,
+      businessId,
+      businessMax,
+      cost,
+    }) {
       try {
-        return await spendInFixedWindow(redis, key, WINDOW_SECONDS, cost);
-      } catch {
-        return null;
-      }
-    },
-
-    async spendBusiness(businessId, cost) {
-      try {
-        return await spendInFixedWindow(
+        const spent = await spendWithinFixedWindows(
           redis,
-          businessKey(businessId),
+          [
+            { key: keyWindow, max: keyMax },
+            { key: businessKey(businessId), max: businessMax },
+          ],
           WINDOW_SECONDS,
           cost,
         );
+
+        return {
+          refused:
+            spent.refusedIndex === 0
+              ? "key"
+              : spent.refusedIndex === 1
+                ? "company"
+                : null,
+          key: spent.windows[0],
+          company: spent.windows[1],
+        };
       } catch {
         return null;
       }
@@ -149,8 +172,7 @@ const unlimitedIntegrationRateGuard: IntegrationRateGuard = {
   recordAuthFailure: async () => undefined,
   allowBusiness: async () => true,
   spendPanelBudget: async () => null,
-  spendUnits: async () => null,
-  spendBusiness: async () => null,
+  spendBatchUnits: async () => null,
 };
 
 // Wired in http.ts with the rate-limit Redis connection.
@@ -168,5 +190,6 @@ export {
   createIntegrationRateGuard,
   integrationRateGuard,
   unlimitedIntegrationRateGuard,
+  type BatchUnitsSpend,
   type IntegrationRateGuard,
 };
