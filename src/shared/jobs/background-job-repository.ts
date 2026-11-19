@@ -53,6 +53,19 @@ const BACKGROUND_JOB_KINDS = [
 
 type BackgroundJobKind = (typeof BACKGROUND_JOB_KINDS)[number];
 
+/**
+ * The kinds that must finish once they start: a company's purge leaves it
+ * PURGING (no way back, by design) and a person's anonymization sets
+ * `anonymized_at` (asking again is refused), so a job given up halfway
+ * leaves the data half gone with no way to finish it. Past its attempts, a
+ * failure of these is retried every hour instead of failing for good
+ * (job-runner.ts), and the job-failing alert says so.
+ */
+const MUST_FINISH_JOB_KINDS: readonly BackgroundJobKind[] = [
+  "TENANT_OFFBOARD",
+  "USER_ANONYMIZE",
+];
+
 type BackgroundJobStatus =
   "PENDING" | "PROCESSING" | "SUCCEEDED" | "FAILED" | "CANCELLED";
 
@@ -206,12 +219,17 @@ interface IBackgroundJobRepository {
   /** SUCCEEDED; false when the lease was lost before. */
   complete(id: string, attempts: number): Promise<boolean>;
 
-  /** Back to PENDING after `delayMs`, the attempt spent. */
+  /**
+   * Back to PENDING after `delayMs`, the attempt spent. With `oneMore`, the
+   * job also gets one attempt more than it has spent (`maxAttempts` raised
+   * to `attempts + 1`): a job that must finish, past its attempts.
+   */
   retry(
     id: string,
     attempts: number,
     error: string,
     delayMs: number,
+    options?: { oneMore?: boolean },
   ): Promise<boolean>;
 
   /** FAILED for good. */
@@ -478,11 +496,16 @@ class BackgroundJobRepository implements IBackgroundJobRepository {
     attempts: number,
     error: string,
     delayMs: number,
+    options: { oneMore?: boolean } = {},
   ): Promise<boolean> {
+    const oneMore = options.oneMore === true;
     const updated = await this.prisma.$executeRaw`
       UPDATE "background_job"
       SET "status" = 'PENDING', "leaseExpiresAt" = NULL,
           "availableAt" = now() + make_interval(secs => ${Math.max(0, delayMs) / 1000}),
+          "maxAttempts" = CASE WHEN ${oneMore}
+            THEN GREATEST("maxAttempts", "attempts" + 1)
+            ELSE "maxAttempts" END,
           "lastError" = ${trimError(error)}, "updated_at" = now()
       WHERE "id" = ${id} AND "attempts" = ${attempts}
         AND "status" = 'PROCESSING'
@@ -581,6 +604,7 @@ export {
   LAST_ERROR_MAX_LENGTH,
   LEASE_RENEW_EVERY_MS,
   LEASE_SECONDS,
+  MUST_FINISH_JOB_KINDS,
   jobClaimSql,
   trimError,
 };

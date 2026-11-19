@@ -63,6 +63,16 @@ interface OperationalSnapshot {
    */
   jobEligibleLagSec?: number | null;
 
+  /**
+   * The durable jobs that must finish (MUST_FINISH_JOB_KINDS: a company's
+   * purge, a person's anonymization): `failing`, the live ones that spent
+   * their regular attempts and still fail (the runner retries them every
+   * hour); `failed`, the ones that failed for good in the last 24 h (a
+   * PermanentJobError, or a process that died in the last attempt).
+   * Absent when the collector did not read them, which judges nothing.
+   */
+  mustFinishJobs?: { failing: number; failed: number };
+
   /** Deliveries that gave up recently (the collector's window), newest first. */
   deliveryFailures: Array<{ channel: string; lastError: string | null }>;
 
@@ -530,6 +540,7 @@ const ALERT_KINDS = [
   "ai-provider-paused",
   "ai-credential",
   "job-overdue",
+  "job-failing",
   "cron-lease-expired",
   "cron-partial-stuck",
   "cron-overdue",
@@ -1083,6 +1094,17 @@ function collectAlerts(
       thresholds.jobOverdueSec,
     ),
   );
+
+  // A purge or an anonymization that keeps failing leaves the data half
+  // gone: nobody would know but the log.
+  const mustFinish = snapshot.mustFinishJobs;
+
+  if (mustFinish && (mustFinish.failing > 0 || mustFinish.failed > 0)) {
+    alerts.push({
+      code: "job-failing",
+      message: `Jobs que precisam terminar (exclusão de empresa, anonimização de pessoa): ${mustFinish.failing} seguem falhando depois das tentativas normais (voltam a cada hora, de onde pararam) e ${mustFinish.failed} falharam de vez nas últimas 24 h`,
+    });
+  }
 
   // Credentials first, and on the FIRST occurrence: every later send of the
   // channel fails the same way until somebody changes the secret.

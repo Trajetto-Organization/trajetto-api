@@ -219,11 +219,16 @@ class InMemoryBackgroundJobRepository implements IBackgroundJobRepository {
     attempts: number,
     error: string,
     delayMs: number,
+    options: { oneMore?: boolean } = {},
   ): Promise<boolean> {
     return this.settle(id, attempts, (job) => {
       job.status = "PENDING";
       job.availableAt = new Date(this.now().getTime() + Math.max(0, delayMs));
       job.lastError = trimError(error);
+
+      if (options.oneMore) {
+        job.maxAttempts = Math.max(job.maxAttempts, job.attempts + 1);
+      }
     });
   }
 

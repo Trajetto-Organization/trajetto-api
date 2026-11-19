@@ -10,6 +10,7 @@ import { selfReplica } from "@/shared/wake/wake-bus";
 import {
   BackgroundJobRepository,
   LEASE_RENEW_EVERY_MS,
+  MUST_FINISH_JOB_KINDS,
   type BackgroundJobKind,
   type ClaimedJob,
   type IBackgroundJobRepository,
@@ -49,7 +50,15 @@ const log = logger.child({ component: "jobs" });
  *    30 min, jittered) until `maxAttempts`, then FAILED, and the kind's
  *    `onFailed` closes its domain record (the upload's report). A
  *    PermanentJobError fails at once. A job claimed past its last attempt
- *    (its process died during it) fails without running again.
+ *    (its process died during it) fails without running again;
+ *  - a kind that must finish (MUST_FINISH_JOB_KINDS: a company's purge, a
+ *    person's anonymization) is never given up on a failure: past its
+ *    attempts it is retried every JOB_MUST_FINISH_RETRY_MS, from its
+ *    cursor, with one attempt more each time, until it ends. Failing for
+ *    good would leave the company PURGING or the person half anonymized,
+ *    with no way for anybody to finish it. A process that dies during that
+ *    attempt still fails it (a job that kills its process never loops),
+ *    and the job-failing alert pages for both.
  *
  * Slots: JOB_RUNNER_SLOTS jobs at once per process, one per company per
  * claim, and a kind may cap the jobs running per company across processes
@@ -66,6 +75,13 @@ const JOB_RETRY_DELAYS_MS = [
   10 * 60_000,
   30 * 60_000,
 ] as const;
+
+/**
+ * The pause between the attempts of a job that must finish, past its
+ * own: long enough for an outage of the bucket or the database to pass,
+ * short enough to finish the same day once it has. Jittered by ±20%.
+ */
+const JOB_MUST_FINISH_RETRY_MS = 60 * 60_000;
 
 /**
  * How long shutdown waits, at most, for the handlers to reach their next
@@ -468,6 +484,24 @@ class JobRunner {
         : jobRetryDelayMs(job.attempts, job.maxAttempts);
 
     try {
+      if (
+        delay === null &&
+        !(error instanceof PermanentJobError) &&
+        MUST_FINISH_JOB_KINDS.includes(job.kind)
+      ) {
+        const later = withRetryJitter(JOB_MUST_FINISH_RETRY_MS);
+
+        log.error(
+          { ...where, err: error, retryInMs: later },
+          "background job that must finish failed past its attempts; it will be retried",
+        );
+        await this.store.retry(job.id, job.attempts, errorText(error), later, {
+          oneMore: true,
+        });
+
+        return;
+      }
+
       if (delay !== null) {
         log.warn(
           { ...where, err: error, retryInMs: delay },
@@ -533,6 +567,7 @@ class JobRunner {
 }
 
 export {
+  JOB_MUST_FINISH_RETRY_MS,
   JOB_RETRY_DELAYS_MS,
   JOB_RUNNER_SLOTS,
   JOB_SHUTDOWN_WAIT_MS,

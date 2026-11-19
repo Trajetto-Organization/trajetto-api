@@ -134,6 +134,78 @@ describe("the operational snapshot", () => {
     expect(reasons.some((reason) => reason.includes("code=190"))).toBe(true);
   });
 
+  it("counts the jobs that must finish and keep failing, and pages job-failing", async () => {
+    const { collectOperationalSnapshot } =
+      await import("@/shared/health/operational-snapshot");
+    const { evaluateAlerts } = await import("@/shared/health/alert-rules");
+    const hour = 60 * 60 * 1000;
+    const job = (data: Record<string, unknown>) =>
+      prisma.backgroundJob.create({
+        data: {
+          businessId: BUSINESS,
+          subjectId: randomUUID(),
+          payload: {},
+          kind: "TENANT_OFFBOARD",
+          ...data,
+        } as never,
+      });
+
+    // Counted: a purge that failed for good an hour ago, and an
+    // anonymization past its five attempts, back in an hour.
+    await job({
+      status: "FAILED",
+      attempts: 6,
+      lastError: "Error: bucket unavailable",
+      finished_at: new Date(Date.now() - hour),
+    });
+    await job({
+      kind: "USER_ANONYMIZE",
+      status: "PENDING",
+      attempts: 5,
+      maxAttempts: 6,
+      lastError: "Error: lock timeout",
+      availableAt: new Date(Date.now() + hour),
+    });
+
+    // Not counted: a purge in its fifth (regular) attempt, one that failed
+    // two days ago, and an import that failed (its report says so).
+    await job({
+      status: "PROCESSING",
+      attempts: 5,
+      lastError: "Error: lock timeout",
+      leaseExpiresAt: new Date(Date.now() + 60_000),
+    });
+    await job({
+      status: "FAILED",
+      attempts: 5,
+      lastError: "Error: old",
+      finished_at: new Date(Date.now() - 48 * hour),
+    });
+    await job({
+      kind: "SPREADSHEET_IMPORT",
+      status: "FAILED",
+      attempts: 5,
+      lastError: "Error: bad file",
+      finished_at: new Date(),
+    });
+
+    try {
+      const snapshot = await collectOperationalSnapshot();
+
+      expect(snapshot.collectionErrors).toEqual([]);
+      expect(snapshot.mustFinishJobs).toEqual({ failing: 1, failed: 1 });
+      expect(
+        evaluateAlerts(snapshot).some((reason) =>
+          reason.includes("docs/runbooks/job-failing.md"),
+        ),
+      ).toBe(true);
+    } finally {
+      await prisma.backgroundJob.deleteMany({
+        where: { businessId: BUSINESS },
+      });
+    }
+  });
+
   it("stops paging for the outbox once the event is taken", async () => {
     await prisma.domainOutboxEvent.update({
       where: { id: outboxEventId },

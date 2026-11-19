@@ -191,6 +191,118 @@ describe("the job runner", () => {
     expect(onFailed).toHaveBeenCalledTimes(1);
   });
 
+  it("never gives up on a job that must finish: past its attempts it comes back each hour, from its cursor", async () => {
+    // A company's purge that failed for good stayed PURGING, half deleted,
+    // with no way for anybody to finish it.
+    const store = new InMemoryBackgroundJobRepository();
+    const runner = runnerOn(store);
+    const onFailed = vi.fn(async () => undefined);
+    const seen: unknown[] = [];
+    let bucketDown = true;
+
+    runner.register("TENANT_OFFBOARD", {
+      run: async (job) => {
+        seen.push(job.progress);
+
+        if (!bucketDown) return;
+
+        await job.checkpoint({ phase: "storage", page: 3 });
+        throw new Error("bucket unavailable");
+      },
+      onFailed,
+    });
+
+    const id = await enqueue(store, {
+      kind: "TENANT_OFFBOARD",
+      subjectId: "company-a",
+      maxAttempts: 1,
+    });
+
+    await runner.processBatch();
+
+    const first = statusOf(store, id);
+
+    expect(first).toMatchObject({
+      status: "PENDING",
+      attempts: 1,
+      maxAttempts: 2,
+      progress: { phase: "storage", page: 3 },
+    });
+    expect(first.lastError).toMatch(/bucket unavailable/);
+    // An hour ± 20%.
+    expect(first.availableAt.getTime() - Date.now()).toBeGreaterThan(
+      45 * 60_000,
+    );
+
+    // Still down an hour later: once more.
+    first.availableAt = new Date(Date.now() - 1);
+    await runner.processBatch();
+
+    expect(statusOf(store, id)).toMatchObject({
+      status: "PENDING",
+      attempts: 2,
+      maxAttempts: 3,
+    });
+
+    // The bucket is back: the purge ends, from its cursor.
+    bucketDown = false;
+    statusOf(store, id).availableAt = new Date(Date.now() - 1);
+    await runner.processBatch();
+
+    expect(statusOf(store, id)).toMatchObject({
+      status: "SUCCEEDED",
+      attempts: 3,
+    });
+    expect(seen).toEqual([
+      null,
+      { phase: "storage", page: 3 },
+      { phase: "storage", page: 3 },
+    ]);
+    expect(onFailed).not.toHaveBeenCalled();
+  });
+
+  it("still fails a job that must finish on a PermanentJobError, or when its process died in its last attempt", async () => {
+    const store = new InMemoryBackgroundJobRepository();
+    const runner = runnerOn(store);
+    const run = vi.fn(async () => {
+      throw new PermanentJobError("USER_ANONYMIZE sem sujeito ou empresa");
+    });
+
+    runner.register("USER_ANONYMIZE", { run });
+
+    const permanent = await enqueue(store, {
+      kind: "USER_ANONYMIZE",
+      subjectId: "user-1",
+    });
+
+    await runner.processBatch();
+
+    expect(statusOf(store, permanent)).toMatchObject({ status: "FAILED" });
+
+    // A job that kills its process never loops: dead in its last attempt,
+    // it fails without running.
+    const killer = await enqueue(store, {
+      kind: "USER_ANONYMIZE",
+      subjectId: "user-2",
+      maxAttempts: 1,
+    });
+
+    Object.assign(statusOf(store, killer), {
+      status: "PROCESSING",
+      attempts: 1,
+      leaseExpiresAt: new Date(Date.now() - 1_000),
+    });
+    run.mockClear();
+
+    await runner.processBatch();
+
+    expect(run).not.toHaveBeenCalled();
+    expect(statusOf(store, killer)).toMatchObject({
+      status: "FAILED",
+      attempts: 2,
+    });
+  });
+
   it("hands a job back at SIGTERM without spending the attempt, its cursor kept", async () => {
     const store = new InMemoryBackgroundJobRepository();
     const runner = runnerOn(store);

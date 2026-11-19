@@ -6,6 +6,10 @@ import { RedisConnection } from "@/../infra/cache/redis-connection";
 import { env } from "@/env";
 import { registeredPartitions } from "@/shared/database/partitions";
 import { GEOCODER_PROVIDER } from "@/shared/delivery/geocoding/geocoding-budget";
+import {
+  DEFAULT_MAX_ATTEMPTS,
+  MUST_FINISH_JOB_KINDS,
+} from "@/shared/jobs/background-job-repository";
 import { quotaDay } from "@/shared/services/provider-quota/provider-quota-repository";
 
 import { readWebhookQueueMetrics } from "@/shared/integration/webhook-metrics";
@@ -209,22 +213,42 @@ async function collectOperationalSnapshot(
 
   // The durable jobs (F3-22): the oldest due PENDING job, on the partial
   // background_job_due_idx ("availableAt") WHERE status IN ('PENDING',
-  // 'PROCESSING'), a range that stops at now().
-  const jobEligibleLagSec = await part(
+  // 'PROCESSING'), a range that stops at now(). In the same statement, the
+  // jobs that must finish and keep failing (job-failing): the live ones
+  // past their regular attempts (failed at the last one and back PENDING,
+  // or running one more), on the same partial index (the live jobs are the
+  // queue's depth), and the ones FAILED in the last 24 h, a range
+  // of background_job_status_finished_at_idx.
+  const jobs = await part(
     "background_job",
     errors,
     async () => {
-      const [row] = await database.$queryRaw<Array<{ lag: number | null }>>`
-        SELECT EXTRACT(EPOCH FROM (now() - MIN("availableAt")))::float AS lag
-        FROM "background_job"
-        WHERE "status" IN ('PENDING', 'PROCESSING')
-          AND "status" = 'PENDING' AND "availableAt" <= now()
+      const [row] = await database.$queryRaw<
+        Array<{ lag: number | null; failing: number; failed: number }>
+      >`
+        SELECT
+          (SELECT EXTRACT(EPOCH FROM (now() - MIN("availableAt")))::float
+           FROM "background_job"
+           WHERE "status" IN ('PENDING', 'PROCESSING')
+             AND "status" = 'PENDING' AND "availableAt" <= now()) AS "lag",
+          (SELECT count(*)::int FROM "background_job"
+           WHERE "status" IN ('PENDING', 'PROCESSING')
+             AND "kind"::text IN (${Prisma.join(MUST_FINISH_JOB_KINDS)})
+             AND "lastError" IS NOT NULL
+             AND ("attempts" > ${DEFAULT_MAX_ATTEMPTS}
+               OR ("status" = 'PENDING'
+                 AND "attempts" >= ${DEFAULT_MAX_ATTEMPTS}))) AS "failing",
+          (SELECT count(*)::int FROM "background_job"
+           WHERE "status" = 'FAILED'
+             AND "finished_at" > now() - interval '24 hours'
+             AND "kind"::text IN (${Prisma.join(MUST_FINISH_JOB_KINDS)})) AS "failed"
       `;
 
-      return row?.lag ?? null;
+      return row ?? null;
     },
     null,
   );
+  const jobEligibleLagSec = jobs?.lag ?? null;
 
   // Newest first, on the partial notification_delivery_failed_idx
   // ("updated_at", "channel") WHERE status = 'FAILED': a range on its
@@ -576,6 +600,9 @@ async function collectOperationalSnapshot(
     webhookDueLagSec,
     aiEligibleLagSec,
     jobEligibleLagSec,
+    ...(jobs && {
+      mustFinishJobs: { failing: jobs.failing, failed: jobs.failed },
+    }),
     deliveryFailures,
     aiCredentialFailures,
     aiProviderPausedRequests,

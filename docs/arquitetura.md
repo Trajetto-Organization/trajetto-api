@@ -3862,11 +3862,21 @@ worker numa frota separada) roda o `JobRunner`
 - a falha volta com espera (30 s, 2 min, 10 min, 30 min) até
   `maxAttempts`; depois, FAILED, e o tipo fecha o seu registro (o relatório
   da importação);
+- a exclusão de empresa (`TENANT_OFFBOARD`) e a anonimização
+  (`USER_ANONYMIZE`) precisam terminar (`MUST_FINISH_JOB_KINDS`): parar no
+  meio deixaria a empresa `PURGING` ou a pessoa com `anonymized_at`, com os
+  dados pela metade e sem caminho para terminar. Depois das tentativas
+  normais, a falha delas volta a cada hora, do cursor, com uma tentativa a
+  mais, até terminar. Só falham de vez num `PermanentJobError` ou quando o
+  processo morre durante a última tentativa (um job que derruba o processo
+  não fica derrubando a API a cada hora), e o alerta `job-failing` acusa os
+  dois casos;
 - quem enfileira com teto (`enqueueWithCap`) conta os jobs vivos do tipo na
   empresa e grava na mesma transação, sob
   `pg_advisory_xact_lock('job-cap:<tipo>:<empresa>')`, e acorda a fila depois
   do commit (o próprio runner e, pelo Redis, os outros processos);
-- o alerta `job-overdue` acusa um job PENDING vencido há mais de 10 min; o
+- o alerta `job-overdue` acusa um job PENDING vencido há mais de 10 min, e
+  o `job-failing`, um job que precisa terminar e segue falhando; o
   cron `cleanup-background-jobs` apaga os que terminaram (30 dias os que
   deram certo, 90 os que falharam).
 

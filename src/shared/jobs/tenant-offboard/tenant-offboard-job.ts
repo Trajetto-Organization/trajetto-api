@@ -74,6 +74,11 @@ const log = logger.child({ component: "jobs", kind: "TENANT_OFFBOARD" });
  *     list says the data is gone) — or removed, for the old "Deletar" of an
  *     empty company, which frees its CNPJ as it always did. A line in the
  *     platform's audit trail says when.
+ *
+ * Once PURGING there is no way back, so the job must finish: past its
+ * attempts, a failure (the bucket down, a lock that never comes) is
+ * retried every hour from the cursor instead of failing for good
+ * (MUST_FINISH_JOB_KINDS, job-runner.ts), and job-failing pages.
  */
 
 type OffboardPhase = "storage" | "rows" | "trail-archive" | "finish" | "done";

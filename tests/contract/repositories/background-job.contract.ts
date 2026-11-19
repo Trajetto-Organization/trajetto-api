@@ -281,6 +281,39 @@ function backgroundJobContract(harness: () => BackgroundJobHarness): void {
     expect(await repo.retry(id, job.attempts, "again", 0)).toBe(false);
   });
 
+  it("gives a job that must finish one attempt more when retried past its last", async () => {
+    const { repo } = harness();
+    const { job: queued } = await repo.enqueue({
+      kind: "SPREADSHEET_IMPORT",
+      businessId: A,
+      payload: {},
+      maxAttempts: 1,
+    });
+    const [job] = (await claim(1)).jobs;
+
+    expect(job.id).toBe(queued.id);
+    expect(
+      await repo.retry(queued.id, job.attempts, "r2 down", 0, {
+        oneMore: true,
+      }),
+    ).toBe(true);
+    expect(await repo.findById(queued.id)).toMatchObject({
+      status: "PENDING",
+      attempts: 1,
+      maxAttempts: 2,
+      lastError: "r2 down",
+    });
+
+    // A plain retry never moves the ceiling.
+    const [again] = (await claim(1)).jobs;
+
+    expect(await repo.retry(queued.id, again.attempts, "x", 0)).toBe(true);
+    expect(await repo.findById(queued.id)).toMatchObject({
+      attempts: 2,
+      maxAttempts: 2,
+    });
+  });
+
   it("cancels only a job still waiting, of that company", async () => {
     const { repo } = harness();
     const waiting = await enqueue(A, {

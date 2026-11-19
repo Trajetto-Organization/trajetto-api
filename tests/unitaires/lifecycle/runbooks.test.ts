@@ -96,6 +96,8 @@ function everyRuleBroken(): OperationalSnapshot[] {
       webhookDueLagSec: T.webhookLagSec + 1,
       aiEligibleLagSec: T.aiLagSec + 1,
       jobEligibleLagSec: T.jobOverdueSec + 1,
+      // A company's purge still failing past its attempts (F3-26a).
+      mustFinishJobs: { failing: 1, failed: 0 },
       deliveryFailures: [
         { channel: "WHATSAPP", lastError: "[whatsapp http=401 code=190] x" },
         ...Array.from({ length: T.terminalFailuresPerChannel }, () => ({

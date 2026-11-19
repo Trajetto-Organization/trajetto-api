@@ -18,4 +18,4 @@ O motivo some no próximo minuto do `ops-heartbeat`, e o job passa a PROCESSING 
 
 ## Quando escalar
 
-Job parado por mais de uma hora com o worker vivo, ou o mesmo job voltando a FAILED com o mesmo `lastError`: chame o dono.
+Job parado por mais de uma hora com o worker vivo, ou o mesmo job voltando a FAILED com o mesmo `lastError`: chame o dono. A exclusão de empresa e a anonimização que falham têm o alerta próprio, [job-failing](./job-failing.md).
