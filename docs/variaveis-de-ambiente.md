@@ -210,6 +210,22 @@ Exemplo de host: `trajetto-postgres-production` (staging:
 no pool do `pg` (Prisma 7 com `@prisma/adapter-pg`), está em
 [`arquitetura.md`](./arquitetura.md#conexão-com-o-postgres).
 
+**Pelo PgBouncer** (onda 17; plano de escala, F4-31). A URL do runtime que
+passa pelo `trajetto-pgbouncer` (porta 6432, com `pgbouncer=true`) não leva
+`options`: os tetos vêm do `ALTER ROLE` do login. O boot recusa uma URL
+pelo PgBouncer com qualquer coisa no `options` além do `TimeZone`, e
+também com `max_connection_lifetime` 0 ou acima de 60 (sem ele, cada
+conexão vive 60 s). Vale para a `DATABASE_URL` e a `DATABASE_READ_URL`. O
+formato, trocando só o usuário, a senha, o host e o `connection_limit`:
+
+```
+DATABASE_URL=postgresql://<USUÁRIO>:<SENHA>@<APP NAME DO PGBOUNCER>:6432/<BANCO>?schema=public&connection_limit=6&pool_timeout=5&connect_timeout=5&socket_timeout=60&pgbouncer=true
+```
+
+A `BATCH_DATABASE_URL` e a URL da `trajetto-api-migrate` continuam
+diretas no Postgres, sempre (a
+[seção do PgBouncer em `deploy.md`](./deploy.md#pgbouncer-a-imagem-trajetto-pgbouncer-onda-17)).
+
 **O usuário de cada URL** (plano de escala, X-15). Até o corte dos roles, o
 `<USUÁRIO>` de todas é o do Database, superusuário e dono das tabelas.
 Depois, cada URL do runtime usa o login do seu papel, criado pela etapa de

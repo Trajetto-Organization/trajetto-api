@@ -5,8 +5,10 @@ import {
   createPool,
 } from "@/shared/database/pg-driver";
 import {
+  POOLED_MAX_CONNECTION_LIFETIME_SECONDS,
   PRISMA_ONLY_PARAMETERS,
   poolSettingsFrom,
+  pooledUrlProblem,
   runtimeApplicationName,
 } from "@/shared/database/pool-config";
 import { processRoleFromEnvironment } from "@/shared/lifecycle/process-role";
@@ -389,5 +391,213 @@ describe("the runtime pools' application_name", () => {
 
     expect(settings.applicationName).toBeUndefined();
     expect(settings.connectionString).not.toContain("application_name");
+  });
+});
+
+/**
+ * A URL through PgBouncer (plano-escala F4-31): port 6432 or
+ * pgbouncer=true. In transaction mode a setting either travels with every
+ * client (PgBouncer tracks TimeZone) or belongs to the login (the runtime
+ * roles carry the ceilings by ALTER ROLE): PgBouncer refuses a connection
+ * whose options carry anything else, so such a URL would fail every query
+ * of the process. And SIGTERM on PgBouncer waits for its clients to leave
+ * within the 90 s Stop Grace Period, so its connections are recycled every
+ * minute instead of the five of the idle lifetime.
+ */
+describe("a URL through PgBouncer (pooled)", () => {
+  const POOLED =
+    "postgresql://trajetto_http:secret@pgbouncer.example.com:6432/trajetto?schema=public&connection_limit=6&pool_timeout=5&connect_timeout=5&socket_timeout=60&pgbouncer=true";
+
+  const withOptions = (base: string, options: string) =>
+    `${base}&options=${encodeURIComponent(options)}`;
+
+  it("carries TimeZone alone in its options, and no ceiling of a side pool", () => {
+    const main = poolSettingsFrom(POOLED);
+    const read = poolSettingsFrom(POOLED, { statementTimeoutMs: 10_000 });
+
+    expect(new URL(main.connectionString).searchParams.get("options")).toBe(
+      "-c TimeZone=UTC",
+    );
+    expect(new URL(read.connectionString).searchParams.get("options")).toBe(
+      "-c TimeZone=UTC",
+    );
+    // The login's ceiling is the server's; the client's wait stays the URL's.
+    expect(read.queryTimeoutMs).toBe(60_000);
+    expect(
+      poolSettingsFrom(POOLED, { statementTimeoutMs: 30 * 60_000 })
+        .queryTimeoutMs,
+    ).toBe(60_000);
+  });
+
+  it("is pooled by its port alone, or by pgbouncer=true on another port", () => {
+    const byPort = poolSettingsFrom(POOLED.replace("&pgbouncer=true", ""), {
+      statementTimeoutMs: 10_000,
+    });
+    const byFlag = poolSettingsFrom(POOLED.replace(":6432", ":5433"), {
+      statementTimeoutMs: 10_000,
+    });
+
+    for (const settings of [byPort, byFlag]) {
+      expect(
+        new URL(settings.connectionString).searchParams.get("options"),
+      ).toBe("-c TimeZone=UTC");
+      expect(settings.maxLifetimeSeconds).toBe(60);
+    }
+  });
+
+  it("retires its connections after 60 s, or sooner when the URL says so", () => {
+    expect(POOLED_MAX_CONNECTION_LIFETIME_SECONDS).toBe(60);
+    expect(poolSettingsFrom(POOLED).maxLifetimeSeconds).toBe(60);
+    expect(
+      poolSettingsFrom(`${POOLED}&max_connection_lifetime=30`)
+        .maxLifetimeSeconds,
+    ).toBe(30);
+  });
+
+  it("keeps a TimeZone the URL sets, and the rest of the pool settings", () => {
+    const settings = poolSettingsFrom(
+      withOptions(POOLED, "-c TimeZone=America/Sao_Paulo"),
+    );
+    const url = new URL(settings.connectionString);
+
+    expect(url.searchParams.get("options")).toBe(
+      "-c TimeZone=America/Sao_Paulo",
+    );
+    expect(url.searchParams.has("pgbouncer")).toBe(false);
+    expect(settings.max).toBe(6);
+    expect(settings.poolTimeoutMs).toBe(5_000);
+  });
+
+  it("passes the pool's application_name as a startup parameter, never in options", () => {
+    const settings = poolSettingsFrom(POOLED);
+
+    expect(settings.connectionString).not.toContain("application_name");
+    expect(
+      new URL(settings.connectionString).searchParams.get("options"),
+    ).not.toMatch(/application_name/i);
+  });
+
+  it.each([
+    "-c statement_timeout=30000",
+    "-c TimeZone=UTC -c lock_timeout=5000",
+    "-c idle_in_transaction_session_timeout=60000",
+    "--statement_timeout=30000",
+    "-cstatement_timeout=30000",
+    "-c search_path=public",
+    "-B 100",
+  ])("is refused with options %j", (options) => {
+    const url = withOptions(POOLED, options);
+
+    expect(pooledUrlProblem(url)).toMatch(/só o TimeZone/);
+    expect(() => poolSettingsFrom(url)).toThrow(/só o TimeZone/);
+  });
+
+  it("names what to take out of the options", () => {
+    expect(
+      pooledUrlProblem(
+        withOptions(
+          POOLED,
+          "-c statement_timeout=30000 -c lock_timeout=5000 -c TimeZone=UTC",
+        ),
+      ),
+    ).toMatch(/Tire do options: statement_timeout, lock_timeout$/);
+  });
+
+  it.each(["0", "61", "300", "soon"])(
+    "is refused with max_connection_lifetime=%s",
+    (value) => {
+      const url = `${POOLED}&max_connection_lifetime=${value}`;
+
+      expect(pooledUrlProblem(url)).toMatch(/max_connection_lifetime/);
+      expect(() => poolSettingsFrom(url)).toThrow(/max_connection_lifetime/);
+    },
+  );
+
+  it("changes nothing for a direct URL, ceilings in options included", () => {
+    const direct = productionDatabaseUrl("DATABASE_URL").toString();
+
+    expect(pooledUrlProblem(direct)).toBeNull();
+    expect(poolSettingsFrom(direct).maxLifetimeSeconds).toBe(0);
+    expect(
+      new URL(
+        poolSettingsFrom(direct, { statementTimeoutMs: 10_000 })
+          .connectionString,
+      ).searchParams.get("options"),
+    ).toMatch(/ -c statement_timeout=10000$/);
+  });
+
+  it("takes an empty options", () => {
+    expect(pooledUrlProblem(`${POOLED}&options=`)).toBeNull();
+    expect(pooledUrlProblem(withOptions(POOLED, " "))).toBeNull();
+  });
+});
+
+/**
+ * The boot refuses a pooled URL that PgBouncer would refuse (F4-31): a
+ * process that booted with one would fail every query instead, after the
+ * rolling had already taken the old task away.
+ */
+describe("the runtime URLs through PgBouncer in the environment", () => {
+  const BASE = {
+    NODE_ENV: "development",
+    REDIS_URL: "redis://localhost:6379",
+    HTTP_REQUEST: "http://localhost:3000",
+    JWT_SECRET: "a".repeat(32),
+    JWT_SECRET_REFRESH_TOKEN: "b".repeat(32),
+    MASTER_USER_EMAIL: "master@example.com",
+    MASTER_USER_INITIAL_PASSWORD: "x",
+  };
+  const POOLED =
+    "postgresql://trajetto_http:secret@pgbouncer.example.com:6432/trajetto?schema=public&connection_limit=6&pgbouncer=true";
+  const CEILINGS = `options=${encodeURIComponent("-c statement_timeout=30000 -c lock_timeout=5000")}`;
+
+  const parse = (overrides: Record<string, string>) =>
+    envSchema.safeParse(definedEnv({ ...BASE, ...overrides }));
+
+  const messagesOf = (overrides: Record<string, string>) => {
+    const parsed = parse(overrides);
+
+    return parsed.success
+      ? []
+      : parsed.error.issues.map(
+          (issue) => `${issue.path.join(".")}: ${issue.message}`,
+        );
+  };
+
+  it("take a pooled URL with no options, or TimeZone alone", () => {
+    expect(parse({ DATABASE_URL: POOLED }).success).toBe(true);
+    expect(
+      parse({
+        DATABASE_URL: `${POOLED}&options=${encodeURIComponent("-c TimeZone=UTC")}`,
+        DATABASE_READ_URL: POOLED,
+      }).success,
+    ).toBe(true);
+  });
+
+  it("refuse DATABASE_URL and DATABASE_READ_URL through PgBouncer with ceilings in options", () => {
+    expect(messagesOf({ DATABASE_URL: `${POOLED}&${CEILINGS}` })).toEqual([
+      expect.stringMatching(/^DATABASE_URL: .*só o TimeZone/),
+    ]);
+    expect(messagesOf({ DATABASE_READ_URL: `${POOLED}&${CEILINGS}` })).toEqual([
+      expect.stringMatching(/^DATABASE_READ_URL: .*só o TimeZone/),
+    ]);
+  });
+
+  it("refuse a pooled URL whose connections would outlive a rolling of PgBouncer", () => {
+    expect(
+      messagesOf({ DATABASE_URL: `${POOLED}&max_connection_lifetime=0` }),
+    ).toEqual([
+      expect.stringMatching(/^DATABASE_URL: max_connection_lifetime/),
+    ]);
+  });
+
+  it("leave the direct URLs of today as they are, ceilings included", () => {
+    expect(
+      parse({
+        DATABASE_URL: productionDatabaseUrl("DATABASE_URL").toString(),
+        DATABASE_READ_URL: productionDatabaseUrl("DATABASE_URL").toString(),
+      }).success,
+    ).toBe(true);
+    expect(parse({ DATABASE_URL: "" }).success).toBe(true);
   });
 });

@@ -4816,6 +4816,34 @@ explícita:
 | `options`                      | `statement_timeout=30s`, `lock_timeout=5s`, `idle_in_transaction_session_timeout=60s` | enviado na conexão, + `TimeZone=UTC` | tetos do lado do servidor; e a sessão sempre em UTC, que o pool acrescenta no fim (sem `options` na URL, vai só ele), a menos que a própria URL defina `TimeZone` (parágrafo abaixo)                                                                                                            |
 | `schema`                       | `public`                                                                              | opção `schema` do adapter            | o schema das queries                                                                                                                                                                                                                                                                            |
 
+**Uma URL pelo PgBouncer** (porta 6432 ou `pgbouncer=true`; plano de
+escala, F4-31) muda três coisas no pool. Em modo transaction, cada
+transação cai na conexão de servidor que estiver livre, então uma
+configuração ou viaja com cada cliente (o PgBouncer faz isso com as poucas
+que ele rastreia, como `TimeZone` e `application_name`) ou é do login. Os
+tetos são do login: cada role do runtime leva o seu `statement_timeout`,
+`lock_timeout` e `idle_in_transaction_session_timeout` por `ALTER ROLE`
+(`infra/sql/20-runtime-roles.sql`).
+
+- O `options` leva só o `TimeZone`. Com qualquer outra coisa ali, o
+  PgBouncer recusa a conexão ("unsupported startup parameter in options"),
+  e o processo falharia todas as queries. Por isso o boot recusa a
+  `DATABASE_URL` ou a `DATABASE_READ_URL` assim, dizendo o que tirar. O
+  teto próprio de um pool de lado (os 10 s do `databaseRead`) também não é
+  acrescentado: vem do login (`trajetto_read` tem 10 s). Um pool de lado
+  que cai numa `DATABASE_URL` pelo PgBouncer roda com o teto do login
+  dela.
+- Cada conexão vive no máximo 60 s (`max_connection_lifetime`; a URL pode
+  pedir menos, e o boot recusa 0 ou mais de 60). O SIGTERM do PgBouncer
+  espera os clientes saírem, e o Swarm o mata no Stop Grace Period de 90 s.
+  Com as conexões trocadas a cada minuto, a tarefa antiga de um rolling
+  fica sem cliente antes disso, e a próxima conexão abre na nova. É também
+  como um retarget (failover) ou uma segunda réplica do PgBouncer chegam a
+  todos os processos em um minuto.
+- O `application_name` do pool (`trajetto-<papel>`, F3-02) continua indo
+  como parâmetro de abertura. O PgBouncer o aplica na conexão de servidor
+  de cada transação do cliente.
+
 O `keepAlive` do TCP fica ligado (com o tempo do sistema), como no driver do
 Prisma 6. Provas: `tests/unitaires/database/pool-config.test.ts` (o mapeamento
 com a URL de produção do `.env.example`),

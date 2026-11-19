@@ -9,6 +9,7 @@ import {
   missingArchiveSettings,
 } from "@/shared/archive/archive-settings";
 import { throughPgBouncer } from "@/shared/database/pgbouncer-url";
+import { pooledUrlProblem } from "@/shared/database/pool-config";
 import { isValidCnpj } from "@/shared/delivery/cnpj";
 import {
   GEOCODING_BACKGROUND_CALLS_PER_MINUTE_DEFAULT,
@@ -77,6 +78,13 @@ function isPostgresUrl(value: string): boolean {
 
 const POSTGRES_URL_MESSAGE =
   "precisa ser uma URL postgresql:// (o mesmo formato da DATABASE_URL)";
+
+/** A URL through PgBouncer that PgBouncer would refuse (pool-config.ts). */
+function refusePooledUrlProblem(value: string, ctx: z.RefinementCtx): void {
+  const problem = pooledUrlProblem(value);
+
+  if (problem) ctx.addIssue({ code: z.ZodIssueCode.custom, message: problem });
+}
 
 /** A provider's global concurrency cap (F3-15a): 0 to 256, 0 = none. */
 function providerGlobalConcurrency() {
@@ -179,7 +187,24 @@ const envSchema = z
     // refuses the boot.
     DATABASE_READ_URL: z.preprocess(
       (value) => (value === "" ? undefined : value),
-      z.string().refine(isPostgresUrl, POSTGRES_URL_MESSAGE).optional(),
+      z
+        .string()
+        .refine(isPostgresUrl, POSTGRES_URL_MESSAGE)
+        .superRefine(refusePooledUrlProblem)
+        .optional(),
+    ),
+
+    // The runtime's main URL: read by the pools of infra/database.ts at
+    // connect time, checked here only for what PgBouncer would refuse
+    // (plano-escala F4-31). Through PgBouncer (port 6432 or pgbouncer=true)
+    // its `options` carry TimeZone alone, the ceilings coming from the
+    // login's ALTER ROLE, and its connections live 60 s at most: booted
+    // with ceilings in `options`, the process would fail every query, after
+    // the rolling took the old task away. A direct URL is not checked, so
+    // the deploys of today boot as they do. Empty counts as absent.
+    DATABASE_URL: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.string().superRefine(refusePooledUrlProblem).optional(),
     ),
     BATCH_DATABASE_URL: z.preprocess(
       (value) => (value === "" ? undefined : value),
