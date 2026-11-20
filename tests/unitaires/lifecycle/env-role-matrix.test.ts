@@ -451,3 +451,19 @@ describe("the spreadsheet reads on the trajetto-worker (F3-23b)", () => {
     }
   });
 });
+
+/**
+ * The same key in the matrix: the trajetto-ingest emits the position, so a
+ * `cópia` there ("the role may not even read it") would send the owner's
+ * way back of U-03 to the trajetto-api alone.
+ */
+describe("the positions' room flag in the matrix (U-03)", () => {
+  it("is not a copy on the trajetto-ingest", () => {
+    expect(
+      cellOf("SOCKET_POSITIONS_ON_OPERATIONS_ROOM", "`trajetto-ingest`"),
+    ).toBe("igual à api");
+    expect(
+      cellOf("SOCKET_POSITIONS_ON_OPERATIONS_ROOM", "`trajetto-api`"),
+    ).toBe("valor");
+  });
+});
