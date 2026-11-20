@@ -4412,6 +4412,17 @@ próprio Database PostgreSQL no Dokploy**, gravado no Cloudflare R2. O antigo
 serviço `trajetto-backup` (imagem própria, `pg_dump` cifrado com age, heartbeat
 de 1 dia) saiu do código e do pipeline; nada no repositório agenda backup.
 
+**Fonte das cópias diárias**: `dokploy`
+
+A linha acima diz de onde vem a cópia diária que a política de privacidade
+e os termos prometem ("diárias, guardadas por 30 dias"), e o teste
+`legal-facts` da web confere o prazo nela: `dokploy` é o backup desta
+seção (o _Keep_ e a agenda abaixo); `pgbackrest` é o PITR da
+[seção 27](#27-pitr-com-pgbackrest), com o prazo de
+`infra/postgres/pgbackrest.conf`. Ela só muda na troca do dump (plano de
+escala, decisão D9 e item U-09), pelo runbook
+[troca-do-dump](./runbooks/troca-do-dump.md).
+
 |                   |                                                                                                                                                                |
 | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Quando**        | uma cópia por dia, às 03:00 UTC (antes do primeiro job que apaga dados, 03:17 UTC)                                                                             |
@@ -4481,6 +4492,25 @@ Notifications**, cadastre um canal (Telegram, Slack, Discord ou e-mail) com o
 evento de **backup de Database** marcado: o Dokploy avisa quando um backup
 falha. Um backup que simplesmente deixou de rodar não avisa: confira de tempos
 em tempos a data da cópia mais nova no bucket.
+
+### A troca pelo pgBackRest (preparada, não feita)
+
+O dump continua todo dia, em paralelo ao pgBackRest da seção 27, que já
+faz uma cópia por dia (o diferencial de domingo a sexta e o completo no
+sábado) com o WAL do PITR. A troca desliga o dump e deixa o pgBackRest
+como a cópia diária, com 30 dias: o texto da política continua verdadeiro
+e muda só a técnica. Ela só acontece num gatilho medido, com o aval do
+dono para o texto:
+
+- o dump leva mais de 30 min;
+- o `n_dead_tup` das filas sobe durante o dump (ele segura o `xmin`, e o
+  autovacuum não limpa as filas enquanto ele roda);
+- o portão de 1 milhão de entregas por mês do plano de escala.
+
+O passo a passo (a retenção do pgBackRest que mantém os 30 dias, a linha
+**Fonte das cópias diárias** acima, o _Enabled_ do backup desligado, a
+regra de ciclo de vida do R2 para as cópias que ficaram, e a volta) está
+no runbook [troca-do-dump](./runbooks/troca-do-dump.md).
 
 ### Restaurar a partir do R2
 

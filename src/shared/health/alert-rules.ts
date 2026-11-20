@@ -643,6 +643,7 @@ const OPERATION_RUNBOOKS = [
   "drills",
   "swarm-multi-no",
   "roteamento-por-path",
+  "troca-do-dump",
 ] as const;
 
 /** One reason to wake the operation: its code and its pt-BR message. */
