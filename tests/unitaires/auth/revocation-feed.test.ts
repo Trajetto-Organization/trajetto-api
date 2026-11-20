@@ -19,6 +19,9 @@ import {
  *  - a hole past its grace is a gap: every listener fails closed, and a
  *    late commit is still handed out;
  *  - a burst bigger than a read is a gap;
+ *  - where the cursor jumps to the newest id (the first read, a burst),
+ *    an id below it not committed yet is watched, and handed out when it
+ *    commits;
  *  - the nudge reads at once and sends one hint per burst; another
  *    process's hint makes this one read, its own does not;
  *  - a log that cannot be read keeps the cursor, and `fresh()` says so;
@@ -50,8 +53,16 @@ function fakeLog() {
       rows.push({ id: BigInt(id), kind, subject_id: subject });
     },
     deps: {
-      head: async () =>
-        rows.reduce((top, row) => (row.id > top ? row.id : top), 0n),
+      tail: async (span: number) => {
+        const head = rows.reduce(
+          (top, row) => (row.id > top ? row.id : top),
+          0n,
+        );
+
+        return rows
+          .filter((row) => row.id > head - BigInt(span))
+          .map((row) => row.id);
+      },
       read: async (cursor: bigint, watch: bigint[], limit: number) => {
         reads += 1;
 
@@ -208,6 +219,59 @@ describe("the poll", () => {
     expect(seen.gaps).toEqual(["backlog"]);
     expect(seen.handed).toEqual([]);
     expect(feed.state().cursor).toBe(8n);
+  });
+
+  it("watches an id below the newest at the first read, and hands it out when it commits", async () => {
+    vi.useFakeTimers();
+
+    const log = fakeLog();
+
+    // 2 took its id first and commits after 3, which is the newest when
+    // the feed starts.
+    log.commit(1);
+    log.commit(3);
+
+    const feed = createRevocationFeed({ ...log.deps, pollMs: 1_000 });
+    const seen = recorder();
+
+    feed.listen(seen.listener);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(seen.handed).toEqual([]);
+    expect(feed.state()).toMatchObject({ cursor: 3n, late: 1 });
+
+    log.commit(2, "user", "u-late");
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(seen.handed).toEqual([["user", "u-late"]]);
+    expect(feed.state()).toMatchObject({ late: 0 });
+    expect(seen.gaps).toEqual([]);
+  });
+
+  it("watches an id below the newest after a burst, and hands it out when it commits", async () => {
+    vi.useFakeTimers();
+
+    const log = fakeLog();
+    const feed = createRevocationFeed({ ...log.deps, pollMs: 1_000, limit: 5 });
+    const seen = recorder();
+
+    feed.listen(seen.listener);
+    await vi.advanceTimersByTimeAsync(0);
+
+    // A purge of seven rows, and a revocation that took 8 and commits
+    // after 9.
+    for (let id = 1; id <= 7; id += 1) log.commit(id);
+    log.commit(9);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(seen.gaps).toEqual(["backlog"]);
+    expect(feed.state()).toMatchObject({ cursor: 9n, late: 1 });
+
+    log.commit(8, "refresh_family", "f-late");
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(seen.handed).toEqual([["refresh_family", "f-late"]]);
   });
 
   it("keeps its cursor while the log cannot be read, and is not fresh", async () => {

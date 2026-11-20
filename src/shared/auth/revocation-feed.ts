@@ -45,6 +45,11 @@ const log = logger.child({ component: "revocation-feed" });
  *    handed out when it shows. More than 1.000 rows in one read (a company
  *    purged) is a gap too: the listeners re-check everything, cheaper than
  *    a thousand subjects one by one;
+ *  - where the cursor jumps to the newest id instead of walking to it (the
+ *    first read, and after such a burst), the ids of the last 256 below it
+ *    that are not committed yet are watched the same 5 minutes: the
+ *    newest and the ids present come from one statement, so an id absent
+ *    there was not committed when the cursor passed it;
  *  - a process that cannot read the log keeps its cursor and reads it all
  *    when the database answers. `fresh()` says whether the last read is
  *    recent enough to trust a cached session on it.
@@ -59,6 +64,8 @@ const GAP_GRACE_MS = 10_000;
 const LATE_WATCH_MS = 5 * 60_000;
 const LATE_WATCH_MAX = 1_000;
 const HINT_DEBOUNCE_MS = 20;
+/** Ids below the newest watched when the cursor jumps to it. */
+const JUMP_WATCH = 256;
 
 interface RevocationEntry {
   id: bigint;
@@ -81,8 +88,11 @@ interface LogRow {
 }
 
 interface RevocationFeedDeps {
-  /** The newest id now (0 for an empty log). */
-  head: () => Promise<bigint>;
+  /**
+   * The ids committed among the newest `span` ids (the newest one, the
+   * head, included), in one snapshot; empty for an empty log.
+   */
+  tail: (span: number) => Promise<bigint[]>;
   /** Rows with id > cursor, or among `watch`, by id, at most `limit`. */
   read: (cursor: bigint, watch: bigint[], limit: number) => Promise<LogRow[]>;
   /** The hint to the other processes. */
@@ -164,8 +174,30 @@ function createRevocationFeed(deps: RevocationFeedDeps) {
     }
   };
 
+  /**
+   * The newest id, for a cursor that jumps there. Ids below it that were
+   * not committed in the same snapshot may be a transaction still open:
+   * watched like a hole given up, and handed out if they show.
+   */
+  const jump = async (): Promise<bigint> => {
+    const ids = (await deps.tail(JUMP_WATCH)).map((id) => BigInt(id));
+    const head = ids.reduce((a, b) => (b > a ? b : a), 0n);
+    const present = new Set(ids);
+    const until = now() + LATE_WATCH_MS;
+
+    for (
+      let id = head - BigInt(JUMP_WATCH) + 1n;
+      id < head && late.size < LATE_WATCH_MAX;
+      id += 1n
+    ) {
+      if (id > 0n && !present.has(id)) late.set(id, until);
+    }
+
+    return head;
+  };
+
   const readOnce = async (): Promise<void> => {
-    if (cursor === null) cursor = await deps.head();
+    if (cursor === null) cursor = await jump();
 
     // Read and moved locally, written back once: a single read runs at a
     // time (poll), so nothing else moves it meanwhile.
@@ -186,10 +218,10 @@ function createRevocationFeed(deps: RevocationFeedDeps) {
 
     if (rows.length >= limit) {
       // A burst bigger than a read: everything again, from the newest.
-      cursor = await deps.head();
       handed.clear();
       holes.clear();
       late.clear();
+      cursor = await jump();
       gap("backlog");
       return;
     }
@@ -398,16 +430,20 @@ function revocationChannel(key: string = env.SOCKET_ADAPTER_KEY): string {
  */
 function revocationLogReader(
   client: Pick<typeof database, "$queryRaw"> = database,
-): Pick<RevocationFeedDeps, "head" | "read"> {
+): Pick<RevocationFeedDeps, "tail" | "read"> {
   return {
-    head: async () => {
-      const [row] = await client.$queryRaw<Array<{ head: bigint }>>`
-        SELECT coalesce(max("id"), 0)::bigint AS "head"
-        FROM "session_revocation_log"
-      `;
-
-      return BigInt(row?.head ?? 0);
-    },
+    // One statement, one snapshot: the head and the ids below it agree.
+    tail: async (span) =>
+      (
+        await client.$queryRaw<Array<{ id: bigint }>>`
+          SELECT "id"
+          FROM "session_revocation_log"
+          WHERE "id" > (
+            SELECT coalesce(max("id"), 0) FROM "session_revocation_log"
+          ) - ${span}::bigint
+          ORDER BY "id"
+        `
+      ).map((row) => BigInt(row.id)),
     read: (cursor, watch, limit) =>
       client.$queryRaw<LogRow[]>`
         SELECT "id", "kind", "subject_id"

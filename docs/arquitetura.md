@@ -4201,7 +4201,12 @@ commit não é a ordem dos ids: o cursor para antes de um buraco e espera a
 linha dele; um buraco aberto por mais de 10 s (um insert desfeito ou uma
 transação longa) chama o `gap` de quem escuta, que falha fechado (relê tudo),
 e o id fica vigiado por 5 minutos para um commit atrasado. Mais de 1.000
-linhas numa leitura (uma empresa expurgada) também é `gap`. Um processo que
+linhas numa leitura (uma empresa expurgada) também é `gap`. Onde o cursor
+salta para o id mais novo em vez de andar até ele (a primeira leitura e
+depois de um `gap` desses), os ids dos 256 abaixo dele que ainda não
+commitaram ficam vigiados pelos mesmos 5 minutos: o mais novo e os presentes
+vêm de uma consulta só, então um id ausente ali não tinha commitado quando o
+cursor passou por ele. Um processo que
 não consegue ler o log guarda o cursor e lê tudo quando o banco volta;
 `fresh()` diz se a última leitura é recente o bastante para confiar num
 cache. `REVOCATION_FEED_POLL_MS=0` desliga o feed. Provas: os unitários
