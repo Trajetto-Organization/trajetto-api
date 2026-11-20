@@ -329,6 +329,7 @@ src/shared/health/database-metrics.ts
 src/shared/health/feed-txid.ts
 src/shared/health/heartbeat-client.ts
 src/shared/health/http-metrics.ts
+src/shared/health/index-usage.ts
 src/shared/health/metrics-math.ts
 src/shared/health/metrics-queries.ts
 src/shared/health/operational-metrics.ts
