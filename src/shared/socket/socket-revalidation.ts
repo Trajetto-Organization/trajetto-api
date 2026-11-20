@@ -3,6 +3,7 @@ import type { PrismaClient } from "@prisma/client";
 import type { Driver } from "@/modules/driver/dtos/driver-dto";
 import type { User } from "@/modules/user/dtos/user-dto";
 import { assertSessionEligible } from "@/modules/user/services/session-eligibility";
+import type { SessionRevocationKind } from "@/shared/auth/session-revocation";
 import { AppError } from "@/shared/errors/AppError";
 
 import { mayReadDeliveries } from "./operations-access";
@@ -362,6 +363,130 @@ async function sweepConnections<S extends SweptSocket>(
 }
 
 /**
+ * Whose sockets the revocation feed asked to re-read (plano-escala F5-24),
+ * waiting for the next pass. A user, a family, a company and a driver are
+ * recorded on the socket. A profile and a branch are not: the pass asks
+ * the primary which users hold them (`usersOf` in takeRevokedSockets), so
+ * a routine edit of a profile, or a branch switched on, re-reads only the
+ * sockets it concerns, not every socket of the replica.
+ */
+interface RevokedSubjects {
+  users: Set<string>;
+  sessions: Set<string>;
+  businesses: Set<string>;
+  drivers: Set<string>;
+  profiles: Set<string>;
+  branches: Set<string>;
+  /** A gap: every socket. */
+  everything: boolean;
+}
+
+function createRevokedSubjects(): RevokedSubjects {
+  return {
+    users: new Set(),
+    sessions: new Set(),
+    businesses: new Set(),
+    drivers: new Set(),
+    profiles: new Set(),
+    branches: new Set(),
+    everything: false,
+  };
+}
+
+const SET_OF_KIND: Readonly<
+  Record<SessionRevocationKind, Exclude<keyof RevokedSubjects, "everything">>
+> = {
+  user: "users",
+  refresh_family: "sessions",
+  business: "businesses",
+  driver: "drivers",
+  profile: "profiles",
+  branch: "branches",
+};
+
+/** One row of the feed; a kind this build does not know re-reads all. */
+function noteRevocation(
+  subjects: RevokedSubjects,
+  kind: string,
+  subjectId: string,
+): void {
+  const set = SET_OF_KIND[kind as SessionRevocationKind];
+
+  if (set) subjects[set].add(subjectId);
+  else subjects.everything = true;
+}
+
+function hasRevokedSubjects(subjects: RevokedSubjects): boolean {
+  return (
+    subjects.everything ||
+    subjects.users.size +
+      subjects.sessions.size +
+      subjects.businesses.size +
+      subjects.drivers.size +
+      subjects.profiles.size +
+      subjects.branches.size >
+      0
+  );
+}
+
+/**
+ * The sockets to re-read now, and the subjects cleared for the next pass.
+ * `usersOf` answers, from the primary, the users of these profiles and the
+ * logins of the drivers of these branches; asked only when there are any,
+ * and when it fails every socket is re-read (fail closed, as before).
+ */
+async function takeRevokedSockets<S extends SweptSocket>(
+  sockets: S[],
+  subjects: RevokedSubjects,
+  usersOf: (profiles: string[], branches: string[]) => Promise<Set<string>>,
+): Promise<S[]> {
+  const users = new Set(subjects.users);
+  const sessions = new Set(subjects.sessions);
+  const businesses = new Set(subjects.businesses);
+  const drivers = new Set(subjects.drivers);
+  const profiles = [...subjects.profiles];
+  const branches = [...subjects.branches];
+  let everything = subjects.everything;
+
+  for (const set of [
+    subjects.users,
+    subjects.sessions,
+    subjects.businesses,
+    subjects.drivers,
+    subjects.profiles,
+    subjects.branches,
+  ]) {
+    set.clear();
+  }
+
+  subjects.everything = false;
+
+  if (everything) return sockets;
+
+  if (profiles.length + branches.length > 0) {
+    try {
+      for (const userId of await usersOf(profiles, branches)) {
+        users.add(userId);
+      }
+    } catch {
+      everything = true;
+    }
+  }
+
+  if (everything) return sockets;
+
+  return sockets.filter(
+    (socket) =>
+      users.has(String(socket.data.userId)) ||
+      sessions.has(String(socket.data.sessionId)) ||
+      (Boolean(socket.data.businessId) &&
+        businesses.has(String(socket.data.businessId))) ||
+      (Boolean(socket.data.driverId) &&
+        drivers.has(String(socket.data.driverId))),
+  );
+}
+
+/**
  * ±25% around the configured interval.
  *
  * Every replica boots at the same moment in a deploy; without jitter they
@@ -372,6 +497,10 @@ function jitteredInterval(baseMs: number, random: () => number = Math.random) {
 }
 
 export {
+  createRevokedSubjects,
+  hasRevokedSubjects,
+  noteRevocation,
+  takeRevokedSockets,
   judgeConnection,
   judgeFromRows,
   jitteredInterval,
@@ -381,6 +510,7 @@ export {
   REASON_BY_ELIGIBILITY_CODE,
 };
 export type {
+  RevokedSubjects,
   SocketSubject,
   SocketVerdict,
   SubjectRows,

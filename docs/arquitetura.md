@@ -4217,7 +4217,11 @@ até 2 s, pelo app em menos de 100 ms).
 **Sockets derrubados pelo feed** (F5-24, `src/websocket.ts`): toda réplica
 com sockets escuta o feed. Cada linha marca os sockets locais do sujeito
 (usuário, família, empresa ou motorista; filial e perfil, que nenhum socket
-guarda, marcam todos), e 300 ms depois a réplica os relê no primário com a
+guarda, viram no primário os usuários do perfil e os logins dos motoristas
+da filial, numa consulta por indexados, e só os sockets deles são relidos:
+uma edição de rotina num perfil sem ninguém ou uma filial ativada não relê
+a réplica inteira; se essa consulta falha, relê todos), e 300 ms depois a
+réplica os relê no primário com a
 regra e as ações da varredura periódica: encerra com o motivo de sempre, ou
 mantém e ajusta as salas. Os 300 ms existem pela troca da própria senha:
 a sessão que a fez continua (`adoptSessionVersion`), e a versão nova chega

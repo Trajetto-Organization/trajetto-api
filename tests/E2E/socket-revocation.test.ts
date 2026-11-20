@@ -41,7 +41,9 @@ import { createPrismaClient } from "@/shared/database/database-client";
  *    the database: the frame finds no room, because the socket joins its
  *    rooms only after the handshake ends.
  *  - A revocation written only by SQL, on a replica that never sweeps but
- *    reads the revocation feed (plano-escala F5-24): ended within 2 s.
+ *    reads the revocation feed (plano-escala F5-24): ended within 2 s;
+ *    a profile's permission removed by SQL alone takes its user out of
+ *    the dispatch rooms, by the users the primary says hold the profile.
  *
  * Every other replica here runs with the feed off (REVOCATION_FEED_POLL_MS
  * =0), so each case still proves the mechanism it names and not the feed.
@@ -64,6 +66,7 @@ const MID_HANDSHAKE_UNTOUCHED = "018fde00-0000-7000-8000-0000000000ab";
 const FEED_BUMPED = "018fde00-0000-7000-8000-0000000000ac";
 const FEED_FAMILY = "018fde00-0000-7000-8000-0000000000ad";
 const FEED_UNTOUCHED = "018fde00-0000-7000-8000-0000000000ae";
+const FEED_PROFILE = "018fde00-0000-7000-8000-0000000000af";
 
 const USERS = [
   RESUBSCRIBER,
@@ -80,6 +83,7 @@ const USERS = [
   FEED_BUMPED,
   FEED_FAMILY,
   FEED_UNTOUCHED,
+  FEED_PROFILE,
 ];
 
 /** The sweeping replica's interval; the others effectively never sweep. */
@@ -818,4 +822,25 @@ describe("a revocation written only by SQL, on a replica with the feed", () => {
     expect(await untouchedEnd).toBeNull();
     expect(untouchedSocket.connected).toBe(true);
   }, 90_000);
+
+  it("takes a profile's user out of the dispatch rooms, by SQL alone", async () => {
+    const { token } = await sessionFor(FEED_PROFILE, "BUSINESS_USER", CARRIER);
+    const socket = await connectTo(feeding.port, token);
+
+    await feeding.waitForRoom(socket.id, operationsRoom(CARRIER), true);
+
+    const committedAt = Date.now();
+
+    // A permission row of the profile: the log names the profile, never
+    // the user, so the replica asks the primary who holds it.
+    await revokeProfile(profiles[FEED_PROFILE]);
+
+    await feeding.waitForRoom(socket.id, operationsRoom(CARRIER), false);
+    expect(Date.now() - committedAt, "a revogação demorou").toBeLessThanOrEqual(
+      2_500,
+    );
+
+    // Authorization changed, authentication did not: the connection stays.
+    expect(socket.connected).toBe(true);
+  }, 60_000);
 });

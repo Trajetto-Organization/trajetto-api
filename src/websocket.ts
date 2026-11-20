@@ -112,11 +112,15 @@ import {
   closePubSub,
 } from "@/shared/redis/pubsub-redis";
 import {
+  createRevokedSubjects,
+  hasRevokedSubjects,
   jitteredInterval,
   judgeConnection,
   loadSubjectRows,
+  noteRevocation,
   subjectOf,
   sweepConnections,
+  takeRevokedSockets,
   type SocketSubject,
   type SocketVerdict,
   type SweepResult,
@@ -703,43 +707,38 @@ function stopRevalidation(): void {
 const REVOCATION_SETTLE_MS = 300;
 
 /** Whose sockets the feed asked to re-read, waiting for the next pass. */
-const revokedSubjects = {
-  users: new Set<string>(),
-  sessions: new Set<string>(),
-  businesses: new Set<string>(),
-  drivers: new Set<string>(),
-  /** A branch or a profile: no socket records it, so all of them. */
-  everything: false,
-};
+const revokedSubjects = createRevokedSubjects();
 
 let stopRevocationListener: (() => void) | null = null;
 let revocationTimer: NodeJS.Timeout | null = null;
 let revocationPass: Promise<void> | null = null;
 
-function takeRevokedSockets(): Socket[] {
-  if (!io) return [];
+/**
+ * The users a profile or a branch of the feed concerns, from the primary
+ * (a replica could still lack the change): the users of the profiles and
+ * the logins of the drivers of the branches. Both columns are indexed.
+ */
+async function usersOfRevokedCatalog(
+  profiles: string[],
+  branches: string[],
+): Promise<Set<string>> {
+  return withoutRequestContext(async () => {
+    const or = [
+      ...(profiles.length > 0 ? [{ profileAccessId: { in: profiles } }] : []),
+      ...(branches.length > 0
+        ? [{ driver: { is: { branchId: { in: branches } } } }]
+        : []),
+    ];
 
-  const sockets = [...io.of("/").sockets.values()];
-  const { users, sessions, businesses, drivers, everything } = revokedSubjects;
+    if (or.length === 0) return new Set<string>();
 
-  const chosen = everything
-    ? sockets
-    : sockets.filter(
-        (socket) =>
-          users.has(String(socket.data.userId)) ||
-          sessions.has(String(socket.data.sessionId)) ||
-          (socket.data.businessId &&
-            businesses.has(String(socket.data.businessId))) ||
-          (socket.data.driverId && drivers.has(String(socket.data.driverId))),
-      );
+    const users = await database.user.findMany({
+      where: { OR: or },
+      select: { id: true },
+    });
 
-  users.clear();
-  sessions.clear();
-  businesses.clear();
-  drivers.clear();
-  revokedSubjects.everything = false;
-
-  return chosen;
+    return new Set(users.map((user) => user.id));
+  });
 }
 
 /**
@@ -755,15 +754,24 @@ function scheduleRevocationPass(): void {
     setTimeout(() => {
       revocationTimer = null;
 
-      const sockets = takeRevokedSockets();
+      revocationPass = takeRevokedSockets(
+        io ? [...io.of("/").sockets.values()] : [],
+        revokedSubjects,
+        usersOfRevokedCatalog,
+      )
+        .then((sockets) =>
+          sockets.length === 0
+            ? null
+            : sweepConnections(sockets, loadSessionRows, {
+                end: endLocalSocket,
+                keep: applyDeliveryStaff,
+              }).then((result) => ({ result, sockets })),
+        )
+        .then((outcome) => {
+          if (!outcome) return;
 
-      if (sockets.length === 0) return;
+          const { result, sockets } = outcome;
 
-      revocationPass = sweepConnections(sockets, loadSessionRows, {
-        end: endLocalSocket,
-        keep: applyDeliveryStaff,
-      })
-        .then((result) => {
           if (result.skipped) {
             log.error(
               { sockets: sockets.length },
@@ -782,15 +790,7 @@ function scheduleRevocationPass(): void {
         .finally(() => {
           revocationPass = null;
 
-          const { users, sessions, businesses, drivers, everything } =
-            revokedSubjects;
-
-          if (
-            everything ||
-            users.size + sessions.size + businesses.size + drivers.size > 0
-          ) {
-            scheduleRevocationPass();
-          }
+          if (hasRevokedSubjects(revokedSubjects)) scheduleRevocationPass();
         });
     }, REVOCATION_SETTLE_MS),
   );
@@ -813,16 +813,7 @@ function listenToRevocations(): void {
   stopRevocationListener = revocationFeed().listen({
     revoked: (entries) => {
       for (const entry of entries) {
-        if (entry.kind === "user") revokedSubjects.users.add(entry.subjectId);
-        else if (entry.kind === "refresh_family") {
-          revokedSubjects.sessions.add(entry.subjectId);
-        } else if (entry.kind === "business") {
-          revokedSubjects.businesses.add(entry.subjectId);
-        } else if (entry.kind === "driver") {
-          revokedSubjects.drivers.add(entry.subjectId);
-        } else {
-          revokedSubjects.everything = true;
-        }
+        noteRevocation(revokedSubjects, entry.kind, entry.subjectId);
       }
 
       scheduleRevocationPass();
