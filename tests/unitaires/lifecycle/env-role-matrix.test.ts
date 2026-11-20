@@ -393,3 +393,61 @@ describe("the way back of the positions' contraction (U-03)", () => {
     }
   });
 });
+
+/** The matrix row that places `name`. */
+function keyRow(name: string): string[] {
+  const row = keys.rows.find((cells) => namesIn(cells[0]).includes(name));
+
+  expect(row, name).toBeDefined();
+
+  return row!;
+}
+
+const cellOf = (name: string, application: string) =>
+  keyRow(name)[keys.header.indexOf(application)];
+
+/**
+ * With IMPORT_DURABLE_JOBS on, the trajetto-worker is the process that reads
+ * the uploaded spreadsheets (plano-escala, wave 14). Its reads must run in a
+ * thread with a heap ceiling of its own, `1` read with 128 MB in staging and
+ * 320 MB in production: with `0` the worker reads on its main thread, and an
+ * oversized workbook that should end one thread with a 413 kills the whole
+ * worker (outbox, webhooks, AI, jobs) instead, again after every restart.
+ */
+describe("the spreadsheet reads on the trajetto-worker (F3-23b)", () => {
+  it("gives the worker one read once the import is durable", () => {
+    const worker = cellOf("SPREADSHEET_READS_PER_PROCESS", "`trajetto-worker`");
+
+    expect(worker).not.toBe("`0`");
+    expect(worker).toMatch(/importação durável/);
+    expect(worker).toContain("`1`");
+  });
+
+  it("gives the worker's read thread its own ceiling, as deploy.md does", () => {
+    const worker = cellOf("SPREADSHEET_WORKER_MAX_OLD_MB", "`trajetto-worker`");
+
+    expect(worker).toContain("`128`");
+    expect(worker).toContain("`320`");
+    expect(deploy).toMatch(
+      /`SPREADSHEET_READS_PER_PROCESS=1` e\s+`SPREADSHEET_WORKER_MAX_OLD_MB=320`/,
+    );
+  });
+
+  it("says the same in section 1, staging and production", () => {
+    const section = doc.replace(matrix, "");
+
+    for (const name of [
+      "SPREADSHEET_READS_PER_PROCESS",
+      "SPREADSHEET_WORKER_MAX_OLD_MB",
+    ]) {
+      const line = section
+        .split("\n")
+        .find((text) => text.startsWith(`| \`${name}\``));
+
+      expect(line, name).toBeTruthy();
+      expect(line, name).toMatch(
+        /`trajetto-worker`[^|]*importação durável|importação durável[^|]*`trajetto-worker`/,
+      );
+    }
+  });
+});
