@@ -367,3 +367,29 @@ describe("the GitHub secrets and variables by environment", () => {
     expect([...listed.keys()].filter((name) => !reads.has(name))).toEqual([]);
   });
 });
+
+/**
+ * The way back of a contraction branch (docs/deploy.md, "As branches das
+ * contrações") goes on every Application whose process reads the variable.
+ * SOCKET_POSITIONS_ON_OPERATIONS_ROOM counts in the process that answers
+ * POST /route/positions, the one that emits the position: the trajetto-api
+ * and, with the /route/positions Domain, the trajetto-ingest. A way back
+ * typed on the trajetto-api alone left the points that arrive through the
+ * ingest out of the operations room, half undone with no warning.
+ */
+describe("the way back of the positions' contraction (U-03)", () => {
+  const branchRow = (branch: string) =>
+    deploy
+      .split("\n")
+      .find((line) => line.startsWith(`| \`escala/contract-${branch}\``));
+
+  it("names the trajetto-ingest beside the trajetto-api, in both steps", () => {
+    for (const branch of ["U-03", "U-03-remove"]) {
+      const row = branchRow(branch);
+
+      expect(row, branch).toBeTruthy();
+      expect(row, branch).toContain("`trajetto-api`");
+      expect(row, branch).toContain("`trajetto-ingest`");
+    }
+  });
+});
