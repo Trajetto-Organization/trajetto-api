@@ -366,8 +366,15 @@ BEGIN
           FOR EACH STATEMENT
           EXECUTE FUNCTION "trajetto_delivery_event_writer_bound"('240');
 
-        COMMENT ON TABLE "delivery_event_legacy" IS
-          'trajetto:window-legacy delivery_event de antes da janela do histórico (plano-escala F2-17); fica 14 dias, a volta é prisma/post-deploy/rollback/unpartition-delivery-event.sql';
+        -- The instant of the window, on the table it leaves behind: the
+        -- contraction of F2-20 drops it 14 days after it, and the release
+        -- step's own row of this file is overwritten by the next run.
+        EXECUTE format(
+          'COMMENT ON TABLE "delivery_event_legacy" IS %L',
+          'trajetto:window-legacy at='
+            || to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+            || ' delivery_event de antes da janela do histórico (plano-escala F2-17); fica 14 dias, a volta é prisma/post-deploy/rollback/unpartition-delivery-event.sql'
+        );
 
         done_at := clock_timestamp();
         outcome := 'swapped';

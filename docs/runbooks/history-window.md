@@ -12,7 +12,7 @@ A cópia é o passo `prisma/post-deploy/30-delivery-event-window.sql` da etapa d
 2. recupera em `delivery_event_submission` as chaves de envio que a imagem anterior gravou só na coluna;
 3. copia toda linha para a casca com o `txid` como está (NULL continua NULL): um integrador com cursor v2 não recebe nada repetido nem perde nada;
 4. confere as contagens;
-5. troca os nomes: a tabela de antes vira `delivery_event_legacy` (fica 14 dias, sai na onda 20), a casca vira `delivery_event`, os meses viram `delivery_event_AAAAMM` e a partição de tudo que veio antes do primeiro mês vira `delivery_event_older`.
+5. troca os nomes: a tabela de antes vira `delivery_event_legacy` (fica 14 dias, sai na onda 20), a casca vira `delivery_event`, os meses viram `delivery_event_AAAAMM` e a partição de tudo que veio antes do primeiro mês vira `delivery_event_older`. O instante da janela fica no comentário da tabela de antes (`trajetto:window-legacy at=<instante UTC>`): é por ele que a contração da onda 20 (F2-20) conta os 14 dias, porque a linha do passo em `release_step_state` é regravada pela release seguinte.
 
 O registro de atividades (`activity`, F2-18) vai na mesma janela, pelo passo seguinte, `prisma/post-deploy/31-activity-window.sql`, com a mesma aprovação e a mesma capability: as escritas da `activity` param enquanto toda linha é copiada para a casca `activity_part`, e todo id de antes da troca para uuid v7 (09/2025, um uuid v4 aleatório) ganha um v7 do próprio `created_at`, o mesmo em toda rodada (a função `trajetto_activity_rekey`). A tabela de antes vira `activity_legacy`, com os ids antigos, por 14 dias; a partição de antes do primeiro mês vira `activity_older`. A linha do tempo aberta numa aba antes da janela recomeça do topo sozinha (o cabeçalho `x-trajetto-data-version` passa de `1` a `2`).
 
@@ -104,6 +104,13 @@ WHERE step IN ('prisma/post-deploy/30-delivery-event-window.sql', 'prisma/post-d
 
 SELECT (SELECT count(*) FROM activity_legacy) AS antes,
        (SELECT count(*) FROM activity WHERE id !~ '^[0-9a-f]{8}-[0-9a-f]{4}-7') AS fora_do_v7;
+```
+
+O instante de cada janela, de onde a contração conta os 14 dias:
+
+```sql
+SELECT relname, obj_description(oid, 'pg_class') FROM pg_class
+WHERE relname IN ('delivery_event_legacy', 'activity_legacy');
 ```
 
 `delivery_event` com `relkind` `p`, `delivery_event_legacy` com `r`, nenhuma `delivery_event_part`; as duas contagens iguais (a segunda pode passar da primeira só pelas linhas gravadas depois, com id menor que o último copiado, o que é raro); o `detail` de cada passo com a pausa; na `activity`, nenhum id fora do v7. As partições:

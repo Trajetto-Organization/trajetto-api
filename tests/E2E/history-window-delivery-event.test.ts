@@ -218,6 +218,19 @@ describe("inside the interval", () => {
     expect(await kind("delivery_event_legacy")).toBe("r");
     expect(await kind("delivery_event_part")).toBeNull();
 
+    // When the window ran, on the table it leaves behind: the contraction
+    // of F2-20 drops it only 14 days after this instant, and the release
+    // step's own row of the step is overwritten by the next run.
+    const [comment] = await rows<{ text: string }>(
+      `SELECT obj_description(to_regclass('delivery_event_legacy'), 'pg_class') AS text`,
+    );
+    const stamped = /^trajetto:window-legacy at=(\S+) /.exec(comment.text);
+
+    expect(stamped, comment.text).not.toBeNull();
+    expect(Math.abs(Date.parse(stamped![1]) - Date.now())).toBeLessThan(
+      10 * 60_000,
+    );
+
     // Every row, each with the txid it had: NULL is still NULL.
     expect(await trail("delivery_event")).toEqual(before);
     expect(await trail("delivery_event_legacy")).toEqual(before);

@@ -329,8 +329,13 @@ BEGIN
           );
         END LOOP;
 
-        COMMENT ON TABLE "activity_legacy" IS
-          'trajetto:window-legacy activity de antes da janela do histórico (plano-escala F2-18), com os ids de antes; fica 14 dias, trajetto_activity_rekey(id, created_at) dá o id novo, e a volta é prisma/post-deploy/rollback/unpartition-activity.sql';
+        -- The instant of the window, as in 30-delivery-event-window.sql.
+        EXECUTE format(
+          'COMMENT ON TABLE "activity_legacy" IS %L',
+          'trajetto:window-legacy at='
+            || to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+            || ' activity de antes da janela do histórico (plano-escala F2-18), com os ids de antes; fica 14 dias, trajetto_activity_rekey(id, created_at) dá o id novo, e a volta é prisma/post-deploy/rollback/unpartition-activity.sql'
+        );
 
         done_at := clock_timestamp();
         outcome := 'swapped';

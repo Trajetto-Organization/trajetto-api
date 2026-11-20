@@ -306,6 +306,19 @@ describe("inside it", () => {
     expect(await kind("activity_legacy")).toBe("r");
     expect(await kind("activity_part")).toBeNull();
 
+    // When the window ran, on the table it leaves behind: the contraction
+    // of F2-20 drops it only 14 days after this instant, and the release
+    // step's own row of the step is overwritten by the next run.
+    const [comment] = await rows<{ text: string }>(
+      `SELECT obj_description(to_regclass('activity_legacy'), 'pg_class') AS text`,
+    );
+    const stamped = /^trajetto:window-legacy at=(\S+) /.exec(comment.text);
+
+    expect(stamped, comment.text).not.toBeNull();
+    expect(Math.abs(Date.parse(stamped![1]) - Date.now())).toBeLessThan(
+      10 * 60_000,
+    );
+
     const after = await rows<{
       id: string;
       description: string;
