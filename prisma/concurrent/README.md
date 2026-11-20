@@ -82,6 +82,36 @@ Sem `DO $$`, sem `ON ONLY`, sem schema no nome. Um subcomando por
 recusado. DDL com pré-condição (uma troca de tabela, um `OWNER TO`) vai em
 `prisma/post-deploy`, depois das migrations.
 
+## Um índice que sai
+
+Um índice que ninguém lê custa toda escrita da tabela. O `index_usage` do
+`/health/metrics` (bloco `database`, plano de escala F2-23) lista cada
+índice das tabelas quentes com as leituras e a última leitura, e marca em
+`unused` o candidato: nem chave primária nem unique, e sem leitura há 30
+dias. O corte é uma contração, por índice:
+
+1. Na produção, com pelo menos 30 dias de `pg_stat_statements` e sem
+   zerar as estatísticas no meio, anote do `index_usage` o índice
+   (`scans`, `last_scan_at`, `stats_reset_at`) em dois dias a 30 dias um
+   do outro. O `scans` igual nas duas e o `last_scan_at` mais velho que a
+   primeira (ou vazio) é o registro.
+2. Confira no código que nada o pede: um `@@index` do `schema.prisma`
+   que uma consulta usa num plano fixado (`tests/E2E/query-plans.test.ts`
+   e os registros de índices), ou um `@@unique` de um `upsert` (estes
+   nunca são candidatos).
+3. Uma branch própria, como as contrações da onda 20
+   ([as branches das contrações](../../docs/deploy.md#as-branches-das-contrações)):
+   um arquivo aqui com
+   `DROP INDEX CONCURRENTLY IF EXISTS <nome>;`, a migration que tira o
+   mesmo índice só num banco sem empresa (o bloco `DO $$` de
+   `20261118110000_drop_route_stop_status_delivery_idx`, com
+   `-- contract-phase:`), o `@@index` fora do `schema.prisma` e as duas
+   leituras no corpo do commit. Um índice por release: se o plano de
+   alguma consulta piorar, a volta é um índice só.
+4. Depois do push, confira no `index_usage` que ele saiu e, no
+   `pg_stat_statements`, que nenhuma consulta das tabelas dele ficou mais
+   lenta.
+
 ## Como roda
 
 - Cada espera de lock tem `lock_timeout` (`PREBUILD_LOCK_TIMEOUT_MS`, 3 s) e

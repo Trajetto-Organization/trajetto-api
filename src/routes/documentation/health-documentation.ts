@@ -310,6 +310,58 @@ const databaseMetricsShape = {
     .describe(
       "Tamanho do banco e das tabelas quentes (com índices e TOAST, partições somadas).",
     ),
+  index_usage: z
+    .object({
+      stats_reset_at: z
+        .string()
+        .nullable()
+        .describe(
+          "Quando as estatísticas deste banco foram zeradas pela última vez (pg_stat_database.stats_reset); null se nunca foram.",
+        ),
+      window_days: nullableNumber().describe(
+        "Dias inteiros que os contadores cobrem; null quando não se sabe (nunca zerados).",
+      ),
+      indexes: z.array(
+        z.object({
+          table: z.string().describe("A tabela quente, pela raiz da partição."),
+          index: z
+            .string()
+            .describe(
+              "O índice, pelo nome do índice do pai numa particionada.",
+            ),
+          scans: z
+            .number()
+            .describe(
+              "Leituras pelo índice desde o último zeramento, somadas nas partições.",
+            ),
+          last_scan_at: z
+            .string()
+            .nullable()
+            .describe(
+              "A última leitura pelo índice (Postgres 16, last_idx_scan); null se nunca, ou num servidor mais antigo.",
+            ),
+          bytes: z.number().describe("Tamanho do índice, partições somadas."),
+          primary: z.boolean(),
+          unique: z.boolean(),
+          unused: z
+            .boolean()
+            .describe(
+              "Candidato a sair: nem chave primária nem unique, e sem leitura há 30 dias (a última leitura mais velha que isso, ou nenhuma numa janela de 30 dias ou mais).",
+            ),
+        }),
+      ),
+      unused: z
+        .array(z.string())
+        .describe("Os nomes dos candidatos, para uma olhada."),
+      measured_at: z
+        .string()
+        .describe("Quando foi lido: a cópia vale 15 min em cada réplica."),
+    })
+    .nullable()
+    .optional()
+    .describe(
+      "O uso de cada índice das tabelas quentes (plano de escala F2-23). Um índice sem leitura custa toda escrita da tabela; o candidato só sai à mão, um por release, com duas leituras deste bloco a 30 dias uma da outra no commit (prisma/concurrent/README.md). Null quando a leitura falhou.",
+    ),
   sampled_at: z
     .string()
     .nullable()
@@ -320,7 +372,7 @@ const databaseMetricsShape = {
   collection_errors: z
     .array(
       z.object({
-        part: z.enum(["core", "pg_wal", "sizes"]),
+        part: z.enum(["core", "pg_wal", "sizes", "index_usage"]),
         code: z
           .string()
           .nullable()

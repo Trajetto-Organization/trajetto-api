@@ -179,9 +179,10 @@ async function collectOperationalMetrics() {
   // fails is a collection error.
   // After the cut of the database roles this login may not read the other
   // sessions nor pg_wal: those parts come from the cron's newest cluster
-  // sample (F3-18), one more statement only then.
+  // sample (F3-18), one more statement only then. The index usage report
+  // (F2-23) rides along from its own 15-minute copy.
   const databaseMetrics = await withClusterSample(
-    await collectDatabaseMetrics(),
+    await collectDatabaseMetrics({ indexUsage: "cached" }),
   );
 
   // PgBouncer's consoles (plano-escala F4-36): never read from here, only

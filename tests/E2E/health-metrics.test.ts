@@ -6,6 +6,7 @@ import pg from "pg";
 
 import { sign } from "jsonwebtoken";
 import auth from "@/config/auth";
+import { resetIndexUsageCache } from "@/shared/health/database-metrics";
 import { resetOperationalMetricsCache } from "@/shared/health/operational-metrics";
 import { createPrismaClient } from "@/shared/database/database-client";
 import { v7 as uuidV7 } from "uuid";
@@ -491,6 +492,67 @@ describe("the database's own numbers", () => {
       pg_wal_bytes: env.PG_WAL_ALERT_GIB * 1024 ** 3,
       pitr_expected: env.PITR_EXPECTED,
     });
+  });
+
+  /**
+   * The index usage report (plano-escala F2-23), on the real catalog: each
+   * index of a hot table once, by the parent's name for a partitioned one,
+   * the primary keys marked so they are never candidates, and the last
+   * scan Postgres 16 keeps. A scan through an index moves its counter.
+   */
+  it("report each hot table's indexes once, with their scans and last scan", async () => {
+    resetOperationalMetricsCache();
+    resetIndexUsageCache();
+
+    // One read down the trail's primary key, so its counter moves: the
+    // planner kept off a sequential scan of the small partitions, and the
+    // backend's statistics flushed when the transaction ends.
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe("SET LOCAL enable_seqscan = off");
+      await tx.$queryRawUnsafe(
+        `SELECT 1 FROM "driver_position_v2" WHERE "driverId" = $1::uuid AND "recorded_at" > now() - interval '1 day'`,
+        randomUUID(),
+      );
+      await tx.$executeRawUnsafe("SELECT pg_stat_force_next_flush()");
+    });
+
+    const { database } = (await metrics(masterToken)).json();
+    const usage = database.index_usage;
+
+    expect(usage).not.toBeNull();
+    expect(database.collection_errors).toEqual([]);
+
+    const names = usage.indexes.map(
+      (entry: { table: string; index: string }) =>
+        `${entry.table}.${entry.index}`,
+    );
+
+    // Once each, and never a daily partition's own index.
+    expect(new Set(names).size).toBe(names.length);
+    expect(
+      usage.indexes.filter((entry: { index: string }) =>
+        /_\d{8}_/.test(entry.index),
+      ),
+    ).toEqual([]);
+
+    const trailKey = usage.indexes.find(
+      (entry: { index: string }) => entry.index === "driver_position_v2_pkey",
+    );
+
+    expect(trailKey).toMatchObject({
+      table: "driver_position_v2",
+      primary: true,
+      unique: true,
+      unused: false,
+    });
+    expect(trailKey.scans).toBeGreaterThanOrEqual(1);
+    expect(trailKey.last_scan_at).not.toBeNull();
+    expect(
+      usage.indexes.some((entry: { primary: boolean }) => !entry.primary),
+    ).toBe(true);
+    // A fresh database: the counters' window is unknown or short, so no
+    // index is a candidate yet.
+    expect(usage.unused).toEqual([]);
   });
 
   it("report a partitioned table once, by its root", async () => {

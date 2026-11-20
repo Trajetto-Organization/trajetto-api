@@ -601,6 +601,42 @@ function databaseSizesSql(): Prisma.Sql {
 }
 
 /**
+ * The index usage report (plano-escala F2-23), cached by its caller: each
+ * index of the hot tables, by partition root (a partition's index is a
+ * partition of the parent's, so pg_partition_root names the parent's), its
+ * scans and size summed over the partitions, whether it is a primary key
+ * or a unique, and its last scan. last_idx_scan only exists from Postgres
+ * 16, so it is read through the row as JSON: on an older server it is
+ * null instead of failing the read. With the reset of this database's
+ * statistics, which says how long the scans were counted. The statistics
+ * views and pg_relation_size need no privilege on the tables.
+ */
+function indexUsageSql(): Prisma.Sql {
+  return Prisma.sql`
+    SELECT
+      (SELECT stats_reset FROM pg_stat_database
+        WHERE datname = current_database()) AS stats_reset_at,
+      (SELECT coalesce(json_agg(t ORDER BY t.table_name, t.index_name), '[]'::json) FROM (
+        SELECT
+          coalesce(root_table.relname, s.relname)::text AS table_name,
+          coalesce(root_index.relname, s.indexrelname)::text AS index_name,
+          sum(s.idx_scan)::float8 AS scans,
+          max((to_jsonb(s) ->> 'last_idx_scan')::timestamptz) AS last_scan_at,
+          sum(pg_relation_size(s.indexrelid))::float8 AS bytes,
+          bool_or(i.indisprimary) AS is_primary,
+          bool_or(i.indisunique) AS is_unique
+        FROM pg_stat_user_indexes s
+        JOIN pg_index i ON i.indexrelid = s.indexrelid
+        LEFT JOIN pg_class root_table ON root_table.oid = pg_partition_root(s.relid)
+        LEFT JOIN pg_class root_index ON root_index.oid = pg_partition_root(s.indexrelid)
+        WHERE s.schemaname = current_schema()
+          AND coalesce(root_table.relname, s.relname) = ANY(${[...HOT_TABLES]}::text[])
+        GROUP BY 1, 2
+      ) t) AS indexes
+  `;
+}
+
+/**
  * The database block of the newest cluster row (ops_sample, role
  * 'cluster') written after `since` (plano-escala F3-18): what the cron
  * process read on the maintenance pool, with pg_read_all_stats and
@@ -627,6 +663,7 @@ export {
   databaseCoreSql,
   databaseSizesSql,
   databaseWalSql,
+  indexUsageSql,
   operationalSnapshotSql,
   outboxFailedSql,
   outboxPendingSql,

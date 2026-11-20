@@ -3,12 +3,19 @@ import type { Prisma } from "@prisma/client";
 import database from "@/../infra/database";
 import { sqlStateOf } from "@/shared/errors/prisma-error-meta";
 import { logger } from "@/shared/logging/logger";
+import {
+  INDEX_USAGE_TTL_MS,
+  indexUsageOf,
+  type IndexUsage,
+  type IndexUsageQueryRow,
+} from "@/shared/health/index-usage";
 import { deadTuplePercent } from "@/shared/health/metrics-math";
 import {
   DATABASE_PARAMETERS,
   databaseCoreSql,
   databaseSizesSql,
   databaseWalSql,
+  indexUsageSql,
   latestClusterDatabaseSql,
 } from "@/shared/health/metrics-queries";
 import {
@@ -44,7 +51,7 @@ const log = logger.child({ component: "database-metrics" });
 /** How long the sizes are served before the next read (F1-06). */
 const DATABASE_SIZES_TTL_MS = 5 * 60 * 1000;
 
-type DatabaseMetricsPart = "core" | "pg_wal" | "sizes";
+type DatabaseMetricsPart = "core" | "pg_wal" | "sizes" | "index_usage";
 
 interface DatabaseCollectionError {
   part: DatabaseMetricsPart;
@@ -99,6 +106,13 @@ interface DatabaseMetrics {
     bytes: number | null;
   };
   sizes: DatabaseSizes | null;
+
+  /**
+   * Each index of the hot tables and whether anybody read it in 30 days
+   * (plano-escala F2-23); only on the endpoint, from a 15-minute copy.
+   * Absent when not asked (the cluster row), null when the read failed.
+   */
+  index_usage?: IndexUsage | null;
   collection_errors: DatabaseCollectionError[];
 
   /**
@@ -213,7 +227,10 @@ function pgssStateOf(
 
 function coreOf(
   row: DatabaseCoreRow | undefined,
-): Omit<DatabaseMetrics, "pg_wal" | "sizes" | "collection_errors"> {
+): Omit<
+  DatabaseMetrics,
+  "pg_wal" | "sizes" | "index_usage" | "collection_errors"
+> {
   const blocksHit = finiteOrNull(row?.blocks_hit);
   const blocksRead = finiteOrNull(row?.blocks_read);
 
@@ -307,6 +324,16 @@ const sizesMemo = createTimedMemo<DatabaseSizes>({
   ttlMs: DATABASE_SIZES_TTL_MS,
 });
 
+const indexUsageMemo = createTimedMemo<IndexUsage>({
+  ttlMs: INDEX_USAGE_TTL_MS,
+});
+
+async function readIndexUsage(client: Client): Promise<IndexUsage> {
+  const [row] = await client.$queryRaw<IndexUsageQueryRow[]>(indexUsageSql());
+
+  return indexUsageOf(row);
+}
+
 async function readDatabaseSizes(
   client: Client = database,
   now: () => Date = () => new Date(),
@@ -330,14 +357,17 @@ function failure(
 /**
  * The three reads. `sizes` picks where the sizes come from: the five-minute
  * copy (the endpoint), a fresh read (the cluster row every 15 minutes,
- * F1-10) or none.
+ * F1-10) or none. `indexUsage` adds the index report (F2-23) from its
+ * 15-minute copy; only the endpoint asks, so the cluster row stays small.
  */
 async function collectDatabaseMetrics({
   client = database,
   sizes = "cached",
+  indexUsage = "skip",
 }: {
   client?: Client;
   sizes?: "cached" | "fresh" | "skip";
+  indexUsage?: "cached" | "skip";
 } = {}): Promise<DatabaseMetrics> {
   const errors: DatabaseCollectionError[] = [];
 
@@ -381,10 +411,21 @@ async function collectDatabaseMetrics({
     }
   }
 
+  let usage: IndexUsage | null = null;
+
+  if (indexUsage === "cached") {
+    try {
+      usage = await indexUsageMemo.read(() => readIndexUsage(client));
+    } catch (error) {
+      errors.push(failure("index_usage", error));
+    }
+  }
+
   return {
     ...coreOf(core),
     pg_wal: pgWal,
     sizes: databaseSizes,
+    ...(indexUsage === "cached" && { index_usage: usage }),
     collection_errors: errors,
   };
 }
@@ -509,6 +550,11 @@ function resetDatabaseSizesCache(): void {
   sizesMemo.reset();
 }
 
+/** For tests: the next index report goes to the database again. */
+function resetIndexUsageCache(): void {
+  indexUsageMemo.reset();
+}
+
 export {
   CLUSTER_SAMPLE_MAX_AGE_MS,
   DATABASE_SIZES_TTL_MS,
@@ -518,6 +564,7 @@ export {
   mergeClusterSample,
   readDatabaseSizes,
   resetDatabaseSizesCache,
+  resetIndexUsageCache,
   withClusterSample,
 };
 export type {

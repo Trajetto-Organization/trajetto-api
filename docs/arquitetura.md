@@ -6103,8 +6103,21 @@ dados (é a cópia que o item F1-06 do plano de escala pede: números da
 plataforma que só o MASTER lê, em memória, nunca no Redis). Tudo é nullable:
 uma parte que falha fica null e vira uma linha de `collection_errors` com o
 SQLSTATE, e as outras respondem. As idades das sessões só enxergam o cluster
-inteiro com superusuário ou `pg_read_all_stats` (`stats_cluster_wide`). O
-mesmo bloco leva `alert_limits`: os limites com que o alerta da operação
+inteiro com superusuário ou `pg_read_all_stats` (`stats_cluster_wide`).
+
+Só no endpoint, uma quarta leitura, guardada por 15 minutos, traz o
+`index_usage` (plano de escala F2-23): cada índice das tabelas quentes,
+pela raiz da partição, com as leituras desde o último zeramento das
+estatísticas (`pg_stat_database.stats_reset`), a última leitura (o
+`last_idx_scan` do Postgres 16), o tamanho e se é chave primária ou
+unique. `unused` marca o candidato a sair: nem chave primária nem unique,
+e sem leitura há 30 dias (a última mais velha que isso, ou nenhuma numa
+janela de contadores de 30 dias ou mais; com os contadores nunca
+zerados, a janela é desconhecida e nada é marcado). O corte é à mão, um
+índice por release, com duas leituras do bloco a 30 dias uma da outra no
+commit ([prisma/concurrent](../prisma/concurrent/README.md#um-índice-que-sai)).
+A amostra do cluster não leva o relatório (ficaria grande a cada 15
+minutos). O mesmo bloco leva `alert_limits`: os limites com que o alerta da operação
 julga esses números neste ambiente (o xid, o atraso do arquivamento,
 `LONG_WRITE_XACT_ALERT_SECONDS`, `PG_WAL_ALERT_GIB` em bytes e
 `PITR_EXPECTED`), lidos da mesma `alertThresholdsFromEnv` do heartbeat. A
