@@ -47,6 +47,8 @@ import { runHistoryWindow } from "./support/history-window";
  *    partition goes on the night after it is verified;
  *  - a partition whose rows changed since its final archive is archived
  *    again and kept;
+ *  - so is one whose company had a person anonymized after it was
+ *    written (no count changes), and one being anonymized is kept;
  *  - after the DROP, the manifest and the objects stay: they are what is
  *    left of the month.
  *
@@ -364,6 +366,62 @@ describe("with the DROP on, past HISTORY_ATTACHED_MONTHS", () => {
     );
 
     expect(activity.row_count).toBe(1);
+  }, 120_000);
+
+  it("keeps it while a person of it is anonymized, and archives it again after", async () => {
+    // An anonymization changes no count: only its job says the rows were
+    // scrubbed after the final pass wrote them.
+    const anonymize = randomUUID();
+
+    await admin.query(
+      `INSERT INTO "background_job" ("id", "kind", "businessId", "subjectId", "status", "leaseExpiresAt")
+       VALUES ($1, 'USER_ANONYMIZE', $2, $3, 'PROCESSING', now() + interval '1 hour')`,
+      [anonymize, BUSINESS, randomUUID()],
+    );
+
+    const running = await dropNight(retentionPastOlderOnly());
+
+    expect(running.delivery_event.dropped).toBe(0);
+    expect(running.activity.dropped).toBe(0);
+    expect(await attached("delivery_event_older")).toBe(true);
+
+    const pending = async () =>
+      rows<{ subject: string }>(
+        `SELECT "subjectId" AS subject FROM "background_job"
+          WHERE "kind" = 'PARTITION_ARCHIVE' AND "status" = 'PENDING'
+          ORDER BY 1`,
+      );
+
+    expect(await pending()).toEqual([]);
+
+    await admin.query(
+      `UPDATE "background_job"
+          SET "status" = 'SUCCEEDED', "finished_at" = now(), "leaseExpiresAt" = NULL
+        WHERE "id" = $1`,
+      [anonymize],
+    );
+
+    const puts = storage.puts.length;
+    const finished = await dropNight(retentionPastOlderOnly());
+
+    expect(finished.delivery_event.dropped).toBe(0);
+    expect(finished.activity.dropped).toBe(0);
+    expect(await attached("activity_older")).toBe(true);
+    expect((await pending()).map((job) => job.subject)).toEqual([
+      "activity_older",
+      "delivery_event_older",
+    ]);
+
+    await drainJobs();
+
+    // Written again from the scrubbed rows: the archive keeps nothing the
+    // database no longer holds.
+    expect(storage.puts.slice(puts).sort()).toEqual(
+      [
+        `archive/activity/older/${BUSINESS}.csv.gz`,
+        `archive/delivery_event/older/${BUSINESS}.csv.gz`,
+      ].sort(),
+    );
   }, 120_000);
 
   it("drops it the night after, and keeps its manifest and its objects", async () => {

@@ -786,8 +786,10 @@ interface HistoryDropGate {
    * Whether the partition, past HISTORY_ATTACHED_MONTHS, may be detached:
    * only when its archive was verified AFTER it became due (the final
    * pass, which writes again every object older than that), no archive
-   * job of it is live, and the count of its rows now is the one verified.
-   * Otherwise the final pass is enqueued and the partition stays.
+   * job of it is live, no anonymization of its companies is running or
+   * finished after their object was written, and the count of its rows
+   * now is the one verified. Otherwise the final pass is enqueued (or,
+   * while an anonymization runs, nothing) and the partition stays.
    */
   ensureArchived(
     table: string,
@@ -869,6 +871,49 @@ function createHistoryDropGate(
           log.info(
             { table, partition: partition.name },
             "history partition due: its final archive was enqueued; kept until it is verified",
+          );
+
+          return false;
+        }
+
+        // An anonymization rewrites rows in place and changes no count
+        // (D49): one still running, or one that finished after an object
+        // was written, leaves in the bucket what the database scrubbed.
+        // The DROP would make that permanent, so the month waits.
+        const [scrub] = await db.$queryRawUnsafe<
+          Array<{ running: number; stale: number }>
+        >(
+          `SELECT count(*) FILTER (
+                    WHERE j."status" IN ('PENDING'::"BackgroundJobStatus", 'PROCESSING'::"BackgroundJobStatus")
+                  )::int AS running,
+                  count(*) FILTER (
+                    WHERE j."status" = 'SUCCEEDED'::"BackgroundJobStatus"
+                      AND j."finished_at" > coalesce(m."archived_at", m."created_at")
+                  )::int AS stale
+             FROM "archive_manifest" m
+             JOIN "background_job" j
+               ON j."businessId" = m."businessId"
+              AND j."kind" = 'USER_ANONYMIZE'::"BackgroundJobKind"
+            WHERE m."partition_name" = $1`,
+          partition.name,
+        );
+
+        if (Number(scrub?.running ?? 0) > 0) {
+          log.info(
+            { table, partition: partition.name },
+            "history partition due while a person of it is being anonymized: kept",
+          );
+
+          return false;
+        }
+
+        if (Number(scrub?.stale ?? 0) > 0) {
+          await options.jobs.enqueue(table, partition, {
+            rewriteBefore: new Date(now()),
+          });
+          log.warn(
+            { table, partition: partition.name },
+            "history partition anonymized since its final archive: archived again, kept",
           );
 
           return false;

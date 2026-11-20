@@ -4417,6 +4417,11 @@ pelo portão do histórico (`createHistoryDropGate`):
   objeto mais velho que o vencimento) e guarda a partição até ela conferir;
 - na noite do DROP, a contagem da partição e a soma do manifesto precisam
   bater com a conferida; senão ela é arquivada de novo e fica;
+- uma anonimização não muda contagem nenhuma: na noite do DROP, se uma
+  empresa da partição teve alguém anonimizado depois que o objeto dela foi
+  escrito, a partição é arquivada de novo e fica; com uma anonimização
+  ainda na fila ou rodando, só fica. Sem isso o DROP deixaria no bucket,
+  para sempre, o nome que o banco já apagou;
 - sem o portão (flag desligada), nenhuma partição do histórico é destacada,
   nem a `_older`. As FKs ficam: o `DETACH` as leva para a tabela destacada,
   e o `DROP` some com elas. O manifesto e os objetos ficam, pelo prazo de
