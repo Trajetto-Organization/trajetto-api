@@ -4351,6 +4351,54 @@ Regras do trem:
 - Antes de cada contração datada, confira a data nesta tabela e anote a do
   dia em que rodou.
 
+### As branches das contrações
+
+As contrações da onda 20 estão prontas (código, migration ou passo da
+etapa de release, testes e documentação), cada uma numa branch local
+própria do repositório, fora da `staging`: entram só quando a condição
+delas, na tabela acima, estiver cumprida na produção. Cada uma foi
+conferida (typecheck, Prettier, os unitários e os E2E que a cobrem) sobre
+a base abaixo; a réplica completa do CI roda no push da `staging` que a
+leva.
+
+| Branch                        | Base       | Item          | O que faz                                                                                                                                                                                                                                                                                                   | Quando, no mais cedo                                                                                                |
+| ----------------------------- | ---------- | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `escala/contract-U-03`        | `12561a53` | U-03, passo 1 | `SOCKET_POSITIONS_ON_OPERATIONS_ROOM` passa a `false` por padrão: a posição vai só para `positions:<businessId>`; `true` no _Environment_ da `trajetto-api` é a volta                                                                                                                                       | ≥ 1 semana com a web X-32 na produção                                                                               |
+| `escala/contract-U-03-remove` | `69ed92ef` | U-03, passo 2 | sai a variável e a cópia na sala de operações; está sobre a `escala/contract-U-03` (o merge dela leva as duas)                                                                                                                                                                                              | uma release depois do passo 1 na produção, sem ter precisado da volta                                               |
+| `escala/contract-F2-36`       | `12561a53` | F2-36         | o orçamento do geocodificador (job, busca, comprovante) conta só na `provider_quota_day`; saem a gravação em dobro, a semente pelo maior dos dois e as chaves de contagem do dia no Redis                                                                                                                   | uma release depois do F2-32 na produção                                                                             |
+| `escala/contract-F2-20`       | `febdd4af` | F2-20         | o passo `prisma/post-deploy/41-history-legacy-drop.sql` apaga a `delivery_event_legacy` e a `activity_legacy` 14 dias depois da janela, contados do instante que a janela grava no comentário de cada uma; antes disso fica `pending` com a data                                                            | depois da janela do histórico na produção (o próprio passo espera os 14 dias)                                       |
+| `escala/contract-F2-12`       | `0c97c71e` | F2-12         | a tela da trilha lê só a `driver_position_v2`; o passo `40-driver-position-legacy-drop.sql` apaga a `driver_position` quando todo processo anuncia `driver-position-legacy-free-v1` e a tabela não tem nenhuma linha; a migration `20270228000000_drop_driver_position_legacy` só age num banco sem empresa | ≥ `DRIVER_POSITION_RETENTION_DAYS` (90) depois do F2-10 na produção, e o `partitions.driver_position` sem dia preso |
+
+Os cortes de índice do F2-23 não têm branch: quais índices saem só se sabe
+com 30 dias de `pg_stat_statements` na produção, lidos no `index_usage` do
+`/health/metrics`, e o passo a passo de cada corte está em
+[prisma/concurrent](../prisma/concurrent/README.md#um-índice-que-sai). As
+contrações do U-10 ganham as suas branches na entrega delas, com o mesmo
+nome (`escala/contract-U-10…`), e entram nesta tabela.
+
+Como levar uma contração para a produção, na data dela:
+
+1. Confira a condição na produção (a tabela do trem) e que a imagem que
+   está no ar é a da release que a contração pressupõe.
+2. Na sua máquina, com a `staging` atualizada:
+   `git switch staging`, `git merge --no-ff escala/contract-<item>` (o
+   `U-03-remove` só depois de o passo 1 estar na produção). Um conflito
+   é a `staging` que andou: resolva mantendo as duas mudanças e rode o
+   typecheck e os testes da área.
+3. Na `F2-12`, se a `staging` já tiver migration com data depois de
+   `20270228000000`, renomeie o diretório da migration da branch para o
+   dia do merge (ela tem de ser a mais nova; nenhum banco a aplicou
+   ainda).
+4. Push da `staging`, staging no ar, testes da área na staging, e então
+   a promoção para a produção, como qualquer release. Depois que ela
+   roda, o piso de rollback do código é essa release.
+5. Apague a branch local (`git branch -d escala/contract-<item>`) e anote
+   na tabela do trem o dia em que rodou.
+
+As branches são só locais. Um push de uma delas para o GitHub dispara o CI
+de branch de trabalho (`ci.yml`) e gasta minutos do Actions: faça-o só se
+quiser guardá-las no GitHub, com os minutos disponíveis.
+
 ### Quando o Swarm desiste de um serviço
 
 Nenhuma Application tem limite de tentativas (`MaxAttempts: 0`). Se uma
