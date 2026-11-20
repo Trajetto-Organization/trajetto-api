@@ -4361,20 +4361,28 @@ conferida (typecheck, Prettier, os unitários e os E2E que a cobrem) sobre
 a base abaixo; a réplica completa do CI roda no push da `staging` que a
 leva.
 
-| Branch                        | Base       | Item          | O que faz                                                                                                                                                                                                                                                                                                   | Quando, no mais cedo                                                                                                |
-| ----------------------------- | ---------- | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `escala/contract-U-03`        | `12561a53` | U-03, passo 1 | `SOCKET_POSITIONS_ON_OPERATIONS_ROOM` passa a `false` por padrão: a posição vai só para `positions:<businessId>`; `true` no _Environment_ da `trajetto-api` é a volta                                                                                                                                       | ≥ 1 semana com a web X-32 na produção                                                                               |
-| `escala/contract-U-03-remove` | `69ed92ef` | U-03, passo 2 | sai a variável e a cópia na sala de operações; está sobre a `escala/contract-U-03` (o merge dela leva as duas)                                                                                                                                                                                              | uma release depois do passo 1 na produção, sem ter precisado da volta                                               |
-| `escala/contract-F2-36`       | `12561a53` | F2-36         | o orçamento do geocodificador (job, busca, comprovante) conta só na `provider_quota_day`; saem a gravação em dobro, a semente pelo maior dos dois e as chaves de contagem do dia no Redis                                                                                                                   | uma release depois do F2-32 na produção                                                                             |
-| `escala/contract-F2-20`       | `febdd4af` | F2-20         | o passo `prisma/post-deploy/41-history-legacy-drop.sql` apaga a `delivery_event_legacy` e a `activity_legacy` 14 dias depois da janela, contados do instante que a janela grava no comentário de cada uma; antes disso fica `pending` com a data                                                            | depois da janela do histórico na produção (o próprio passo espera os 14 dias)                                       |
-| `escala/contract-F2-12`       | `0c97c71e` | F2-12         | a tela da trilha lê só a `driver_position_v2`; o passo `40-driver-position-legacy-drop.sql` apaga a `driver_position` quando todo processo anuncia `driver-position-legacy-free-v1` e a tabela não tem nenhuma linha; a migration `20270228000000_drop_driver_position_legacy` só age num banco sem empresa | ≥ `DRIVER_POSITION_RETENTION_DAYS` (90) depois do F2-10 na produção, e o `partitions.driver_position` sem dia preso |
+| Branch                         | Base       | Item            | O que faz                                                                                                                                                                                                                                                                                                   | Quando, no mais cedo                                                                                                |
+| ------------------------------ | ---------- | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `escala/contract-U-03`         | `12561a53` | U-03, passo 1   | `SOCKET_POSITIONS_ON_OPERATIONS_ROOM` passa a `false` por padrão: a posição vai só para `positions:<businessId>`; `true` no _Environment_ da `trajetto-api` é a volta                                                                                                                                       | ≥ 1 semana com a web X-32 na produção                                                                               |
+| `escala/contract-U-03-remove`  | `69ed92ef` | U-03, passo 2   | sai a variável e a cópia na sala de operações; está sobre a `escala/contract-U-03` (o merge dela leva as duas)                                                                                                                                                                                              | uma release depois do passo 1 na produção, sem ter precisado da volta                                               |
+| `escala/contract-F2-36`        | `12561a53` | F2-36           | o orçamento do geocodificador (job, busca, comprovante) conta só na `provider_quota_day`; saem a gravação em dobro, a semente pelo maior dos dois e as chaves de contagem do dia no Redis                                                                                                                   | uma release depois do F2-32 na produção                                                                             |
+| `escala/contract-F2-20`        | `febdd4af` | F2-20           | o passo `prisma/post-deploy/41-history-legacy-drop.sql` apaga a `delivery_event_legacy` e a `activity_legacy` 14 dias depois da janela, contados do instante que a janela grava no comentário de cada uma; antes disso fica `pending` com a data                                                            | depois da janela do histórico na produção (o próprio passo espera os 14 dias)                                       |
+| `escala/contract-F2-12`        | `0c97c71e` | F2-12           | a tela da trilha lê só a `driver_position_v2`; o passo `40-driver-position-legacy-drop.sql` apaga a `driver_position` quando todo processo anuncia `driver-position-legacy-free-v1` e a tabela não tem nenhuma linha; a migration `20270228000000_drop_driver_position_legacy` só age num banco sem empresa | ≥ `DRIVER_POSITION_RETENTION_DAYS` (90) depois do F2-10 na produção, e o `partitions.driver_position` sem dia preso |
+| `escala/contract-U-10-session` | `5be702d1` | U-10, sessão    | sai `SESSION_LOOKUP_MODE=legacy`: a sessão é lida sempre na ida única da F4-05; um _Environment_ que ainda tenha a variável sobe, e ela é ignorada                                                                                                                                                          | 2 releases depois da F4-05 na produção, sem ter precisado do `legacy`                                               |
+| `escala/contract-U-10-history` | `5be702d1` | U-10, histórico | o reenvio (chegada, comprovante, "a caminho") lê a chave só em `delivery_event_submission`, e a atividade do aviso é procurada só pelo id; a leitura pelo `deliveryId` fica só no caminho de erro, quando o índice único legado recusa a gravação                                                           | depois da janela do histórico na produção, como a `F2-20`                                                           |
+| `escala/contract-U-10-outbox`  | `5be702d1` | U-10, outbox    | a migration `20261120120000_drop_outbox_claim_created_at_idx` apaga o `domain_outbox_event_claim_idx` (`created_at`), com `lock_timeout` de 5 s; a fila particionada não aceita `DROP INDEX CONCURRENTLY`                                                                                                   | uma release depois da F3-11 na produção                                                                             |
+| `escala/contract-U-10-memory`  | `5be702d1` | U-10, memória   | `MEMORY_BUDGET_MODE` passa a `enforce` por padrão: o processo cujo orçamento de memória não fecha não sobe; `warn` no _Environment_ da Application é a volta                                                                                                                                                | os valores da seção 3 do plano nas Applications dos dois ambientes, e o alerta `memory-budget` quieto há 7 dias     |
 
 Os cortes de índice do F2-23 não têm branch: quais índices saem só se sabe
 com 30 dias de `pg_stat_statements` na produção, lidos no `index_usage` do
 `/health/metrics`, e o passo a passo de cada corte está em
-[prisma/concurrent](../prisma/concurrent/README.md#um-índice-que-sai). As
-contrações do U-10 ganham as suas branches na entrega delas, com o mesmo
-nome (`escala/contract-U-10…`), e entram nesta tabela.
+[prisma/concurrent](../prisma/concurrent/README.md#um-índice-que-sai).
+
+O caminho em memória da importação (U-10) também não tem branch ainda: ele
+sai só com `IMPORT_DURABLE_JOBS=true` há 2 releases no _Environment_ da
+`trajetto-api` da produção, e a remoção reescreve as suítes da importação
+que hoje rodam por ele. Ela entra com a sua branch quando essa condição
+estiver perto.
 
 Como levar uma contração para a produção, na data dela:
 
@@ -4385,14 +4393,19 @@ Como levar uma contração para a produção, na data dela:
    `U-03-remove` só depois de o passo 1 estar na produção). Um conflito
    é a `staging` que andou: resolva mantendo as duas mudanças e rode o
    typecheck e os testes da área.
-3. Na `F2-12`, se a `staging` já tiver migration com data depois de
-   `20270228000000`, renomeie o diretório da migration da branch para o
-   dia do merge (ela tem de ser a mais nova; nenhum banco a aplicou
-   ainda).
+3. Na `F2-12` e na `U-10-outbox`, se a `staging` já tiver migration com
+   data depois da da branch (`20270228000000` e `20261120120000`),
+   renomeie o diretório da migration da branch para o dia do merge (ela
+   tem de ser a mais nova; nenhum banco a aplicou ainda).
 4. Push da `staging`, staging no ar, testes da área na staging, e então
    a promoção para a produção, como qualquer release. Depois que ela
    roda, o piso de rollback do código é essa release.
-5. Apague a branch local (`git branch -d escala/contract-<item>`) e anote
+5. Depois da `U-10-session`, apague `SESSION_LOOKUP_MODE` do
+   _Environment_ de cada Application que a tenha; depois da
+   `U-10-memory`, confira no log do boot de cada Application que o
+   orçamento de memória fecha (`memory budget`), e, se uma não subir,
+   `MEMORY_BUDGET_MODE=warn` no _Environment_ dela é a volta.
+6. Apague a branch local (`git branch -d escala/contract-<item>`) e anote
    na tabela do trem o dia em que rodou.
 
 As branches são só locais. Um push de uma delas para o GitHub dispara o CI
