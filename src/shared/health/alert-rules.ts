@@ -221,6 +221,17 @@ interface ProcessFleetState {
     commit: string | null;
     queues: string[];
     startedAt: Date;
+
+    /**
+     * What the process's image says the realtime role runs and speaks
+     * (plano-escala F3-31c: the `trajetto.realtime-source` and
+     * `trajetto.contract-epoch` labels, as APP_REALTIME_SOURCE and
+     * APP_CONTRACT_EPOCH): the deploy holds trajetto-realtime on its build
+     * while both match the new image's. Null in an image without them;
+     * absent from an older collector.
+     */
+    realtimeSource?: string | null;
+    contractEpoch?: number | null;
   }>;
 }
 
@@ -984,7 +995,12 @@ function measuredQueues(
  *  - processes of this environment on different commits for more than half
  *    an hour, counted from the moment the newest of the commits appeared
  *    (the oldest start of each one): a role left on the old build. A
- *    restart only makes the count shorter, never a false page;
+ *    restart only makes the count shorter, never a false page. The
+ *    realtime the deploy held on its build (F3-31c: it is deployed only
+ *    when what it runs changed) is not a role left behind: a realtime
+ *    process whose realtime-source and contract epoch are the newest
+ *    commit's own (heldRealtime) is left out of the count, and any other
+ *    process on another commit still pages;
  *  - a row of another APP_ENV: a staging process pointed at production's
  *    database (or the other way round), claiming its rows with the wrong
  *    environment's settings. The dokploy-network is shared by both.
@@ -1012,7 +1028,11 @@ function processAlerts(
     { count: number; since: number; roles: Set<string> }
   >();
 
+  const held = heldRealtime(own);
+
   for (const process of own) {
+    if (held.has(process)) continue;
+
     const key = process.commit ?? "sem commit";
     const entry = commits.get(key) ?? {
       count: 0,
@@ -1065,6 +1085,64 @@ function processAlerts(
   }
 
   return alerts;
+}
+
+type FleetProcess = ProcessFleetState["live"][number];
+
+/**
+ * The realtime processes the deploy kept on their build (plano-escala
+ * F3-31c), as deploy-roles.sh decides it: on another commit than the
+ * newest one the other roles run, with the same realtime-source and the
+ * same contract epoch as that commit's image. Without both in its own row
+ * (an image before them) or in the newest commit's, nothing is held: the
+ * rule reads it as any role left behind, as the deploy deploys it.
+ */
+function heldRealtime(own: readonly FleetProcess[]): Set<FleetProcess> {
+  const held = new Set<FleetProcess>();
+
+  // The newest commit among the other roles: the one whose first process
+  // started last.
+  const firstStart = new Map<string | null, number>();
+
+  for (const process of own) {
+    if (process.role === "realtime") continue;
+
+    const started = process.startedAt.getTime();
+
+    firstStart.set(
+      process.commit,
+      Math.min(firstStart.get(process.commit) ?? started, started),
+    );
+  }
+
+  if (firstStart.size === 0) return held;
+
+  const [newest] = [...firstStart.entries()].reduce((latest, entry) =>
+    entry[1] > latest[1] ? entry : latest,
+  );
+
+  const reference = own.find(
+    (process) =>
+      process.role !== "realtime" &&
+      process.commit === newest &&
+      typeof process.realtimeSource === "string" &&
+      typeof process.contractEpoch === "number",
+  );
+
+  if (!reference) return held;
+
+  for (const process of own) {
+    if (
+      process.role === "realtime" &&
+      process.commit !== newest &&
+      process.realtimeSource === reference.realtimeSource &&
+      process.contractEpoch === reference.contractEpoch
+    ) {
+      held.add(process);
+    }
+  }
+
+  return held;
 }
 
 /** The cron rules: a dead run, partials that never end, no success. */

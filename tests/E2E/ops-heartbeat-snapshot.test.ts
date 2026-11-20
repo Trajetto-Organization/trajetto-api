@@ -409,7 +409,7 @@ describe("the processes of process_heartbeat", () => {
 
     await prisma.processHeartbeat.createMany({
       data: [
-        row(API, {}),
+        row(API, { realtime_source: "e".repeat(64), contract_epoch: 4 }),
         row(FOREIGN, {
           role: "worker",
           app_env: other,
@@ -450,6 +450,13 @@ describe("the processes of process_heartbeat", () => {
     expect(
       snapshot.processes?.live.map((process) => process.replica).sort(),
     ).toEqual([API, FOREIGN].sort());
+    // What the image says the realtime runs (F3-31c), for mixed-versions.
+    expect(
+      snapshot.processes?.live.find((process) => process.replica === API),
+    ).toMatchObject({ realtimeSource: "e".repeat(64), contractEpoch: 4 });
+    expect(
+      snapshot.processes?.live.find((process) => process.replica === FOREIGN),
+    ).toMatchObject({ realtimeSource: null, contractEpoch: null });
 
     const alerts = collectAlerts(snapshot, DEFAULT_ALERT_THRESHOLDS, {
       pitrExpected: false,

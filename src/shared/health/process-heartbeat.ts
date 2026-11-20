@@ -1,7 +1,7 @@
 import database from "@/../infra/database";
 import { RedisConnection } from "@/../infra/cache/redis-connection";
 import { env } from "@/env";
-import { buildInfo } from "@/shared/build-info";
+import { buildInfo, realtimeIdentity } from "@/shared/build-info";
 import {
   configFingerprint,
   readDatabaseIdentity,
@@ -72,6 +72,15 @@ interface ProcessHeartbeatRow {
   cron: boolean;
   sockets: boolean;
   started_at: Date;
+
+  /**
+   * What the image says the realtime role runs and speaks (F3-31c,
+   * shared/build-info.ts): how the fleet's alert tells the realtime the
+   * deploy held on its build from a role left behind. Null in an image
+   * without them; absent, written as null.
+   */
+  realtime_source?: string | null;
+  contract_epoch?: number | null;
 }
 
 /** One UPSERT, stamped with the database's own clock. */
@@ -79,17 +88,21 @@ async function writeProcessHeartbeat(row: ProcessHeartbeatRow): Promise<void> {
   await database.$executeRaw`
     INSERT INTO "process_heartbeat" (
       "replica", "role", "app_env", "build_commit", "config_fingerprint",
-      "node_hostname", "queues", "cron", "sockets", "started_at", "updated_at"
+      "node_hostname", "queues", "cron", "sockets", "started_at",
+      "realtime_source", "contract_epoch", "updated_at"
     ) VALUES (
       ${row.replica}, ${row.role}, ${row.app_env}, ${row.build_commit},
       ${row.config_fingerprint}, ${row.node_hostname},
       ${[...row.queues]}::text[], ${row.cron}, ${row.sockets},
-      ${row.started_at}, now()
+      ${row.started_at}, ${row.realtime_source ?? null},
+      ${row.contract_epoch ?? null}::int, now()
     )
     ON CONFLICT ("replica") DO UPDATE SET
       "role" = EXCLUDED."role",
       "app_env" = EXCLUDED."app_env",
       "build_commit" = EXCLUDED."build_commit",
+      "realtime_source" = EXCLUDED."realtime_source",
+      "contract_epoch" = EXCLUDED."contract_epoch",
       "config_fingerprint" = EXCLUDED."config_fingerprint",
       "node_hostname" = EXCLUDED."node_hostname",
       "queues" = EXCLUDED."queues",
@@ -282,6 +295,8 @@ function currentProcessRow(
     role: env.PROCESS_ROLE,
     app_env: env.APP_ENV,
     build_commit: buildInfo.commit,
+    realtime_source: realtimeIdentity.source,
+    contract_epoch: realtimeIdentity.epoch,
     node_hostname: swarmIdentity.node ?? null,
     queues: env.WORKER_QUEUES,
     cron: env.CRON_ENABLED,

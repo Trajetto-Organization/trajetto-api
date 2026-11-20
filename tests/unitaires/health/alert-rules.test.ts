@@ -1034,6 +1034,124 @@ describe("the processes of process_heartbeat", () => {
     expect(alerts[0].message).toContain("newcommit000 (2: api)");
   });
 
+  // The deploy keeps trajetto-realtime on its build when what it runs did
+  // not change (plano-escala F3-31c): the same realtime-source and contract
+  // epoch as the new image. The rule used to read that as a role left on
+  // the old build, and paged 30 min after almost every release, for up to
+  // the 7 days of the realtime's maximum lag, hiding a role really stuck.
+  describe("with the realtime the deploy held on its build", () => {
+    const SOURCE = "a".repeat(64);
+    const held = (extra: Parameters<typeof process_>[1] = {}) =>
+      process_("realtime-1", {
+        role: "realtime",
+        commit: "oldcommit00001",
+        startedAt: new Date(NOW.getTime() - 72 * HOUR),
+        realtimeSource: SOURCE,
+        contractEpoch: 7,
+        ...extra,
+      });
+    const fresh = (
+      replica: string,
+      extra: Parameters<typeof process_>[1] = {},
+    ) =>
+      process_(replica, {
+        commit: "newcommit00001",
+        startedAt: new Date(NOW.getTime() - 2 * HOUR),
+        realtimeSource: SOURCE,
+        contractEpoch: 7,
+        ...extra,
+      });
+
+    it("does not page: it runs what the new commit's realtime would", () => {
+      expect(
+        codes({
+          ...healthy(),
+          processes: fleet(
+            fresh("api-1"),
+            fresh("worker-1", { role: "worker", queues: ALL_QUEUES }),
+            held(),
+          ),
+        }),
+      ).not.toContain("mixed-versions");
+    });
+
+    it("pages when its code differs: the deploy should have moved it", () => {
+      const alerts = collectAlerts({
+        ...healthy(),
+        processes: fleet(
+          fresh("api-1"),
+          fresh("worker-1", { role: "worker", queues: ALL_QUEUES }),
+          held({ realtimeSource: "b".repeat(64) }),
+        ),
+      }).filter((alert) => alert.code === "mixed-versions");
+
+      expect(alerts).toHaveLength(1);
+      expect(alerts[0].message).toContain("oldcommit000 (1: realtime)");
+    });
+
+    it("pages when its contract epoch differs", () => {
+      expect(
+        codes({
+          ...healthy(),
+          processes: fleet(
+            fresh("api-1"),
+            fresh("worker-1", { role: "worker", queues: ALL_QUEUES }),
+            held({ contractEpoch: 6 }),
+          ),
+        }),
+      ).toContain("mixed-versions");
+    });
+
+    it("pages for an image that does not say what it runs", () => {
+      expect(
+        codes({
+          ...healthy(),
+          processes: fleet(
+            fresh("api-1"),
+            fresh("worker-1", { role: "worker", queues: ALL_QUEUES }),
+            held({ realtimeSource: null, contractEpoch: null }),
+          ),
+        }),
+      ).toContain("mixed-versions");
+    });
+
+    it("still pages for another role left on the old build, naming only it", () => {
+      const alerts = collectAlerts({
+        ...healthy(),
+        processes: fleet(
+          fresh("api-1"),
+          process_("worker-1", {
+            role: "worker",
+            commit: "oldcommit00001",
+            queues: ALL_QUEUES,
+            startedAt: new Date(NOW.getTime() - 72 * HOUR),
+          }),
+          held(),
+        ),
+      }).filter((alert) => alert.code === "mixed-versions");
+
+      expect(alerts).toHaveLength(1);
+      expect(alerts[0].message).toContain("oldcommit000 (1: worker)");
+      expect(alerts[0].message).not.toContain("realtime)");
+    });
+
+    it("never holds a role other than the realtime", () => {
+      expect(
+        codes({
+          ...healthy(),
+          processes: fleet(
+            fresh("api-1"),
+            fresh("ingest-1", {
+              role: "ingest",
+              commit: "oldcommit00001",
+              startedAt: new Date(NOW.getTime() - 72 * HOUR),
+            }),
+          ),
+        }),
+      ).toContain("mixed-versions");
+    });
+  });
+
   it("gives a rolling deploy its half hour, counted from when the new commit arrived", () => {
     expect(
       codes({

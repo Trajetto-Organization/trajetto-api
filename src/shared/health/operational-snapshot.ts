@@ -507,9 +507,12 @@ async function collectOperationalSnapshot(
           build_commit: string | null;
           queues: string[] | null;
           started_at: Date;
+          realtime_source: string | null;
+          contract_epoch: number | null;
         }>
       >`
-        SELECT "replica", "role", "app_env", "build_commit", "queues", "started_at"
+        SELECT "replica", "role", "app_env", "build_commit", "queues", "started_at",
+               "realtime_source", "contract_epoch"
         FROM "process_heartbeat"
         WHERE "updated_at" > now() - make_interval(secs => ${LIVE_WINDOW_SECONDS})
       `;
@@ -523,6 +526,8 @@ async function collectOperationalSnapshot(
           commit: row.build_commit,
           queues: row.queues ?? [],
           startedAt: new Date(row.started_at),
+          realtimeSource: row.realtime_source,
+          contractEpoch: row.contract_epoch,
         })),
       };
     },

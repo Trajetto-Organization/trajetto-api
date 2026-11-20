@@ -312,13 +312,19 @@ ENV APP_COMMIT_SHA=${GIT_SHA}
 # What the realtime role runs and the contract it speaks (plano-escala
 # F3-31c), computed by .github/scripts/realtime-closure.mjs in the build
 # job: the deploy compares them with the image trajetto-realtime runs and
-# deploys it only when one of them changed (or past 7 days). Labels only,
-# after the last RUN like GIT_SHA: no layer depends on them. Empty in a
-# local build, which the deploy reads as "deploy it".
+# deploys it only when one of them changed (or past 7 days). After the
+# last RUN like GIT_SHA: no layer depends on them. Empty in a local build,
+# which the deploy reads as "deploy it". The same two values go to the
+# process as APP_REALTIME_SOURCE and APP_CONTRACT_EPOCH: it writes them in
+# its process_heartbeat row, so the fleet's alert (mixed-versions) tells
+# the realtime the deploy held on its build from a role left behind
+# (src/shared/build-info.ts). Image config only, too.
 ARG REALTIME_SOURCE=""
 ARG CONTRACT_EPOCH=""
 LABEL trajetto.realtime-source="${REALTIME_SOURCE}" \
       trajetto.contract-epoch="${CONTRACT_EPOCH}"
+ENV APP_REALTIME_SOURCE=${REALTIME_SOURCE} \
+    APP_CONTRACT_EPOCH=${CONTRACT_EPOCH}
 
 USER nodejs
 

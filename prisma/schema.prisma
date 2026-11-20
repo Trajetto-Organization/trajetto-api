@@ -1850,6 +1850,13 @@ model ProcessHeartbeat {
   started_at DateTime
   updated_at DateTime @default(now())
 
+  /// What the image says the realtime role runs and speaks (F3-31c: the
+  /// trajetto.realtime-source and trajetto.contract-epoch labels): the
+  /// mixed-versions alert leaves out the realtime the deploy held on its
+  /// build. Null in an image without them.
+  realtime_source String?
+  contract_epoch  Int?
+
   @@index([updated_at])
   @@map("process_heartbeat")
 }

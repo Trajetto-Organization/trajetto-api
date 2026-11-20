@@ -89,6 +89,39 @@ describe("a process's row", () => {
     ]);
   });
 
+  // The fleet's alert leaves out the realtime the deploy held on its build
+  // by these two (plano-escala F3-31c): a beat that dropped them, or kept
+  // a previous image's, would page or hide a role left behind.
+  it("carries what its image says the realtime runs, and rewrites it", async () => {
+    const source = "f".repeat(64);
+
+    await writeProcessHeartbeat(
+      row("realtime-1", {
+        role: "realtime",
+        realtime_source: source,
+        contract_epoch: 9,
+      }),
+    );
+
+    const read = () =>
+      prisma.$queryRaw<
+        Array<{ realtime_source: string | null; contract_epoch: number | null }>
+      >`
+        SELECT "realtime_source", "contract_epoch" FROM "process_heartbeat"
+      `;
+
+    expect(await read()).toEqual([
+      { realtime_source: source, contract_epoch: 9 },
+    ]);
+
+    // The same replica on an image that does not say: nothing kept.
+    await writeProcessHeartbeat(row("realtime-1", { role: "realtime" }));
+
+    expect(await read()).toEqual([
+      { realtime_source: null, contract_epoch: null },
+    ]);
+  });
+
   it("goes when the process stops", async () => {
     await writeProcessHeartbeat(row("worker-2"));
     await deleteProcessHeartbeat("worker-2");

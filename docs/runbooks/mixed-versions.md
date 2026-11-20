@@ -6,6 +6,8 @@
 
 O deploy implanta todos os papéis da mesma imagem em poucos minutos (migração, IA, worker, scheduler, worker-external, API, ingest e realtime), cada um com a tag `<tag>-<papel>` no digest da API. Meia hora com commits diferentes quer dizer que um papel ficou no build anterior: o deploy dele falhou, o Swarm reverteu a task nova (o healthcheck não passou), ou a Application ficou de fora do deploy (sem o secret `DOKPLOY_<PAPEL>_APPLICATION_ID` no environment do GitHub).
 
+O realtime que o deploy manteve no build dele não conta (plano-escala F3-31c: ele só é implantado quando o que roda mudou, ou passados 7 dias). Fica de fora o processo `realtime` em outro commit cujo `realtime_source` e `contract_epoch` no `process_heartbeat` são os mesmos da imagem do commit mais novo dos outros papéis. Um realtime com outro valor, ou de uma imagem que não grava os dois (vazios), conta e alerta como qualquer papel atrasado.
+
 Uma frota mista funciona por um tempo, porque toda mudança do plano é compatível com a versão anterior. Mas ela é o estado que as contrações (as migrations da fase de contract) não podem encontrar, e um worker velho processa as filas com o código velho.
 
 ## Primeira ação
@@ -13,10 +15,11 @@ Uma frota mista funciona por um tempo, porque toda mudança do plano é compatí
 1. Veja quem roda o quê:
 
    ```sql
-   SELECT role, build_commit, count(*), min(started_at)
+   SELECT role, build_commit, realtime_source, contract_epoch,
+          count(*), min(started_at)
    FROM process_heartbeat
    WHERE updated_at > now() - interval '90 seconds'
-   GROUP BY role, build_commit
+   GROUP BY role, build_commit, realtime_source, contract_epoch
    ORDER BY role;
    ```
 

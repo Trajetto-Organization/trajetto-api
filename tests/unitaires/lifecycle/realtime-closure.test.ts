@@ -316,6 +316,24 @@ describe("the image and the build", () => {
     }
   });
 
+  // The process writes them in its process_heartbeat row, so the fleet's
+  // alert (mixed-versions) can tell the realtime the deploy held on its
+  // build from a role left on the old one.
+  it("gives the process the same two values, after the last RUN", () => {
+    const runner = dockerfile.slice(
+      dockerfile.indexOf("AS runner"),
+      dockerfile.indexOf("FROM runner AS migrate"),
+    );
+    const lastRun = runner.lastIndexOf("\nRUN ");
+
+    for (const line of [
+      "ENV APP_REALTIME_SOURCE=${REALTIME_SOURCE}",
+      "APP_CONTRACT_EPOCH=${CONTRACT_EPOCH}",
+    ]) {
+      expect(runner.indexOf(line), line).toBeGreaterThan(lastRun);
+    }
+  });
+
   it("passes the labels to the smoke build and the push of the API image alike", () => {
     const build = jobOf(readWorkflow("staging.yml"), "build");
     const compute = stepOf(build, "Compute the realtime labels").text;

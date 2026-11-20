@@ -49,3 +49,39 @@ export const buildInfoShape = {
     .nullable()
     .describe("O commit completo deste build; `null` num build local."),
 };
+
+/**
+ * What this image says the realtime role runs and speaks (plano-escala
+ * F3-31c): the `trajetto.realtime-source` and `trajetto.contract-epoch`
+ * labels, which the Dockerfile also sets as APP_REALTIME_SOURCE and
+ * APP_CONTRACT_EPOCH. The deploy keeps trajetto-realtime on its build while
+ * both match the new image's; every process writes them in its
+ * process_heartbeat row, so the fleet's alert (mixed-versions) can tell
+ * that realtime from a role left on the old build. Not secrets: a hash of
+ * the sources and a counter.
+ */
+export interface RealtimeIdentity {
+  /** The sha256 (64 hex); null in a build that was given none. */
+  source: string | null;
+  /** A non-negative integer; null in a build that was given none. */
+  epoch: number | null;
+}
+
+const SOURCE_HASH = /^[0-9a-f]{64}$/;
+
+/** Anything else reads as an image that does not say. */
+export function readRealtimeIdentity(
+  env: Record<string, string | undefined> = process.env,
+): RealtimeIdentity {
+  const source = (env.APP_REALTIME_SOURCE ?? "").trim().toLowerCase();
+  const epoch = (env.APP_CONTRACT_EPOCH ?? "").trim();
+
+  return {
+    source: SOURCE_HASH.test(source) ? source : null,
+    epoch: /^\d{1,9}$/.test(epoch) ? Number(epoch) : null,
+  };
+}
+
+export const realtimeIdentity: Readonly<RealtimeIdentity> = Object.freeze(
+  readRealtimeIdentity(),
+);
