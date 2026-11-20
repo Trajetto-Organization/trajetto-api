@@ -467,3 +467,37 @@ describe("the positions' room flag in the matrix (U-03)", () => {
     ).toBe("valor");
   });
 });
+
+/**
+ * A constraint on a label the node does not carry leaves every task Pending
+ * with "no suitable node": the labels come at wave 17 (F4-52), after the 2nd
+ * VPS of wave 16. And two PgBouncer tasks, one per node, cannot update
+ * start-first: the new task has no node it may run on, so the update never
+ * converges (runbooks/swarm-multi-no.md).
+ */
+describe("the placement in the Dokploy settings", () => {
+  const settings = firstTable(
+    part(matrix, "### Configurações do Dokploy por Application"),
+    "| Application",
+  );
+  const column = (name: string) => settings.header.indexOf(name);
+
+  it("applies every constraint only after the node labels", () => {
+    for (const row of settings.rows) {
+      const placement = row[column("_Placement_")];
+
+      expect(placement, row[0]).toContain("Constraints");
+      expect(placement, row[0]).toMatch(/depois dos labels do nó \(onda 17\)/);
+      expect(placement, row[0]).toMatch(/antes, vazio/);
+    }
+  });
+
+  it("switches the two PgBouncer tasks to stop-first", () => {
+    const row = settings.rows.find((r) => r[0] === "`trajetto-pgbouncer`")!;
+
+    expect(row[column("_Placement_")]).toContain('"MaxReplicas": 1');
+    expect(row[column("_Restart_, _Update_ e _Rollback_")]).toMatch(
+      /2 tarefas \(onda 23\)[^|]*`stop-first`/,
+    );
+  });
+});
