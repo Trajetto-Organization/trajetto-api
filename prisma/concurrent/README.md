@@ -87,18 +87,35 @@ recusado. DDL com pré-condição (uma troca de tabela, um `OWNER TO`) vai em
 Um índice que ninguém lê custa toda escrita da tabela. O `index_usage` do
 `/health/metrics` (bloco `database`, plano de escala F2-23) lista cada
 índice das tabelas quentes com as leituras e a última leitura, e marca em
-`unused` o candidato: nem chave primária nem unique, e sem leitura há 30
-dias. O corte é uma contração, por índice:
+`unused` o candidato: nem chave primária, nem unique, nem índice de chave
+estrangeira (`foreign_key`), e sem leitura há 30 dias. O `unused` não
+prova que o índice sobra: a janela conta do zeramento das estatísticas,
+não da criação do índice, e um caminho que roda menos que uma vez por
+mês lê zero nela. O corte é uma contração, por índice:
 
 1. Na produção, com pelo menos 30 dias de `pg_stat_statements` e sem
    zerar as estatísticas no meio, anote do `index_usage` o índice
    (`scans`, `last_scan_at`, `stats_reset_at`) em dois dias a 30 dias um
    do outro. O `scans` igual nas duas e o `last_scan_at` mais velho que a
    primeira (ou vazio) é o registro.
-2. Confira no código que nada o pede: um `@@index` do `schema.prisma`
-   que uma consulta usa num plano fixado (`tests/E2E/query-plans.test.ts`
-   e os registros de índices), ou um `@@unique` de um `upsert` (estes
-   nunca são candidatos).
+2. Confira no código que nada o pede, e descarte o candidato em qualquer
+   um destes casos:
+   - um `@@index` do `schema.prisma` que uma consulta usa num plano
+     fixado (`tests/E2E/query-plans.test.ts` e os registros de índices),
+     ou um `@@unique` de um `upsert` (estes nunca são candidatos);
+   - as colunas dele são as de uma relação (`@relation(fields: ...)`) da
+     tabela, mesmo que o `foreign_key` não o marque (uma relação sem a
+     restrição no banco): a remoção do pai, com `onDelete: Cascade` ou
+     não, varre a tabela quente sem ele;
+   - um job raro o lê: o expurgo de empresa
+     (`src/shared/jobs/tenant-offboard/purge-plan.ts`, as colunas de cada
+     passo), a anonimização de usuário
+     (`src/shared/jobs/user-anonymize`), os arquivos da trilha e do
+     histórico, e qualquer job mensal ou trimestral: 30 dias sem leitura
+     não dizem nada de quem roda menos que isso;
+   - ele veio de uma migration de menos de 30 dias antes da primeira
+     leitura, ou serve uma funcionalidade ainda desligada por variável de
+     ambiente: zero leitura aí é só o que se espera.
 3. Uma branch própria, como as contrações da onda 20
    ([as branches das contrações](../../docs/deploy.md#as-branches-das-contrações)):
    um arquivo aqui com

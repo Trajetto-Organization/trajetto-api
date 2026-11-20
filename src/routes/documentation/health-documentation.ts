@@ -343,10 +343,15 @@ const databaseMetricsShape = {
           bytes: z.number().describe("Tamanho do índice, partições somadas."),
           primary: z.boolean(),
           unique: z.boolean(),
+          foreign_key: z
+            .boolean()
+            .describe(
+              "Uma chave estrangeira da tabela abre o índice (as colunas dela são as primeiras dele): é por ele que o ON DELETE CASCADE do pai e a conferência da remoção do pai andam. Nunca é candidato.",
+            ),
           unused: z
             .boolean()
             .describe(
-              "Candidato a sair: nem chave primária nem unique, e sem leitura há 30 dias (a última leitura mais velha que isso, ou nenhuma numa janela de 30 dias ou mais).",
+              "Candidato a sair: nem chave primária, nem unique, nem índice de chave estrangeira, e sem leitura há 30 dias (a última leitura mais velha que isso, ou nenhuma numa janela de 30 dias ou mais, contada do zeramento das estatísticas, não da criação do índice).",
             ),
         }),
       ),

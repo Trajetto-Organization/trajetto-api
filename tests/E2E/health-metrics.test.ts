@@ -553,6 +553,21 @@ describe("the database's own numbers", () => {
     // A fresh database: the counters' window is unknown or short, so no
     // index is a candidate yet.
     expect(usage.unused).toEqual([]);
+
+    // The index of a foreign key, the one the parent's ON DELETE CASCADE
+    // walks, is marked so (also when the key's column leads a longer
+    // index), and never becomes a candidate.
+    const byName = (name: string) =>
+      usage.indexes.find((entry: { index: string }) => entry.index === name);
+
+    expect(byName("route_stop_deliveryId_idx")).toMatchObject({
+      table: "route_stop",
+      foreign_key: true,
+      unused: false,
+    });
+    expect(byName("route_stop_routeId_status_idx")).toMatchObject({
+      foreign_key: true,
+    });
   });
 
   it("report a partitioned table once, by its root", async () => {

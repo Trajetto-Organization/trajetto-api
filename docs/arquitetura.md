@@ -6124,11 +6124,16 @@ Só no endpoint, uma quarta leitura, guardada por 15 minutos, traz o
 `index_usage` (plano de escala F2-23): cada índice das tabelas quentes,
 pela raiz da partição, com as leituras desde o último zeramento das
 estatísticas (`pg_stat_database.stats_reset`), a última leitura (o
-`last_idx_scan` do Postgres 16), o tamanho e se é chave primária ou
-unique. `unused` marca o candidato a sair: nem chave primária nem unique,
-e sem leitura há 30 dias (a última mais velha que isso, ou nenhuma numa
-janela de contadores de 30 dias ou mais; com os contadores nunca
-zerados, a janela é desconhecida e nada é marcado). O corte é à mão, um
+`last_idx_scan` do Postgres 16), o tamanho, se é chave primária ou
+unique e se é índice de chave estrangeira (`foreign_key`: as colunas de
+uma chave estrangeira da tabela abrem o índice, e é por ele que o
+`ON DELETE CASCADE` do pai anda). `unused` marca o candidato a sair: nem
+chave primária, nem unique, nem índice de chave estrangeira, e sem
+leitura há 30 dias (a última mais velha que isso, ou nenhuma numa janela
+de contadores de 30 dias ou mais; com os contadores nunca zerados, a
+janela é desconhecida e nada é marcado). A janela conta do zeramento,
+não da criação do índice, e um job raro lê menos que uma vez por mês: o
+`unused` é só o ponto de partida do roteiro do corte. O corte é à mão, um
 índice por release, com duas leituras do bloco a 30 dias uma da outra no
 commit ([prisma/concurrent](../prisma/concurrent/README.md#um-índice-que-sai)).
 A amostra do cluster não leva o relatório (ficaria grande a cada 15

@@ -40,6 +40,7 @@ function row(overrides: Partial<IndexUsageRow> = {}): IndexUsageRow {
     bytes: 8192,
     is_primary: false,
     is_unique: false,
+    serves_foreign_key: false,
     ...overrides,
   };
 }
@@ -62,6 +63,7 @@ describe("indexUsageOf", () => {
         bytes: 8192,
         primary: false,
         unique: false,
+        foreign_key: false,
         unused: true,
       },
     ]);
@@ -114,6 +116,47 @@ describe("indexUsageOf", () => {
 
     expect(unknown.window_days).toBeNull();
     expect(unknown.unused).toEqual([]);
+  });
+
+  it("never flags an index that serves a foreign key, read or not", () => {
+    // route_stop_deliveryId_idx answers the ON DELETE CASCADE of delivery:
+    // nothing SELECTs through it for months, and the next removal of a
+    // delivery without it scans the whole route_stop under the lock.
+    const usage = indexUsageOf(
+      {
+        stats_reset_at: daysAgo(60),
+        indexes: [
+          row({
+            index_name: "route_stop_deliveryId_idx",
+            serves_foreign_key: true,
+          }),
+          row({
+            index_name: "route_stop_routeId_status_idx",
+            serves_foreign_key: true,
+            scans: 4,
+            last_scan_at: daysAgo(90),
+          }),
+        ],
+      },
+      NOW,
+    );
+
+    expect(usage.indexes.map((entry) => entry.foreign_key)).toEqual([
+      true,
+      true,
+    ]);
+    expect(usage.unused).toEqual([]);
+  });
+
+  it("reads a row without the foreign key flag as not serving one", () => {
+    const { serves_foreign_key: _, ...older } = row();
+    const usage = indexUsageOf(
+      { stats_reset_at: daysAgo(31), indexes: [older as IndexUsageRow] },
+      NOW,
+    );
+
+    expect(usage.indexes[0].foreign_key).toBe(false);
+    expect(usage.unused).toEqual(["route_stop_some_idx"]);
   });
 
   it("turns a driver's strings and nulls into numbers, never NaN", () => {
@@ -219,5 +262,10 @@ describe("the index usage in the database block", () => {
     // and naming the column would fail the whole read there.
     expect(sql).toContain("'last_idx_scan'");
     expect(sql).toContain("stats_reset");
+    // The foreign keys of the table the index is on: one whose columns
+    // lead the index makes it the index of the parent's cascade.
+    expect(sql).toContain("pg_constraint");
+    expect(sql).toContain("contype = 'f'");
+    expect(sql).toContain("serves_foreign_key");
   });
 });

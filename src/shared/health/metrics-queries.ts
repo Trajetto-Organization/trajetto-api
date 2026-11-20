@@ -605,7 +605,10 @@ function databaseSizesSql(): Prisma.Sql {
  * index of the hot tables, by partition root (a partition's index is a
  * partition of the parent's, so pg_partition_root names the parent's), its
  * scans and size summed over the partitions, whether it is a primary key
- * or a unique, and its last scan. last_idx_scan only exists from Postgres
+ * or a unique, whether a foreign key of its table leads it (its columns,
+ * as a set, are the index's first ones: the index the parent's ON DELETE
+ * CASCADE and the check of a parent's removal walk), and its last scan.
+ * last_idx_scan only exists from Postgres
  * 16, so it is read through the row as JSON: on an older server it is
  * null instead of failing the read. With the reset of this database's
  * statistics, which says how long the scans were counted. The statistics
@@ -624,7 +627,14 @@ function indexUsageSql(): Prisma.Sql {
           max((to_jsonb(s) ->> 'last_idx_scan')::timestamptz) AS last_scan_at,
           sum(pg_relation_size(s.indexrelid))::float8 AS bytes,
           bool_or(i.indisprimary) AS is_primary,
-          bool_or(i.indisunique) AS is_unique
+          bool_or(i.indisunique) AS is_unique,
+          bool_or(EXISTS (
+            SELECT 1 FROM pg_constraint fk
+            WHERE fk.contype = 'f'
+              AND fk.conrelid = i.indrelid
+              AND (string_to_array(i.indkey::text, ' ')::int2[])[1:cardinality(fk.conkey)] @> fk.conkey
+              AND (string_to_array(i.indkey::text, ' ')::int2[])[1:cardinality(fk.conkey)] <@ fk.conkey
+          )) AS serves_foreign_key
         FROM pg_stat_user_indexes s
         JOIN pg_index i ON i.indexrelid = s.indexrelid
         LEFT JOIN pg_class root_table ON root_table.oid = pg_partition_root(s.relid)

@@ -9,8 +9,12 @@
  * INDEX_USAGE_WINDOW_DAYS.
  *
  * An index is a candidate (`unused`) only when it is neither a primary key
- * nor a unique (a constraint or an upsert needs it whatever the scans say)
- * and either its last scan is older than the window, or it was never
+ * nor a unique (a constraint or an upsert needs it whatever the scans say),
+ * nor the index of a foreign key of its table (`foreign_key`: the key's
+ * columns lead it, so the parent's ON DELETE CASCADE, or the check of a
+ * parent's removal, walks it instead of the whole hot table; those reads
+ * never show as scans of a query anybody wrote, and may come once a
+ * quarter), and either its last scan is older than the window, or it was never
  * scanned in a window of the counters that is at least that long. With
  * counters that were never reset, since when they run is unknown and a
  * zero proves nothing (an index created yesterday reads zero too): no
@@ -36,6 +40,9 @@ interface IndexUsageRow {
   bytes: number;
   is_primary: boolean;
   is_unique: boolean;
+
+  /** Absent in a reading from before the flag: read as false. */
+  serves_foreign_key?: boolean;
 }
 
 interface IndexUsageQueryRow {
@@ -51,6 +58,10 @@ interface IndexUsageEntry {
   bytes: number;
   primary: boolean;
   unique: boolean;
+
+  /** A foreign key of its table leads it: never a candidate. */
+  foreign_key: boolean;
+
   unused: boolean;
 }
 
@@ -98,7 +109,9 @@ function indexUsageOf(
   const indexes = (row?.indexes ?? []).map((index): IndexUsageEntry => {
     const scans = finite(index.scans);
     const lastScanAt = iso(index.last_scan_at);
-    const constraint = index.is_primary === true || index.is_unique === true;
+    const foreignKey = index.serves_foreign_key === true;
+    const constraint =
+      index.is_primary === true || index.is_unique === true || foreignKey;
     const unreadSince =
       lastScanAt !== null
         ? Date.parse(lastScanAt) < cutoff
@@ -114,6 +127,7 @@ function indexUsageOf(
       bytes: finite(index.bytes),
       primary: index.is_primary === true,
       unique: index.is_unique === true,
+      foreign_key: foreignKey,
       unused: !constraint && unreadSince,
     };
   });
