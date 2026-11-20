@@ -46,7 +46,10 @@ Redis, que só vale nas rotas que pedem (`config.sessionCache`) e só com
    cache: ele depende do que a requisição pede. O orçamento do painel
    (F2-28) também.
 6. **Falha fechada:** a cópia só é servida enquanto o feed de revogação leu
-   o log há pouco (`fresh()`). Feed desligado
+   o log há pouco (`fresh()`: um poll e meio desde o começo da última
+   leitura boa, 1,5 s no padrão; uma leitura lenta ou falhando para de
+   valer nesse prazo, e uma revogação que a réplica ainda não leu nunca é
+   servida além dele). Feed desligado
    (`REVOCATION_FEED_POLL_MS=0`), banco sem responder ao feed ou processo
    recém-iniciado: toda requisição lê o banco, como se o cache não existisse.
 7. **Invalidação síncrona na réplica que revoga:** os helpers de segurança

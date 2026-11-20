@@ -4209,7 +4209,8 @@ vêm de uma consulta só, então um id ausente ali não tinha commitado quando o
 cursor passou por ele. Um processo que
 não consegue ler o log guarda o cursor e lê tudo quando o banco volta;
 `fresh()` diz se a última leitura é recente o bastante para confiar num
-cache. `REVOCATION_FEED_POLL_MS=0` desliga o feed. Provas: os unitários
+cache: um poll e meio contado do começo da última leitura boa (o que ela
+viu), 1,5 s no padrão. `REVOCATION_FEED_POLL_MS=0` desliga o feed. Provas: os unitários
 `revocation-feed` e o E2E `revocation-feed` (dois processos: pelo SQL em
 até 2 s, pelo app em menos de 100 ms).
 

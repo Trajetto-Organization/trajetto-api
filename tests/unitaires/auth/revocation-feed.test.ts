@@ -25,6 +25,9 @@ import {
  *  - the nudge reads at once and sends one hint per burst; another
  *    process's hint makes this one read, its own does not;
  *  - a log that cannot be read keeps the cursor, and `fresh()` says so;
+ *  - `fresh()` counts from the start of the last good read (what it saw)
+ *    and lasts a poll and a half: a revocation the replica has not read
+ *    is never trusted away for longer than that;
  *  - 0 turns it all off.
  */
 
@@ -298,6 +301,44 @@ describe("the poll", () => {
 
     expect(seen.handed).toEqual([["user", "u-1"]]);
     expect(feed.fresh()).toBe(true);
+  });
+
+  it("is fresh for a poll and a half from the start of its last good read, slow or failing after it", async () => {
+    vi.useFakeTimers();
+
+    const log = fakeLog();
+    let slow: (() => void) | null = null;
+    let hang = false;
+    const feed = createRevocationFeed({
+      ...log.deps,
+      read: async (cursor, watch, limit) => {
+        if (hang) await new Promise<void>((resolve) => (slow = resolve));
+
+        return log.deps.read(cursor, watch, limit);
+      },
+      pollMs: 1_000,
+    });
+
+    feed.listen({ revoked: () => undefined, gap: () => undefined });
+    await vi.advanceTimersByTimeAsync(0);
+
+    // The last good read started at 0; the next one, at 1 s, hangs.
+    hang = true;
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(feed.fresh()).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(feed.fresh()).toBe(false);
+
+    // It answers at 2.4 s, from what it saw at 1 s: fresh until 2.5 s.
+    await vi.advanceTimersByTimeAsync(899);
+    hang = false;
+    (slow as (() => void) | null)?.();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(feed.fresh()).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(101);
+    expect(feed.fresh()).toBe(false);
   });
 
   it("ignores a kind it does not know", async () => {

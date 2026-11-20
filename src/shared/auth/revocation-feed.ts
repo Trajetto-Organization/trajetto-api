@@ -52,7 +52,8 @@ const log = logger.child({ component: "revocation-feed" });
  *    there was not committed when the cursor passed it;
  *  - a process that cannot read the log keeps its cursor and reads it all
  *    when the database answers. `fresh()` says whether the last read is
- *    recent enough to trust a cached session on it.
+ *    recent enough to trust a cached session on it: a poll and a half
+ *    from the start of the last good read.
  *
  * The feed reads only while somebody listens (`listen`), from the id that
  * was the newest when the first listener came: a process has no session
@@ -64,6 +65,8 @@ const GAP_GRACE_MS = 10_000;
 const LATE_WATCH_MS = 5 * 60_000;
 const LATE_WATCH_MAX = 1_000;
 const HINT_DEBOUNCE_MS = 20;
+/** How many polls a good read is trusted for (fresh()). */
+const FRESH_POLLS = 1.5;
 /** Ids below the newest watched when the cursor jumps to it. */
 const JUMP_WATCH = 256;
 
@@ -207,9 +210,12 @@ function createRevocationFeed(deps: RevocationFeedDeps) {
 
     for (const [id, until] of late) if (until <= at) late.delete(id);
 
+    // What the read sees is the log as of its start, not of its answer:
+    // a revocation committed while a slow read runs is not in it.
+    const startedAt = now();
     const rows = await deps.read(position, [...late.keys()], limit);
 
-    lastReadAt = now();
+    lastReadAt = startedAt;
 
     if (failing) {
       failing = false;
@@ -392,12 +398,20 @@ function createRevocationFeed(deps: RevocationFeedDeps) {
     /** One read now (tests, and the listeners that want it). */
     poll,
 
-    /** Whether the log was read recently enough to trust a cache on it. */
+    /**
+     * Whether the log was read recently enough to trust a cache on it: a
+     * poll and a half from the start of the last good read (1.5 s at the
+     * default). The next read starts a poll after the previous answered,
+     * so a healthy feed stays fresh; a slow or failing one stops being
+     * trusted, and a revocation this process has not read is never served
+     * past that window.
+     */
     fresh(): boolean {
       return (
         deps.pollMs > 0 &&
         listeners.size > 0 &&
-        now() - lastReadAt <= deps.pollMs * 2 + 1_000
+        lastReadAt > 0 &&
+        now() - lastReadAt <= deps.pollMs * FRESH_POLLS
       );
     },
 

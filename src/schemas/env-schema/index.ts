@@ -2183,8 +2183,10 @@ const envSchema = z
      * two routes that opt in (POST /route/positions and GET
      * /route/control-tower), never for a MASTER. A revocation drops it at
      * once on the replica that made it and within the revocation feed's
-     * second on the others; with the feed not fresh (off, or the log
-     * unreadable) every request reads the database. 0, the default, turns
+     * second on the others (1.5 s with the pub/sub hint lost: a copy is
+     * trusted a poll and a half from the start of the last good read);
+     * with the feed not fresh (off, or the log unreadable, or slow) every
+     * request reads the database. 0, the default, turns
      * it off: production keeps it at 0 until the gate's ABBA shows the
      * gain and the owner accepts in writing the one second of the other
      * replicas. At most 15000. Empty counts as absent.
