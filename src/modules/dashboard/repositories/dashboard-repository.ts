@@ -24,6 +24,8 @@ import { deliveryPieces } from "./delivery-pieces";
 import { DUE_SOON_DAYS } from "./maintenance-standing";
 import { periodBuckets } from "./period-buckets";
 
+import { businessDateKey } from "@/shared/time/business-day";
+
 import {
   PENDING_DELIVERY_METRIC,
   deliveryMetric,
@@ -213,9 +215,11 @@ class DashboardRepository implements IDashboardRepository {
       ),
     );
 
-    // The UTC days a mark touching the window can hold, both ends included.
-    const firstUtcDay = pieces[0].from.toISOString().slice(0, 10);
-    const lastUtcDay = pieces[pieces.length - 1].to.toISOString().slice(0, 10);
+    // The UTC days a mark touching the window can hold, both ends included:
+    // the trigger marks the UTC day of created_at (migration
+    // 20261119130100), so this calendar is UTC on purpose, not the company's.
+    const firstUtcDay = businessDateKey(pieces[0].from, "UTC");
+    const lastUtcDay = businessDateKey(pieces[pieces.length - 1].to, "UTC");
 
     const company = businessId
       ? Prisma.sql`WHERE "id" = ${businessId}`
