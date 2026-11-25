@@ -319,11 +319,13 @@ beforeAll(async () => {
   );
 
   // The bell: thirty thousand read notifications and fifty unread ones.
+  // Partitioned by RANGE(id) since F5-15: v7 ids minted at created_at, as
+  // the code mints them, so each row lands in its month's partition.
   await sql(
     `INSERT INTO notification (id, type, title, message, read, "businessId", "userId", created_at, updated_at)
-     SELECT gen_random_uuid()::text, 'delivery', 'Entrega', 'Mudou', n > 50, $1, $2,
-            now() - (n || ' minutes')::interval, now()
-     FROM generate_series(1, 30050) n`,
+     SELECT ${uuid7Sql("t.at")}, 'delivery', 'Entrega', 'Mudou', n > 50, $1, $2, t.at, now()
+     FROM generate_series(1, 30050) n
+     CROSS JOIN LATERAL (SELECT now() - (n || ' minutes')::interval AS at) t`,
     CARRIER,
     ADMIN,
   );
