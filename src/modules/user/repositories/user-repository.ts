@@ -53,12 +53,15 @@ import { NO_USER_HISTORY, type UserHistoryCounts } from "../user-history-rules";
  * The user listings stream NDJSON, and a stream never passes through the
  * response serializer: whatever these queries return is exactly what leaves.
  * They selected the whole row, so every password hash of a company went to
- * any profile allowed to read its users. The hash stops here.
+ * any profile allowed to read its users. The hash stops here, and so does
+ * `anonymized_at`: the removal job's own bookkeeping (when the personal
+ * data was erased), which the documented line does not carry and no screen
+ * reads (an anonymized user already shows under the anonymous name).
  */
-function withoutPassword<T extends { password?: unknown }>(
+function listedUser<T extends { password?: unknown; anonymized_at?: unknown }>(
   user: T,
-): Omit<T, "password"> {
-  const { password: _password, ...listed } = user;
+): Omit<T, "password" | "anonymized_at"> {
+  const { password: _password, anonymized_at: _anonymizedAt, ...listed } = user;
 
   return listed;
 }
@@ -177,7 +180,7 @@ class UserRepository implements IUserRepository {
         : [];
 
     return {
-      data: rows.map(withoutPassword),
+      data: rows.map(listedUser),
       groups: grouped.map((group) => ({
         role: group.role,
         access_revoked: group.access_revoked,
@@ -1141,7 +1144,7 @@ class UserRepository implements IUserRepository {
     });
 
     return {
-      data: rows.map(withoutPassword),
+      data: rows.map(listedUser),
       groups: grouped.map((group) => ({
         role: group.role,
         access_revoked: group.access_revoked,
@@ -1182,7 +1185,7 @@ class UserRepository implements IUserRepository {
     const data = hasMore ? items.slice(0, limit) : items;
     const nextCursor = hasMore ? (data[data.length - 1]?.id ?? null) : null;
 
-    return { data: data.map(withoutPassword), nextCursor, hasMore };
+    return { data: data.map(listedUser), nextCursor, hasMore };
   }
 }
 

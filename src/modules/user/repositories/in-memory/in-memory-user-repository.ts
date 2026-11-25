@@ -144,10 +144,11 @@ function recordNotFound(): Prisma.PrismaClientKnownRequestError {
   );
 }
 
-function withoutPassword<T extends { password?: unknown }>(
+/** As the real listings: no hash, no removal bookkeeping on the line. */
+function listedUser<T extends { password?: unknown; anonymized_at?: unknown }>(
   user: T,
-): Omit<T, "password"> {
-  const { password: _password, ...listed } = user;
+): Omit<T, "password" | "anonymized_at"> {
+  const { password: _password, anonymized_at: _anonymizedAt, ...listed } = user;
 
   return listed;
 }
@@ -285,7 +286,7 @@ class InMemoryUserRepository implements IUserRepository {
       : undefined;
 
     const row = {
-      ...withoutPassword(user),
+      ...listedUser(user),
       // The real query selects only these names from the relations.
       profileAccess: profile ? { name: profile.name } : null,
       driver: driverName ? { name: driverName } : null,
@@ -1119,7 +1120,7 @@ class InMemoryUserRepository implements IUserRepository {
     return {
       data: this.sorted(filtered, sort, order)
         .slice(skip, skip + pageSize)
-        .map((user) => withoutPassword(user) as unknown as ListUsersProps),
+        .map((user) => listedUser(user) as unknown as ListUsersProps),
       groups: this.groupsOf(base),
       profileNames: new Map(),
       emailVerified: filtered.filter((user) => user.email_verified).length,
@@ -1155,7 +1156,7 @@ class InMemoryUserRepository implements IUserRepository {
     const data = filtered.slice(0, limit);
     const nextCursor = hasMore ? (data[data.length - 1]?.id ?? null) : null;
 
-    return { data: data.map(withoutPassword), nextCursor, hasMore };
+    return { data: data.map(listedUser), nextCursor, hasMore };
   }
 }
 
