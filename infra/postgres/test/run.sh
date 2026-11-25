@@ -355,9 +355,26 @@ conninfo=$(sb_sql 'SHOW primary_conninfo')
 [ "$(stat -c '%a %U' "${SB_RUN}/replication.pgpass")" = "600 postgres" ] || fail "o passfile não é 600 do postgres"
 if grep -q "primary_conninfo" "${SB_DATA}/postgresql.auto.conf"; then fail "o clone gravou primary_conninfo no volume"; fi
 if grep -q "$REPLICATION_PASSWORD" "$SB_LOG" "${SB_DATA}/postgresql.auto.conf" < /dev/null; then fail "a senha de replicação vazou"; fi
-if tr '\0' '\n' < "/proc/${SB_PID}/environ" | grep -q '^POSTGRES_REPLICATION_PASSWORD='; then
+# The environment is asked of the server itself: what a program it starts
+# inherits (archive_command and restore_command run pgBackRest). Never
+# /proc/<pid>/environ, which this check read inside an `if`: root is denied
+# another user's without CAP_SYS_PTRACE (the build's sandbox), so the read
+# failed and the check passed without reading anything; and even read as
+# postgres it is the area the postmaster overwrites with its ps title, after
+# moving the variables out, so most of them are not there. The copy must be
+# the standby's own environment (PGDATA) and hold the password under no
+# name: the official entrypoint drops every POSTGRES_* before it execs the
+# server, but a PGPASSWORD (or any other name) would get through.
+SB_ENV="${WORK}/standby-environ"
+rm -f "$SB_ENV"
+sb_sql "COPY (SELECT 1) TO PROGRAM 'env > ${SB_ENV}'" \
+  || fail "o standby não mostrou o próprio ambiente"
+grep -qx "PGDATA=${SB_DATA}" "$SB_ENV" \
+  || fail "o ambiente lido não é o do servidor do standby"
+if grep -qF -e POSTGRES_REPLICATION_PASSWORD -e "$REPLICATION_PASSWORD" "$SB_ENV"; then
   fail "a senha de replicação ficou no ambiente do servidor"
 fi
+rm -f "$SB_ENV"
 [ "$(sb_sql 'SHOW hot_standby_feedback')" = off ] || fail "hot_standby_feedback ligado"
 [ "$(sb_sql 'SHOW max_standby_streaming_delay')" = 30s ] || fail "max_standby_streaming_delay não é 30s"
 stop_standby

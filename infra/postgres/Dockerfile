@@ -1,10 +1,11 @@
 # syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 
 # trajetto-postgres: the Database image of staging and production
-# (plano-escala F1-01). The official postgres:16-alpine, byte for byte, plus
-# pgBackRest compiled from source, the parameters production runs
-# (trajetto-entrypoint.sh, postgres.params), a versioned pg_hba.conf, the
-# standby branch (plano-escala F4-40) and the backup and drill scripts.
+# (plano-escala F1-01). The official postgres:16-alpine, its server byte for
+# byte, plus pgBackRest compiled from source, its gosu rebuilt with a fixed
+# Go (below), the parameters production runs (trajetto-entrypoint.sh,
+# postgres.params), a versioned pg_hba.conf, the standby branch
+# (plano-escala F4-40) and the backup and drill scripts.
 #
 #   docker build -t trajetto-postgres infra/postgres      the image (last stage)
 #   docker build --target test infra/postgres             its tests, offline
@@ -20,9 +21,11 @@
 # server (18 on Alpine 3.24) beside the image's own 16. The builder compiles
 # it against the image's own libpq, and the image ships the binary alone.
 #
-# The base by digest (INFRA-16): postgres:16-alpine (16.15, Alpine 3.24), the
-# same digest as validate.yml's services and staging.yml's smoke test; bumped
-# with them, by hand (docs/deploy.md, "Versões fixas").
+# The base by digest (INFRA-16): postgres:16-alpine (16.16, Alpine 3.24.4,
+# the index of 18/11/2026), the same digest as validate.yml's services,
+# staging.yml's smoke test and trajetto-ui's validate.yml; bumped with them,
+# by hand, all at once (docs/deploy.md, "Versões fixas"). A minor bump keeps
+# the volume: the same major and the same musl collation.
 #
 # pgBackRest's version and the SHA-256 of its source, in this one ARG: the
 # primary, the future standby and the restore drill all run this image, so
@@ -33,7 +36,51 @@
 ARG PGBACKREST_VERSION=2.60.1 \
     PGBACKREST_SHA256=9a8aaf770e5e57c18426d5c2fa34e749db1ecb2d56979bf064550d5493a2df55
 
-FROM postgres:16-alpine@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab AS base
+# gosu's version and the SHA-256 of its source, in one ARG as pgBackRest's.
+# 1.20 is the release the base ships (the first with the fix of
+# GO-2026-6686 in github.com/moby/sys/user): the same source, another Go.
+ARG GOSU_VERSION=1.20 \
+    GOSU_SHA256=207a2045e890d3ca3326027c5f585733085960b401a49dbc00e3bb628c054cf8
+
+# --- gosu, rebuilt with a fixed Go ---------------------------------------------
+# The base's /usr/local/bin/gosu (the official entrypoint steps down to the
+# postgres user with it; so do trajetto-backup and the drill) is upstream's
+# release binary, built with Go 1.24.6: the image scan of staging.yml flags
+# its stdlib with CVE-2025-68121 (crypto/tls session resumption, CRITICAL,
+# fixed in Go 1.24.13 and 1.25.7) and two dozen HIGHs. gosu never links
+# crypto/tls, and upstream does not rebuild for a CVE in code it does not
+# call (its SECURITY.md); but no official postgres:16-alpine has a newer
+# toolchain either (the base's digest of 18/11/2026, 16.16, ships gosu 1.20
+# still built with Go 1.24.6), and a finding waved through by hand would
+# hide the next real one. So upstream's release source, checked by its SHA-256,
+# built the way upstream builds it (static, no cgo, `-trimpath -ldflags
+# '-d -w'`) with the Go of this builder, pinned by digest; bumped by hand,
+# like the base.
+# su-exec would be a smaller swap, but every caller here and the official
+# entrypoint run `gosu` by name, with its own argument rules.
+FROM golang:1.27.4-alpine3.24@sha256:70bd7ddea8b6cbe5d6943cde279d6b67feb10cc924fb9100d1d8757c1575b280 AS gosu
+ARG GOSU_VERSION GOSU_SHA256
+# The modules come from the Go proxy, each checked against gosu's own
+# go.sum and the checksum database; the compile itself has no network.
+RUN set -eu; \
+    wget -q -O /tmp/gosu.tar.gz \
+      "https://github.com/tianon/gosu/archive/refs/tags/${GOSU_VERSION}.tar.gz"; \
+    echo "${GOSU_SHA256}  /tmp/gosu.tar.gz" | sha256sum -c -; \
+    mkdir /src; \
+    tar -xzf /tmp/gosu.tar.gz -C /src --strip-components=1; \
+    rm /tmp/gosu.tar.gz; \
+    cd /src; \
+    GOTOOLCHAIN=local go mod download; \
+    GOTOOLCHAIN=local go mod verify
+RUN --network=none set -eu; \
+    cd /src; \
+    CGO_ENABLED=0 GOTOOLCHAIN=local go build -trimpath -buildvcs=false \
+      -ldflags '-d -w' -o /out/usr/local/bin/gosu .; \
+    chmod 0755 /out/usr/local/bin/gosu; \
+    test "$(/out/usr/local/bin/gosu --version)" = "${GOSU_VERSION} ($(go env GOVERSION) on linux/$(go env GOARCH); gc)"; \
+    /out/usr/local/bin/gosu nobody true
+
+FROM postgres:16-alpine@sha256:f2f98726820d0342055351c6e9d36e705f5bfffb3dd53ff556325114b08afb6d AS base
 
 # --- wrapper: the official server started the way this image starts it ------
 # The parameters, pg_hba (the official rules plus one replication line for
@@ -95,6 +142,12 @@ RUN set -eu; \
     rm /tmp/apk-before /tmp/apk-after
 
 COPY --link --from=pgbackrest /out/ /
+# The rebuilt gosu over the base's, at the same path and mode the official
+# entrypoint runs. Here and not in the wrapper: the E2E infra phase builds
+# that stage with no cache, and its step-down is the same gosu release
+# (1.20, the base's) compiled by an older Go; what ships, and what the test
+# stage starts as root, is this one.
+COPY --link --from=gosu /out/ /
 COPY --link pgbackrest.conf /etc/pgbackrest/pgbackrest.conf
 # The backup of the Schedule Jobs and the monthly drill (F1-02) ship with
 # the server they back up: the same pgBackRest, no other copy to drift.

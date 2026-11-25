@@ -76,8 +76,10 @@ describe("the image's Dockerfile", () => {
     // than in the suites would test one server and ship another.
     expect(e2e?.[1]).toBe(from?.[1]);
     expect(staging).toContain(`POSTGRES_IMAGE: ${from?.[1]}`);
-    // Only the base: every other stage builds on it.
+    // Only the base, and the builder of gosu: every other stage builds on
+    // the base.
     expect(instructions.filter((line) => /^FROM /.test(line))).toEqual([
+      expect.stringMatching(/^FROM golang:\S+@sha256:[0-9a-f]{64} AS gosu$/),
       expect.stringMatching(/^FROM postgres:16-alpine@sha256:\w+ AS base$/),
       "FROM base AS wrapper",
       "FROM base AS pgbackrest",
@@ -135,6 +137,70 @@ describe("the image's Dockerfile", () => {
     expect(compile).toContain(
       'pgbackrest version)" = "pgBackRest ${PGBACKREST_VERSION}"',
     );
+  });
+
+  it("ships gosu rebuilt from its checked source with a Go that has the fix of CVE-2025-68121", () => {
+    // The base's gosu is upstream's binary, built with Go 1.24.6: the image
+    // scan of staging.yml flagged its crypto/tls with CVE-2025-68121
+    // (CRITICAL), fixed in Go 1.24.13 and 1.25.7. A builder moved back to an
+    // older Go would bring the finding back.
+    const builder =
+      /^FROM golang:(\d+)\.(\d+)\.(\d+)-alpine[\d.]+@sha256:[0-9a-f]{64} AS gosu$/.exec(
+        instructions.find((line) => / AS gosu$/.test(line)) ?? "",
+      );
+
+    expect(builder).not.toBeNull();
+    const [major, minor, patch] = (builder ?? []).slice(1).map(Number);
+    const fixed =
+      minor > 25 ||
+      (minor === 25 && patch >= 7) ||
+      (minor === 24 && patch >= 13);
+    expect(major).toBe(1);
+    expect(fixed, `Go ${major}.${minor}.${patch}`).toBe(true);
+
+    // Version and SHA-256 in one ARG before every stage, as pgBackRest's.
+    const declared = instructions.filter((line) =>
+      /^ARG .*GOSU_(?:VERSION|SHA256)=/.test(line),
+    );
+    expect(declared).toHaveLength(1);
+    expect(declared[0]).toMatch(
+      /^ARG GOSU_VERSION=\d+\.\d+ GOSU_SHA256=[0-9a-f]{64}$/,
+    );
+    expect(instructions.indexOf(declared[0])).toBeLessThan(
+      instructions.findIndex((line) => /^FROM /.test(line)),
+    );
+
+    const stage = instructions.slice(
+      instructions.findIndex((line) => / AS gosu$/.test(line)),
+      instructions.findIndex((line) => / AS base$/.test(line)),
+    );
+    const download = stage.find((line) => /wget/.test(line)) ?? "";
+    const compile = stage.find((line) => /go build/.test(line)) ?? "";
+
+    // The source is checked before it is unpacked; its modules against its
+    // own go.sum; the compile has no network and no cgo (a static binary,
+    // as upstream's), and proves the binary reports the builder's Go.
+    expect(download).toMatch(/sha256sum -c -.*tar -xzf/);
+    expect(download).toContain(
+      "https://github.com/tianon/gosu/archive/refs/tags/${GOSU_VERSION}.tar.gz",
+    );
+    expect(download).toContain("go mod verify");
+    expect(compile).toMatch(/^RUN --network=none /);
+    expect(compile).toContain("CGO_ENABLED=0");
+    expect(compile).toContain("-ldflags '-d -w' -o /out/usr/local/bin/gosu");
+    expect(compile).toContain(
+      'gosu --version)" = "${GOSU_VERSION} ($(go env GOVERSION) on linux/$(go env GOARCH); gc)"',
+    );
+
+    // Over the base's, at the path the official entrypoint runs, in the app
+    // stage (so the test stage and the image both run it), and only there.
+    const app = instructions.slice(
+      instructions.indexOf("FROM wrapper AS app"),
+      instructions.indexOf("FROM app AS test"),
+    );
+    const fromGosu = instructions.filter((line) => /--from=gosu/.test(line));
+    expect(app).toContain("COPY --link --from=gosu /out/ /");
+    expect(fromGosu).toHaveLength(1);
   });
 
   it("ships no postgresql package and fails the build if adding pgBackRest's library moves a package of the base", () => {
@@ -242,6 +308,34 @@ describe("the image's test stage", () => {
     expect(test).toContain("start_standby POSTGRES_REPLICATION_PASSWORD=");
     expect(test).toContain("SELECT pg_promote()");
     expect(test).toContain("o standby promovido foi rebaixado ao reiniciar");
+  });
+
+  it("asks the standby itself for its environment, and fails when it cannot read it", () => {
+    // The check read /proc/<pid>/environ inside an `if`: root is denied it
+    // without CAP_SYS_PTRACE (the build's sandbox), so the read failed and
+    // the check passed, and the postmaster overwrites that area with its ps
+    // title anyway (25/11/2026). Only code lines: the comment explains it.
+    const code = test
+      .split("\n")
+      .filter((line) => !/^\s*#/.test(line))
+      .join("\n");
+
+    expect(code).not.toMatch(/\/proc\/\S*\/environ/);
+    expect(code).toContain(
+      "sb_sql \"COPY (SELECT 1) TO PROGRAM 'env > ${SB_ENV}'\" \\\n  || fail",
+    );
+    // The read is the standby's (its PGDATA), and the password is looked
+    // for by value: a PGPASSWORD would get past the official entrypoint,
+    // which drops only POSTGRES_*.
+    expect(code).toContain(
+      'grep -qx "PGDATA=${SB_DATA}" "$SB_ENV" \\\n  || fail',
+    );
+    expect(code).toContain(
+      'grep -qF -e POSTGRES_REPLICATION_PASSWORD -e "$REPLICATION_PASSWORD" "$SB_ENV"; then',
+    );
+    expect(code.indexOf('rm -f "$SB_ENV"')).toBeLessThan(
+      code.indexOf("TO PROGRAM 'env > ${SB_ENV}'"),
+    );
   });
 });
 

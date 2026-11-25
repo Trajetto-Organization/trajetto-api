@@ -663,16 +663,25 @@ O mesmo commit testa e publica sempre nas mesmas versões:
   suítes da web. Troque à mão, nos três no mesmo dia, quando o GitHub
   anunciar o fim do 24.04 (o `ci-stability.test.ts` recusa `ubuntu-latest`).
 - **Imagens dos jobs**, por digest do índice multi-arquitetura, com a tag ao
-  lado em comentário: `postgres:16-alpine` (16.15) e `redis:7-alpine`
-  (7.4.12) nos serviços e no smoke test; o BuildKit do Buildx
-  (`moby/buildkit:v0.33.1`, a versão que o `buildx-stable-1` apontava em
-  30/10/2026); gitleaks e Trivy. Os digests do Postgres e do Redis são os
-  mesmos nos três repositórios. O Dependabot não lê imagens dentro dos
+  lado em comentário: `postgres:16-alpine` (16.16, desde 25/11/2026) e
+  `redis:7-alpine` (7.4.12) nos serviços e no smoke test; o BuildKit do
+  Buildx (`moby/buildkit:v0.33.1`, a versão que o `buildx-stable-1` apontava
+  em 30/10/2026); gitleaks e Trivy. Os digests do Postgres e do Redis são os
+  mesmos nos três repositórios. O Postgres está hoje em quatro lugares: o
+  `validate.yml` e o `staging.yml` daqui, o `validate.yml` da web e a base do
+  `infra/postgres/Dockerfile`. O Dependabot não lê imagens dentro dos
   workflows: para subir, pegue o digest novo do índice
   (`docker buildx imagetools inspect postgres:16-alpine`, a linha `Digest:`)
   e troque em todos os lugares de uma vez, nos três repositórios. O
   `ci-stability.test.ts` recusa uma imagem sem digest e o mesmo nome com dois
-  digests.
+  digests, também entre repositórios: com a web e o app ao lado (no
+  `Validate`, a ação `siblings` os traz), o Postgres e o Redis deles têm que
+  estar no digest daqui, e a base do `Dockerfile` também.
+- **Builders do `infra/postgres/Dockerfile`**, também por digest e à mão:
+  a base `postgres:16-alpine` (a mesma dos serviços, acima) e a
+  `golang:1.27.4-alpine3.24`, que só compila o `gosu` da imagem
+  ([seção 27](#o-gosu-recompilado)); o `postgres-image.test.ts` recusa um Go
+  sem a correção da CVE-2025-68121.
 - **O `docker buildx` dos jobs** é o que vem no runner (só o BuildKit é
   fixado), e ele muda com a imagem do runner. Uma diferença entre versões já
   medida: o `--format '{{.Manifest.Digest}}'` que o `ghcr.sh` usa devolve o
@@ -2279,7 +2288,10 @@ de onde o Postgres lê o `pg_hba`:
   - volume vazio: o wrapper clona o primário (`pg_basebackup` pelo slot,
     criado se faltar) e sobe o clone em recuperação, só leitura, seguindo o
     primário. A senha vai para um passfile, nunca para o
-    `primary_conninfo` nem para o volume. Sem a senha, com um host ou um
+    `primary_conninfo` nem para o volume, e sai do ambiente antes de o
+    servidor subir (o stage `test` pergunta o ambiente ao próprio servidor,
+    com `COPY ... TO PROGRAM 'env'`, e falha se ela estiver lá com qualquer
+    nome). Sem a senha, com um host ou um
     slot inválido, ou com o clone falhando, o contêiner para (código 64):
     um volume vazio nunca vira um primário novo no lugar do standby;
   - volume que já é standby (tem `standby.signal`): segue o primário, sem
@@ -6981,12 +6993,64 @@ os runs mais novos da web e do app são reexecutados.
 O Database PostgreSQL passa a rodar a imagem `trajetto-postgres`
 (`infra/postgres`): a `postgres:16-alpine` pelo mesmo digest da CI (o mesmo
 Postgres 16, a mesma musl e a mesma colação, então a troca serve no volume de
-hoje), mais o pgBackRest compilado da fonte, os parâmetros de produção
+hoje), mais o pgBackRest compilado da fonte, o `gosu` recompilado com um Go
+corrigido (abaixo), os parâmetros de produção
 (`infra/postgres/postgres.params`), toda a memória derivada do teto e os
 scripts `trajetto-backup` e `trajetto-restore-drill`. O porquê de cada valor
 está nos comentários do `infra/postgres/trajetto-entrypoint.sh`; as travas
 dos buckets, em `infra/r2/bucket-locks.md`; o ensaio, em
 [`runbooks/restore-drill.md`](./runbooks/restore-drill.md).
+
+### O gosu recompilado
+
+O entrypoint oficial desce de root para o usuário `postgres` com o
+`/usr/local/bin/gosu` da base (o `trajetto-backup` e o ensaio também). Esse
+binário é o release do upstream, compilado com Go 1.24.6, e o `Image scan`
+apontava nele a CVE-2025-68121 (CRITICAL; `crypto/tls`, retomada de sessão
+inesperada; corrigida no Go 1.24.13 e no 1.25.7), mais duas dezenas de HIGH
+da biblioteca padrão. O `gosu` nunca usa `crypto/tls`, e o upstream não
+recompila por CVE de código que ele não chama (o `SECURITY.md` do `gosu`);
+mas nenhuma `postgres:16-alpine` oficial traz um Go mais novo: a de
+18/11/2026 (16.16), a base desde 25/11/2026, ainda vem com o `gosu` 1.20 de
+Go 1.24.6.
+
+Por isso o `infra/postgres/Dockerfile` tem o stage `gosu`: a fonte do
+release (`GOSU_VERSION`, conferida pelo `GOSU_SHA256` antes de abrir), os
+módulos conferidos pelo `go.sum` dele, e a compilação sem rede e sem cgo,
+como o upstream compila, com o Go de uma `golang:<versão>-alpine3.24` fixada
+por digest. O binário entra no stage `app` (o que o stage `test` sobe como
+root e o que vai para o ar) por cima do da base, no mesmo caminho e com o
+mesmo modo. O stage `wrapper` (a fase infra do E2E) fica com o da base: o
+CI o constrói sem cache, e o código do `gosu` é o mesmo. O
+`postgres-image.test.ts` recusa um Go anterior às versões corrigidas.
+
+Medido em 25/11/2026 com o Trivy do CI (0.74.0, as mesmas opções do passo
+"Scan the images"): antes, `usr/local/bin/gosu` com 1 CRITICAL e 25 HIGH
+corrigíveis e saída 3 (achado); depois, `gosu` 1.20 de Go 1.27.4, nenhum
+achado nele e saída 0. Sobravam 20 HIGH da Alpine 3.24.3 da base 16.15
+(`krb5-libs`, `libxml2`, `libxslt`), nenhum CRITICAL.
+
+No mesmo dia a base subiu para a 16.16 (`sha256:f2f98726…`, Alpine 3.24.4),
+nos quatro lugares de uma vez ("Versões fixas", acima). Com o mesmo Trivy,
+em HIGH e CRITICAL: nenhum CRITICAL e 1 HIGH, o `libxml2` 2.13.9-r2
+(CVE-2026-86144, corrigida no r3, que a base ainda não traz). O `gosu`
+continua sem achado. A 16.16 é uma versão menor do mesmo 16, e a musl
+(1.2.6-r3) e a ICU (78.1) são as mesmas da 16.15, então a colação não muda
+e a troca continua servindo no volume de hoje.
+
+Só vale onde o Database roda a `trajetto-postgres`: enquanto ele estiver na
+`postgres:16-alpine` oficial (o `/health/rollout` mostra
+`database.imageRevision` nulo), o `gosu` dele é o de Go 1.24.6. A correção
+chega com a troca da imagem (a F1a abaixo, na staging; a troca da onda 3,
+na produção), pelo digest que o `Build` publicar a partir deste
+`infra/postgres`, depois de conferir no resumo do `Image scan` a linha
+"trajetto-postgres sem CRITICAL corrigível".
+
+Para subir: troque o digest da `golang` (`docker buildx imagetools inspect
+golang:<versão>-alpine3.24`, a linha `Digest:`) e, se for o caso,
+`GOSU_VERSION` com o `GOSU_SHA256` novo (o SHA-256 de
+`https://github.com/tianon/gosu/archive/refs/tags/<versão>.tar.gz`). O
+build confere que o binário diz a versão do `gosu` e o Go do builder.
 
 ### Regras do Database
 

@@ -1,5 +1,11 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  readdirSync,
+  readFileSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { resolve } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -367,6 +373,74 @@ describe("pinned versions", () => {
         "zricethezav/gitleaks:v8.30.1",
       ]),
     );
+  });
+
+  // One Postgres and one Redis for the suites of the three repositories and
+  // for the Database image (docs/deploy.md, "Versões fixas"). The bump of
+  // postgres:16-alpine to 16.16 (25/11/2026) touched four files in two
+  // repositories, and the test above reads this one only: a sibling left on
+  // the old digest would test the web against another server, green.
+  it("pins Postgres and Redis by the same digests in the sibling repositories and the Database image", () => {
+    const ciFilesOf = (dir: string) => {
+      const workflowDir = resolve(dir, ".github", "workflows");
+      const actionDir = resolve(dir, ".github", "actions");
+
+      return [
+        ...(existsSync(workflowDir) ? readdirSync(workflowDir) : [])
+          .filter((name) => /\.ya?ml$/.test(name))
+          .map((name) => `.github/workflows/${name}`),
+        ...(existsSync(actionDir) ? readdirSync(actionDir) : [])
+          .map((name) => `.github/actions/${name}/action.yml`)
+          .filter((file) => existsSync(resolve(dir, file))),
+      ];
+    };
+    // Not ghcr.io/…/trajetto-postgres: only the upstream images.
+    const pinsOf = (dir: string, files: string[]) =>
+      files.flatMap((file) =>
+        [
+          ...readFileSync(resolve(dir, file), "utf8").matchAll(
+            /(?<![\w./-])((?:postgres|redis):[\w.-]+)@(sha256:[0-9a-f]{64})/g,
+          ),
+        ].map(([, name, digest]) => ({ where: file, name, digest })),
+      );
+
+    const own = pinsOf(ROOT, [
+      ...ciFilesOf(ROOT),
+      "infra/postgres/Dockerfile",
+    ]);
+    const digestOf = new Map(own.map(({ name, digest }) => [name, digest]));
+
+    expect([...digestOf.keys()].sort()).toEqual([
+      "postgres:16-alpine",
+      "redis:7-alpine",
+    ]);
+    expect(own.map(({ where }) => where)).toContain(
+      "infra/postgres/Dockerfile",
+    );
+    for (const { where, name, digest } of own) {
+      expect(digest, `${where}: ${name}`).toBe(digestOf.get(name));
+    }
+
+    // Checked out next to this one by .github/actions/siblings in Validate
+    // (and by hand on a developer's machine); skipped when absent.
+    const clients = ["trajetto-ui", "trajetto-mobile"]
+      .map((repo) => ({ repo, dir: resolve(ROOT, "..", repo) }))
+      .filter(({ dir }) => existsSync(resolve(dir, "package.json")));
+
+    for (const { repo, dir } of clients) {
+      const pins = pinsOf(dir, ciFilesOf(dir));
+
+      // The web's E2E job runs both: a reader that found nothing there
+      // would pass without comparing anything.
+      if (repo === "trajetto-ui") {
+        expect(pins.map(({ name }) => name)).toEqual(
+          expect.arrayContaining(["postgres:16-alpine", "redis:7-alpine"]),
+        );
+      }
+      for (const { where, name, digest } of pins) {
+        expect(digest, `${repo}/${where}: ${name}`).toBe(digestOf.get(name));
+      }
+    }
   });
 
   it("pins BuildKit wherever Buildx is set up", () => {
