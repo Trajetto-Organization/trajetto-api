@@ -56,6 +56,12 @@ const INDEXES: Record<string, string> = {
   notification_delivery_business_internal_idx: `CREATE INDEX notification_delivery_business_internal_idx ON ONLY public.notification_delivery USING btree (business_id, "availableAt") WHERE ((status = ANY (ARRAY['PENDING'::"NotificationDeliveryStatus", 'PROCESSING'::"NotificationDeliveryStatus"])) AND (channel = ANY (ARRAY['IN_APP'::"NotificationChannel", 'ACTIVITY'::"NotificationChannel", 'PUSH'::"NotificationChannel"])))`,
   notification_delivery_business_external_idx: `CREATE INDEX notification_delivery_business_external_idx ON ONLY public.notification_delivery USING btree (business_id, "availableAt") WHERE ((status = ANY (ARRAY['PENDING'::"NotificationDeliveryStatus", 'PROCESSING'::"NotificationDeliveryStatus"])) AND (channel = ANY (ARRAY['EMAIL'::"NotificationChannel", 'WHATSAPP'::"NotificationChannel"])))`,
   webhook_delivery_claim_idx: `CREATE INDEX webhook_delivery_claim_idx ON ONLY public.webhook_delivery USING btree ("availableAt") WHERE (status = ANY (ARRAY['PENDING'::"WebhookDeliveryStatus", 'PROCESSING'::"WebhookDeliveryStatus"]))`,
+  // The background jobs' queue (migration 20261119100000_background_job):
+  // the fair claim by company, the oldest due rows, and one live job per
+  // kind and subject.
+  background_job_fair_idx: `CREATE INDEX background_job_fair_idx ON public.background_job USING btree ("businessId", "availableAt") WHERE (status = ANY (ARRAY['PENDING'::"BackgroundJobStatus", 'PROCESSING'::"BackgroundJobStatus"]))`,
+  background_job_due_idx: `CREATE INDEX background_job_due_idx ON public.background_job USING btree ("availableAt") WHERE (status = ANY (ARRAY['PENDING'::"BackgroundJobStatus", 'PROCESSING'::"BackgroundJobStatus"]))`,
+  background_job_live_subject_key: `CREATE UNIQUE INDEX background_job_live_subject_key ON public.background_job USING btree (kind, "subjectId") WHERE ((status = ANY (ARRAY['PENDING'::"BackgroundJobStatus", 'PROCESSING'::"BackgroundJobStatus"])) AND ("subjectId" IS NOT NULL))`,
   // The capped claim's walk by endpoint (plano-escala F3-13).
   webhook_delivery_endpoint_due_idx: `CREATE INDEX webhook_delivery_endpoint_due_idx ON ONLY public.webhook_delivery USING btree ("endpointId", "availableAt", id) WHERE (status = ANY (ARRAY['PENDING'::"WebhookDeliveryStatus", 'PROCESSING'::"WebhookDeliveryStatus"]))`,
   // The minute's close of the exhausted rows (plano-escala F3-08): only the
