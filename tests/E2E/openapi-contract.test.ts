@@ -41,6 +41,10 @@ const ANONYMOUS = [
   "GET /health",
   "GET /health/liveness",
   "GET /health/readiness",
+  // The release step's state for the pipeline (plano-escala U-11): its
+  // bearer is ROLLOUT_STATUS_TOKEN, not a session, and without the right
+  // one it answers the 404 of a missing route, never a 401.
+  "GET /health/rollout",
   "GET /integration/v1/catalogue",
   // The integrator's `proof_url` (plan of 02/11/2026, L7): a signed bearer
   // link, opened without a session.
