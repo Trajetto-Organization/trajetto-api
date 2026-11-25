@@ -185,9 +185,11 @@ const PLATFORM_EDITS = new Set([
  *
  *   POST /integration/v1/deliveries              integration-create-delivery
  *   POST /integration/v1/deliveries/{id}/cancel  integration-cancel-delivery
+ *   POST /integration/v1/deliveries/batch        integration-deliveries-batch
  */
 const KEYED_WRITES = new Set([
   "POST /integration/v1/deliveries",
+  "POST /integration/v1/deliveries/batch",
   "POST /integration/v1/deliveries/{id}/cancel",
 ]);
 
@@ -208,6 +210,12 @@ const NO_BODY = [
   "POST /ai-analysis/request/{recordType}/{recordId}",
   "POST /branch/request-branch-deletion/{branchId}/business/{businessId}",
   "POST /business/request-business-deletion/{businessId}",
+  // Undoes the scheduled purge of the company in the path (plano-escala
+  // F3-25), and removes the person in the path with their personal data
+  // (LGPD): each acts on the record its path names.
+  "POST /business/cancel-business-purge/{businessId}",
+  "POST /driver/anonymize-driver/{driverId}/business/{businessId}",
+  "POST /user/anonymize-user/{userId}",
   // Undoes the opt-out of the delivery's recipient (contract C2): acts on
   // the delivery in the path and the company's rows of that contact.
   "POST /delivery/reactivate-customer-messages/{deliveryId}/business/{businessId}",
