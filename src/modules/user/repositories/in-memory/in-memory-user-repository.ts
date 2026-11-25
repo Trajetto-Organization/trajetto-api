@@ -1,6 +1,7 @@
 import { afterCursor, newestFirst } from "@/shared/in-memory/cursor";
 import { Prisma } from "@prisma/client";
 import { USER_COLUMN_DEFAULTS } from "@/shared/in-memory/column-defaults";
+import { DEFAULT_BUSINESS_TIMEZONE } from "@/shared/time/business-day";
 import { v7 as uuidV7 } from "uuid";
 
 import {
@@ -85,7 +86,7 @@ interface PermissionSeed {
 interface BusinessSeed {
   is_active: boolean;
 
-  /** The column, when a test gives it (the database always has one). */
+  /** The column; the database default when a test gives none. */
   timezone?: string;
   entitlements: { module: string; enabled: boolean }[];
 
@@ -633,9 +634,8 @@ class InMemoryUserRepository implements IUserRepository {
         // What the session lookup selects, never the picker's names.
         relations.business = {
           is_active: business.is_active,
-          ...(business.timezone !== undefined && {
-            timezone: business.timezone,
-          }),
+          // The column's default when the test gives none, as the database.
+          timezone: business.timezone ?? DEFAULT_BUSINESS_TIMEZONE,
           entitlements: business.entitlements,
         };
       }

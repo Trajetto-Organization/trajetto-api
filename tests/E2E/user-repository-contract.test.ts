@@ -769,8 +769,11 @@ describe.each(harnesses.map((harness) => [harness.name, harness] as const))(
           },
         ],
       });
+      // The company's zone rides along: the request's "today" reads it from
+      // the session instead of reading the company again.
       expect(carla.business).toEqual({
         is_active: true,
+        timezone: "America/Sao_Paulo",
         entitlements: [{ module: "DELIVERIES", enabled: true }],
       });
       expect(carla.driver).toBeNull();
