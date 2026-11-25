@@ -43,6 +43,14 @@ const GRACE_MS = 2_000;
 
 vi.hoisted(() => {
   process.env.PRESENCE_GRACE_MS = "2000";
+  // A cluster of its own on the shared Redis. On the default key, the
+  // adapter's servers are every E2E file's running beside this one: the
+  // legacy replica's lookup below (fetchSockets) waits for an answer from
+  // each of them, and one busy past the 2 s timeout made it come back
+  // empty, which a run alone never shows.
+  process.env.SOCKET_ADAPTER_KEY = `socket.io-e2e-presence-${Math.random()
+    .toString(36)
+    .slice(2)}`;
 });
 
 const prisma = createPrismaClient();
