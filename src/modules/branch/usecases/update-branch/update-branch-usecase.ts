@@ -10,6 +10,8 @@ import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-n
 import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
 
 import { BranchNotFoundError } from "../errors/branch-not-found-error";
+import { BranchHeadOfficeReadOnlyError } from "../errors/branch-head-office-read-only-error";
+import { headOfficeChanges, isHeadOffice } from "../../branch-head-office";
 
 import { BranchCnpjAlreadyExistsError } from "../errors/branch-cnpj-already-exists-error";
 import { BranchErpCodeAlreadyExistsError } from "../errors/branch-erp-code-already-exists-error";
@@ -65,6 +67,16 @@ class UpdateBranchUseCase {
     // moves between companies, not even by the MASTER.
     if (!findBranch || findBranch.businessId !== businessId) {
       throw new BranchNotFoundError();
+    }
+
+    // The head office mirrors the company, one way: an edit here was undone
+    // by the next save in Empresas, and a CNPJ changed here unlinked it for
+    // good. Resending the values it already has is no change.
+    if (
+      isHeadOffice(findBranch, findBusiness) &&
+      headOfficeChanges(findBranch, branchData).length > 0
+    ) {
+      throw new BranchHeadOfficeReadOnlyError();
     }
 
     // Uniqueness inside THIS company only (decision 8.1).

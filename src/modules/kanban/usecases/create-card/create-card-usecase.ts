@@ -9,6 +9,7 @@ import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-n
 import { UserAssignedUserNotFoundError } from "@/modules/user/usecases/errors/user-assigned-user-not-found-error";
 
 import { UserNotBelongBusinessError } from "@/modules/user/usecases/errors/user-not-belong-business-error";
+import { assertAssignableUser } from "@/modules/user/user-assignable-rules";
 import { KanbanColumnNotFoundError } from "../errors/kanban-column-not-found-error";
 
 import { AppError } from "@/shared/errors/AppError";
@@ -74,6 +75,10 @@ class CreateKanbanCardUseCase {
       if (assignedUser.businessId !== findColumn.businessId) {
         throw new UserNotBelongBusinessError();
       }
+
+      // The assignee is paged about the card: never a revoked or removed
+      // login (audit of 11/2026).
+      assertAssignableUser(assignedUser);
     }
 
     // Read before the transaction: the message prints the due day in the

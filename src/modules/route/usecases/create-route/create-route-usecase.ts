@@ -18,11 +18,17 @@ import { deliveryAssignedPayload } from "@/shared/integration/announce";
 
 import { AppError } from "@/shared/errors/AppError";
 import { logger } from "@/shared/logging/logger";
+import { announceRouteCreated } from "@/shared/route/route-realtime";
 
 import { assertDeliveriesRoutable } from "../shared/routable-deliveries";
 import { assertRoutePlan } from "../shared/route-plan";
 import { assertDriverStillActive } from "../shared/driver-still-active";
 import { assertCrewFit } from "../shared/route-crew";
+import {
+  alreadyOnRouteAfterRace,
+  deliveryLabelOf,
+  type RaceContext,
+} from "../shared/route-plan-rules";
 
 import { businessToday } from "@/shared/time/business-day";
 import { isUniqueViolation } from "@/shared/http/idempotency-key";
@@ -170,9 +176,14 @@ class CreateRouteUseCase {
         if (twin) return twin;
       }
 
-      throw routeWriteFailure(
+      throw await routeWriteFailure(
         error,
         "Houve um erro ao tentar criar a rota! Por favor, tente novamente.",
+        {
+          reread: (ids) =>
+            this.route.findOpenStopRoutes(ids, request.businessId),
+          labelOf: deliveryLabelOf(validated.routed),
+        },
       );
     }
   }
@@ -389,14 +400,20 @@ class CreateRouteUseCase {
    * After the commit — never about a write that rolled back: the activity
    * line, and the address lookup of the stops still without a point, so the
    * route page has their pins now rather than at the next minute's job (E1;
-   * never awaited). Both the Rotas screen and the batch assignment pass
-   * here.
+   * never awaited), and the operations room's hint. Both the Rotas screen
+   * and the batch assignment pass here.
    */
   recordCreated(
     created: RouteWithStops,
     { userId, businessId }: CreateRouteRequest,
     { driverName, vehicleLabel, uniqueIds }: ValidatedRoute,
   ): void {
+    // Every other route write already told the operations room; a new one
+    // did not, so a colleague's "Adicionar à rota" never listed it until a
+    // reload (owner's report of 25/11/2026). The operations room only: a
+    // PLANNED route is a draft that is not the driver's yet.
+    announceRouteCreated(businessId, created);
+
     geocodeSoon(
       businessId,
       unlocatedDeliveryIds(created.stops.map((stop) => stop.delivery)),
@@ -422,12 +439,21 @@ class CreateRouteUseCase {
  * assignment, which builds the route inside its own transaction and has to
  * answer the same refusals the same way.
  */
-function routeWriteFailure(error: unknown, fallback: string): AppError {
+/**
+ * The answer of a route write that failed. `race` is required: every write
+ * that inserts open stops can lose the index race, and each one names the
+ * deliveries it lost them to (alreadyOnRouteAfterRace).
+ */
+async function routeWriteFailure(
+  error: unknown,
+  fallback: string,
+  race: RaceContext,
+): Promise<AppError> {
   // 409, not 400: the request was well formed and the caller was allowed
   // to make it — somebody else put one of these deliveries on a route
   // first. The screen has to say "refresh", not "you did it wrong".
   if (error instanceof DeliveryAlreadyOnRouteError) {
-    return new AppError(error.message, 409, "DELIVERY_ALREADY_ON_ROUTE");
+    return alreadyOnRouteAfterRace(error, race);
   }
 
   // Cancelled (or sent out by hand) between the check and the write: the

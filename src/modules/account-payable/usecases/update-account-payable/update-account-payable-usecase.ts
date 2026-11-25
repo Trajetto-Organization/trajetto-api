@@ -137,6 +137,7 @@ class UpdateAccountPayableUseCase {
         supplierId: accountPayableData.supplierId,
         vehicleId: accountPayableData.vehicleId,
         registrationUserId: accountPayableData.registrationUserId,
+        keptRegistrationUserId: findAccountPayable.registrationUserId,
       },
     );
 

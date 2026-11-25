@@ -76,7 +76,7 @@ async function branchRoutes(app: FastifyInstance) {
         tags: ["branch"],
         summary: "Lista as filiais da empresa",
         description:
-          "Filiais de uma empresa numa tabela paginada. Ordena no servidor (`sort`/`order`) e filtra por situação (`status`: active, inactive) e UF (um ou mais valores separados por vírgula), além da busca livre (ID, razão social, nome fantasia, endereço, CNAE, código ERP, responsável, e-mail e os dígitos de CNPJ, CEP e telefone). A primeira linha (`meta`) traz o total do filtro e, em `searchMeta`, os cartões (total, ativas, com código ERP, com nome fantasia) e as opções dos filtros com as contagens — calculados sobre a empresa inteira, nunca sobre a página. O MASTER informa `businessId`.",
+          "Filiais de uma empresa numa tabela paginada. Ordena no servidor (`sort`/`order`) e filtra por situação (`status`: active, inactive) e UF (um ou mais valores separados por vírgula), além da busca livre (ID, razão social, nome fantasia, endereço, CNAE, código ERP, responsável, e-mail e os dígitos de CNPJ, CEP e telefone). A primeira linha (`meta`) traz o total do filtro e, em `searchMeta`, os cartões (total, ativas, com código ERP, com nome fantasia) e as opções dos filtros com as contagens — calculados sobre a empresa inteira, nunca sobre a página. Cada linha traz `is_head_office`: true na matriz, que a tela mostra só para leitura. O MASTER informa `businessId`.",
         querystring: branchSchemas.listBranch,
         response: {
           200: ndjsonList(
@@ -128,7 +128,7 @@ async function branchRoutes(app: FastifyInstance) {
         tags: ["branch"],
         summary: "Atualiza uma filial",
         description:
-          "Atualiza só os campos enviados (um campo ausente fica como está). A filial precisa ser da empresa do caminho — filial não muda de empresa, nem pelo MASTER; a de outra empresa responde 404. As regras de unicidade são as do cadastro. Avisa as outras telas pelo evento `catalogChanged`.",
+          "Atualiza só os campos enviados (um campo ausente fica como está). A filial precisa ser da empresa do caminho — filial não muda de empresa, nem pelo MASTER; a de outra empresa responde 404. As regras de unicidade são as do cadastro. A matriz (a filial com o CNPJ da empresa) espelha o cadastro da empresa, que a reescreve a cada edição em Empresas: mudar qualquer dado dela por aqui responde 409 BRANCH_HEAD_OFFICE_READ_ONLY (reenviar os mesmos valores não é mudança). Avisa as outras telas pelo evento `catalogChanged`.",
         params: branchSchemas.updateDeleteBranch,
         body: branchSchemas.updateBranch,
         response: {

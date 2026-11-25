@@ -58,6 +58,12 @@ const branchRow = z.object({
   businessId: z.string(),
   created_at: responseDateTime(),
   updated_at: responseDateTime(),
+  is_head_office: z
+    .boolean()
+    .optional()
+    .describe(
+      "Só na lista (GET /branch/list-branch): true na matriz, a filial com o CNPJ da empresa. Ela espelha o cadastro da empresa e não é editada por Filiais (409 BRANCH_HEAD_OFFICE_READ_ONLY).",
+    ),
 });
 
 /** The list's `meta.searchMeta`, as summarizeBranchList builds it. */
@@ -146,7 +152,7 @@ const branchResponses = {
     "BRANCH_NOT_FOUND: a filial não existe nesta empresa. A filial de outra empresa responde igual, para não confirmar que o ID existe.",
   ),
   branchConflict: codedError(
-    "BRANCH_NAME_TAKEN, BRANCH_EMAIL_TAKEN ou BRANCH_ERP_CODE_TAKEN: já existe uma filial com a mesma razão social (sem diferenciar maiúsculas), e-mail ou código ERP NESTA empresa. BRANCH_CNPJ_UNAVAILABLE: o CNPJ, identidade nacional, já está cadastrado; a mensagem não diz onde. TOGGLE_CONFLICT: o status mudou enquanto a tela estava aberta. DRIVER_HAS_OPEN_ROUTES (só ao desativar): motoristas da filial têm rota planejada, liberada ou em andamento, e a filial desativada os tiraria do aplicativo; a mensagem traz as contagens e o que fazer com cada rota.",
+    "BRANCH_NAME_TAKEN, BRANCH_EMAIL_TAKEN ou BRANCH_ERP_CODE_TAKEN: já existe uma filial com a mesma razão social (sem diferenciar maiúsculas), e-mail ou código ERP NESTA empresa. BRANCH_CNPJ_UNAVAILABLE: o CNPJ, identidade nacional, já está cadastrado; a mensagem não diz onde. TOGGLE_CONFLICT: o status mudou enquanto a tela estava aberta. BRANCH_HEAD_OFFICE_READ_ONLY (só na edição): a filial é a matriz, espelho do cadastro da empresa; os dados dela só mudam em Empresas. DRIVER_HAS_OPEN_ROUTES (só ao desativar): motoristas da filial têm rota planejada, liberada ou em andamento, e a filial desativada os tiraria do aplicativo; a mensagem traz as contagens e o que fazer com cada rota.",
   ),
   branchInUse: codedError(
     "BRANCH_IN_USE: a filial tem veículos, motoristas, ordens de serviço, contas a pagar, multas, abastecimentos ou checklists; a mensagem traz as contagens.",

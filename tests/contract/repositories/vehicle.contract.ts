@@ -27,6 +27,7 @@ const VEHICLE_FIXTURE = {
   responsibleA: fixedId("0ffb", 1),
   responsibleName: "Pessoa Contrato 1",
   vehicleTypeName: "Truck Baú",
+  fuelTypeName: "Diesel",
   driverName: "Zeca Pagodinho",
   branchName: "Filial Centro",
 } as const;
@@ -380,6 +381,27 @@ function vehicleRepositoryContract(harness: () => VehicleHarness): void {
       // v2 is BLOCKED (outside the `where`): Prisma still positions on it,
       // and skip: 1 drops the first row after it (v1).
       expect((await page(h.id("v2"))).data).toEqual([]);
+    });
+
+    // Audit of 11/2026: the driver's "Meus veículos" card read
+    // "Combustível: N/A" — the full rows never carried the fuel.
+    it("carries the driver, the type and the fuel on the full rows; the choice rows leave the fuel out", async () => {
+      const h = harness();
+      const rowOf = async (fields: "full" | "choice") =>
+        (
+          await h.repo.searchVehicleWithCursor({
+            limit: 10,
+            businessId: A,
+            fields,
+          })
+        ).data.find((row) => row.id === h.id("v1"));
+
+      expect(await rowOf("full")).toMatchObject({
+        driver: { name: F.driverName },
+        vehicleType: { description: F.vehicleTypeName },
+        fuelType: { description: F.fuelTypeName },
+      });
+      expect(await rowOf("choice")).not.toHaveProperty("fuelType");
     });
   });
 

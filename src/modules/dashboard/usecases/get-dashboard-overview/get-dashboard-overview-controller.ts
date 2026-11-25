@@ -2,6 +2,7 @@ import { FastifyReply, FastifyRequest } from "fastify";
 import { container } from "tsyringe";
 
 import { GetDashboardOverviewUseCase } from "./get-dashboard-overview-usecase";
+import { wantsFreshSnapshot } from "@/shared/http/snapshot-reply";
 
 class GetDashboardOverviewController {
   async handle(
@@ -17,6 +18,8 @@ class GetDashboardOverviewController {
     const result = await getDashboardOverviewUseCase.execute({
       userId: id,
       entitlements,
+      // "Atualizar" asks for numbers newer than the company's copy.
+      refresh: wantsFreshSnapshot(request),
     });
 
     return reply.status(200).send(result);

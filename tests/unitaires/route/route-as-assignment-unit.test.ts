@@ -321,6 +321,16 @@ async function plannedRoute(
     deliveryIds,
   });
 
+  // The creation's own `route.created` hint is asserted where creating is
+  // the subject (route-append-refusals.test.ts); the suites here read what
+  // the NEXT write says, so it is taken out of the way.
+  const born = emitted.findIndex(
+    (entry) =>
+      entry.event?.type === "route.created" && entry.event.routeId === route.id,
+  );
+
+  if (born >= 0) emitted.splice(born, 1);
+
   return { id: route.id, code: route.code };
 }
 

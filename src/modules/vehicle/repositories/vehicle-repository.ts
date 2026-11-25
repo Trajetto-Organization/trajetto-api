@@ -569,6 +569,10 @@ class VehicleRepository implements IVehicleRepository {
               vehicleType: {
                 select: { description: true, required_cnh_category: true },
               },
+              // The driver's "Meus veículos" card prints the fuel: without
+              // it every card read "Combustível: N/A" (audit of 11/2026).
+              // The dispatcher's choice fields stay without it (DLV-COMBO-1).
+              fuelType: { select: { description: true } },
             },
           });
 

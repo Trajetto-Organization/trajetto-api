@@ -5,6 +5,7 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 
 import database from "@/../infra/database";
 import { sendRouteEventToBusiness, sendRouteEventToDriver } from "@/websocket";
+import { announceRouteVehicle } from "@/shared/vehicle/vehicle-realtime";
 import { OutboxService } from "@/shared/notifications/outbox-service";
 
 import { WebhookFanOutService } from "@/shared/integration/webhook-fan-out-service";
@@ -176,6 +177,9 @@ class CloseRouteWithPendingUseCase {
       routeId,
       routeCode: closed.route.code,
     });
+
+    // The truck came back with it.
+    announceRouteVehicle(businessId, closed.route);
 
     sendRouteEventToDriver(driverUser?.id ?? null, {
       type: "route.stops_changed",

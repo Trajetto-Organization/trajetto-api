@@ -18,6 +18,7 @@ import { VehicleChecklist } from "../../dtos/vehicle-checklist-dto";
 import { UploadService } from "@/shared/services/upload-service";
 import { AppError } from "@/shared/errors/AppError";
 import { logger } from "@/shared/logging/logger";
+import { announceVehicleChanged } from "@/shared/vehicle/vehicle-realtime";
 
 import { IVehicleRepository } from "@/modules/vehicle/repositories/IVehicle-repository";
 
@@ -102,6 +103,9 @@ class DeleteVehicleChecklistUseCase {
         500,
       );
     }
+
+    // A checklist that set the odometer took its km with it.
+    announceVehicleChanged(businessId);
 
     // The photos go only after the row is gone. They used to be deleted
     // first: a delete that then failed left a checklist whose photos no

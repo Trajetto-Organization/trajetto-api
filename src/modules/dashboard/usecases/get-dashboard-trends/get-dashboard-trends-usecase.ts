@@ -51,6 +51,9 @@ interface GetDashboardTrendsRequest {
    * Absent or null, they are read.
    */
   entitlements?: Array<{ module: string; enabled: boolean }> | null;
+
+  /** The panel's "Atualizar" (`x-trajetto-refresh: 1`), as the overview. */
+  refresh?: boolean;
 }
 
 /**
@@ -144,6 +147,7 @@ class GetDashboardTrendsUseCase {
     userId,
     period,
     entitlements: sessionEntitlements,
+    refresh = false,
   }: GetDashboardTrendsRequest): Promise<DashboardTrendsResponse> {
     const user = await this.userRepository.findUserById(userId);
 
@@ -190,6 +194,7 @@ class GetDashboardTrendsUseCase {
         businessId,
         variant: trendsVariant(period, visibility, timeZone),
         compute: () => this.trendsFor(businessId, period, visibility, timeZone),
+        refresh,
       });
     } catch (error) {
       throw new AppError("Erro ao obter tendências do dashboard", 500);

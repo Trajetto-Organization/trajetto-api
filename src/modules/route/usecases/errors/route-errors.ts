@@ -101,16 +101,25 @@ class RouteDriverBusyError extends Error {
  * The message names the situation rather than the constraint, because the
  * dispatcher's next move depends on it: the delivery is not "invalid", it is
  * somewhere else.
+ *
+ * It carries the deliveries the write tried, not a count of them: the index
+ * names none, and the count of the whole selection said "30 das entregas já
+ * estão em outra rota em andamento" when one was, on a route that had not
+ * even left (audit of 25/11/2026). The use cases read the deliveries' open
+ * stops again after the rollback and name them (alreadyOnRouteAfterRace);
+ * this message is the answer when that read finds nothing, so it claims no
+ * count and no state — the index holds for any open stop, planned, released
+ * or running.
  */
 class DeliveryAlreadyOnRouteError extends Error {
-  constructor(count: number) {
+  readonly deliveryIds: readonly string[];
+
+  constructor(deliveryIds: readonly string[] = []) {
     super(
-      count === 1
-        ? "Uma das entregas já está em outra rota em andamento. Atualize a " +
-            "lista e tente novamente."
-        : `${count} das entregas já estão em outra rota em andamento. ` +
-            "Atualize a lista e tente novamente.",
+      "Uma ou mais entregas entraram em outra rota aberta enquanto você " +
+        "montava esta. Atualize a lista e tente novamente.",
     );
+    this.deliveryIds = deliveryIds;
   }
 }
 

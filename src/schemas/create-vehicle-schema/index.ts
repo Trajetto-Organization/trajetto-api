@@ -219,7 +219,7 @@ const vehicleFieldsSchema = z.object({
   // Plan of 02/11/2026 (F1): who answers for the vehicle in the company —
   // the person a failed checklist alerts. Null = the company's admins.
   responsibleUserId: optionalUuid("ID do responsável é inválido.").describe(
-    "Usuário da empresa responsável pela frota deste veículo: recebe o alerta de checklist com defeito. Vazio ou null = os administradores da empresa. Usuário inexistente ou de outra empresa: 400 RESPONSIBLE_USER_NOT_FOUND (a mesma resposta).",
+    "Usuário da empresa responsável pela frota deste veículo: recebe o alerta de checklist com defeito. Vazio ou null = os administradores da empresa. Usuário inexistente ou de outra empresa: 400 RESPONSIBLE_USER_NOT_FOUND (a mesma resposta); usuário sem acesso (revogado ou removido): 400 USER_NOT_ASSIGNABLE.",
   ),
 });
 

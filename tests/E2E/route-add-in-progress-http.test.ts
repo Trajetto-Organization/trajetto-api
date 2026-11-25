@@ -221,6 +221,44 @@ describe("adding to a route in progress", () => {
     });
 
     expect(refusal(response), response.body).toBe("409 ROUTE_STATUS_CONFLICT");
+    // Named, with its state (owner's report of 25/11/2026).
+    expect(response.json().message).toBe(
+      `A Rota ${routeCode} foi concluída e não aceita novas entregas. Atualize a lista e escolha outra rota.`,
+    );
+  });
+
+  it("refuses an ended route before the 'already on this route' answer, on add and on move", async () => {
+    // Red before: the delivery still reads as an open stop of the route
+    // that ended, so add-stops answered 201 with it in `alreadyOnRoute` —
+    // "already there", on a route nobody will run.
+    const routeId = await runningRoute();
+    const code = routeCode;
+
+    const onBoard = (
+      await prisma.routeStop.findFirstOrThrow({ where: { routeId } })
+    ).deliveryId;
+
+    await prisma.route.update({
+      where: { id: routeId },
+      data: { status: "CANCELLED", cancellation_reason: "Teste" },
+    });
+
+    const message = `A Rota ${code} foi cancelada e não aceita novas entregas. Atualize a lista e escolha outra rota.`;
+
+    const added = await addStops(routeId, { deliveryIds: [onBoard] });
+
+    expect(refusal(added), added.body).toBe("409 ROUTE_STATUS_CONFLICT");
+    expect(added.json().message).toBe(message);
+
+    const moved = await app.inject({
+      method: "POST",
+      url: `/route/move-stops/${routeId}/business/${CARRIER}`,
+      headers: { authorization: `Bearer ${carrier.managerToken}` },
+      payload: { deliveryIds: [onBoard] },
+    });
+
+    expect(refusal(moved), moved.body).toBe("409 ROUTE_STATUS_CONFLICT");
+    expect(moved.json().message).toBe(message);
   });
 });
 

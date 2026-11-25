@@ -45,6 +45,7 @@ import {
 } from "../fuel-rules";
 import { recordDate } from "@/shared/vehicle/odometer-timeline";
 import { pickedDateFromInput } from "@/shared/vehicle/record-dates";
+import { announceVehicleChanged } from "@/shared/vehicle/vehicle-realtime";
 
 import { AIAnalysisService } from "@/shared/ai/ai-analysis-service";
 import { logger } from "@/shared/logging/logger";
@@ -313,6 +314,12 @@ class UpdateFuelUseCase {
           : undefined,
       );
       databaseCommitted = true;
+
+      // Committed, and the reading was placed again: the odometer of one
+      // vehicle (or two, when the refuelling changed truck) may have moved.
+      if (mileageChanged || vehicleChanged || dateChanged) {
+        announceVehicleChanged(businessId);
+      }
 
       // Delete the previous object only after the database points to the new
       // one. Deletion is best-effort and can never break the record.

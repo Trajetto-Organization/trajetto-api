@@ -24,6 +24,10 @@ vi.mock("@/websocket", () => ({
   sendRouteEventToDriver: (id: string | null, event: unknown) => {
     emitted.push({ room: "driver", id, event });
   },
+  // The vehicle lists' hint: the truck came back with the route.
+  sendCatalogChangedEvent: (id: string, entity: string) => {
+    emitted.push({ room: "catalog", id, event: { entity } });
+  },
 }));
 
 vi.mock("@/../infra/database", () => ({
@@ -265,6 +269,8 @@ describe("closing a route with pending stops (K11)", () => {
             planVersion: 1,
           }),
         },
+        // Its truck is free again (audit of 25/11/2026).
+        { room: "catalog", id: A, event: { entity: "vehicle" } },
       ]),
     );
 

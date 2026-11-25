@@ -211,7 +211,9 @@ src/modules/user/usecases/errors/resource-not-found-error.ts
 src/modules/user/usecases/errors/user-has-associated-account-payables-error.ts
 src/modules/user/usecases/errors/user-has-associated-service-orders-error.ts
 src/modules/user/usecases/errors/user-has-records-error.ts
+src/modules/user/usecases/errors/user-not-assignable-error.ts
 src/modules/user/usecases/list-users/user-list.ts
+src/modules/user/user-assignable-rules.ts
 src/modules/user/user-history-rules.ts
 src/modules/vehicle-checklist/dtos/vehicle-checklist-dto.ts
 src/modules/vehicle-checklist/repositories/IVehicle-checklist-repository.ts
@@ -559,6 +561,7 @@ src/shared/vehicle/driver-vehicle-access.ts
 src/shared/vehicle/odometer-timeline.ts
 src/shared/vehicle/record-dates.ts
 src/shared/vehicle/route-columns.ts
+src/shared/vehicle/route-vehicle.ts
 src/shared/vehicle/vehicle-rules.ts
 src/shared/wake/wake-bus.ts
 src/websocket.ts

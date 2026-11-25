@@ -81,6 +81,7 @@ import {
   appSubmissionKeyRefusal,
   resolveRecordOrigin,
 } from "@/shared/vehicle/record-origin";
+import { announceVehicleChanged } from "@/shared/vehicle/vehicle-realtime";
 
 const log = logger.child({ component: "fuel" });
 
@@ -695,6 +696,10 @@ class CreateFuelUseCase {
         return fuelCreated;
       }
       databaseCommitted = true;
+
+      // Committed: the odometer may have moved, and the vehicle lists show
+      // it ("Quilometragem Atual"). A replay above wrote nothing new.
+      announceVehicleChanged(fuelData.businessId);
 
       // Request AI verification for odometer photo (fire-and-forget)
       // Skip if business has AI disabled (limit === 0)

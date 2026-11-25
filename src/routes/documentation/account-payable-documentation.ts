@@ -186,7 +186,7 @@ const accountPayableResponses = {
   internalServerError: internalErrorResponse,
 
   writeErrors: codedError(
-    "VALIDATION_ERROR (com `issues`: favorecido ausente ou duplo, datas, valores, textos). ACCOUNT_PAYABLE_INVALID_REFERENCE: filial, ordem de serviço, fornecedor, veículo ou responsável não encontrado NESTA empresa (a resposta é a mesma quando o registro é de outra empresa). ACCOUNT_PAYABLE_INVALID_AMOUNT, ACCOUNT_PAYABLE_PAYMENT_REQUIRED: valor pago acima do total, ou data de pagamento sem valor pago. ACCOUNT_PAYABLE_PAYEE_REQUIRED (edição): a conta já tem favorecido e a alteração o deixaria vazio.",
+    "VALIDATION_ERROR (com `issues`: favorecido ausente ou duplo, datas, valores, textos). ACCOUNT_PAYABLE_INVALID_REFERENCE: filial, ordem de serviço, fornecedor, veículo ou responsável não encontrado NESTA empresa (a resposta é a mesma quando o registro é de outra empresa). USER_NOT_ASSIGNABLE: o responsável escolhido não tem mais acesso (revogado ou removido); na edição, manter o responsável que a conta já tem continua valendo. ACCOUNT_PAYABLE_INVALID_AMOUNT, ACCOUNT_PAYABLE_PAYMENT_REQUIRED: valor pago acima do total, ou data de pagamento sem valor pago. ACCOUNT_PAYABLE_PAYEE_REQUIRED (edição): a conta já tem favorecido e a alteração o deixaria vazio.",
   ),
   listErrors: codedError(
     "VALIDATION_ERROR: ordenação ou filtro inválido. BUSINESS_NOT_IDENTIFIED: o MASTER não informou `businessId`.",

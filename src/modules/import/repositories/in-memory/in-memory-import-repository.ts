@@ -3,6 +3,7 @@ import { v7 as uuidV7 } from "uuid";
 import type {
   IImportRepository,
   ReversalRemovedHook,
+  ReversalRoutesRemovedHook,
 } from "../IImport-repository";
 import { ImportReversalLeaseLostError } from "../../usecases/errors/import-errors";
 import type {
@@ -405,10 +406,12 @@ class InMemoryImportRepository implements IImportRepository {
       onRemoved,
       batchSize = REVERSAL_BATCH_SIZE,
       beforeBatch,
+      onRoutesRemoved,
     }: {
       onRemoved?: ReversalRemovedHook;
       batchSize?: number;
       beforeBatch?: () => void;
+      onRoutesRemoved?: ReversalRoutesRemovedHook;
     },
   ): Promise<ReversalResult> {
     let current = progress;
@@ -417,7 +420,12 @@ class InMemoryImportRepository implements IImportRepository {
       if (!current.routesDone) {
         beforeBatch?.();
 
-        current = this.reverseRoutes(importId, businessId, lease, current);
+        const step = this.reverseRoutes(importId, businessId, lease, current);
+
+        current = step.progress;
+
+        // Like the real one: told after the step, with the routes it took.
+        if (step.removed.length > 0) onRoutesRemoved?.(step.removed);
       }
 
       for (;;) {
@@ -494,7 +502,10 @@ class InMemoryImportRepository implements IImportRepository {
     businessId: string,
     lease: Date,
     progress: ReversalProgress,
-  ): ReversalProgress {
+  ): {
+    progress: ReversalProgress;
+    removed: Array<{ id: string; code: number }>;
+  } {
     const record = this.fence(importId, businessId, lease);
 
     const own = (entry: { importId: string | null; businessId: string }) =>
@@ -533,6 +544,11 @@ class InMemoryImportRepository implements IImportRepository {
       removableRouteIds.add(route.id);
     }
 
+    const removed = this.routes
+      .filter((route) => removableRouteIds.has(route.id))
+      .sort(byId)
+      .map((route) => ({ id: route.id, code: route.code }));
+
     this.routes = this.routes.filter(
       (route) => !removableRouteIds.has(route.id),
     );
@@ -549,7 +565,7 @@ class InMemoryImportRepository implements IImportRepository {
 
     record.reversal = next;
 
-    return next;
+    return { progress: next, removed };
   }
 
   /** The next `batchSize` deliveries still carrying the upload, in id order. */

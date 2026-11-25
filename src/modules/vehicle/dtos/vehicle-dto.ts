@@ -203,8 +203,18 @@ interface VehicleChoice {
   } | null;
 }
 
+/**
+ * A `full` picker row: the whole record plus the names its cards print —
+ * the driver, the type and the fuel (the driver's "Meus veículos" card read
+ * "Combustível: N/A" while the fuel was missing).
+ */
+interface VehicleSearchRow
+  extends Vehicle, Pick<VehicleChoice, "driver" | "vehicleType"> {
+  fuelType?: { description: string } | null;
+}
+
 interface CursorPaginatedVehicle {
-  data: Array<Vehicle | VehicleChoice>;
+  data: Array<VehicleSearchRow | VehicleChoice>;
   nextCursor: string | null;
   hasMore: boolean;
 }
@@ -233,5 +243,6 @@ export {
   SearchVehicleWithCursorProps,
   CursorPaginatedVehicle,
   VehicleChoice,
+  VehicleSearchRow,
   VehicleUsageCounts,
 };

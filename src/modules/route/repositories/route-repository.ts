@@ -34,6 +34,7 @@ import {
   writePointToDoor,
 } from "@/shared/delivery/geocoding/address-point-propagation";
 import { isModuleEnabled } from "@/shared/entitlements/entitlement-rules";
+import { routeMovesVehicle } from "@/shared/vehicle/route-vehicle";
 
 import {
   ROUTE_PERIOD_SORT,
@@ -466,7 +467,7 @@ class RouteRepository implements IRouteRepository {
       }
 
       if (isDeliveryOnRoute(target)) {
-        throw new DeliveryAlreadyOnRouteError(data.deliveryIds.length);
+        throw new DeliveryAlreadyOnRouteError(data.deliveryIds);
       }
 
       throw new RouteCodeTakenError();
@@ -495,7 +496,7 @@ class RouteRepository implements IRouteRepository {
       }
 
       if (isDeliveryOnRoute(target)) {
-        throw new DeliveryAlreadyOnRouteError(data.deliveryIds.length);
+        throw new DeliveryAlreadyOnRouteError(data.deliveryIds);
       }
 
       // Two dispatchers took the same code. One retry, then let it surface.
@@ -1694,12 +1695,17 @@ class RouteRepository implements IRouteRepository {
    * vehicle blocked by an administrator WHILE it was on the road (theft, a
    * crash) stays blocked when the route ends instead of being quietly
    * reopened for service.
+   *
+   * Which states move the truck at all is routeMovesVehicle, the same rule
+   * the use cases announce the vehicle catalogue by after their commit
+   * (announceRouteVehicle): the web's vehicle lists kept the old badge for
+   * two minutes because this write told nobody (audit of 25/11/2026).
    */
   private async syncVehicleStatus(
     tx: Prisma.TransactionClient | typeof database,
     route: Route,
   ): Promise<void> {
-    if (!route.vehicleId) return;
+    if (!route.vehicleId || !routeMovesVehicle(route)) return;
 
     if (route.status === "IN_PROGRESS") {
       await tx.vehicle.updateMany({
@@ -2032,7 +2038,7 @@ class RouteRepository implements IRouteRepository {
       return outerTx ? await run(outerTx) : await this.prisma.$transaction(run);
     } catch (error) {
       if (isDeliveryOnRoute(violatedIndex(error))) {
-        throw new DeliveryAlreadyOnRouteError(deliveryIds.length);
+        throw new DeliveryAlreadyOnRouteError(deliveryIds);
       }
 
       throw error;

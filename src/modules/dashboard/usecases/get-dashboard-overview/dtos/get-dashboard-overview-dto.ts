@@ -9,6 +9,12 @@ interface DashboardOverviewRequest {
    * are read from the database.
    */
   entitlements?: Array<{ module: string; enabled: boolean }> | null;
+
+  /**
+   * The panel's "Atualizar" (`x-trajetto-refresh: 1`): read the numbers
+   * again when the company's copy is two seconds old or more.
+   */
+  refresh?: boolean;
 }
 
 interface EntityCount {

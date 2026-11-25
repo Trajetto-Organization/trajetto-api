@@ -4,6 +4,7 @@ import type { IServiceOrderRepository } from "@/modules/service-order/repositori
 import type { ISupplierRepository } from "@/modules/supplier/repositories/ISupplier-repository";
 import type { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import type { IVehicleRepository } from "@/modules/vehicle/repositories/IVehicle-repository";
+import { assertAssignableUser } from "@/modules/user/user-assignable-rules";
 
 import { AccountPayableReferenceError } from "./errors/account-payable-reference-error";
 
@@ -22,6 +23,12 @@ interface AccountPayableReferences {
   supplierId?: string | null;
   vehicleId?: string | null;
   registrationUserId?: string | null;
+  /**
+   * The responsible the bill already has (update only): keeping them is
+   * allowed even after they lost their access, so an old bill stays
+   * editable and keeps showing who answered for it.
+   */
+  keptRegistrationUserId?: string | null;
 }
 
 interface CheckedReferences {
@@ -84,9 +91,13 @@ async function assertAccountPayableReferences(
       references.registrationUserId,
     );
 
-    if (!belongs(responsible)) {
+    if (responsible === null || !belongs(responsible)) {
       throw new AccountPayableReferenceError("responsible");
     }
+
+    // The responsible receives the bill's notices: a NEW one must still be
+    // able to sign in (revoked or removed logins are refused).
+    assertAssignableUser(responsible, references.keptRegistrationUserId);
   }
 
   return { serviceOrder };

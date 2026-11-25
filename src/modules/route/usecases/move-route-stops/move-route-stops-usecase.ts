@@ -12,7 +12,12 @@ import {
   announcePlanChange,
   planWriteFailure,
 } from "../shared/route-plan-change";
+import {
+  routeConflictAfterLock,
+  routeNotAppendable,
+} from "../shared/route-plan-rules";
 import { routeWriteFailure } from "../create-route/create-route-usecase";
+import { announceDepartedStops } from "../shared/departing-stops";
 import { CancelRouteUseCase } from "../cancel-route/cancel-route-usecase";
 
 import { NotificationService } from "@/shared/services/notification-service";
@@ -27,6 +32,7 @@ import {
   RouteStatusConflictError,
 } from "../errors/route-errors";
 
+import type { OutboxService } from "@/shared/notifications/outbox-service";
 import type { PlanBump, RouteStop } from "../../dtos/route-dto";
 
 interface MoveRouteStopsRequest {
@@ -87,6 +93,11 @@ class MoveRouteStopsUseCase {
     private notificationService: NotificationService,
     @inject("WebhookFanOutService")
     private webhooks: WebhookFanOutService,
+    // "Saiu para entrega" for a load moved onto a running route. Optional,
+    // as in add-stops, so the suites built before it keep working; the
+    // container always provides it.
+    @inject("OutboxService")
+    private outbox?: OutboxService,
   ) {}
 
   async execute({
@@ -103,6 +114,13 @@ class MoveRouteStopsUseCase {
     if (!target) {
       throw new RouteNotFoundError();
     }
+
+    // An ended target answers as one, naming it, before the "already on
+    // this route" shortcut and before any source is touched (owner's report
+    // of 25/11/2026: a cancelled route read as "já estão nesta rota").
+    const ended = routeNotAppendable(target);
+
+    if (ended) throw ended;
 
     const uniqueIds = [...new Set(deliveryIds)];
 
@@ -238,6 +256,23 @@ class MoveRouteStopsUseCase {
           );
         }
 
+        // Onto a running route the load left now (addStops moved it to
+        // IN_TRANSIT): the same two notices add-stops and the departure
+        // give, in this commit (K12).
+        if (added.status === "IN_PROGRESS") {
+          await announceDepartedStops(
+            tx,
+            { webhooks: this.webhooks, outbox: this.outbox },
+            {
+              businessId,
+              actorId: userId,
+              deliveries: deliveries.filter((delivery) =>
+                toAdd.includes(delivery.id!),
+              ),
+            },
+          );
+        }
+
         return { added, sources, cancelledRoutes, afterCommit };
       });
 
@@ -301,17 +336,30 @@ class MoveRouteStopsUseCase {
 
       if (planFailure) throw planFailure;
 
+      // The target ended between the check above and the lock (a running
+      // one still takes stops since K12, so "já saiu" was no reason): read
+      // again to say which state it is in now.
       if (error instanceof RouteStatusConflictError) {
-        throw new AppError(
-          "Esta rota já saiu e não aceita novas paradas. Atualize a tela.",
-          409,
-          "ROUTE_STATUS_CONFLICT",
+        throw await routeConflictAfterLock(
+          () => this.route.findRouteById(routeId, businessId),
+          "Uma das rotas envolvidas mudou de status enquanto você trabalhava e nada foi gravado. Atualize a tela e tente novamente.",
         );
       }
 
-      throw routeWriteFailure(
+      throw await routeWriteFailure(
         error,
         "Houve um erro ao tentar mover as entregas! Por favor, tente novamente.",
+        {
+          reread: (ids) => this.route.findOpenStopRoutes(ids, businessId),
+          labelOf,
+          expected: (now) =>
+            now.routeId === routeId ||
+            held.some(
+              (before) =>
+                before.deliveryId === now.deliveryId &&
+                before.routeId === now.routeId,
+            ),
+        },
       );
     }
   }

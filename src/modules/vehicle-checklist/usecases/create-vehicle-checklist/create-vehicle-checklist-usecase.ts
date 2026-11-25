@@ -73,6 +73,7 @@ import {
   resolveRecordBranchId,
 } from "@/shared/vehicle/record-branch";
 import { resolveRecordOrigin } from "@/shared/vehicle/record-origin";
+import { announceVehicleChanged } from "@/shared/vehicle/vehicle-realtime";
 
 const log = logger.child({ component: "vehicle-checklist" });
 
@@ -630,6 +631,10 @@ class CreateVehicleChecklistUseCase {
       }
 
       databaseCommitted = true;
+
+      // Committed: the reading may have moved the vehicle's odometer, which
+      // the vehicle lists show. A replay above wrote nothing new.
+      announceVehicleChanged(checklistData.businessId);
 
       // Said once the row is recorded, never for a request a later check
       // refused (custody, branch, mileage): the outbox retries those, and

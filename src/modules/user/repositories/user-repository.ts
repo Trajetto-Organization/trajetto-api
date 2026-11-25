@@ -48,6 +48,7 @@ import {
 } from "@/shared/security/login-lockout-rules";
 
 import { NO_USER_HISTORY, type UserHistoryCounts } from "../user-history-rules";
+import { ASSIGNABLE_USER_WHERE } from "../user-assignable-rules";
 
 /**
  * The user listings stream NDJSON, and a stream never passes through the
@@ -1168,6 +1169,9 @@ class UserRepository implements IUserRepository {
     const items = await this.prisma.user.findMany({
       where: {
         businessId,
+        // Every consumer is an assignment picker: a revoked or removed login
+        // is never offered, as the branch picker skips inactive branches.
+        ...ASSIGNABLE_USER_WHERE,
         ...(term &&
           buildSearchOr<Prisma.UserWhereInput>([
             { name: { contains: term, mode: "insensitive" as const } },

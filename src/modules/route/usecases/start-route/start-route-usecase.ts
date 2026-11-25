@@ -6,6 +6,7 @@ import { IVehicleRepository } from "@/modules/vehicle/repositories/IVehicle-repo
 
 import { NotificationService } from "@/shared/services/notification-service";
 import { sendRouteEventToBusiness } from "@/websocket";
+import { announceRouteVehicle } from "@/shared/vehicle/vehicle-realtime";
 import { AppError } from "@/shared/errors/AppError";
 
 import database from "@/../infra/database";
@@ -381,6 +382,9 @@ class StartRouteUseCase {
         routeId,
         routeCode: findRoute.code,
       });
+
+      // The truck is "Em rota" now: the vehicle lists hear it too.
+      announceRouteVehicle(businessId, started);
 
       this.notificationService.createActivityIfEnabled({
         type: "Rota",

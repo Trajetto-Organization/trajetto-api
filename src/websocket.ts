@@ -2403,6 +2403,18 @@ const sendChatMessageEvent = (
  */
 interface RouteRealtimeEvent {
   type:
+    // A route was planned (the Rotas screen or the batch assignment). The
+    // operations room only: a draft is not the driver's yet. Every other
+    // write already had an event, and without this one the pickers that
+    // list routes ("Adicionar à rota") in a colleague's open tab never
+    // learned it existed until a reload.
+    | "route.created"
+
+    // A PLANNED route deleted outright: the undo of the spreadsheet import
+    // that built it (audit of 25/11/2026). The operations room only, like
+    // its creation. Not "route.cancelled": a cancelled route stays, with its
+    // reason, and this one is gone — opening it answers 404.
+    | "route.removed"
     | "route.released"
 
     // A route pulled BACK to planning. It leaves the driver's phone, so the

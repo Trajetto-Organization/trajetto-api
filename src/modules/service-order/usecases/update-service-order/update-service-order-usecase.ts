@@ -27,6 +27,7 @@ import { OutboxService } from "@/shared/notifications/outbox-service";
 
 import { ServiceOrderCompletionDateCannotBeEarlierOrderError } from "../errors/service-order-completion-date-cannot-be-earlier-order-date-error";
 import { UserResponsibleNotFoundError } from "@/modules/user/usecases/errors/user-responsible-not-found-error";
+import { assertAssignableUser } from "@/modules/user/user-assignable-rules";
 
 import { ServiceOrderNewMileageRequireOrderFinalizedError } from "../errors/service-order-new-mileage-require-order-finalized-error";
 import { ServiceOrderNotFoundError } from "../errors/service-order-not-found-error";
@@ -46,6 +47,7 @@ import {
 } from "../service-order-mileage";
 import { timeZoneOfBusiness } from "@/shared/time/business-time-zone";
 import { pickedDateFromInput } from "@/shared/vehicle/record-dates";
+import { announceVehicleChanged } from "@/shared/vehicle/vehicle-realtime";
 
 @injectable()
 class UpdateServiceOrderUseCase {
@@ -157,6 +159,13 @@ class UpdateServiceOrderUseCase {
       if (findResponsibleUser.businessId !== businessId) {
         throw new UserNotBelongBusinessError();
       }
+
+      // A hand-over pages the new responsible, who must still sign in;
+      // keeping the one the order already names keeps it editable.
+      assertAssignableUser(
+        findResponsibleUser,
+        findServiceOrder.responsibleUserId,
+      );
     }
 
     // A bare day starts in the company's zone (see the create).
@@ -339,10 +348,15 @@ class UpdateServiceOrderUseCase {
       const vehicleId =
         serviceOrderData.vehicleId || findServiceOrder.vehicleId;
 
+      // Whether the transaction below wrote the vehicle; read only once it
+      // committed, for the vehicle lists' hint.
+      let writesVehicle = false;
+
       const updatedServiceOrder = await database.$transaction(async (tx) => {
         // A MASTER's deliberate override of the vehicle: unconditional, but
         // now atomic with the order it came with.
         if (Object.keys(vehicleUpdateData).length > 0) {
+          writesVehicle = true;
           await this.vehicle.updateVehicle(
             { vehicleData: vehicleUpdateData, vehicleId },
             tx,
@@ -360,6 +374,7 @@ class UpdateServiceOrderUseCase {
           (isBeingCompleted || wasCompleted);
 
         if (correctsMileage && isLatestMaintenance) {
+          writesVehicle = true;
           await recordMileageCorrection(
             this.vehicle,
             {
@@ -370,6 +385,7 @@ class UpdateServiceOrderUseCase {
             tx,
           );
         } else if (movesOdometer) {
+          writesVehicle = true;
           await recordMaintenanceMileage(
             this.vehicle,
             {
@@ -423,6 +439,10 @@ class UpdateServiceOrderUseCase {
 
         return updated;
       });
+
+      // Committed: the vehicle lists show the odometer and the last
+      // maintenance this order wrote.
+      if (writesVehicle) announceVehicleChanged(businessId);
 
       return updatedServiceOrder;
     } catch (error) {

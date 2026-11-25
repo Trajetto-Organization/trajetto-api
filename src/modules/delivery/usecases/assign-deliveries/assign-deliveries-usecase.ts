@@ -26,6 +26,7 @@ import { AppError } from "@/shared/errors/AppError";
 import { assertRouteDispatcher } from "@/modules/route/usecases/shared/assert-route-dispatcher";
 import { RouteBranchGuard } from "@/modules/route/usecases/shared/route-branch-guard";
 import { announcePlanChange } from "@/modules/route/usecases/shared/route-plan-change";
+import { deliveryLabelOf } from "@/modules/route/usecases/shared/route-plan-rules";
 
 interface AssignDeliveriesRequest {
   userId: string;
@@ -261,6 +262,23 @@ class AssignDeliveriesUseCase {
     };
 
     /**
+     * The open stops this assignment is about to detach, read before the
+     * unit so a lost race can tell them apart from the one it lost to.
+     *
+     * The detach runs inside the transaction that rolls back, so after the
+     * index refuses the insert every delivery being moved is back on its
+     * old route. The read again then found twelve documents on Rota 5 next to
+     * the one a colleague had just put on Rota 8, and the 409 named all
+     * thirteen: the dispatcher read that the twelve could not be reassigned
+     * when only one was in conflict (review of 25/11/2026). The move of stops
+     * answers the same way, with its `held`.
+     */
+    const detaching = await this.route.findOpenStopRoutes(
+      uniqueIds,
+      businessId,
+    );
+
+    /**
      * The detach, the new route and its release, as ONE unit of work — any
      * refusal from here on (a concurrent departure, a delivery cancelled in
      * the same instant, a code collision) rolls all of it back.
@@ -384,9 +402,19 @@ class AssignDeliveriesUseCase {
         throw new AppError(error.message, 409, "ROUTE_STATUS_CONFLICT");
       }
 
-      throw routeWriteFailure(
+      throw await routeWriteFailure(
         error,
         "Houve um erro ao tentar designar as entregas! Por favor, tente novamente.",
+        {
+          reread: (ids) => this.route.findOpenStopRoutes(ids, businessId),
+          labelOf: deliveryLabelOf(validated.routed),
+          expected: (now) =>
+            detaching.some(
+              (before) =>
+                before.deliveryId === now.deliveryId &&
+                before.routeId === now.routeId,
+            ),
+        },
       );
     }
   }

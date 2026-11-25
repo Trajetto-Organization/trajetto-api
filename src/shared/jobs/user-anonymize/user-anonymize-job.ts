@@ -8,6 +8,7 @@ import { logger } from "@/shared/logging/logger";
 import { deleteQueueRowsOfUser } from "@/shared/notifications/queue-row-cleanup";
 import type { NotificationService } from "@/shared/services/notification-service";
 import type { UploadService } from "@/shared/services/upload-service";
+import { sendCatalogChangedEvent } from "@/websocket";
 
 const log = logger.child({ component: "jobs", kind: "USER_ANONYMIZE" });
 
@@ -44,7 +45,10 @@ const log = logger.child({ component: "jobs", kind: "USER_ANONYMIZE" });
  *     the driver's and the login's rows, the tokens and devices, the bell,
  *     the last position, the archive's redaction (trail_archive_redaction:
  *     a restore of the archived trail leaves the driver out) and the audit
- *     line;
+ *     line. After its commit a driver's company hears `catalogChanged`
+ *     driver, as every other driver write does: the pickers trust that
+ *     hint for two minutes, and they kept offering the old name, ACTIVE,
+ *     until then (audit of 25/11/2026);
  *  2. avatar: the login's photos in the uploads bucket;
  *  3. trail: the driver's hot trail, by its primary key (driverId,
  *     recorded_at) in every partition, in short batches;
@@ -751,6 +755,15 @@ function createUserAnonymizeJob(deps: UserAnonymizeDeps): JobHandler {
         }
 
         progress = next;
+
+        // After the commit, never inside it: the driver is INACTIVE and
+        // "Motorista removido" now, and the open pickers (web selectors, the
+        // app's driver list) trust catalogChanged to say so. A login without
+        // a driver is in no catalogue. A crash between the commit and here
+        // loses the hint, as any lost hint does: the next refetch is right.
+        if (next.driverId) {
+          sendCatalogChangedEvent(payload.businessId, "driver");
+        }
       }
 
       if (progress.phase === "avatar") {

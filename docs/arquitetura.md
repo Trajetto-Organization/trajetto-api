@@ -1563,7 +1563,15 @@ mesma reserva, o mesmo orçamento e o mesmo portão
   que o lote), o que mantém a taxa com respostas de até 1 s. Um provedor
   mais lento recebe proporcionalmente menos, nunca mais que a taxa. O
   início das chamadas continua espaçado, e cada uma continua passando pela
-  vaga do portão e pela unidade do dia. As reservas são tratadas em ordem,
+  vaga do portão e pela unidade do dia. O espaçamento conta da saída real
+  da faixa anterior, não só do início que ela reservou: a faixa espera o
+  próprio início e depois o espaçamento desde a última que saiu de fato
+  (no máximo três rodadas, para um relógio injetado parado não segurar a
+  rodada). Antes, um timer que disparava tarde (a resolução de 15,6 ms do
+  Windows) ou um milissegundo cedo (o relógio do libuv atrás do
+  `Date.now`) punha duas chamadas mais perto que o espaçamento, e o teto
+  por segundo do provedor dependia disso (25/11/2026,
+  `delivery-geocoding-service.ts`). As reservas são tratadas em ordem,
   uma de cada vez, com as leituras de reaproveitamento; uma entrega numa
   porta que outra faixa está consultando espera essa resposta e leva o
   ponto ou o veredito dela, sem segunda chamada. O que para a execução
@@ -1587,6 +1595,21 @@ cada chamada gasta uma unidade do orçamento. O CEP no OpenStreetMap
 brasileiro é esparso: no exemplo do dono (Rua Epitácio Pessoa, Petrópolis -
 RJ, CEP 25610-000), o CEP sozinho não acha nada, e a rua é achada com ou sem
 o CEP.
+
+**O formato é `format=json`, nunca `jsonv2`** (log da staging de
+25/11/2026). O LocationIQ responde 400 "Invalid Request" ao `jsonv2`, nos três
+hosts dele e antes de ler a chave; com `json` o mesmo pedido passa. Toda
+entrega criada registrava "geocoding provider refused the request" e pausava
+a geocodificação por 15 min (a recusa da tabela abaixo), e a busca inversa do
+comprovante, com o mesmo formato, deixava o PDF sempre com o endereço
+cadastrado. As duas pedem `json` agora (`address-geocoder.ts` e
+`reverse-geocoder.ts`), e a busca do "Fixar no mapa" no protocolo Nominatim
+reaproveita o pedido da geocodificação (o autocomplete do LocationIQ não leva
+`format`). O Nominatim aceita os dois formatos, e os leitores leem os dois (a
+classe em `class` ou em `category`, com ou sem `place_rank`).
+`address-geocoder.test.ts`, `proof-location.test.ts` e
+`address-search-provider.test.ts` fixam o `json`; um Nominatim local não
+prova o formato, então uma mudança na chamada se confere no staging.
 
 **A segunda busca só vale se não contradiz a entrega**
 (`fallback-agreement.ts`, revisão de 09/11/2026). Ela deixa de fora
@@ -2963,7 +2986,10 @@ o caminho que resolve.
     removido"), apaga RG, nascimento, endereço, e-mail, telefone e foto,
     troca CPF e CNH por um marcador único do motorista, revoga o acesso,
     apaga as sessões, os aparelhos, o 2FA, os tokens por e-mail, o sino e
-    a última posição, inativa o motorista e grava `anonymized_at`;
+    a última posição, inativa o motorista e grava `anonymized_at`; depois
+    do commit, com um motorista, emite `catalogChanged` `driver` à empresa,
+    como toda escrita de motorista, para os seletores da web e a lista do
+    app pararem de oferecê-lo com o nome antigo (auditoria de 25/11/2026);
   - apaga a foto do bucket, a trilha de GPS quente dele pela chave
     primária, em lotes, e o aparelho (`device`, `device_id`) dos eventos
     de entrega que o login registrou. Esta última parte vai pelo pool de
@@ -3042,6 +3068,22 @@ o caminho que resolve.
     para agora (`removeRow`) e responde como antes; o job apaga em lotes e,
     no fim, remove a linha da empresa, o que libera o CNPJ como o DELETE de
     antes, sem a cascata de 15 s dentro do pedido.
+- **Quem pode ser responsável** (auditoria de 11/2026,
+  `modules/user/user-assignable-rules.ts`): o seletor de usuários
+  (`GET /user/search-user-business`), que só serve para escolher
+  responsável, não lista login com acesso revogado nem removido
+  (anonimizado), como o seletor de filiais já não lista filial inativa. E
+  quem grava um responsável recusa uma escolha NOVA dessas pessoas com
+  `400 USER_NOT_ASSIGNABLE` ("Este usuário não tem mais acesso ao sistema.
+  Escolha outra pessoa."): o responsável da conta a pagar, o atribuído do
+  card do Kanban, o responsável da OS e o responsável pela frota do
+  veículo. Manter quem o registro já tem continua valendo, para a conta
+  antiga continuar editável e o histórico mostrar quem respondia por ela. A
+  checagem vem depois da de empresa, então um ID de outra empresa continua
+  "não encontrado". Um teste lê o código: toda use case que busca o
+  usuário de `responsibleUserId`, `assignedUserId` ou `registrationUserId`
+  também chama `assertAssignableUser`
+  (`tests/unitaires/user/assignable-users.test.ts`).
 
 ## Entregas na rota: casos de borda
 
@@ -3096,9 +3138,49 @@ D32).
   remover, reordenar e editar seguem só com rota planejada ou liberada). A
   entrega entra no fim, já EM ROTA, com `delivery.dispatched` ao destinatário,
   `plan_version` novo e push ao motorista (`announcePlanChange` também avisa
-  rota em andamento). Com `redelivery: { reasonId, note? }`, as entregas com
+  rota em andamento). `POST /route/move-stops` para uma rota em andamento
+  diz o mesmo: o `delivery.in_transit` e o `delivery.dispatched` saem pelo
+  mesmo `announceDepartedStops` (`usecases/shared/departing-stops.ts`), na
+  transação da gravação; antes o move só punha a entrega EM ROTA, calado
+  para o ERP e para o destinatário (auditoria de 25/11/2026, testes em
+  `tests/unitaires/route/route-move-in-progress.test.ts`). Com
+  `redelivery: { reasonId, note? }`, as entregas com
   INSUCESSO voltam a PENDENTE com a mudança de status citando o motivo e
   entram na rota, numa transação só (rota travada primeiro).
+- **Adicionar à rota encerrada (relato do dono de 25/11/2026):** add-stops e
+  move-stops respondem rota destino concluída ou cancelada antes de tudo —
+  antes do atalho idempotente "já é parada desta rota" e antes de tocar a
+  origem — com `409 ROUTE_STATUS_CONFLICT` nomeando a rota e o estado ("A
+  Rota 8 foi cancelada e não aceita novas entregas…", `routeNotAppendable`
+  em `route-plan-rules`). Se ela termina entre essa verificação e a trava, a
+  resposta relê a rota e diz o mesmo (`routeConflictAfterLock`). Rota nova
+  (Rotas, atribuição em lote ou importação de planilha) avisa a sala de
+  operações com o `routeEvent` `route.created` (`announceRouteCreated`, em
+  `src/shared/route/route-realtime.ts`), para a lista do "Adicionar à rota"
+  de outra aba aparecer sem recarregar; a rota planejada que o estorno da
+  importação apaga sai com `route.removed`. Testes em
+  `tests/unitaires/route/route-append-refusals.test.ts` e
+  `tests/unitaires/import/import-route-events.test.ts`.
+- **Entrega que entrou em outra rota no meio da gravação (auditoria de
+  25/11/2026):** a conferência antes da gravação nomeia onde cada entrega
+  está; quando um colega a põe numa rota entre a conferência e o `INSERT`, o
+  índice `route_stop_active_delivery_idx` recusa e a resposta era montada com
+  o tamanho da seleção ("30 das entregas já estão em outra rota em
+  andamento"), mesmo com uma só em conflito e numa rota que nem saiu. Agora
+  `DeliveryAlreadyOnRouteError` leva as entregas tentadas, e create, add,
+  move e a atribuição em lote releem as paradas abertas depois do rollback
+  (`alreadyOnRouteAfterRace`, em `route-plan-rules`) e respondem como a
+  conferência: "A entrega 123 (Rota 8) já está em outra rota". Se a releitura
+  não acha nada, a frase não tem contagem nem estado. O mesmo `409
+  DELIVERY_ALREADY_ON_ROUTE`. A releitura ignora as paradas que a própria
+  gravação esperava (`expected`): a rota de destino e, no mover e na
+  atribuição em lote, as paradas de onde as entregas estavam saindo, que o
+  rollback devolveu. A atribuição lê essas paradas antes da transação; sem
+  isso, um redesignar de 12 entregas de uma rota liberada mais uma entrega
+  tomada por um colega nomeava as 13. Testes em
+  `tests/unitaires/route/route-race-already-on-route.test.ts` (o mock da
+  transação desfaz as linhas quando a unidade falha), com a trava que exige
+  o nome em todo `catch` desse erro.
 - **Revogar acesso ou desativar filial com rota aberta (K10, D31):** recusado
   com `409 DRIVER_HAS_OPEN_ROUTES`, as contagens e os passos da inativação do
   motorista (`openRoutesRefusal` com o ato). Restaurar o acesso e reativar a
@@ -4036,7 +4118,14 @@ própria empresa no connect; o do app (cabeçalho `x-trajetto-client: mobile` ou
 A entrega é _at-most-once_: a
 verdade está no banco e as telas refazem a consulta ao reconectar. Mudanças de
 catálogo emitem `catalogChanged` `{ businessId, entity }` depois do commit, e
-a web invalida a lista daquela entidade. `SOCKET_ADAPTER_KEY` separa os canais
+a web invalida a lista daquela entidade. O `vehicle` não sai só do cadastro do
+veículo: a saída e o fim de uma rota que saiu (o status Em rota,
+`announceRouteVehicle` com a regra `routeMovesVehicle` do
+`syncVehicleStatus`), o abastecimento, o checklist e a ordem de serviço que
+mexem no hodômetro ou na última manutenção também avisam, uma vez por
+gravação (`announceVehicleChanged`, `src/shared/vehicle/vehicle-realtime.ts`).
+`tests/unitaires/quality/vehicle-catalog-hints.test.ts` lista toda escrita na
+tabela `vehicle` e quem chega nela, e falha se um caminho novo não avisar. `SOCKET_ADAPTER_KEY` separa os canais
 de dois ambientes que dividam um Redis (Pub/Sub ignora o número do banco).
 
 **Admissão, sala de posições e dreno** (plano de escala U-01, F2.19;
@@ -4646,7 +4735,13 @@ importação intocada. Uma entrega ainda numa rota que fica é mantida pela
 parada aberta ("Está numa rota que não pode ser desfeita."), e sair de uma
 rota (retirada, movida, rota cancelada ou encerrada com pendências) grava um
 `ROUTE_REMOVED`, que continua contando. O mesmo filtro vale na decisão das
-rotas, na contagem do lote e na conferência do `DELETE`.
+rotas, na contagem do lote e na conferência do `DELETE`. As rotas que saem
+são as que continuam PLANEJADA sob a trava da linha (`FOR UPDATE`, em ordem de
+id): o `DELETE` apaga exatamente essas, e depois do commit desse passo cada
+uma vira um `routeEvent` `route.removed` na sala de operações
+(`announceRoutesRemoved`), para os quadros e os seletores de rota das outras
+abas largarem a rota em vez de oferecer uma que responde 404 (auditoria de
+25/11/2026).
 
 **Exportações** (CSV e Excel, `src/shared/services/export/`) passam por
 `ExportPipeline`, que reserva uma vaga antes do primeiro byte: uma exportação
@@ -5729,7 +5824,21 @@ visão geral leva as atividades de cada visita, e ninguém revalida essas
 leituras. O fuso e os módulos vêm da sessão e entram na chave, então o
 cálculo, fora da requisição, não lê nada a mais. Com
 `DASHBOARD_SNAPSHOT_TTL_MS=0`, cada visita volta a ler sozinha, pelo
-caminho de antes. Um acerto custa 4 statements na visão geral (a sessão e
+caminho de antes. O Atualizar do painel manda `x-trajetto-refresh: 1`, como
+o da torre, e os controllers de `/dashboard/overview` e `/dashboard/trends`
+o repassam (`wantsFreshSnapshot` → `readDashboardNumbers({ refresh })`, e
+também a foto do MASTER): a cópia é recalculada quando tem 2 s ou mais
+(`DASHBOARD_MIN_REFRESH_MS`, passado como `minRefreshMs` às duas fotos), então
+um clique em sequência custa no máximo um cálculo a cada 2 s. Antes
+(auditoria de 11/2026), o Atualizar logo depois de criar uma rota devolvia os
+números de antes por até um minuto
+(`tests/unitaires/dashboard/dashboard-refresh-hint.test.ts`). A foto do
+MASTER é um `SnapshotCache`, cujo piso padrão é zero: sem o piso, cada clique
+recalculava os números de todas as empresas (revisão de 25/11/2026). Ela é
+montada por `masterOverviewSnapshot` em `dashboard-snapshot.ts`, e
+`tests/unitaires/dashboard/dashboard-snapshot.test.ts` exige `minRefreshMs`
+em todo `new SnapshotCache` do código (só a de `operational-metrics.ts`, que
+ninguém atualiza, fica de fora). Um acerto custa 4 statements na visão geral (a sessão e
 as três leituras das atividades) e 1 nas tendências, contra 17 e 4 do
 cálculo (`tests/E2E/panel-statement-budgets.test.ts`). A prova de que um
 perfil nunca vê o número de outro está em
@@ -6029,6 +6138,19 @@ podem ter o mesmo registro?". Decisão 8.1 (28/09/2026):
 Esta seção substitui o antigo `docs/decisao-uniques-multi-tenant.md`, que os
 comentários das migrations `20260924090400` e `20260928120500` ainda citam
 (migrations aplicadas não são editadas).
+
+**A matriz é uma cópia da empresa, num sentido só** (auditoria de
+11/2026, `modules/branch/branch-head-office.ts`): a filial criada com a
+empresa leva o CNPJ dela, e é por esse CNPJ que a edição da empresa acha a
+matriz e regrava nela todos os campos do cadastro (menos o fuso). Filiais
+editava a matriz à vontade e nada voltava para a empresa: a edição sumia no
+próximo salvar em Empresas, e um CNPJ trocado ali desligava a matriz da
+empresa de vez. Agora `PATCH /branch/update-branch` recusa mudar qualquer
+campo da matriz com `409 BRANCH_HEAD_OFFICE_READ_ONLY` (reenviar os mesmos
+valores não é mudança), a lista traz `is_head_office` em cada linha e a web
+abre a matriz só para leitura, dizendo que os dados mudam em Empresas. Um
+teste prende a lista de campos espelhados aos dois corpos de edição, o da
+empresa e o da filial (`tests/unitaires/branch/branch-head-office.test.ts`).
 
 Regras de implementação que vieram dessa análise:
 

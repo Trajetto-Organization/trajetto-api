@@ -55,7 +55,7 @@ const VALIDATION =
 const SESSION_USER = "USER_NOT_FOUND (o usuário da sessão não existe mais)";
 const BUSINESS = "BUSINESS_NOT_FOUND (a empresa não existe)";
 const ASSIGNEE =
-  "ASSIGNED_USER_NOT_FOUND (o responsável indicado não existe ou é de outra empresa — a mesma resposta) ou USER_NOT_IN_BUSINESS (só para o MASTER, que enxerga todas as empresas: o responsável é de outra empresa)";
+  "ASSIGNED_USER_NOT_FOUND (o responsável indicado não existe ou é de outra empresa — a mesma resposta) ou USER_NOT_IN_BUSINESS (só para o MASTER, que enxerga todas as empresas: o responsável é de outra empresa). USER_NOT_ASSIGNABLE: o responsável escolhido não tem mais acesso (revogado ou removido); manter o que o card já tem continua valendo";
 
 const validationError = refusal(`${VALIDATION}.`);
 

@@ -164,6 +164,7 @@ class GetDashboardOverviewUseCase {
   async execute({
     userId,
     entitlements,
+    refresh = false,
   }: DashboardOverviewRequest): Promise<DashboardOverviewResponse> {
     const user = await this.userRepository.findUserById(userId);
 
@@ -187,10 +188,16 @@ class GetDashboardOverviewUseCase {
         user.role === "MASTER" && this.masterSnapshots
           ? (
               await this.masterSnapshots.read({
+                refresh,
                 compute: () => this.numbersOf(user, undefined, null),
               })
             ).value
-          : await this.numbersOf(user, businessId, entitlements ?? null);
+          : await this.numbersOf(
+              user,
+              businessId,
+              entitlements ?? null,
+              refresh,
+            );
 
       // The five newest lines, without a total: this screen has no pager,
       // and the paginated listing's COUNT walked the whole activity trail
@@ -218,6 +225,7 @@ class GetDashboardOverviewUseCase {
     user: Viewer,
     businessId: string | undefined,
     sessionEntitlements: Entitlements | null,
+    refresh = false,
   ): Promise<OverviewNumbers> {
     /**
      * Months, "this month" and "today" in the company's calendar
@@ -244,6 +252,7 @@ class GetDashboardOverviewUseCase {
       businessId,
       variant: overviewVariant(visibility, timeZone),
       compute: () => this.numbersFor(businessId, visibility, timeZone),
+      refresh,
     });
   }
 

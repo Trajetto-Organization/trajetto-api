@@ -33,6 +33,7 @@ import { ServiceOrderLocationNotProvidedAdjustmentValidationError } from "../err
 import { ServiceOrderRegistrationsMobileLocationRequiredError } from "../errors/service-order-registrations-mobile-location-required-error";
 
 import { UserResponsibleNotFoundError } from "@/modules/user/usecases/errors/user-responsible-not-found-error";
+import { assertAssignableUser } from "@/modules/user/user-assignable-rules";
 
 import {
   ServiceOrder,
@@ -50,6 +51,7 @@ import { logger } from "@/shared/logging/logger";
 import { isUniqueViolation } from "@/shared/http/idempotency-key";
 import { timeZoneOfBusiness } from "@/shared/time/business-time-zone";
 import { pickedDateFromInput } from "@/shared/vehicle/record-dates";
+import { announceVehicleChanged } from "@/shared/vehicle/vehicle-realtime";
 import database from "@/../infra/database";
 
 @injectable()
@@ -156,6 +158,10 @@ class CreateServiceOrderUseCase {
       if (findResponsibleUser.businessId !== serviceOrderData.businessId) {
         throw new UserNotBelongBusinessError();
       }
+
+      // The responsible is paged about the order: never a revoked or
+      // removed login (audit of 11/2026).
+      assertAssignableUser(findResponsibleUser);
     }
 
     // A bare day starts in the company's zone: as a string it reached
@@ -320,6 +326,15 @@ class CreateServiceOrderUseCase {
       (serviceOrderData as any).location_edited_at = new Date();
     }
 
+    // Whether the order writes its vehicle: a MASTER's override, or the
+    // odometer and last maintenance of an order created finished.
+    const writesVehicle =
+      Object.keys(vehicleUpdateData).length > 0 ||
+      Boolean(
+        serviceOrderData.completion_date &&
+          serviceOrderData.new_mileage_after_service,
+      );
+
     try {
       // Order and outbox event commit together; the pipeline notifies the
       // responsible user and records the activity after the commit.
@@ -397,6 +412,10 @@ class CreateServiceOrderUseCase {
 
         return created;
       });
+
+      // Committed: the vehicle lists show the odometer and the last
+      // maintenance this order wrote.
+      if (writesVehicle) announceVehicleChanged(serviceOrderData.businessId);
 
       // Create kanban card asynchronously without blocking the main flow
       logger.debug(

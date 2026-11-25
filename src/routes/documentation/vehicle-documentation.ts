@@ -123,11 +123,17 @@ const vehicleSearchItem = vehicleListItem
       .describe(
         "O tipo e a categoria de CNH que ele exige, para a atribuição avisar quando a do motorista não cobre (decisão 8.5).",
       ),
+    fuelType: z
+      .object({ description: z.string() })
+      .nullable()
+      .describe(
+        'O combustível do veículo, que o cartão "Meus veículos" do motorista mostra. Só no cadastro inteiro.',
+      ),
   })
   .partial()
   .required({ id: true, description: true, license_plate: true, status: true })
   .describe(
-    "Quem tem leitura de veículos recebe o cadastro inteiro. Quem só entra pela escrita de Entregas (despacho) recebe apenas id, description, license_plate, brand, model, status, businessId, driverId, vehicleTypeId, driver.name e vehicleType (descrição e CNH exigida).",
+    "Quem tem leitura de veículos recebe o cadastro inteiro, com driver.name, vehicleType e fuelType.description. Quem só entra pela escrita de Entregas (despacho) recebe apenas id, description, license_plate, brand, model, status, businessId, driverId, vehicleTypeId, driver.name e vehicleType (descrição e CNH exigida).",
   );
 
 /** GET /vehicle/list-vehicle `meta.searchMeta`, as summarizeVehicleList builds it. */
@@ -255,7 +261,7 @@ const vehicleResponses = {
   // Every refusal leaves in the handler's shape (`code` + `message`); the
   // descriptions list the codes a client branches on.
   validationError: errorResponse.describe(
-    "VALIDATION_ERROR (campo inválido, ordenação ou filtro fora da lista), BUSINESS_NOT_IDENTIFIED (MASTER sem empresa), VEHICLE_MODEL_YEAR_INVALID, VEHICLE_MILEAGE_READ_ONLY, VEHICLE_MAINTENANCE_MILEAGE_INVALID, VEHICLE_STATUS_DERIVED ou um cadastro relacionado (tipo, combustível, motorista, filial, RESPONSIBLE_USER_NOT_FOUND para o responsável pela frota) que não existe nesta empresa.",
+    "VALIDATION_ERROR (campo inválido, ordenação ou filtro fora da lista), BUSINESS_NOT_IDENTIFIED (MASTER sem empresa), VEHICLE_MODEL_YEAR_INVALID, VEHICLE_MILEAGE_READ_ONLY, VEHICLE_MAINTENANCE_MILEAGE_INVALID, VEHICLE_STATUS_DERIVED ou um cadastro relacionado (tipo, combustível, motorista, filial, RESPONSIBLE_USER_NOT_FOUND para o responsável pela frota) que não existe nesta empresa. USER_NOT_ASSIGNABLE: o responsável pela frota escolhido não tem mais acesso (revogado ou removido).",
   ),
   forbidden: errorResponse.describe(
     "PERMISSION_DENIED (inclui o motorista na listagem da frota) ou VEHICLE_NOT_ASSIGNED_TO_DRIVER (o motorista pediu um veículo que não é o dele nem o da rota liberada ou em andamento; na consulta de um veículo, também não é o da rota dele concluída nas últimas 24 horas).",

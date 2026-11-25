@@ -3,6 +3,7 @@ import database from "@/../infra/database";
 import type {
   IImportRepository,
   ReversalRemovedHook,
+  ReversalRoutesRemovedHook,
 } from "./IImport-repository";
 import type {
   CreateImportProps,
@@ -501,10 +502,12 @@ class ImportRepository implements IImportRepository {
       onRemoved,
       batchSize = REVERSAL_BATCH_SIZE,
       beforeBatch,
+      onRoutesRemoved,
     }: {
       onRemoved?: ReversalRemovedHook;
       batchSize?: number;
       beforeBatch?: () => void;
+      onRoutesRemoved?: ReversalRoutesRemovedHook;
     },
   ): Promise<ReversalResult> {
     let current = progress;
@@ -513,10 +516,15 @@ class ImportRepository implements IImportRepository {
       if (!current.routesDone) {
         beforeBatch?.();
 
-        current = await this.prisma.$transaction(
+        const step = await this.prisma.$transaction(
           (tx) => this.reverseRoutes(tx, importId, businessId, lease, current),
           REVERSAL_TRANSACTION_OPTIONS,
         );
+
+        current = step.progress;
+
+        // Committed: the routes are gone for every reader now.
+        if (step.removed.length > 0) onRoutesRemoved?.(step.removed);
       }
 
       for (;;) {
@@ -617,7 +625,10 @@ class ImportRepository implements IImportRepository {
     businessId: string,
     lease: Date,
     progress: ReversalProgress,
-  ): Promise<ReversalProgress> {
+  ): Promise<{
+    progress: ReversalProgress;
+    removed: Array<{ id: string; code: number }>;
+  }> {
     await this.fence(tx, importId, businessId, lease);
 
     const routes = await tx.route.findMany({
@@ -677,18 +688,31 @@ class ImportRepository implements IImportRepository {
 
     // Routes before their deliveries: a stop references its delivery, and
     // the delivery cannot go while a stop still points at it. The status is
-    // asked again in the delete: the reads above take no lock, and a route
-    // released since is not ours to remove any more.
-    const removedRoutes =
+    // asked again under the routes' lock: the reads above take none, and a
+    // route released since is not ours to remove any more. The lock (in id
+    // order, as the route writes take it) makes the rows read here exactly
+    // the rows deleted, so the hint after the commit names the routes that
+    // went — a count could not (audit of 25/11/2026).
+    const removed =
       removableRouteIds.length > 0
-        ? await tx.route.deleteMany({
-            where: {
-              id: { in: removableRouteIds },
-              businessId,
-              status: "PLANNED",
-            },
-          })
-        : { count: 0 };
+        ? await tx.$queryRaw<Array<{ id: string; code: number }>>`
+            SELECT "id", "code" FROM "route"
+            WHERE "id" IN (${Prisma.join(removableRouteIds)})
+              AND "businessId" = ${businessId}
+              AND "status" = 'PLANNED'
+            ORDER BY "id"
+            FOR UPDATE
+          `
+        : [];
+
+    if (removed.length > 0) {
+      await tx.route.deleteMany({
+        where: {
+          id: { in: removed.map((route) => route.id) },
+          businessId,
+        },
+      });
+    }
 
     // Whatever is kept stops claiming to be part of this upload.
     await tx.route.updateMany({
@@ -698,14 +722,14 @@ class ImportRepository implements IImportRepository {
 
     const next: ReversalProgress = {
       ...progress,
-      removedRoutes: progress.removedRoutes + removedRoutes.count,
+      removedRoutes: progress.removedRoutes + removed.length,
       keptRoutes: [...progress.keptRoutes, ...keptRoutes],
       routesDone: true,
     };
 
     await this.saveProgress(tx, importId, businessId, next);
 
-    return next;
+    return { progress: next, removed };
   }
 
   /**

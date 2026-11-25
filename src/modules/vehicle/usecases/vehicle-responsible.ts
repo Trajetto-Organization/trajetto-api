@@ -1,5 +1,6 @@
 import type { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { UserResponsibleNotFoundError } from "@/modules/user/usecases/errors/user-responsible-not-found-error";
+import { assertAssignableUser } from "@/modules/user/user-assignable-rules";
 
 /**
  * The vehicle's responsible person (plan of 02/11/2026, F1; decision D44):
@@ -22,6 +23,11 @@ async function assertResponsibleUser(
   if (!user || user.businessId !== businessId) {
     throw new UserResponsibleNotFoundError();
   }
+
+  // They receive the failed-checklist alert, so they must still sign in.
+  // The update calls this only for a person it changes to, so a vehicle
+  // whose responsible later left keeps naming them until someone picks.
+  assertAssignableUser(user);
 }
 
 export { assertResponsibleUser };

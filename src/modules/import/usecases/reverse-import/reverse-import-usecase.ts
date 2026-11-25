@@ -27,6 +27,7 @@ import { callerNotFound } from "@/shared/delivery/caller-not-found";
 import { WebhookFanOutService } from "@/shared/integration/webhook-fan-out-service";
 import { deliveryEventPayload } from "@/shared/integration/announce";
 import { logger } from "@/shared/logging/logger";
+import { announceRoutesRemoved } from "@/shared/route/route-realtime";
 import { env } from "@/env";
 import type { IBackgroundJobRepository } from "@/shared/jobs/background-job-repository";
 import { PermanentJobError } from "@/shared/jobs/job-errors";
@@ -433,12 +434,19 @@ class ReverseImportUseCase {
       }
     };
 
+    // The PLANNED routes the undo deleted, after their commit: the other
+    // tabs' boards and route pickers kept offering them, and choosing one
+    // answered 404; only the tab that undid read again (audit of
+    // 25/11/2026).
+    const onRoutesRemoved = (routes: Array<{ id: string; code: number }>) =>
+      announceRoutesRemoved(businessId, routes);
+
     const result = await this.importRepository.runReversal(
       importId,
       businessId,
       lease,
       progress,
-      { onRemoved, beforeBatch },
+      { onRemoved, beforeBatch, onRoutesRemoved },
     );
 
     const kept = result.keptDeliveries.length + result.keptRoutes.length;

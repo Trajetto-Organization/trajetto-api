@@ -1,3 +1,6 @@
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join, relative } from "node:path";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const entitlements = vi.hoisted(() => ({ getBusinessEntitlements: vi.fn() }));
@@ -27,6 +30,7 @@ import {
 } from "@/modules/dashboard/usecases/get-dashboard-trends/get-dashboard-trends-usecase";
 import {
   dashboardSnapshot,
+  masterOverviewSnapshot,
   overviewVariant,
   trendsVariant,
   type OverviewVisibility,
@@ -35,6 +39,7 @@ import {
   TenantSnapshotMemory,
   type TenantSnapshot,
 } from "@/shared/cache/tenant-snapshot";
+import type { SnapshotCache } from "@/shared/cache/snapshot-cache";
 
 /**
  * The dashboard's 60-second snapshot per company and visibility
@@ -170,7 +175,10 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-const overview = (snapshot?: TenantSnapshot<OverviewNumbers>) =>
+const overview = (
+  snapshot?: TenantSnapshot<OverviewNumbers>,
+  master?: SnapshotCache<OverviewNumbers>,
+) =>
   new GetDashboardOverviewUseCase(
     users,
     dashboard,
@@ -178,7 +186,7 @@ const overview = (snapshot?: TenantSnapshot<OverviewNumbers>) =>
     new InMemoryDeliveryRepository(),
     businesses,
     new InMemoryOperationDayRepository(),
-    undefined,
+    master,
     snapshot,
   );
 
@@ -312,6 +320,34 @@ describe("the overview through the company's snapshot", () => {
     expect((await read()).counts.vehicles.value).toBe(4);
   });
 
+  // Audit of 11/2026: "Atualizar" right after creating a route brought the
+  // numbers of before back for up to a minute — the dashboard never passed
+  // the refresh hint the tower and the summary honour.
+  it("reads again on 'Atualizar' once the copy is two seconds old, never sooner", async () => {
+    const snapshot = fresh<OverviewNumbers>();
+    const read = (refresh: boolean) =>
+      overview(snapshot).execute({
+        userId: ADMIN_A,
+        entitlements: BOTH_MODULES,
+        refresh,
+      });
+
+    expect((await read(false)).counts.vehicles.value).toBe(3);
+
+    dashboard.addEntityCount("vehicle", 1, "2026-10-06T14:00:00.000Z", A);
+
+    // A button pressed in a loop: the copy under two seconds stays.
+    vi.setSystemTime(NOW.getTime() + 1_000);
+    expect((await read(true)).counts.vehicles.value).toBe(3);
+
+    // Without the hint, the copy stands for its minute.
+    vi.setSystemTime(NOW.getTime() + 5_000);
+    expect((await read(false)).counts.vehicles.value).toBe(3);
+
+    expect((await read(true)).counts.vehicles.value).toBe(4);
+    expect(snapshot.stats()).toMatchObject({ computes: 2 });
+  });
+
   it("reads every view alone with DASHBOARD_SNAPSHOT_TTL_MS=0, as before", async () => {
     env.DASHBOARD_SNAPSHOT_TTL_MS = 0;
 
@@ -337,6 +373,109 @@ describe("the overview through the company's snapshot", () => {
 
     expect(result.counts.vehicles.value).toBe(53);
     expect(snapshot.stats()).toMatchObject({ computes: 0, copies: 0 });
+  });
+
+  // Review of 25/11/2026: the MASTER's snapshot is a SnapshotCache, whose
+  // floor defaults to zero, so every "Atualizar" recomputed the numbers of
+  // every company on the platform, one press after the other.
+  it("reads the MASTER's numbers again on 'Atualizar' only once they are two seconds old", async () => {
+    // The instance src/shared/index.ts registers, but in this replica only.
+    const master = masterOverviewSnapshot<OverviewNumbers>({
+      ttlMs: 60_000,
+      store: null,
+    });
+    const platform = vi.spyOn(dashboard, "countVehiclesByType");
+    const read = async (refresh: boolean) =>
+      (await overview(fresh(), master).execute({ userId: MASTER, refresh }))
+        .counts.vehicles.value;
+
+    expect(await read(false)).toBe(53);
+
+    const perComputation = platform.mock.calls.length;
+
+    expect(perComputation).toBeGreaterThan(0);
+
+    dashboard.addEntityCount("vehicle", 1, "2026-10-06T14:00:00.000Z", B);
+
+    // A button pressed in a loop: one computation, the copy under 2 s stays.
+    vi.setSystemTime(NOW.getTime() + 500);
+    expect(await read(true)).toBe(53);
+    vi.setSystemTime(NOW.getTime() + 1_500);
+    expect(await read(true)).toBe(53);
+    expect(platform).toHaveBeenCalledTimes(perComputation);
+
+    vi.setSystemTime(NOW.getTime() + 2_000);
+    expect(await read(true)).toBe(54);
+    expect(platform).toHaveBeenCalledTimes(perComputation * 2);
+  });
+});
+
+/**
+ * Every platform-level snapshot names how often "Atualizar" may recompute
+ * it. SnapshotCache's floor defaults to zero, which is right only for a
+ * snapshot nobody refreshes; a new one built without the option would
+ * bring back the MASTER's case above (review of 25/11/2026).
+ */
+describe("the refresh floor of every SnapshotCache", () => {
+  const ROOT = join(process.cwd(), "src");
+
+  /** Read by its own TTL only: nothing passes `refresh` to it. */
+  const NEVER_REFRESHED = ["src/shared/health/operational-metrics.ts"];
+
+  const rel = (file: string) =>
+    relative(process.cwd(), file).split("\\").join("/");
+
+  function files(dir: string): string[] {
+    return readdirSync(dir).flatMap((name) => {
+      const path = join(dir, name);
+
+      if (statSync(path).isDirectory()) return files(path);
+
+      return path.endsWith(".ts") ? [path] : [];
+    });
+  }
+
+  it("is set wherever one is built", () => {
+    const built: string[] = [];
+    const offenders: string[] = [];
+
+    for (const file of files(ROOT)) {
+      const source = readFileSync(file, "utf8");
+
+      for (const match of source.matchAll(/new SnapshotCache\b[^(]*\(\{/g)) {
+        const start = match.index ?? 0;
+        const options = source.slice(start, source.indexOf("})", start));
+        const line = source.slice(0, start).split("\n").length;
+
+        built.push(rel(file));
+
+        if (
+          !options.includes("minRefreshMs") &&
+          !NEVER_REFRESHED.includes(rel(file))
+        ) {
+          offenders.push(`${rel(file)}:${line}`);
+        }
+      }
+    }
+
+    // The scan sees the snapshots it is about (a regex that stopped
+    // matching would pass with nothing to check).
+    expect(built).toEqual(
+      expect.arrayContaining([
+        "src/modules/dashboard/usecases/shared/dashboard-snapshot.ts",
+        "src/shared/health/provider-readiness.ts",
+        ...NEVER_REFRESHED,
+      ]),
+    );
+    expect(offenders).toEqual([]);
+  });
+
+  it("allows no floor only where nothing refreshes", () => {
+    for (const file of NEVER_REFRESHED) {
+      const source = readFileSync(join(process.cwd(), file), "utf8");
+
+      expect(source, file).not.toMatch(/refresh/);
+    }
   });
 });
 
@@ -370,6 +509,33 @@ describe("the trend chart through the company's snapshot", () => {
 
     expect(snapshot.stats()).toMatchObject({ computes: 5, copies: 2 });
     expect(entitlements.getBusinessEntitlements).not.toHaveBeenCalled();
+  });
+
+  it("reads the chart again on 'Atualizar' once the copy is two seconds old", async () => {
+    const snapshot = fresh<DashboardTrendsResponse>();
+    const vehiclesIn = async (refresh: boolean) =>
+      (
+        await trends(snapshot).execute({
+          userId: ADMIN_A,
+          period: "7d",
+          entitlements: BOTH_MODULES,
+          refresh,
+        })
+      ).activityTrends.reduce(
+        (total, point) => total + Number(point.vehicles ?? 0),
+        0,
+      );
+
+    const before = await vehiclesIn(false);
+
+    dashboard.addEntityCount("vehicle", 1, "2026-10-06T14:00:00.000Z", A);
+
+    vi.setSystemTime(NOW.getTime() + 1_000);
+    expect(await vehiclesIn(true)).toBe(before);
+
+    vi.setSystemTime(NOW.getTime() + 5_000);
+    expect(await vehiclesIn(false)).toBe(before);
+    expect(await vehiclesIn(true)).toBe(before + 1);
   });
 
   it("reads the modules only when the session did not bring them", async () => {

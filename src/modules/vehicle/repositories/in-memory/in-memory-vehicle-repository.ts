@@ -97,6 +97,8 @@ class InMemoryVehicleRepository implements IVehicleRepository {
   public vehicleTypeNames: Record<string, string> = {};
   /** The licence each seeded type requires (decision 8.5); absent = none. */
   public vehicleTypeCnh: Record<string, string> = {};
+  /** fuel_type.description by id, for the picker's full rows. */
+  public fuelTypeNames: Record<string, string> = {};
 
   /**
    * The routes table, for the driver's vehicle access and the status rule.
@@ -662,6 +664,9 @@ class InMemoryVehicleRepository implements IVehicleRepository {
             ...vehicle,
             driver: driverOf(vehicle),
             vehicleType: typeOf(vehicle),
+            fuelType: this.fuelTypeNames[vehicle.fuelTypeId]
+              ? { description: this.fuelTypeNames[vehicle.fuelTypeId] }
+              : null,
           }));
 
     return { data, nextCursor, hasMore };

@@ -194,6 +194,7 @@ async function userRoutes(app: FastifyInstance) {
         summary: "Busca usuários da empresa (cursor)",
         description:
           "Usuários da empresa em NDJSON paginado por cursor, para os seletores. " +
+          "Só quem ainda entra no sistema: acesso revogado ou usuário removido (anonimizado) não aparece, porque todo seletor que usa esta busca escolhe um responsável. " +
           "O termo em `search` é comparado com nome e e-mail no servidor. " +
           "A primeira linha traz {meta: {total: 0, searchMeta: {nextCursor, hasMore}}}; " +
           "use nextCursor como `cursor` da próxima página.",

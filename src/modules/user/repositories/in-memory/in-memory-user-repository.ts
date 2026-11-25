@@ -54,6 +54,7 @@ import {
   NO_USER_HISTORY,
   type UserHistoryCounts,
 } from "../../user-history-rules";
+import { isAssignableUser } from "../../user-assignable-rules";
 
 type StoredUser = User & { created_at?: Date; updated_at?: Date };
 
@@ -1139,6 +1140,7 @@ class InMemoryUserRepository implements IUserRepository {
       this.user.filter(
         (user) =>
           user.businessId === businessId &&
+          isAssignableUser(user) &&
           (!term ||
             containsInsensitive(user.name, term) ||
             containsInsensitive(user.email, term)),

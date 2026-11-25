@@ -575,3 +575,44 @@ describe("branch deletion — request and confirm", () => {
     expect(await prisma.branch.count({ where: { id: branchId } })).toBe(0);
   });
 });
+
+// Audit of 11/2026: the head office is a one-way copy of the company (the
+// company finds it by CNPJ and rewrites it on every save in Empresas), so
+// Filiais never changes it, and the list says which row it is.
+describe("the head office through Filiais", () => {
+  it("refuses a change with 409 BRANCH_HEAD_OFFICE_READ_ONLY and is marked on the list", async () => {
+    const company = await prisma.business.findUniqueOrThrow({
+      where: { id: CARRIER },
+    });
+    const { id: headOffice } = await prisma.branch.create({
+      data: {
+        ...branchBody({ corporate_reason: "Matriz Contrato" }),
+        cnpj: company.cnpj,
+        businessId: CARRIER,
+      },
+    });
+
+    try {
+      const refused = await app.inject({
+        method: "PATCH",
+        url: `/branch/update-branch/${headOffice}/business/${CARRIER}`,
+        headers: { authorization: `Bearer ${tokens.admin}` },
+        payload: { cnpj: "75000000000001" },
+      });
+
+      expect(refused.statusCode).toBe(409);
+      expect(refused.json().code).toBe("BRANCH_HEAD_OFFICE_READ_ONLY");
+      expect(
+        await prisma.branch.findUniqueOrThrow({ where: { id: headOffice } }),
+      ).toMatchObject({ cnpj: company.cnpj });
+
+      const { rows } = await list("search=Matriz%20Contrato");
+
+      expect(
+        rows.map((row) => [row.corporate_reason, row.is_head_office]),
+      ).toEqual([["Matriz Contrato", true]]);
+    } finally {
+      await prisma.branch.delete({ where: { id: headOffice } });
+    }
+  });
+});

@@ -13,10 +13,7 @@ import { AppError } from "@/shared/errors/AppError";
 import { ROUTE_STATUS_LABELS } from "@/shared/route/route-rules";
 
 import { WebhookFanOutService } from "@/shared/integration/webhook-fan-out-service";
-import {
-  deliveryAssignedPayload,
-  deliveryEventPayload,
-} from "@/shared/integration/announce";
+import { deliveryAssignedPayload } from "@/shared/integration/announce";
 
 import { assertDeliveriesRoutable } from "../shared/routable-deliveries";
 import {
@@ -28,6 +25,13 @@ import {
   announcePlanChange,
   planWriteFailure,
 } from "../shared/route-plan-change";
+import {
+  alreadyOnRouteAfterRace,
+  deliveryLabelOf,
+  routeConflictAfterLock,
+  routeNotAppendable,
+} from "../shared/route-plan-rules";
+import { announceDepartedStops } from "../shared/departing-stops";
 
 import {
   DeliveryAlreadyOnRouteError,
@@ -36,11 +40,6 @@ import {
   RouteStatusConflictError,
 } from "../errors/route-errors";
 import { DeliveryStatusConflictError } from "@/modules/delivery/usecases/errors/delivery-errors";
-
-import {
-  buildDeliveryCustomerPayload,
-  hasSomebodyToTell,
-} from "@/shared/delivery/customer-notice";
 
 import type { Prisma } from "@prisma/client";
 import type { IStatusChangeReasonRepository } from "@/modules/status-change-reason/repositories/IStatus-change-reason-repository";
@@ -129,6 +128,12 @@ class AddRouteStopsUseCase {
 
     // Scoped read: another company's route reads as absent.
     if (!findRoute) throw new RouteNotFoundError();
+
+    // An ended route answers as one, naming it, before anything else —
+    // never as "already on this route" (owner's report of 25/11/2026).
+    const ended = routeNotAppendable(findRoute);
+
+    if (ended) throw ended;
 
     // Duplicates in a selection are harmless; collapsing them keeps the count
     // checks below honest.
@@ -245,40 +250,15 @@ class AddRouteStopsUseCase {
           );
         }
 
-        // On a running route these left now: "saiu para entrega", in this
-        // commit, as the departure tells its own load (K12).
+        // On a running route these left now: "saiu para entrega" and
+        // `delivery.in_transit`, in this commit, as the departure tells its
+        // own load (K12).
         if (result.status === "IN_PROGRESS") {
-          // And the customers' systems hear `delivery.in_transit`, as at the
-          // departure (F2-06): the load went "Em rota" in this commit.
-          await this.webhooks.announceMany(
-            "delivery.in_transit",
-            businessId,
-            deliveries.map((delivery) =>
-              deliveryEventPayload({
-                ...delivery,
-                id: delivery.id!,
-                businessId,
-                status: "IN_TRANSIT",
-              }),
-            ),
+          await announceDepartedStops(
             tx,
+            { webhooks: this.webhooks, outbox: this.outbox },
+            { businessId, actorId: userId, deliveries },
           );
-
-          for (const delivery of deliveries) {
-            if (!hasSomebodyToTell(delivery)) continue;
-
-            await this.outbox?.publish(tx, {
-              topic: "delivery.dispatched",
-              aggregateType: "delivery",
-              aggregateId: delivery.id!,
-              businessId,
-              actorId: userId,
-              payload: buildDeliveryCustomerPayload(delivery.id!, {
-                ...delivery,
-                businessId,
-              }),
-            });
-          }
         }
 
         return result;
@@ -325,9 +305,14 @@ class AddRouteStopsUseCase {
 
       // 409 and not 400: the request was well formed and the caller was
       // allowed to make it — somebody else put one of these deliveries on a
-      // route first. The screen has to say "refresh", not "you did it wrong".
+      // route first. The screen has to say "refresh", not "you did it wrong"
+      // — and which delivery, on which route, as the check above does.
       if (error instanceof DeliveryAlreadyOnRouteError) {
-        throw new AppError(error.message, 409, "DELIVERY_ALREADY_ON_ROUTE");
+        throw await alreadyOnRouteAfterRace(error, {
+          reread: (ids) => this.route.findOpenStopRoutes(ids, businessId),
+          labelOf: deliveryLabelOf(deliveries),
+          expected: (now) => now.routeId === routeId,
+        });
       }
 
       // A delivery cancelled (or sent out by hand) after the check above:
@@ -336,13 +321,13 @@ class AddRouteStopsUseCase {
         throw new AppError(error.message, 409, "DELIVERY_NOT_ROUTABLE");
       }
 
-      // Raised when the route ended (completed or cancelled) before the
-      // write — the same empty result set the tenant produces.
+      // Raised when the route ended (completed or cancelled) between the
+      // check above and the lock — the same empty result set the tenant
+      // produces. Read again to say which state it is in now.
       if (error instanceof RouteStatusConflictError) {
-        throw new AppError(
-          "Esta rota já foi concluída ou cancelada e não aceita novas paradas. Atualize a tela.",
-          409,
-          "ROUTE_STATUS_CONFLICT",
+        throw await routeConflictAfterLock(
+          () => this.route.findRouteById(routeId, businessId),
+          `O status da Rota ${findRoute.code} mudou enquanto você trabalhava nela e nada foi gravado. Atualize a tela e tente novamente.`,
         );
       }
 

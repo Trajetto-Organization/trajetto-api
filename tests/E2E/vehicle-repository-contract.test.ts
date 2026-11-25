@@ -101,7 +101,11 @@ beforeAll(async () => {
   await seedBusiness(prisma, F.A, 1);
   await seedBusiness(prisma, F.B, 2);
   await prisma.fuelType.create({
-    data: { id: F.fuelTypeA, description: "Diesel", businessId: F.A },
+    data: {
+      id: F.fuelTypeA,
+      description: F.fuelTypeName,
+      businessId: F.A,
+    },
   });
   await seedFuelType(prisma, F.B).then((row) =>
     prisma.fuelType.update({
@@ -131,6 +135,7 @@ beforeAll(async () => {
 
   memory.driverNames[F.driverA] = F.driverName;
   memory.vehicleTypeNames[F.vehicleTypeA] = F.vehicleTypeName;
+  memory.fuelTypeNames[F.fuelTypeA] = F.fuelTypeName;
   memory.branchNames[F.branchA] = F.branchName;
   memory.userNames[F.responsibleA] = F.responsibleName;
 

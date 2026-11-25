@@ -7,7 +7,7 @@ import {
 import { env } from "@/env";
 import { RedisConnection } from "@/../infra/cache/redis-connection";
 import {
-  SnapshotCache,
+  type SnapshotCache,
   redisSnapshotStore,
 } from "@/shared/cache/snapshot-cache";
 
@@ -141,7 +141,10 @@ import {
   type OverviewNumbers,
 } from "@/modules/dashboard/usecases/get-dashboard-overview/get-dashboard-overview-usecase";
 import type { DashboardTrendsResponse } from "@/modules/dashboard/usecases/get-dashboard-trends/get-dashboard-trends-usecase";
-import { dashboardSnapshot } from "@/modules/dashboard/usecases/shared/dashboard-snapshot";
+import {
+  dashboardSnapshot,
+  masterOverviewSnapshot,
+} from "@/modules/dashboard/usecases/shared/dashboard-snapshot";
 import type { TenantSnapshot } from "@/shared/cache/tenant-snapshot";
 
 import { ActivityRepository } from "@/modules/activity/repositories/activity-repository";
@@ -309,12 +312,12 @@ container.registerSingleton<IDashboardRepository>(
 
 // The MASTER's platform-wide dashboard numbers: one read a minute for the
 // whole deployment, shared by the replicas through Redis and computed again
-// when Redis is away (shared/cache/snapshot-cache.ts). One instance per
+// when Redis is away (shared/cache/snapshot-cache.ts), with the company
+// copy's 2 s floor on "Atualizar" (dashboard-snapshot.ts). One instance per
 // process: the single-flight and this replica's copy live in it.
 container.registerInstance<SnapshotCache<OverviewNumbers>>(
   "MasterOverviewSnapshots",
-  new SnapshotCache<OverviewNumbers>({
-    name: "dashboard-overview-master",
+  masterOverviewSnapshot<OverviewNumbers>({
     ttlMs: MASTER_OVERVIEW_TTL_MS,
     store: redisSnapshotStore(() => RedisConnection.getInstance().getClient()),
   }),

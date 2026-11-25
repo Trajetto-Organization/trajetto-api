@@ -1051,7 +1051,9 @@ describe.each(harnesses.map((harness) => [harness.name, harness] as const))(
       ]);
     });
 
-    it("searches the picker by name or e-mail, newest first, without the hash", async () => {
+    // Audit of 11/2026: every consumer is an assignment picker, so the
+    // revoked ops-2 is not offered (it was, newest first).
+    it("searches the picker by name or e-mail, newest first, without the hash or a revoked login", async () => {
       const result = await harness.repo.searchUserWithCursor({
         limit: 10,
         businessId: A,
@@ -1059,10 +1061,29 @@ describe.each(harnesses.map((harness) => [harness.name, harness] as const))(
       });
 
       expect(result.data.map((row) => keyOf(harness, row.id))).toEqual([
-        "ops-2",
         "ops-1",
       ]);
       expect(result.data.every((row) => !("password" in row))).toBe(true);
+    });
+
+    it("never offers a removed (anonymized) login in the picker", async () => {
+      const removed = idOf(harness, "fin-1");
+
+      await harness.set(removed, { anonymized_at: new Date() });
+
+      try {
+        const result = await harness.repo.searchUserWithCursor({
+          limit: 50,
+          businessId: A,
+        });
+        const offered = result.data.map((row) => keyOf(harness, row.id));
+
+        expect(offered).not.toContain("fin-1");
+        expect(offered).not.toContain("ops-2");
+        expect(offered).toContain("ops-1");
+      } finally {
+        await harness.set(removed, { anonymized_at: null });
+      }
     });
 
     it("lists the masters without the asker and without the hash", async () => {

@@ -63,6 +63,7 @@ import {
 } from "@/modules/route/usecases/errors/route-errors";
 import { crewIssues } from "@/modules/route/usecases/shared/route-crew";
 import { OUT_OF_OPERATION_LABELS } from "@/shared/route/route-rules";
+import { announceRouteCreated } from "@/shared/route/route-realtime";
 import { assertDriverStillActive } from "@/modules/route/usecases/shared/driver-still-active";
 import { ShipperInactiveError } from "@/modules/shipper/usecases/errors/shipper-errors";
 import { logger } from "@/shared/logging/logger";
@@ -1748,6 +1749,13 @@ class ImportDeliverySpreadsheetUseCase {
 
           createdRoute = await build();
         }
+
+        // Committed: the operations room hears it as it hears a route of the
+        // Rotas screen (announceRouteCreated). This path built its routes on
+        // its own and told nobody, so a colleague's boards and route pickers
+        // never listed them until a reload (audit of 25/11/2026). A group a
+        // resumed job finds built was announced by the attempt that built it.
+        announceRouteCreated(businessId, createdRoute);
 
         const builtGroup = builtGroupOf(createdRoute, groupNotes);
 

@@ -396,7 +396,7 @@ class InMemoryRouteRepository implements IRouteRepository {
     );
 
     if (taken.length > 0) {
-      throw new DeliveryAlreadyOnRouteError(taken.length);
+      throw new DeliveryAlreadyOnRouteError(deliveryIds);
     }
   }
 
@@ -442,7 +442,7 @@ class InMemoryRouteRepository implements IRouteRepository {
     this.assertDeliveriesFree(deliveryIds);
 
     if (new Set(deliveryIds).size !== deliveryIds.length) {
-      throw new DeliveryAlreadyOnRouteError(deliveryIds.length);
+      throw new DeliveryAlreadyOnRouteError(deliveryIds);
     }
 
     if (

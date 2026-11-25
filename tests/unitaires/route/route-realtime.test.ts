@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const emitted: Array<{ room: "business"; id: string; event: any }> = [];
+const catalog: Array<{ id: string; entity: string }> = [];
 
 /**
  * The socket layer is a transport; what it is asked to send is the behaviour.
@@ -13,6 +14,9 @@ const emitted: Array<{ room: "business"; id: string; event: any }> = [];
 vi.mock("@/websocket", () => ({
   sendRouteEventToBusiness: (id: string, event: unknown) => {
     emitted.push({ room: "business", id, event });
+  },
+  sendCatalogChangedEvent: (id: string, entity: string) => {
+    catalog.push({ id, entity });
   },
 }));
 
@@ -64,6 +68,7 @@ function closedRoute(): Route {
 
 beforeEach(() => {
   emitted.length = 0;
+  catalog.length = 0;
 });
 
 describe("what the operation's screens are told", () => {
@@ -125,6 +130,27 @@ describe("what the operation's screens are told", () => {
       routeId: "route-1",
       routeCode: 42,
     });
+  });
+
+  it("tells the vehicle lists the truck came back when the route closed", () => {
+    // syncVehicleStatus gave it back in the same commit; the web trusts its
+    // vehicle lists on this hint (audit of 25/11/2026).
+    announceStopSettled(BUSINESS, {
+      stop: stop(),
+      closedRoute: closedRoute(),
+    });
+
+    expect(catalog).toEqual([{ id: BUSINESS, entity: "vehicle" }]);
+  });
+
+  it("tells the vehicle lists nothing for a stop that closed no route", () => {
+    announceStopSettled(BUSINESS, { stop: stop(), closedRoute: null });
+    announceStopSettled(BUSINESS, {
+      stop: stop(),
+      closedRoute: { ...closedRoute(), vehicleId: null },
+    });
+
+    expect(catalog).toEqual([]);
   });
 
   it("says nothing when the delivery was not on a route", () => {

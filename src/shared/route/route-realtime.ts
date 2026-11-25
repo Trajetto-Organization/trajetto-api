@@ -6,6 +6,7 @@ import {
 } from "@/websocket";
 
 import type { Route, RouteStop } from "@/modules/route/dtos/route-dto";
+import { announceRouteVehicle } from "@/shared/vehicle/vehicle-realtime";
 
 /**
  * What the operation's screens are told when a stop resolves.
@@ -50,6 +51,9 @@ function announceStopSettled(
       routeId: settled.closedRoute.id,
       routeCode: settled.closedRoute.code,
     } satisfies RouteRealtimeEvent);
+
+    // And its truck came back by itself (syncVehicleStatus).
+    announceRouteVehicle(businessId, settled.closedRoute);
   }
 
   // The customers' systems hear about the same closure through
@@ -60,8 +64,52 @@ function announceStopSettled(
   // be async for the half that is, in a path where nothing else is.
 }
 
+/** A route as its realtime hints name it. */
+interface AnnouncedRoute {
+  id: string;
+  code: number;
+}
+
+/**
+ * A route was planned: the operations room's hint, after the commit. One
+ * shape for every path that builds routes — the Rotas screen, the batch
+ * assignment and the spreadsheet import — because the import built its
+ * routes on its own and told nobody: a colleague's boards and route pickers
+ * ("Adicionar à rota", "Reentregar") never listed them until a reload
+ * (audit of 25/11/2026). Never the driver's room: a PLANNED route is a draft
+ * that is not theirs yet.
+ */
+function announceRouteCreated(businessId: string, route: AnnouncedRoute): void {
+  sendRouteEventToBusiness(businessId, {
+    type: "route.created",
+    routeId: route.id,
+    routeCode: route.code,
+  } satisfies RouteRealtimeEvent);
+}
+
+/**
+ * PLANNED routes deleted outright (the import's undo), one hint each, after
+ * the commit that deleted them: the boards and pickers of the other tabs
+ * kept offering them, and choosing one answered 404 (audit of 25/11/2026).
+ */
+function announceRoutesRemoved(
+  businessId: string,
+  routes: readonly AnnouncedRoute[],
+): void {
+  for (const route of routes) {
+    sendRouteEventToBusiness(businessId, {
+      type: "route.removed",
+      routeId: route.id,
+      routeCode: route.code,
+    } satisfies RouteRealtimeEvent);
+  }
+}
+
 export {
+  announceRouteCreated,
+  announceRoutesRemoved,
   announceStopSettled,
   sendDriverPositionToBusiness,
+  type AnnouncedRoute,
   type DriverPositionEvent,
 };

@@ -4,6 +4,7 @@ import { container } from "tsyringe";
 import { GetDashboardTrendsUseCase } from "./get-dashboard-trends-usecase";
 
 import { trendsPeriodSchema } from "@/schemas/trends-period-schema";
+import { wantsFreshSnapshot } from "@/shared/http/snapshot-reply";
 
 class GetDashboardTrendsController {
   async handle(
@@ -21,6 +22,8 @@ class GetDashboardTrendsController {
       userId: id,
       period,
       entitlements,
+      // "Atualizar" asks for numbers newer than the company's copy.
+      refresh: wantsFreshSnapshot(request),
     });
 
     return reply.status(200).send(result);

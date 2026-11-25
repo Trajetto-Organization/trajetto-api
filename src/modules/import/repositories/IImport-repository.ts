@@ -173,7 +173,8 @@ interface IImportRepository {
    * transaction, with the deliveries actually deleted) and records its
    * progress. The last one flips the upload to REVERSED and drops the lease.
    * A failure drops the lease too, keeping the progress, so a retry resumes
-   * at once.
+   * at once. `onRoutesRemoved` hears the routes the route step deleted,
+   * after that step commits.
    */
   runReversal: (
     importId: string,
@@ -189,6 +190,14 @@ interface IImportRepository {
        * stays, as for any failure.
        */
       beforeBatch?: () => void;
+
+      /**
+       * The routes the route step actually deleted (still PLANNED under
+       * their lock), called after its transaction commits — the realtime
+       * hint's moment, never a write that rolled back. Not called on a
+       * resume that finds the step done.
+       */
+      onRoutesRemoved?: ReversalRoutesRemovedHook;
     },
   ) => Promise<ReversalResult>;
 }
@@ -199,4 +208,13 @@ type ReversalRemovedHook = (
   tx?: Prisma.TransactionClient,
 ) => Promise<void>;
 
-export type { IImportRepository, ReversalRemovedHook };
+/** The routes a reversal deleted, told after their commit. */
+type ReversalRoutesRemovedHook = (
+  routes: Array<{ id: string; code: number }>,
+) => void;
+
+export type {
+  IImportRepository,
+  ReversalRemovedHook,
+  ReversalRoutesRemovedHook,
+};

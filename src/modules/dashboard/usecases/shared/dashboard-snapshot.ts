@@ -1,5 +1,9 @@
 import { env } from "@/env";
 import {
+  SnapshotCache,
+  type SnapshotStore,
+} from "@/shared/cache/snapshot-cache";
+import {
   TenantSnapshot,
   type TenantSnapshotMemory,
   type TenantSnapshotVariant,
@@ -33,8 +37,8 @@ import type { DashboardEntity } from "../../dtos/dashboard-dto";
  *  - the recent activity, which names people and is filtered by the viewer,
  *    is read on every view and added to the copy's numbers;
  *  - the MASTER, who has no company: their platform-wide overview has its
- *    own snapshot (MasterOverviewSnapshots, snapshot-cache.ts), and their
- *    trends are read on every view;
+ *    own snapshot (MasterOverviewSnapshots, built by masterOverviewSnapshot
+ *    below over snapshot-cache.ts), and their trends are read on every view;
  *  - the role and the session: the route's guards and the use case's user
  *    lookup run on every request, before the snapshot is looked at.
  *
@@ -102,6 +106,15 @@ function trendsVariant(
 }
 
 /**
+ * The shortest interval between two computations "Atualizar" can force, for
+ * a company's copy and for the MASTER's alike (the tower's floor, decision
+ * D2). Named on both snapshots: the platform-wide one is a SnapshotCache,
+ * whose floor defaults to zero, and the MASTER's refresh used to recompute
+ * every company's numbers on each press (review of 25/11/2026).
+ */
+const DASHBOARD_MIN_REFRESH_MS = 2_000;
+
+/**
  * A dashboard snapshot. JSON is the body: the numbers are plain numbers and
  * strings (the repository converts every count), and each hit parses its
  * own copy, so no two requests ever share one mutable object.
@@ -113,7 +126,27 @@ function dashboardSnapshot<T>(
   return new TenantSnapshot<T>({
     name,
     ttlMs: () => env.DASHBOARD_SNAPSHOT_TTL_MS,
+    minRefreshMs: DASHBOARD_MIN_REFRESH_MS,
     memory,
+  });
+}
+
+/**
+ * The MASTER's platform-wide overview numbers, shared by the replicas
+ * (registered in src/shared/index.ts as MasterOverviewSnapshots). Built
+ * here, next to the company's, so both carry the same refresh floor.
+ */
+function masterOverviewSnapshot<T>(options: {
+  ttlMs: number;
+  store: SnapshotStore | null;
+  now?: () => number;
+}): SnapshotCache<T> {
+  return new SnapshotCache<T>({
+    name: "dashboard-overview-master",
+    ttlMs: options.ttlMs,
+    minRefreshMs: DASHBOARD_MIN_REFRESH_MS,
+    store: options.store,
+    now: options.now,
   });
 }
 
@@ -122,6 +155,13 @@ function dashboardSnapshot<T>(
  * when there is none to read: no snapshot given (the suites that build the
  * use case by hand), the snapshot off (DASHBOARD_SNAPSHOT_TTL_MS=0, the
  * path of before, unchanged), or no company (the MASTER).
+ *
+ * `refresh` is the panel's "Atualizar" (`x-trajetto-refresh: 1`, as the
+ * tower and the summary read it): the copy is computed again once it is
+ * DASHBOARD_MIN_REFRESH_MS old or more, so a button pressed in a loop
+ * still costs one computation per two seconds. Audit of
+ * 11/2026: without it, "Atualizar" right after creating a route brought
+ * back the numbers of before for up to a minute.
  */
 async function readDashboardNumbers<T>(
   snapshot: TenantSnapshot<T> | undefined,
@@ -129,21 +169,24 @@ async function readDashboardNumbers<T>(
     businessId: string | undefined;
     variant: TenantSnapshotVariant;
     compute: () => Promise<T>;
+    refresh?: boolean;
   },
 ): Promise<T> {
-  const { businessId, variant, compute } = input;
+  const { businessId, variant, compute, refresh = false } = input;
 
   if (!snapshot || !snapshot.enabled || !businessId) {
     return compute();
   }
 
-  const read = await snapshot.read({ businessId, variant, compute });
+  const read = await snapshot.read({ businessId, variant, compute, refresh });
 
   return JSON.parse(read.body) as T;
 }
 
 export {
+  DASHBOARD_MIN_REFRESH_MS,
   dashboardSnapshot,
+  masterOverviewSnapshot,
   overviewVariant,
   readDashboardNumbers,
   trendsVariant,
