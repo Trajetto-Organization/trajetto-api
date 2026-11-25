@@ -1085,11 +1085,21 @@ function openapiTransform(input: TransformInput): {
   }
 
   // The offset ceiling (shared/pagination/offset-ceiling.ts): every route
-  // whose querystring pages by `page` and `pageSize`.
+  // whose querystring pages by `page` and `pageSize`, unless the route caps
+  // its own pages with its own code (`config.ownOffsetCeiling`).
   const queryFields = ((schema as { querystring?: JsonSchema }).querystring
     ?.properties ?? {}) as Record<string, unknown>;
+  const ownCeiling = (
+    route.config as { ownOffsetCeiling?: { code: string; message: string } }
+  )?.ownOffsetCeiling;
 
-  if ("page" in queryFields && "pageSize" in queryFields) {
+  if (ownCeiling && "page" in queryFields && "pageSize" in queryFields) {
+    mergeResponse(
+      responses,
+      "400",
+      errorBody(`${ownCeiling.code}: ${ownCeiling.message}`, [ownCeiling.code]),
+    );
+  } else if ("page" in queryFields && "pageSize" in queryFields) {
     mergeResponse(
       responses,
       "400",

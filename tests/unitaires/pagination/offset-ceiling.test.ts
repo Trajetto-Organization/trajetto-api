@@ -79,6 +79,17 @@ describe("the hook, after validation", () => {
       { schema: { querystring: listPagesSchema } },
       async () => ({ ok: true }),
     );
+    // A listing with its own cap and code (the webhook monitor).
+    app.get(
+      "/own",
+      {
+        schema: { querystring: listPagesSchema },
+        config: {
+          ownOffsetCeiling: { code: "OWN_PAGE_OUT_OF_RANGE", message: "x" },
+        },
+      },
+      async () => ({ ok: true }),
+    );
     app.get(
       "/raw",
       { schema: { querystring: z.object({ page: z.string().optional() }) } },
@@ -114,6 +125,18 @@ describe("the hook, after validation", () => {
       expect((await app.inject({ url: "/raw?page=999999" })).statusCode).toBe(
         200,
       );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("leaves a listing with its own ceiling to answer its own code", async () => {
+    const app = await appWith(10_000);
+
+    try {
+      expect(
+        (await app.inject({ url: "/own?page=1001&pageSize=10" })).statusCode,
+      ).toBe(200);
     } finally {
       await app.close();
     }

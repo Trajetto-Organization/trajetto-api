@@ -54,6 +54,14 @@ declare module "fastify" {
      * (plano-escala U-04). Absent, the upload's sentence.
      */
     bodyTooLarge?: { code: string; message: string };
+    /**
+     * A listing that pages only as far as it counts and refuses a deeper
+     * page with its own code and sentence (the webhook monitor,
+     * MONITOR_PAGE_OUT_OF_RANGE): the global offset ceiling
+     * (shared/pagination/offset-ceiling.ts) leaves it alone, and the
+     * document shows this code in place of LIST_OFFSET_TOO_DEEP.
+     */
+    ownOffsetCeiling?: { code: string; message: string };
     openapi?: {
       body?: ZodType;
       headers?: ZodType;

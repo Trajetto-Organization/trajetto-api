@@ -362,6 +362,15 @@ async function integrationAdminRoutes(app: FastifyInstance) {
   app.get(
     "/webhook-deliveries",
     {
+      // Pages only as far as it counts (MONITOR_LIST_CAP) and refuses a
+      // deeper page with its own code, the one it answered before the
+      // global offset ceiling (F2-30) existed.
+      config: {
+        ownOffsetCeiling: {
+          code: "MONITOR_PAGE_OUT_OF_RANGE",
+          message: `a página começa no envio ${MONITOR_LIST_CAP.toLocaleString("pt-BR")} ou depois: a lista mostra só os primeiros. Filtre por status, endpoint ou período para ver os demais.`,
+        },
+      },
       onRequest: [ensureAuthenticated],
       preHandler: [
         deliveriesModule,

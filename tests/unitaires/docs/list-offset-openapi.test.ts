@@ -48,6 +48,16 @@ const pagesByOffset = (op: Json) => {
 const badRequestText = (op: Json) =>
   JSON.stringify(op.responses?.["400"] ?? {});
 
+/**
+ * The listings that cap their own pages and answer their own code
+ * (`config.ownOffsetCeiling`): the global hook leaves them alone, so their
+ * document shows that code instead. A closed list: a new entry is a
+ * decision.
+ */
+const OWN_CEILINGS: Record<string, string> = {
+  "GET /integrations/webhook-deliveries": "MONITOR_PAGE_OUT_OF_RANGE",
+};
+
 describe("LIST_OFFSET_TOO_DEEP", () => {
   it("is documented on every route that pages by offset", () => {
     const listings = operations().filter(({ op }) => pagesByOffset(op));
@@ -55,7 +65,12 @@ describe("LIST_OFFSET_TOO_DEEP", () => {
     expect(listings.length).toBeGreaterThan(20);
 
     const missing = listings
-      .filter(({ op }) => !badRequestText(op).includes("LIST_OFFSET_TOO_DEEP"))
+      .filter(
+        ({ id, op }) =>
+          !badRequestText(op).includes(
+            OWN_CEILINGS[id] ?? "LIST_OFFSET_TOO_DEEP",
+          ),
+      )
       .map(({ id }) => id);
 
     expect(missing).toEqual([]);
@@ -63,11 +78,19 @@ describe("LIST_OFFSET_TOO_DEEP", () => {
 
   it("is never documented on a route that does not", () => {
     const stray = operations()
-      .filter(({ op }) => !pagesByOffset(op))
+      .filter(({ id, op }) => !pagesByOffset(op) || id in OWN_CEILINGS)
       .filter(({ op }) => badRequestText(op).includes("LIST_OFFSET_TOO_DEEP"))
       .map(({ id }) => id);
 
     expect(stray).toEqual([]);
+  });
+
+  it("knows every route with its own ceiling", () => {
+    for (const id of Object.keys(OWN_CEILINGS)) {
+      const op = operations().find((operation) => operation.id === id)?.op;
+
+      expect(op && pagesByOffset(op), id).toBe(true);
+    }
   });
 });
 

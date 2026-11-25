@@ -769,7 +769,10 @@ adapter ao Painel e ao detalhe da rota conectados em qualquer processo
   web prende o pager na mesma linha: o OFFSET lê e descarta toda linha antes
   da página (plano de escala F2-30, decisão D42;
   `src/shared/pagination/offset-ceiling.ts`, um `preHandler` global depois
-  da validação, para toda rota com `page` e `pageSize`). Na lista de
+  da validação, para toda rota com `page` e `pageSize`). A exceção é o
+  monitor de envios dos webhooks, que já tinha teto próprio no mesmo
+  número e responde 400 `MONITOR_PAGE_OUT_OF_RANGE` (a rota declara
+  `config.ownOffsetCeiling`, e o documento mostra esse código). Na lista de
   entregas, `facets=skip` traz só a página, sem `total`, cartões nem opções
   dos filtros (`searchMeta.facetsSkipped`): é para quem vira a página com os
   mesmos filtros e já tem as contagens, a leitura agrupada mais pesada da

@@ -18,6 +18,8 @@ import { AppError } from "@/shared/errors/AppError";
  * offset listing is a route whose `page` and `pageSize` came out of
  * validation as numbers (shared/pagination/page-size.ts). The public API
  * pages by cursor and never meets it. `LIST_MAX_OFFSET=0` turns it off.
+ * A route with `config.ownOffsetCeiling` caps its own pages and answers
+ * its own code, which clients already know (the webhook monitor).
  */
 
 const LIST_OFFSET_TOO_DEEP = "LIST_OFFSET_TOO_DEEP";
@@ -48,6 +50,8 @@ async function rejectDeepListOffset(request: FastifyRequest): Promise<void> {
   if (typeof query?.page !== "number" || typeof query.pageSize !== "number") {
     return;
   }
+
+  if (request.routeOptions.config?.ownOffsetCeiling) return;
 
   if (isTooDeep(query.page, query.pageSize, env.LIST_MAX_OFFSET)) {
     throw listOffsetTooDeep(env.LIST_MAX_OFFSET);
