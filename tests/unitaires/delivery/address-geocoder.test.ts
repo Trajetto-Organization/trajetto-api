@@ -146,7 +146,7 @@ describe("searchUrl", () => {
     );
     expect(Object.fromEntries(url.searchParams)).toEqual({
       q: addressQuery(ADDRESS),
-      format: "jsonv2",
+      format: "json",
       addressdetails: "1",
       limit: "1",
       countrycodes: "br",
@@ -166,7 +166,7 @@ describe("searchUrl", () => {
       city: "São Paulo",
       state: "SP",
       country: "Brasil",
-      format: "jsonv2",
+      format: "json",
       addressdetails: "1",
       limit: "5",
       countrycodes: "br",

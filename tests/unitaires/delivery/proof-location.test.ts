@@ -325,7 +325,7 @@ describe("the reverse geocoder", () => {
     },
   };
 
-  it("reads a Nominatim jsonv2 answer as the PDF's address", () => {
+  it("reads a Nominatim answer as the PDF's address", () => {
     expect(parseNominatimAddress(NOMINATIM)).toEqual({
       line: "Rua Alberto de Oliveira Santos, 117",
       district: "Soteco",
@@ -350,7 +350,7 @@ describe("the reverse geocoder", () => {
     );
 
     expect(url.pathname).toBe("/reverse");
-    expect(url.searchParams.get("format")).toBe("jsonv2");
+    expect(url.searchParams.get("format")).toBe("json");
     expect(url.searchParams.get("lat")).toBe("-20.35");
     expect(url.searchParams.get("lon")).toBe("-40.3");
     expect(url.searchParams.get("accept-language")).toBe("pt-BR");

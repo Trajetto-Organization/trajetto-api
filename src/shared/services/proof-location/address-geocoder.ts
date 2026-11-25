@@ -189,7 +189,12 @@ function searchRequestUrl(
     if (value) url.searchParams.set(name, value);
   }
 
-  url.searchParams.set("format", "jsonv2");
+  // `json`, never `jsonv2`: LocationIQ answers `format=jsonv2` with a 400
+  // "Invalid Request" (as XML) before it even reads the key, which the
+  // lookup reads as a refused request and pauses on. Nominatim takes both,
+  // and the parsers read either (`class` or `category`, with or without
+  // `place_rank`).
+  url.searchParams.set("format", "json");
   url.searchParams.set("addressdetails", "1");
   url.searchParams.set("limit", String(limit));
   url.searchParams.set("countrycodes", "br");
@@ -297,7 +302,7 @@ function precisionOf(result: Record<string, unknown>): AddressPrecision {
   return "CITY";
 }
 
-/** The first result of a Nominatim `jsonv2` search, or null when unusable. */
+/** The first result of a Nominatim-compatible search, or null when unusable. */
 function parseNominatimSearch(body: unknown): GeocodedPoint | null {
   if (!Array.isArray(body) || body.length === 0) return null;
 

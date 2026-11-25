@@ -197,7 +197,7 @@ function candidateOf(
   const road =
     text(address.road) ?? text(address.pedestrian) ?? text(address.footway);
   const house = text(address.house_number);
-  // jsonv2 names the object `name`; LocationIQ's autocomplete puts it in
+  // Nominatim names the object `name`; LocationIQ's autocomplete puts it in
   // `address.name` and `display_place`.
   const name =
     text(place.name) ?? text(address.name) ?? text(place.display_place);

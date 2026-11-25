@@ -78,7 +78,7 @@ describe("the request each protocol sends", () => {
       "http://nominatim.interno:8080/search",
     );
     expect(url.searchParams.get("q")).toBe(SEARCH.text);
-    expect(url.searchParams.get("format")).toBe("jsonv2");
+    expect(url.searchParams.get("format")).toBe("json");
     expect(url.searchParams.get("addressdetails")).toBe("1");
     expect(url.searchParams.get("countrycodes")).toBe("br");
     expect(url.searchParams.get("accept-language")).toBe("pt-BR");
