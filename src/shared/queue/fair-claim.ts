@@ -73,7 +73,10 @@ interface FairQueue {
    */
   indexed: (alias: string | null) => Prisma.Sql;
 
-  /** The rows a claim may take, on `alias` (or unqualified). */
+  /**
+   * The rows a claim may take, on `alias` (or unqualified). It must ask
+   * `<dueAt> <= now()`: the walk bounds each company's index scan there.
+   */
   due: (alias: string | null) => Prisma.Sql;
 
   /**
@@ -295,15 +298,22 @@ function fairClaimSql(queue: FairQueue, input: FairClaimInput): Prisma.Sql {
       probe(which, 0, share),
     );
 
-  // The company as a range of one value, ordered by (company, due time), on
-  // purpose: with `= company` the planner drops the company from the order
-  // and may read the queue's due-time index instead, filtering by company.
-  // It does so when the statistics see few companies (a young table, one
-  // carrier alone) — and then a small company behind a flood is found
-  // after the whole flood. Only the fair index gives this order.
+  // The company as `= ANY(ARRAY[company])`, ordered by (company, due time),
+  // on purpose. With `= company` the planner drops the company from the
+  // order and may read the queue's due-time index instead, filtering by
+  // company: it does so when the statistics see few companies (a young
+  // table, one carrier alone), and a small company behind a flood is found
+  // after the whole flood. A one-value range kept the fair index, but its
+  // scan's end could not use the due time: a company with twenty thousand
+  // rows in backoff and none due read all of them (some 400 pages) on every
+  // claim. (A row comparison, (company, now()), does not help on Postgres
+  // 16: only its first column ends a scan.) The array is both: btree takes
+  // it as an equality key, so the due time ends the scan at the company's
+  // first row not yet due, and the planner makes no equivalence class of
+  // it, so the order still needs the fair index.
   const dueIdsOf = (company: Prisma.Sql) =>
     dueIdsWhere(
-      Prisma.sql`${tenant} >= ${company} AND ${tenant} <= ${company}`,
+      Prisma.sql`${tenant} = ANY(ARRAY[${company}])`,
       queue.share?.(company),
     );
 

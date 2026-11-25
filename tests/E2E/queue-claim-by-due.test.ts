@@ -550,13 +550,44 @@ describe("a customer's endpoint down, in the webhook queue", () => {
     expect(claim, "o ciclo não enviou o claim").toBeDefined();
 
     const plan = await planOfClaim(claim!);
-    const pages = pagesRead(plan);
     const touched = rowsTouched(plan, "webhook_delivery");
+
+    // The queue is partitioned by day (F5-09): without the claim floor
+    // (QUEUE_CLAIM_ID_FLOOR_ENABLED, off by default) every probe also
+    // opens each empty day ahead, a constant two pages a probe whatever
+    // the backlog. The budget is for the partitions that hold rows, where
+    // the backlog is; every other partition may cost only its probe.
+    const holding = new Set(
+      (
+        await prisma.$queryRawUnsafe<{ rel: string }[]>(
+          `SELECT DISTINCT tableoid::regclass::text AS "rel" FROM "webhook_delivery"`,
+        )
+      ).map(({ rel }) => rel),
+    );
+    // Scans only: the UPDATE's own node names the parent and carries the
+    // buffers of everything under it.
+    const scans = flatten(plan).filter(
+      (node) =>
+        node["Node Type"].endsWith("Scan") &&
+        String(node["Relation Name"] ?? "").startsWith("webhook_delivery"),
+    );
+    const pages = scans
+      .filter((node) => holding.has(String(node["Relation Name"])))
+      .reduce((sum, node) => sum + pagesRead(node), 0);
 
     expect(
       pages,
       `o claim leu ${pages} páginas com ${BACKLOG} webhooks em espera e nenhum vencido:\n${claim!.query}`,
     ).toBeLessThan(PAGES_BUDGET);
+
+    for (const node of scans.filter(
+      (scan) => !holding.has(String(scan["Relation Name"])),
+    )) {
+      expect(
+        pagesRead(node) / Math.max(1, node["Actual Loops"] ?? 1),
+        `${node["Relation Name"]}: uma partição vazia leu mais que a sonda`,
+      ).toBeLessThanOrEqual(3);
+    }
 
     expect(touched).toBeLessThan(200);
   }, 60_000);

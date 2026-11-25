@@ -64,10 +64,12 @@ describe("the fair claim's statement", () => {
     // index filtering by company: a small company behind a flood was found
     // after the whole flood (1,168 pages for a claim of five in the plan
     // test, against ~200). A one-value range ordered by (company, due time)
-    // only the fair index can give.
-    expect(text).toContain(
-      '"business_id" >= "t"."tenant" AND "business_id" <= "t"."tenant"',
-    );
+    // only the fair index can give. Now as `= ANY(ARRAY[company])`, which
+    // btree reads as an equality key: the scan ends at the company's first
+    // row not yet due, instead of reading every row it has in backoff (420
+    // pages with twenty thousand webhooks parked, in queue-claim-by-due).
+    expect(text).toContain('"business_id" = ANY(ARRAY["t"."tenant"])');
+    expect(text).not.toContain('"business_id" <= "t"."tenant"');
     expect(text).toContain('ORDER BY "business_id", "availableAt" LIMIT');
     expect(text).not.toMatch(/"business_id" = "t"\."tenant"/);
 
@@ -176,8 +178,7 @@ describe("a queue whose rows are not all equally urgent (F3-12)", () => {
   }).text.replace(/\s+/g, " ");
 
   it("reads a company's first class before the next, each by the fair index's order", () => {
-    const company =
-      '"businessId" >= "t"."tenant" AND "businessId" <= "t"."tenant"';
+    const company = '"businessId" = ANY(ARRAY["t"."tenant"])';
 
     // The first class is what the company's share starts from…
     expect(text).toMatch(
