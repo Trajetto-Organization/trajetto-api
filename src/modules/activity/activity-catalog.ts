@@ -40,6 +40,11 @@ const ACTIVITY_STATUS_CATALOG = [
   { value: "Ativo", module: "CORE", aliases: ["ACTIVE"] },
   { value: "Inativo", module: "CORE", aliases: ["INACTIVE"] },
   { value: "Bloqueado", module: "CORE", aliases: ["BLOCKED"] },
+  // A company's scheduled purge and a person's removal (LGPD): the request,
+  // then the job that erased the personal data.
+  { value: "Exclusão agendada", module: "CORE" },
+  { value: "Anonimização pedida", module: "CORE" },
+  { value: "Anonimizado", module: "CORE" },
   // Deliveries and routes.
   {
     value: "Em rota",
