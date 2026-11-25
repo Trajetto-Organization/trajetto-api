@@ -742,7 +742,8 @@ function renderDashboard(dashboard: Dashboard): string {
 
 /**
  * Every file the stack mounts, by its path in this repository, before
- * Prettier (render.ts and the test format both the same way).
+ * Prettier (infra/scripts/render-monitoring.ts and the test format both
+ * the same way).
  */
 function renderMonitoringFiles(): Record<string, string> {
   const files: Record<string, string> = {

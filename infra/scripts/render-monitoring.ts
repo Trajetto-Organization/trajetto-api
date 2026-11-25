@@ -3,14 +3,15 @@ import { dirname, resolve } from "node:path";
 
 import { format, resolveConfig } from "prettier";
 
-import { renderMonitoringFiles } from "./monitoring-config";
+import { renderMonitoringFiles } from "../monitoring/monitoring-config";
 
 /**
  * `yarn monitoring:render` writes the metrics stack's files (plano-escala
  * F5-30) from infra/monitoring/monitoring-config.ts; with `--check` it
  * only says which ones are out of date. The output goes through the
  * repository's Prettier, so `yarn lint:check` and the generated files
- * never disagree.
+ * never disagree. A command-line tool, so it prints to the terminal
+ * (tests/unitaires/logging/no-console.test.ts exempts infra/scripts).
  */
 const ROOT = resolve(__dirname, "..", "..");
 
