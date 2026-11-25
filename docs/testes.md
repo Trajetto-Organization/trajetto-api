@@ -291,7 +291,13 @@ arquivo que segura uma escrita (um teste de lock, um seed em lote), essa
 espera passaria do tempo limite do teste (`tenant-day-rollup.test.ts` e
 `tenant-day-rollup-repository-contract.test.ts`).
 `quality/e2e-replica-isolation.test.ts` falha se um arquivo que espera esse
-horizonte ficar fora da lista.
+horizonte ficar fora da lista. O mesmo vale para quem mede o relógio do
+planejador (o `"Planning Time"` de um `EXPLAIN`): é tempo de CPU, que os outros
+processos da fase paralela dividem num runner pequeno. A busca dos webhooks nas
+filas particionadas planeja em 1,3 ms sozinha e passou de 2,19 ms ali, acima do
+teto de 2 ms, sem mudar a consulta
+(`query-plans-partitioned-queues.test.ts`); o mesmo teste falha se um arquivo
+assim ficar fora da lista.
 
 A fase de réplicas é a que mais pede memória: `resilience-replica-drain.test.ts`
 sobe 10 réplicas ao mesmo tempo. Numa réplica Linux do CI (11/11/2026) o job

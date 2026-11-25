@@ -45,11 +45,19 @@ const REPLICA_E2E_FILES = [
  * changed day (F4-21), past the test's timeout. Not checked for replicas;
  * tests/unitaires/quality/e2e-replica-isolation.test.ts fails when a file
  * that waits on that horizon is missing here.
+ *
+ * The same goes for a gate on the planner's own clock (an EXPLAIN's
+ * "Planning Time"): wall-clock CPU, which the other forks of the parallel
+ * phase share on a small runner. The partitioned queues' webhook claim
+ * plans in 1.3 ms alone and read 2.19 ms there, over its 2 ms gate, with
+ * its statement unchanged; the same guard fails when such a file is
+ * missing here.
  */
 const SERIAL_E2E_FILES = [
   "driver-last-position-hot.test.ts",
   "integration-feed-commit-order.test.ts",
   "integration-feed-across-window.test.ts",
+  "query-plans-partitioned-queues.test.ts",
   "tenant-day-rollup.test.ts",
   "tenant-day-rollup-repository-contract.test.ts",
 ] as const;

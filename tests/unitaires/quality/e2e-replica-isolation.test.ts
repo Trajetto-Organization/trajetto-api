@@ -158,6 +158,23 @@ describe("the cluster-sensitive files", () => {
     expect(missing).toEqual([]);
   });
 
+  /**
+   * A gate on the planner's own clock ("Planning Time" of an EXPLAIN) is
+   * wall-clock CPU: beside the parallel phase's other forks, on a runner
+   * of two to four cores, the same plan read 60 % slower than alone (the
+   * partitioned queues' webhook claim, 1.3 ms alone, 2.19 ms in E2E 1/3
+   * with its statement unchanged), over its 2 ms gate.
+   */
+  it("has every file that gates on the planner's clock", () => {
+    const missing = e2eFiles.filter(
+      (name) =>
+        /"Planning Time"/.test(sourceWithSuites(name)) &&
+        !(SERIAL_E2E_FILES as readonly string[]).includes(name),
+    );
+
+    expect(missing).toEqual([]);
+  });
+
   it("tells a file that waits on the horizon from one that only runs the job", () => {
     expect(waitsOnTheHorizon("tenant-day-rollup.test.ts")).toBe(true);
     expect(
