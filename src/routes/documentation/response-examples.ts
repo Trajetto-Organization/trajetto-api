@@ -421,12 +421,22 @@ const deliveryDetail = {
   messageOptOut: { whatsapp: "2026-09-24T09:02:11.000Z", email: null },
 };
 
+/**
+ * The sync_watermark of /deliveries and /routes (plano-escala F2-05): the
+ * instant of the read, 08:20 here, minus the 2-minute margin.
+ */
+const SYNC_WATERMARK = "2026-09-24T08:18:00.000Z";
+
 const RESPONSE_EXAMPLES: ResponseExamples = {
   "GET /integration/v1/catalogue": {
     200: buildCatalogue(WEBHOOK_API_VERSION, TOPIC_FAMILY),
   },
   "GET /integration/v1/deliveries": {
-    200: { data: [publicDelivery], next_cursor: DELIVERY_ID },
+    200: {
+      data: [publicDelivery],
+      next_cursor: DELIVERY_ID,
+      sync_watermark: SYNC_WATERMARK,
+    },
   },
   "GET /integration/v1/deliveries/:id": { 200: publicDelivery },
   "POST /integration/v1/deliveries": {
@@ -463,11 +473,20 @@ const RESPONSE_EXAMPLES: ResponseExamples = {
     },
   },
   "GET /integration/v1/routes": {
-    200: { data: [publicRoute], next_cursor: null },
+    200: {
+      data: [publicRoute],
+      next_cursor: null,
+      sync_watermark: SYNC_WATERMARK,
+    },
   },
   "GET /integration/v1/routes/:id": { 200: publicRoute },
   "GET /integration/v1/events": {
-    200: { data: publicEvents, next_cursor: publicEvents[2].id },
+    // A page with a next one: resume_cursor is that same cursor.
+    200: {
+      data: publicEvents,
+      next_cursor: publicEvents[2].id,
+      resume_cursor: publicEvents[2].id,
+    },
   },
 
   "GET /delivery/my-deliveries/:businessId": {
