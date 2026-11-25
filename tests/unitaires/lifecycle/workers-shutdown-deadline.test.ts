@@ -32,8 +32,8 @@ import { shutdownWorkers } from "@/workers";
  * stopped answering mid-deploy held the step until the watchdog's exit(1),
  * and closeRedis never ran.
  */
-vi.mock("@/../infra/database", () => ({
-  default: {
+vi.mock("@/../infra/database", () => {
+  const client = {
     // The usage counter's last flush, against a database that no longer
     // answers (a pool exhausted mid-deploy waits up to pool_timeout, 20 s).
     $executeRaw: vi.fn(() => new Promise(() => {})),
@@ -46,8 +46,19 @@ vi.mock("@/../infra/database", () => ({
       updateMany: vi.fn(async () => ({ count: 1 })),
       findFirst: vi.fn(async () => ({ id: "covered" })),
     },
-  },
-}));
+  };
+
+  // The maintenance crons (partition archive) and the explicit reads go
+  // through these named clients; here they are the same stalled database.
+  return {
+    default: client,
+    databaseBatch: client,
+    databasePool: () => null,
+    readDatabase: () => client,
+    readDatabaseWalk: () => () => client,
+    replicaDatabase: () => null,
+  };
+});
 vi.mock("@/websocket", () => ({
   sendAIVerificationEvent: vi.fn(),
   sendNotificationToUser: vi.fn(),

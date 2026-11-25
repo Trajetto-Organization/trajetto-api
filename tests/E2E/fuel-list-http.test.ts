@@ -41,7 +41,17 @@ vi.mock("@/../infra/database", async () => {
     },
   });
 
-  return { default: counted };
+  // Every named client goes through the counted one, so the peak also
+  // covers the reads routed by readDatabase() and the batch pool.
+  return {
+    default: counted,
+    databaseBatch: counted,
+    // http.ts reads the pool for the load shedding's pressure (none here).
+    databasePool: () => null,
+    readDatabase: () => counted,
+    readDatabaseWalk: () => () => counted,
+    replicaDatabase: () => null,
+  };
 });
 
 const prisma = createPrismaClient();
