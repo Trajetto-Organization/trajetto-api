@@ -331,7 +331,9 @@ describe("the vehicle lists hear the truck leave", () => {
       routeId: route.id,
     });
 
-    expect(heard.catalog).toEqual([{ businessId: BUSINESS, entity: "vehicle" }]);
+    expect(heard.catalog).toEqual([
+      { businessId: BUSINESS, entity: "vehicle" },
+    ]);
   });
 
   it.each([

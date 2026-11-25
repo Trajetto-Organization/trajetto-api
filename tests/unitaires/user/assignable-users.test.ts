@@ -176,19 +176,17 @@ beforeEach(() => {
 
 describe("the user picker (GET /user/search-user-business)", () => {
   it("offers only people who can still sign in", async () => {
-    const result = await new SearchUserCursorUseCase(
-      users,
-      businesses,
-    ).execute({ userId: ADMIN, businessId: CARRIER, limit: 50 });
+    const result = await new SearchUserCursorUseCase(users, businesses).execute(
+      { userId: ADMIN, businessId: CARRIER, limit: 50 },
+    );
 
     expect(result.data.map((row) => row.id)).toEqual([ACTIVE, ADMIN]);
   });
 
   it("does not bring a revoked login back through the search term", async () => {
-    const result = await new SearchUserCursorUseCase(
-      users,
-      businesses,
-    ).execute({ userId: ADMIN, businessId: CARRIER, search: "carl" });
+    const result = await new SearchUserCursorUseCase(users, businesses).execute(
+      { userId: ADMIN, businessId: CARRIER, search: "carl" },
+    );
 
     expect(result.data.map((row) => row.id)).toEqual([ACTIVE]);
   });

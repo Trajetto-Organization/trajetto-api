@@ -404,10 +404,7 @@ describe("pinned versions", () => {
         ].map(([, name, digest]) => ({ where: file, name, digest })),
       );
 
-    const own = pinsOf(ROOT, [
-      ...ciFilesOf(ROOT),
-      "infra/postgres/Dockerfile",
-    ]);
+    const own = pinsOf(ROOT, [...ciFilesOf(ROOT), "infra/postgres/Dockerfile"]);
     const digestOf = new Map(own.map(({ name, digest }) => [name, digest]));
 
     expect([...digestOf.keys()].sort()).toEqual([

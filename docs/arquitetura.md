@@ -3171,8 +3171,8 @@ D32).
   move e a atribuição em lote releem as paradas abertas depois do rollback
   (`alreadyOnRouteAfterRace`, em `route-plan-rules`) e respondem como a
   conferência: "A entrega 123 (Rota 8) já está em outra rota". Se a releitura
-  não acha nada, a frase não tem contagem nem estado. O mesmo `409
-  DELIVERY_ALREADY_ON_ROUTE`. A releitura ignora as paradas que a própria
+  não acha nada, a frase não tem contagem nem estado. O código continua o
+  mesmo, `409 DELIVERY_ALREADY_ON_ROUTE`. A releitura ignora as paradas que a própria
   gravação esperava (`expected`): a rota de destino e, no mover e na
   atribuição em lote, as paradas de onde as entregas estavam saindo, que o
   rollback devolveu. A atribuição lê essas paradas antes da transação; sem

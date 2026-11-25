@@ -332,7 +332,7 @@ class CreateServiceOrderUseCase {
       Object.keys(vehicleUpdateData).length > 0 ||
       Boolean(
         serviceOrderData.completion_date &&
-          serviceOrderData.new_mileage_after_service,
+        serviceOrderData.new_mileage_after_service,
       );
 
     try {
