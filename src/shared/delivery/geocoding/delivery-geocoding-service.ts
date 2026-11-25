@@ -268,6 +268,9 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 /** A refusal is configuration: somebody has to fix it, so not every minute. */
 const REFUSED_PAUSE_MS = 15 * 60_000;
 
+/** How many times a lane sleeps toward its start (see ask). */
+const SPACING_WAIT_ROUNDS = 3;
+
 /** A per-second or per-minute 429: the next minute's run asks again. */
 const SHORT_RATE_PAUSE_MS = 60_000;
 
@@ -370,12 +373,14 @@ const sleep = (ms: number) =>
 /**
  * One batch's state, shared by its lanes: when its last call started (or
  * is due to start: a lane books its start before it waits), for the
- * spacing; when it must stop asking (the job's runBudgetMs; never for
- * runFor); the failures in a row; and whether something stopped it, so a
- * lane that has not asked yet asks nothing.
+ * spacing, and when a lane last left its wait for real (lastGoneAt); when
+ * it must stop asking (the job's runBudgetMs; never for runFor); the
+ * failures in a row; and whether something stopped it, so a lane that has
+ * not asked yet asks nothing.
  */
 interface RunState {
   lastCallAt: number | null;
+  lastGoneAt: number | null;
   deadline: number;
   failures: number;
   halted: boolean;
@@ -566,6 +571,7 @@ class DeliveryGeocodingService {
   ): Promise<void> {
     const run: RunState = {
       lastCallAt: null,
+      lastGoneAt: null,
       deadline,
       failures: 0,
       halted: false,
@@ -918,11 +924,27 @@ class DeliveryGeocodingService {
 
       run.lastCallAt = start;
 
-      const wait = start - this.clock();
+      // The booked start, and then a spacing since the lane that last left
+      // for real: a timer fires late on a coarse clock (15.6 ms on Windows)
+      // or a millisecond early (libuv's loop time lags Date.now), so two
+      // lanes booked a spacing apart could leave closer than that. A few
+      // rounds at most: an injected clock that never moves cannot hold the
+      // run.
+      for (let round = 0; round < SPACING_WAIT_ROUNDS; round += 1) {
+        const due =
+          run.lastGoneAt === null
+            ? start
+            : Math.max(start, run.lastGoneAt + this.options.spacingMs);
+        const wait = due - this.clock();
 
-      if (wait > 0) await sleep(wait);
+        if (wait <= 0) break;
+
+        await sleep(wait);
+      }
 
       if (run.halted) return "STOPPED";
+
+      run.lastGoneAt = this.clock();
     }
 
     if (!(await this.slot())) return "NO_SLOT";
