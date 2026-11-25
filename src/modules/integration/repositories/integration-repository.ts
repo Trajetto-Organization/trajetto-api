@@ -136,6 +136,20 @@ const routeSelect = {
  * with every row after it, of any age, left out. By value, the walk goes
  * on after the row wherever it is (and after a row deleted since).
  */
+/**
+ * Whether a list cursor is an id this API hands out (a lowercase UUID). By
+ * value, `id > cursor` would put any other text before or after every row:
+ * `' OR 1=1 --` sorts before every id and would answer the first page
+ * again. Such a cursor points nowhere, and the page after nowhere is empty,
+ * as it was when the cursor was looked up as a row.
+ */
+const ISSUED_CURSOR =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+function pointsNowhere(cursor: string | undefined): boolean {
+  return cursor !== undefined && cursor !== "" && !ISSUED_CURSOR.test(cursor);
+}
+
 function cursorPage<T extends { id: string }>(
   rows: T[],
   limit: number,
@@ -361,6 +375,8 @@ class IntegrationRepository implements IIntegrationRepository {
     updated_since,
     status,
   }: IntegrationListProps): Promise<CursorPage<PublicDelivery>> {
+    if (pointsNowhere(cursor)) return { data: [], next_cursor: null };
+
     // One server for the page and its stops: the standby may not have the
     // stops of a delivery the primary just gave.
     const read = this.read;
@@ -412,6 +428,8 @@ class IntegrationRepository implements IIntegrationRepository {
     updated_since,
     status,
   }: IntegrationListProps): Promise<CursorPage<PublicRoute>> {
+    if (pointsNowhere(cursor)) return { data: [], next_cursor: null };
+
     const rows = await this.read.route.findMany({
       where: {
         businessId,
