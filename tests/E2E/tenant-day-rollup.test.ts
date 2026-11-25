@@ -17,6 +17,7 @@ import {
 import { businessDateKey, shiftDateKey } from "@/shared/time/business-day";
 
 import { seedBusiness, seedShipper } from "../contract/seed";
+import { seededDayWindow } from "./support/seeded-day";
 
 /**
  * The dashboard's closed days on a real Postgres (plano-escala F4-21,
@@ -51,7 +52,6 @@ const COMPANIES = [
 ];
 const [PAULISTA, ACREANA, ILHEU] = COMPANIES.map((company) => company.id);
 
-const DAY_MS = 24 * 60 * 60 * 1000;
 const shippers = new Map<string, string>();
 const sessions: pg.Client[] = [];
 
@@ -72,24 +72,23 @@ async function session(): Promise<pg.Client> {
   return client;
 }
 
-/** The ids of a company's deliveries created about `days` days before NOW. */
+/** The ids of a company's deliveries seeded `days` days before NOW. */
 async function deliveriesAbout(
   businessId: string,
   days: number,
 ): Promise<Array<{ id: string; created_at: Date }>> {
-  const center = NOW.getTime() - days * DAY_MS;
-
-  return prisma.delivery.findMany({
-    where: {
-      businessId,
-      created_at: {
-        gte: new Date(center - DAY_MS / 2),
-        lt: new Date(center + DAY_MS / 2),
-      },
-    },
+  const zone = COMPANIES.find((company) => company.id === businessId)!.zone;
+  const found = await prisma.delivery.findMany({
+    where: { businessId, created_at: seededDayWindow(NOW, zone, days) },
     select: { id: true, created_at: true },
     orderBy: { created_at: "asc" },
   });
+
+  expect(found.length, `seeded deliveries ${days} days back`).toBeGreaterThan(
+    0,
+  );
+
+  return found;
 }
 
 /** Two deliveries of the same UTC day: the second one's mark is the first's. */

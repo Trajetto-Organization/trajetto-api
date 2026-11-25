@@ -35,6 +35,7 @@ import {
 } from "@/shared/time/business-day";
 
 import { seedBusiness, seedShipper, seedUser } from "../contract/seed";
+import { seededDayWindow } from "./support/seeded-day";
 
 /**
  * The dashboard's "Entregas" series read from the closed days (plano-escala
@@ -142,23 +143,21 @@ function deliveriesOf(businessId: string, shipperId: string) {
   }));
 }
 
-/** A delivery of the company created about `days` days before NOW. */
+/** A delivery of the company seeded `days` days before NOW. */
 async function deliveryAbout(
   businessId: string,
   days: number,
 ): Promise<{ id: string; created_at: Date }> {
-  const center = NOW.getTime() - days * DAY_MS;
   const found = await prisma.delivery.findFirst({
     where: {
       businessId,
-      created_at: {
-        gte: new Date(center - DAY_MS / 2),
-        lt: new Date(center + DAY_MS / 2),
-      },
+      created_at: seededDayWindow(NOW, ZONES[businessId], days),
     },
     select: { id: true, created_at: true },
     orderBy: { created_at: "asc" },
   });
+
+  expect(found, `a seeded delivery ${days} days back`).not.toBeNull();
 
   return found!;
 }
