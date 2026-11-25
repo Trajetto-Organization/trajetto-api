@@ -297,7 +297,11 @@ processos da fase paralela dividem num runner pequeno. A busca dos webhooks nas
 filas particionadas planeja em 1,3 ms sozinha e passou de 2,19 ms ali, acima do
 teto de 2 ms, sem mudar a consulta
 (`query-plans-partitioned-queues.test.ts`); o mesmo teste falha se um arquivo
-assim ficar fora da lista.
+assim ficar fora da lista. E para quem põe teto na mais lenta de uma série de
+consultas cronometradas: os pings gravados enquanto o `ATTACH` da manutenção de
+partições espera levam no máximo 9 ms sozinhos e chegaram a 146 ms ali, numa
+cauda gradual de CPU disputada, não de espera por lock, acima do teto de 100 ms
+(`driver-position-partition-locks.test.ts`).
 
 A fase de réplicas é a que mais pede memória: `resilience-replica-drain.test.ts`
 sobe 10 réplicas ao mesmo tempo. Numa réplica Linux do CI (11/11/2026) o job

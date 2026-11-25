@@ -51,10 +51,14 @@ const REPLICA_E2E_FILES = [
  * phase share on a small runner. The partitioned queues' webhook claim
  * plans in 1.3 ms alone and read 2.19 ms there, over its 2 ms gate, with
  * its statement unchanged; the same guard fails when such a file is
- * missing here.
+ * missing here. And for a gate on the slowest of a series of timed
+ * statements: the partition job's pings, at most 9 ms alone while its
+ * ATTACH waits, read 42 to 146 ms in a gradual tail there (no lock wait
+ * jumps to the 25 s hold), over its 100 ms gate.
  */
 const SERIAL_E2E_FILES = [
   "driver-last-position-hot.test.ts",
+  "driver-position-partition-locks.test.ts",
   "integration-feed-commit-order.test.ts",
   "integration-feed-across-window.test.ts",
   "query-plans-partitioned-queues.test.ts",

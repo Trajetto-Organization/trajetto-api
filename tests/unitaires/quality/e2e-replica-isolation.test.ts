@@ -175,6 +175,23 @@ describe("the cluster-sensitive files", () => {
     expect(missing).toEqual([]);
   });
 
+  /**
+   * So is a gate on the slowest of a series of timed statements (each
+   * sample pushed as Date.now() minus its start): the partition job's
+   * pings while its ATTACH waits took at most 9 ms alone and up to 146 ms
+   * in E2E 1/3, a gradual tail of CPU contention, not a lock wait, over
+   * its 100 ms gate.
+   */
+  it("has every file that gates on the slowest of its timed samples", () => {
+    const missing = e2eFiles.filter(
+      (name) =>
+        /\.push\(Date\.now\(\) - \w+\)/.test(sourceWithSuites(name)) &&
+        !(SERIAL_E2E_FILES as readonly string[]).includes(name),
+    );
+
+    expect(missing).toEqual([]);
+  });
+
   it("tells a file that waits on the horizon from one that only runs the job", () => {
     expect(waitsOnTheHorizon("tenant-day-rollup.test.ts")).toBe(true);
     expect(
