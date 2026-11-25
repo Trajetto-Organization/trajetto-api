@@ -423,9 +423,19 @@ class ActivityRepository implements IActivityRepository {
         include: this.includeFor(currentUserRole),
         orderBy: [{ created_at: order }, { id: order }],
       }),
+      // In the order of the (businessId, performedBy, visibilityLevel)
+      // index: with `take` and no order, Prisma sorts the subquery by id,
+      // which reads and sorts every row of the scope before the LIMIT.
+      // In the index's order the count is an index-only walk that stops at
+      // the cap.
       this.read.activity.count({
         where: whereCondition,
         take: activityCountTake(),
+        orderBy: [
+          { businessId: "asc" },
+          { performedBy: "asc" },
+          { visibilityLevel: "asc" },
+        ],
       }),
     ]);
 
