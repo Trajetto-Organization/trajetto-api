@@ -16,6 +16,8 @@ import { BranchNotFoundError } from "../errors/branch-not-found-error";
 import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 
 import { BranchHasChildrenError } from "../errors/branch-has-children-error";
+import { BranchHeadOfficeNotDeletableError } from "../errors/branch-head-office-not-deletable-error";
+import { isHeadOffice } from "../../branch-head-office";
 import { BranchDeletionCodeInvalidError } from "../errors/branch-deletion-code-invalid-error";
 
 import { BranchDeletionCodeExpiredError } from "../errors/branch-deletion-code-expired-error";
@@ -89,6 +91,16 @@ class DeleteBranchUseCase {
     // Another company's branch answers like a missing one (decision 11.3).
     if (!findBranch || findBranch.businessId !== businessId) {
       throw new BranchNotFoundError();
+    }
+
+    // The head office is never deleted (owner decision of 26/11/2026): the
+    // company would be left with none, its saves in Empresas mirroring onto
+    // nothing, and the next branch created with its CNPJ silently taking the
+    // place. Checked after the tenant check above, so another company's
+    // head office stays a plain 404, and before any code is stored, mailed
+    // or consumed.
+    if (isHeadOffice(findBranch, findBusiness)) {
+      throw new BranchHeadOfficeNotDeletableError();
     }
 
     // Re-validate dependencies (race protection)

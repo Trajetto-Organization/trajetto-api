@@ -62,7 +62,7 @@ const branchRow = z.object({
     .boolean()
     .optional()
     .describe(
-      "Só na lista (GET /branch/list-branch): true na matriz, a filial com o CNPJ da empresa. Ela espelha o cadastro da empresa e não é editada por Filiais (409 BRANCH_HEAD_OFFICE_READ_ONLY).",
+      "Só na lista (GET /branch/list-branch): true na matriz, a filial com o CNPJ da empresa. Ela espelha o cadastro da empresa, não é editada por Filiais (409 BRANCH_HEAD_OFFICE_READ_ONLY) nem excluída (409 BRANCH_HEAD_OFFICE_NOT_DELETABLE); desativá-la é permitido.",
     ),
 });
 
@@ -138,7 +138,7 @@ const branchResponses = {
   ),
   /** The confirmation refusals that are about state, not input (decision 11.3). */
   branchDeletionConflict: codedError(
-    "BRANCH_IN_USE: a filial tem veículos, motoristas, ordens de serviço, contas a pagar, multas, abastecimentos ou checklists; a mensagem traz as contagens. BRANCH_DELETION_NOT_REQUESTED: não há pedido de exclusão desta filial por este usuário — peça a exclusão (POST) antes de confirmar.",
+    "BRANCH_HEAD_OFFICE_NOT_DELETABLE: a filial é a matriz, que guarda os dados da própria empresa e nunca é excluída (desativá-la continua permitido). BRANCH_IN_USE: a filial tem veículos, motoristas, ordens de serviço, contas a pagar, multas, abastecimentos ou checklists; a mensagem traz as contagens. BRANCH_DELETION_NOT_REQUESTED: não há pedido de exclusão desta filial por este usuário — peça a exclusão (POST) antes de confirmar.",
   ),
   /** Routes without the tenant gate: the MASTER can name a missing company. */
   branchOrBusinessNotFound: codedError(
@@ -154,8 +154,9 @@ const branchResponses = {
   branchConflict: codedError(
     "BRANCH_NAME_TAKEN, BRANCH_EMAIL_TAKEN ou BRANCH_ERP_CODE_TAKEN: já existe uma filial com a mesma razão social (sem diferenciar maiúsculas), e-mail ou código ERP NESTA empresa. BRANCH_CNPJ_UNAVAILABLE: o CNPJ, identidade nacional, já está cadastrado; a mensagem não diz onde. TOGGLE_CONFLICT: o status mudou enquanto a tela estava aberta. BRANCH_HEAD_OFFICE_READ_ONLY (só na edição): a filial é a matriz, espelho do cadastro da empresa; os dados dela só mudam em Empresas. DRIVER_HAS_OPEN_ROUTES (só ao desativar): motoristas da filial têm rota planejada, liberada ou em andamento, e a filial desativada os tiraria do aplicativo; a mensagem traz as contagens e o que fazer com cada rota.",
   ),
+  /** The request step's state refusals: no code is sent for these. */
   branchInUse: codedError(
-    "BRANCH_IN_USE: a filial tem veículos, motoristas, ordens de serviço, contas a pagar, multas, abastecimentos ou checklists; a mensagem traz as contagens.",
+    "BRANCH_HEAD_OFFICE_NOT_DELETABLE: a filial é a matriz, que guarda os dados da própria empresa e nunca é excluída (desativá-la continua permitido). BRANCH_IN_USE: a filial tem veículos, motoristas, ordens de serviço, contas a pagar, multas, abastecimentos ou checklists; a mensagem traz as contagens.",
   ),
 };
 

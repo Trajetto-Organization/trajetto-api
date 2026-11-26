@@ -616,3 +616,146 @@ describe("the head office through Filiais", () => {
     }
   });
 });
+
+/**
+ * The head office is never deleted (owner decision of 26/11/2026): deleting
+ * it left the company with no head office and no warning, its saves in
+ * Empresas mirroring onto nothing and the next branch with its CNPJ silently
+ * taking the place. Both steps answer 409 BRANCH_HEAD_OFFICE_NOT_DELETABLE
+ * before any code is stored or consumed; another company's head office is
+ * still the 404 of a missing branch; deactivating it stays allowed.
+ */
+describe("the head office cannot be deleted", () => {
+  const MISSING = "018fec00-0000-7000-8000-0000000000ef";
+  const CODE = "123456";
+
+  const request = (branchId: string, businessId: string, token: string) =>
+    app.inject({
+      method: "POST",
+      url: `/branch/request-branch-deletion/${branchId}/business/${businessId}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+  const confirm = (branchId: string, businessId: string, token: string) =>
+    app.inject({
+      method: "DELETE",
+      url: `/branch/delete-branch/${branchId}/business/${businessId}`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { code: CODE },
+    });
+
+  const subjectOf = (token: string) => (decode(token) as { sub: string }).sub;
+
+  async function seedHeadOffice(businessId: string, name: string) {
+    const company = await prisma.business.findUniqueOrThrow({
+      where: { id: businessId },
+    });
+    const { id } = await prisma.branch.create({
+      data: {
+        ...branchBody({ corporate_reason: name }),
+        cnpj: company.cnpj,
+        businessId,
+      },
+    });
+
+    return id;
+  }
+
+  it.each(["admin", "master"] as const)(
+    "refuses both steps with 409 BRANCH_HEAD_OFFICE_NOT_DELETABLE for the %s, deleting nothing",
+    async (who) => {
+      const token = tokens[who];
+      const headOffice = await seedHeadOffice(CARRIER, `Matriz Fixa ${who}`);
+
+      try {
+        const asked = await request(headOffice, CARRIER, token);
+
+        expect(asked.statusCode).toBe(409);
+        expect(asked.json()).toMatchObject({
+          code: "BRANCH_HEAD_OFFICE_NOT_DELETABLE",
+          message: expect.stringContaining("A matriz não pode ser excluída"),
+        });
+        expect(
+          await prisma.pendingDeletion.count({
+            where: { entity_id: headOffice },
+          }),
+        ).toBe(0);
+
+        // Even holding a valid code (one asked before this rule), the
+        // confirmation refuses it and leaves the code where it was.
+        await prisma.pendingDeletion.create({
+          data: {
+            entity_type: "branch",
+            entity_id: headOffice,
+            userId: subjectOf(token),
+            code_hash: await hashSecret(CODE, 4),
+            expires: new Date(Date.now() + 60_000),
+          },
+        });
+
+        const confirmed = await confirm(headOffice, CARRIER, token);
+
+        expect(confirmed.statusCode).toBe(409);
+        expect(confirmed.json()).toMatchObject({
+          code: "BRANCH_HEAD_OFFICE_NOT_DELETABLE",
+        });
+        expect(await prisma.branch.count({ where: { id: headOffice } })).toBe(
+          1,
+        );
+        expect(
+          await prisma.pendingDeletion.count({
+            where: { entity_id: headOffice },
+          }),
+        ).toBe(1);
+      } finally {
+        await prisma.pendingDeletion.deleteMany({
+          where: { entity_id: headOffice },
+        });
+        await prisma.branch.delete({ where: { id: headOffice } });
+      }
+    },
+  );
+
+  it("answers another company's head office exactly like a missing branch", async () => {
+    const theirs = await seedHeadOffice(OTHER, "Matriz Alheia");
+
+    try {
+      for (const step of [request, confirm]) {
+        const real = await step(theirs, CARRIER, tokens.admin);
+        const fake = await step(MISSING, CARRIER, tokens.admin);
+
+        expect(real.statusCode).toBe(404);
+        expect(real.json()).toEqual(fake.json());
+        expect(real.json()).toMatchObject({ code: "BRANCH_NOT_FOUND" });
+      }
+
+      expect(await prisma.branch.count({ where: { id: theirs } })).toBe(1);
+    } finally {
+      await prisma.branch.delete({ where: { id: theirs } });
+    }
+  });
+
+  it("still lets the head office be deactivated and reactivated", async () => {
+    const headOffice = await seedHeadOffice(CARRIER, "Matriz Administrativa");
+    const toggle = () =>
+      app.inject({
+        method: "PATCH",
+        url: `/branch/toggle-branch-active/${headOffice}/business/${CARRIER}`,
+        headers: { authorization: `Bearer ${tokens.admin}` },
+      });
+
+    try {
+      const off = await toggle();
+
+      expect(off.statusCode).toBe(200);
+      expect(off.json()).toMatchObject({ is_active: false });
+
+      const on = await toggle();
+
+      expect(on.statusCode).toBe(200);
+      expect(on.json()).toMatchObject({ is_active: true });
+    } finally {
+      await prisma.branch.delete({ where: { id: headOffice } });
+    }
+  });
+});

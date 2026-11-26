@@ -154,7 +154,7 @@ async function branchRoutes(app: FastifyInstance) {
         tags: ["branch"],
         summary: "Pede a exclusão de uma filial (envia o código)",
         description:
-          "Primeiro passo da exclusão em duas etapas. Confere que a filial pode ser excluída (sem vínculos) e envia um código de 6 dígitos ao e-mail de quem pediu, válido por 5 minutos. Use a rota DELETE com o código para excluir.",
+          "Primeiro passo da exclusão em duas etapas. Confere que a filial pode ser excluída (não é a matriz e não tem vínculos) e envia um código de 6 dígitos ao e-mail de quem pediu, válido por 5 minutos. A matriz (a filial com o CNPJ da empresa) nunca é excluída: responde 409 BRANCH_HEAD_OFFICE_NOT_DELETABLE sem enviar código; desativá-la continua permitido. Use a rota DELETE com o código para excluir.",
         params: branchSchemas.updateDeleteBranch,
         response: {
           200: branchResponses.branchDeletionCodeSent,
@@ -180,7 +180,7 @@ async function branchRoutes(app: FastifyInstance) {
         tags: ["branch"],
         summary: "Confirma a exclusão de uma filial (com o código)",
         description:
-          "Segundo passo da exclusão. Valida o código de 6 dígitos recebido por e-mail e exclui a filial. Depois, os demais administradores da empresa recebem um aviso por e-mail, com a hora no fuso da empresa. Avisa as outras telas pelo evento `catalogChanged`.",
+          "Segundo passo da exclusão. Valida o código de 6 dígitos recebido por e-mail e exclui a filial. A matriz é recusada (409 BRANCH_HEAD_OFFICE_NOT_DELETABLE) antes do código, e nada é excluído. Depois, os demais administradores da empresa recebem um aviso por e-mail, com a hora no fuso da empresa. Avisa as outras telas pelo evento `catalogChanged`.",
         params: branchSchemas.updateDeleteBranch,
         body: branchSchemas.confirmDeletionCode,
         response: {
@@ -210,7 +210,7 @@ async function branchRoutes(app: FastifyInstance) {
         tags: ["branch"],
         summary: "Ativa ou inativa uma filial",
         description:
-          "Inverte a situação da filial. Filial inativa sai dos seletores e seus motoristas não entram no aplicativo; por isso, desativar uma filial cujos motoristas têm rota planejada, liberada ou em andamento é recusado (409 DRIVER_HAS_OPEN_ROUTES, com as contagens; reativar nunca é recusado). Se o status mudou enquanto a tela estava aberta, nada é gravado (409 TOGGLE_CONFLICT). Avisa as outras telas pelo evento `catalogChanged`.",
+          "Inverte a situação da filial. Filial inativa sai dos seletores e seus motoristas não entram no aplicativo (vale também para a matriz, que pode ser desativada mas não excluída); por isso, desativar uma filial cujos motoristas têm rota planejada, liberada ou em andamento é recusado (409 DRIVER_HAS_OPEN_ROUTES, com as contagens; reativar nunca é recusado). Se o status mudou enquanto a tela estava aberta, nada é gravado (409 TOGGLE_CONFLICT). Avisa as outras telas pelo evento `catalogChanged`.",
         params: branchSchemas.updateDeleteBranch,
         response: {
           200: branchResponses.branchToggled,

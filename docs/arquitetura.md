@@ -6151,6 +6151,13 @@ valores não é mudança), a lista traz `is_head_office` em cada linha e a web
 abre a matriz só para leitura, dizendo que os dados mudam em Empresas. Um
 teste prende a lista de campos espelhados aos dois corpos de edição, o da
 empresa e o da filial (`tests/unitaires/branch/branch-head-office.test.ts`).
+A matriz também nunca é excluída (decisão do dono, 26/11/2026): excluída, a
+empresa ficava sem matriz sem aviso, o salvar em Empresas não espelhava em
+nada e a próxima filial cadastrada com o CNPJ da empresa virava a "nova"
+matriz; por isso o pedido de exclusão e a confirmação respondem
+`409 BRANCH_HEAD_OFFICE_NOT_DELETABLE` antes de guardar, enviar ou consumir
+o código (depois da checagem de empresa, então a matriz de outra empresa
+continua um 404), e desativá-la continua permitido, porque se desfaz.
 
 Regras de implementação que vieram dessa análise:
 
