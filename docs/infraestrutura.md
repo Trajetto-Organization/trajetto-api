@@ -706,13 +706,18 @@ pipeline. Passo a passo de cada serviço:
 e, para a web,
 [`trajetto-ui/docs/deploy.md` → 6](https://github.com/Trajetto-Organization/trajetto-ui/blob/staging/docs/deploy.md#6-criar-a-application-trajetto-ui-de-staging).
 
-**A confirmar com o dono:** o Redis de staging foi criado sem o comando
-personalizado (`--requirepass` com `--save ""`, `--appendonly no`,
-`--maxmemory 256mb` e `--maxmemory-policy allkeys-lru`) e sem limite de
-memória (observado em 27/10). O de produção foi instruído com os dois.
-Decidir se o de staging é corrigido. Desde o item F1-11 do plano de escala,
-o `ops-heartbeat` alerta sobre isso (`Redis sem teto de memória` ou
-`com maxmemory-policy noeviction`) em todo minuto em que o Redis responde.
+O Redis de staging foi criado sem teto (observado em 27/10) e corrigido em
+26/11/2026: _Memory Limit_ `167772160` (160 MiB), _Custom command_ vazio e
+os 7 _Args_ `redis-server`, `--requirepass`, `<senha do Database>`,
+`--maxmemory`, `64mb`, `--maxmemory-policy`, `allkeys-lru`
+([`deploy.md` → 7.5](./deploy.md#75-redis-database)); o `CONFIG GET`
+confirmou `allkeys-lru` e `64mb`, e o alerta do `ops-heartbeat` (item
+F1-11 do plano de escala: `Redis sem teto de memória` ou
+`com maxmemory-policy noeviction`) ficou verde. A senha agora mora também
+nos _Args_: trocar a senha do Database é trocar esse argumento junto. O de
+produção, conferido pelo dono em 26/11/2026, ainda está no padrão do
+Dokploy (sem _Args_ nem _Custom command_, portanto sem teto): recebe os
+mesmos _Args_, com `256mb`, quando a staging for levada à produção.
 
 ### 5.3 Por que Application e nunca Compose
 
@@ -739,13 +744,17 @@ O que se perdeu na troca (health check no balanceador, rede interna isolada,
 
 Cada serviço tem um _Name_ (o rótulo no painel) e um _App Name_ (o nome do
 serviço no Swarm e o nome de rede pelo qual os outros o encontram). Na
-montagem, o Dokploy gerou os App Names com um sufixo aleatório, e o App Name
-não pode ser editado depois de criado. Por isso:
+montagem, o Dokploy gerou os App Names com um sufixo aleatório de 6
+caracteres (o `trajetto-worker` da staging, criado em 26/11/2026, ficou
+`trajetto-worker-staging-<sufixo>`), e o App Name não pode ser editado
+depois de criado. Por isso:
 
 - os nomes reais são únicos no servidor inteiro, e staging e produção nunca
   colidem na `dokploy-network`;
 - os nomes `trajetto-*-staging` e `trajetto-*-production` que aparecem no
-  `deploy.md` são marcadores: troque pelo App Name que o painel mostra;
+  `deploy.md` são marcadores: troque pelo App Name que o painel mostra,
+  inclusive nas variáveis `SWARM_*_SERVICE` do GitHub (copie da aba
+  _General_ da Application);
 - o App Name aparece no topo da página do serviço (nos Databases, em
   _General → Internal Host_). No host, `docker service ls` lista todos;
 - o App Name da web de produção ficou no formato `trajetto-trajettoui-<sufixo>`,
@@ -1052,6 +1061,11 @@ e [Criar a Application de um papel](./deploy.md#criar-a-application-de-um-papel)
 Uma Application de papel só existe depois de o dono criá-la: até lá, a
 linha diz "a criar", e o código dela fica inerte.
 
+Na staging, a coluna B é a do painel desde 26/11/2026 (o worker criado, a
+api no papel `api`, a imagem `trajetto-postgres` sem PITR e o Redis com os
+_Args_): os números e o porquê estão em
+[`deploy.md` → Tetos por Application e por fase](./deploy.md#tetos-por-application-e-por-fase).
+
 **A confirmar com o dono:** que o painel tem estes valores (os tetos da
 staging do F0-07, as 2 réplicas da produção do F0-02, o _Stop Grace Period_
 de 40 s do F0-01 e a migrate com 384 MiB); o último estado lido no painel
@@ -1078,20 +1092,20 @@ Application ou mudar um teto, atualize a linha dela no mesmo dia.
 
 **Staging**
 
-| Application                  | Imagem                                                           | Papel             | _Domain_ / _Path_                                | Hoje (A)                       | B (onda 12)                | Estado            |
-| ---------------------------- | ---------------------------------------------------------------- | ----------------- | ------------------------------------------------ | ------------------------------ | -------------------------- | ----------------- |
-| Database `trajetto-postgres` | `trajetto-postgres@sha256` (onda 3; antes, `postgres:16-alpine`) | —                 | —                                                | 576, 0,5 CPU                   | igual                      | existe            |
-| Database `trajetto-redis`    | `redis:7-alpine`                                                 | —                 | —                                                | 160, 0,1 CPU, `maxmemory 64mb` | igual                      | existe            |
-| `trajetto-ai`, sempre ligada | `trajetto-ai:staging`                                            | —                 | —                                                | 768, 1 CPU                     | igual                      | existe            |
-| `trajetto-api`               | `trajetto-api:staging`                                           | `all`; `api` em B | `api-staging.intrajetto.com`, `/`                | 576, 0,5 CPU, heap 400         | 576, heap 320, papel `api` | existe            |
-| `trajetto-api-migrate`       | `trajetto-api-migrate:staging`                                   | release           | —                                                | 384, transitório               | igual                      | existe            |
-| `trajetto-ui`                | `trajetto-ui:staging`                                            | —                 | `staging.intrajetto.com`                         | 320, 0,25 CPU                  | igual                      | existe            |
-| `trajetto-worker`            | `trajetto-api:staging-worker`                                    | `worker`          | —                                                | —                              | 448, 0,25 CPU, heap 256    | a criar (onda 12) |
-| `trajetto-pgbouncer`         | `trajetto-pgbouncer:staging`                                     | —                 | —                                                | —                              | — (no 2º VPS, onda 17)     | a criar           |
-| `trajetto-scheduler`         | `trajetto-api:staging-scheduler`                                 | `scheduler`       | —                                                | —                              | — (no 2º VPS, onda 18)     | a criar           |
-| `trajetto-worker-external`   | `trajetto-api:staging-worker-external`                           | `worker-external` | —                                                | —                              | — (no 2º VPS, onda 18)     | a criar           |
-| `trajetto-realtime`          | `trajetto-api:staging-realtime`                                  | `realtime`        | `api-staging.intrajetto.com`, `/socket.io`       | —                              | — (no 2º VPS, onda 18)     | a criar           |
-| `trajetto-ingest`            | `trajetto-api:staging-ingest`                                    | `ingest`          | `api-staging.intrajetto.com`, `/route/positions` | —                              | — (no 2º VPS, onda 18)     | a criar           |
+| Application                  | Imagem                                                           | Papel             | _Domain_ / _Path_                                | Hoje (A)                       | B (onda 12)                            | Estado              |
+| ---------------------------- | ---------------------------------------------------------------- | ----------------- | ------------------------------------------------ | ------------------------------ | -------------------------------------- | ------------------- |
+| Database `trajetto-postgres` | `trajetto-postgres@sha256` (onda 3; antes, `postgres:16-alpine`) | —                 | —                                                | 576, 0,5 CPU                   | 576, CPU livre                         | existe              |
+| Database `trajetto-redis`    | `redis:7-alpine`                                                 | —                 | —                                                | 160, 0,1 CPU, `maxmemory 64mb` | igual                                  | existe              |
+| `trajetto-ai`, sempre ligada | `trajetto-ai:staging`                                            | —                 | —                                                | 768, 1 CPU                     | 1024, 2 CPU                            | existe              |
+| `trajetto-api`               | `trajetto-api:staging`                                           | `all`; `api` em B | `api-staging.intrajetto.com`, `/`                | 576, 0,5 CPU, heap 400         | 1024, CPU livre, heap 576, papel `api` | existe              |
+| `trajetto-api-migrate`       | `trajetto-api-migrate:staging`                                   | release           | —                                                | 384, transitório               | igual                                  | existe              |
+| `trajetto-ui`                | `trajetto-ui:staging`                                            | —                 | `staging.intrajetto.com`                         | 320, 0,25 CPU                  | 768, CPU livre, heap 512               | existe              |
+| `trajetto-worker`            | `trajetto-api:staging-worker`                                    | `worker`          | —                                                | —                              | 768, 1 CPU, heap 256                   | existe (26/11/2026) |
+| `trajetto-pgbouncer`         | `trajetto-pgbouncer:staging`                                     | —                 | —                                                | —                              | — (no 2º VPS, onda 17)                 | a criar             |
+| `trajetto-scheduler`         | `trajetto-api:staging-scheduler`                                 | `scheduler`       | —                                                | —                              | — (no 2º VPS, onda 18)                 | a criar             |
+| `trajetto-worker-external`   | `trajetto-api:staging-worker-external`                           | `worker-external` | —                                                | —                              | — (no 2º VPS, onda 18)                 | a criar             |
+| `trajetto-realtime`          | `trajetto-api:staging-realtime`                                  | `realtime`        | `api-staging.intrajetto.com`, `/socket.io`       | —                              | — (no 2º VPS, onda 18)                 | a criar             |
+| `trajetto-ingest`            | `trajetto-api:staging-ingest`                                    | `ingest`          | `api-staging.intrajetto.com`, `/route/positions` | —                              | — (no 2º VPS, onda 18)                 | a criar             |
 
 Os papéis usam a mesma imagem da API, cada um com a sua tag, e não gastam
 disco a mais. A soma de cada fase, contra a RAM da VPS, está em
@@ -2210,6 +2224,7 @@ Horários em UTC (São Paulo = UTC−3). Do mais antigo para o mais novo.
 | 28/10/2026      | pull da API falha 6/6 por IPv6; exposição da origem medida; `API_PUBLIC_URL` criada no environment `staging` (conferência `http`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | 29/10/2026      | entre 27/10 à noite e 02:14, firewall `default` aplicado à VPS; 02:51–03:00, regras só da Cloudflare; ~03:15, commits `577fc5a` e `d413cb1` da API enviados com o nome automático e o IPv6 da VPS (no texto e numa mensagem de commit; tratados como públicos depois das janelas abaixo, seção 1); ~12:45 e ~14:11, repositórios públicos temporariamente, depois privados (terceira janela da API e da web para os merges de produção); ~13:23, preferência por IPv4 no host; produção no ar (API `01526b0`, web `a1c5242`/v1.1.0), com a correção das URLs do banco e os certificados de `www` e `api` emitidos com o registro já com proxy; domínio da web de produção trocado do apex para `www`; Redirect Rule do apex; HSTS na borda; ~17:03, Email Obfuscation desligado; Web Analytics mantido (CSP e política); build manual do app sem `preview` (`213d6b0`); agendamento noturno das suítes da web removido no commit `7f83d8c` (vale quando chegar à `main`); ~21:50, Smart Tiered Cache; ~21:58, Early Hints; 22:23–22:26, token temporário criado, usado e apagado no mesmo dia; ~22:33, JSD desligado e políticas de bots de IA refeitas; ~22:42 (web) e ~22:48 (API), quarta janela pública, ainda aberta às 23:44 (fechamento a confirmar); ~23:45, pacotes do GHCR conferidos privados; ~23:50, teste do desafio HTTP-01 nos cinco hosts: 404 sem redirect                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | 30/10/2026      | `APP_ENV=production` na Application da API de produção (o console de integração passa a ser indexável; o staging segue com `noindex`); produção promovida pelo dono, com o `robots.txt` e o `/sitemap.xml` da API (`2d3e547`, `0208102`: em produção, só `/integration/docs`) e, na web, `/login`, `/forgot` e os guias de `/docs` no sitemap; a `trajetto-api` respondia como pública na API do GitHub às ~15:05 (fechamento a confirmar); o dono informa o registrador (GoDaddy), a titularidade das contas na conta Google da Trajetto e o que roda em `uptime` (Uptime Kuma) e `monitor` (Beszel); o `yarn dev` da API passa a gerar o client do Prisma antes de esperar o banco; o dev client do app passa a ser gerado por quem tem _Developer_ na Expo e baixado pelos _Viewers_; auditoria de instabilidade do CI (testes e código da API): com `NODE_ENV=test` o e-mail fica numa caixa em memória (sem Ethereal), nenhum teste conecta fora da máquina (trava do `setupTests.ts`), o `yarn test:e2e` roda em duas fases (réplicas por último, uma por vez) e o pipeline de notificações aproveita o ciclo em andamento em vez de perder o despertar; CI da API sem vermelho que não seja do código: `timeout-minutes` em todo job, `bash -eo pipefail` em todo workflow, Node `22.21.1` em todo job, Postgres, Redis e BuildKit por digest, o `audit-ci` bloqueando só push que muda dependência, o GHCR lido pelo `ghcr.sh` (separa "não existe" de "não respondeu"), o banco do Trivy com cache, os pesos PP-OCRv5 da IA versionados no repositório (o build não fala mais com o ModelScope), cache dos engines do Prisma, retentativas do Dokploy e da conferência pela liveness visíveis, e commit só de documentação promovido com o build do ancestral que o staging rodou (`[skip ci]` só para documentação passa a ser seguro) |
+| 26/11/2026      | staging: o `trajetto-worker` criado (768 MiB, 1 CPU: com 448 MiB e 0,25 CPU o boot não fechava a memória e os logins no banco estouravam o prazo), a `trajetto-api` no papel `api` (1 GiB, heap 576), a imagem `trajetto-postgres` sem PITR (_CPU Limit_ vazio, decisão do dono) e o Redis com os _Args_ (`64mb`, `allkeys-lru`); dois **Deploy** seguidos no worker deixaram duas tasks no mesmo slot, resolvido com Stop e um Deploy ([`deploy.md` → 17](./deploy.md#duas-tasks-do-worker-no-mesmo-slot))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 
 ---
 
@@ -2748,8 +2763,8 @@ derruba o sistema, depois o que abre uma brecha, depois o resto.
       host. [Seção 4.5](#45-outras-configurações-do-host).
 - [ ] **Auto Backup da Contabo**: se continua ligado, a retenção e o custo.
       [Seção 4.1](#41-a-máquina).
-- [ ] **Redis de staging**: decidir se recebe o comando personalizado e o
-      limite de memória.
+- [x] **Redis de staging**: teto e `allkeys-lru` pelos _Args_ do Database
+      em 26/11/2026; falta conferir o de produção.
       [Seção 5.2](#52-environments-projetos-e-serviços).
 - [ ] **Tela do domínio do painel** na v0.30.10.
       [Seção 5.1](#51-o-painel).

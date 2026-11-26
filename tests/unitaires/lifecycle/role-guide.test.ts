@@ -401,8 +401,10 @@ describe("the single VPS's budget (deploy.md §23)", () => {
       const first = staging().header.indexOf("A");
       const index = staging().header.indexOf(column);
 
-      // A cell that names no CPU keeps the one of the phase before ("576,
-      // heap 320", "igual"); "—" has none.
+      // A cell that names no CPU keeps the one of the phase before ("512,
+      // heap 224", "igual"); "—" has none, and neither has "CPU livre": the
+      // staging Postgres, api and web left without a CPU Limit on
+      // 26/11/2026 add nothing to the ceilings' sum.
       return staging().rows.reduce((sum, row) => {
         let value = 0;
 
@@ -410,16 +412,18 @@ describe("the single VPS's budget (deploy.md §23)", () => {
           const found = row[at].match(/(\d+(?:,\d+)?) CPU/);
 
           if (found) value = Number(found[1].replace(",", "."));
-          else if (row[at].startsWith("—")) value = 0;
+          else if (row[at].startsWith("—") || /CPU livre/.test(row[at])) {
+            value = 0;
+          }
         }
 
         return sum + value;
       }, 0);
     };
 
-    expect(budget()).toMatch(/somam 2,35 vCPU \(2,6 na B\)/);
+    expect(budget()).toMatch(/somam 2,35 vCPU \(3,1 na B/);
     expect(cpu("A")).toBeCloseTo(2.35, 5);
-    expect(cpu("B")).toBeCloseTo(2.6, 5);
+    expect(cpu("B")).toBeCloseTo(3.1, 5);
   });
 
   it("keeps the host without swap and the earlyoom guarding the Postgres", () => {

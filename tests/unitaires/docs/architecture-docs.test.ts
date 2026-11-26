@@ -965,9 +965,7 @@ describe("claims the docs make about the code", () => {
     const lists = [
       [
         "deploy.md §7.5",
-        deploy.match(
-          /\*\*Sem persistência e com teto de memória\*\*[\s\S]*?um snapshot/,
-        ),
+        deploy.match(/\*\*Com teto de memória\*\*[\s\S]*?um snapshot/),
       ],
       ["deploy.md §10", deploy.match(/\*\*Nada durável\*\*[\s\S]*?backup/)],
       ["README.md stack", readme.match(/^\| Redis via `ioredis`.*$/m)],

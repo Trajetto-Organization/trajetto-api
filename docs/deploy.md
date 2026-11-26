@@ -868,7 +868,7 @@ O que isso muda no dia a dia:
 | Postgres preso no manager (`node.role == manager`)                                                   | com um nó só, nada muda. O Dokploy já põe `node.role==manager` em todo serviço com volume, o Database incluído; desde a onda 17, o Database fica preso ao label `trajetto.db` e ao hostname do nó do volume, antes de qualquer nó novo ([swarm-multi-no](./runbooks/swarm-multi-no.md))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | imagem do Postgres fixada (`POSTGRES_IMAGE`)                                                         | campo _Docker Image_ do Database com o digest (`trajetto-postgres@sha256:…` desde a troca da onda 3; antes, `postgres:16-alpine@sha256:…`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | tuning do Postgres e `/dev/shm` em tmpfs (comentados no compose)                                     | tuning: os parâmetros vêm da imagem `trajetto-postgres` e a memória do teto, com _Command_ e _Args_ vazios ([seção 27](#27-pitr-com-pgbackrest)). `/dev/shm`: **lacuna**, contornada pela imagem, que desliga os workers paralelos                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| Redis sem persistência, `--maxmemory 256mb --maxmemory-policy allkeys-lru`, senha obrigatória        | senha: o Database Redis sempre tem. O resto: comando personalizado do Database ([seção 10](#10-postgres-e-redis)); se a sua versão não tiver o campo, **lacuna** (Redis com snapshot em disco e sem teto de memória)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| Redis sem persistência, `--maxmemory 256mb --maxmemory-policy allkeys-lru`, senha obrigatória        | senha: o Database Redis sempre tem. O resto: os _Args_ do Database, com o _Custom command_ vazio ([seção 7.5](#75-redis-database)); o snapshot do padrão do Redis continua (o `--save ""` não entrou nos _Args_)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | IA com `read_only`, `/tmp` em tmpfs e `cap_drop: ALL`                                                | **lacuna**: a Application não tem esses campos. Continua valendo o usuário 10001 (não root) da imagem, sem domínio e sem porta publicada                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `REDIS_ENFORCE_AUTH` (transição de um Redis sem senha)                                               | não existe mais: o Redis do Dokploy nasce com senha                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | job de migrations na rede `<stack>_backend`, lendo o env de `<stack>_api`                            | a Application `trajetto-api-migrate` de cada ambiente, na `dokploy-network`, com o próprio _Environment_ (só a URL do banco) e o deploy pedido pelo pipeline antes da API ([seção 15](#15-migrations))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
@@ -1070,31 +1070,34 @@ _Advanced → Swarm Settings → Placement_, pela tabela de
 | `PROOF_SIGNING_*`                                                                                      | o certificado **de teste** ([seção 7.11](#711-certificado-do-comprovante-a1-icp-brasil)), ou vazio (sem assinatura, e o PDF diz isso) | o certificado A1 (e-CNPJ)                                                                         |
 | réplicas da API                                                                                        | 1 (hoje; 2 para testar duas réplicas)                                                                                                 | 2                                                                                                 |
 | environment do GitHub                                                                                  | `staging` (sem revisores)                                                                                                             | `production` (revisores obrigatórios)                                                             |
-| `SWARM_API_SERVICE` (GitHub)                                                                           | `trajetto-api-staging`                                                                                                                | `trajetto-api-production`                                                                         |
+| `SWARM_API_SERVICE` (GitHub)                                                                           | o App Name real da API de staging (`trajetto-api-staging-<sufixo>`, [seção 7.2](#72-nomes-name-e-app-name))                           | o App Name real da API de produção (`trajetto-api-production-<sufixo>`)                           |
 
 ### 7.2 Nomes: Name e App Name
 
 Toda vez que o Dokploy pede para criar um serviço, o diálogo tem dois nomes:
 **Name** (o rótulo no painel) e **App Name** (o nome do serviço no Swarm e o
 **nome de rede** pelo qual os outros serviços o encontram). O App Name precisa
-ser único no servidor inteiro, então o Dokploy sugere o Name com um sufixo
-aleatório. Na montagem de 10/2026 os App Names ficaram com esse sufixo
-aleatório, e o Dokploy instalado (v0.30.10) não deixa editar o App Name depois
-de criado. **Os nomes da tabela abaixo, usados no resto deste documento, são
-marcadores**: troque-os pelo App Name que o painel mostra (o sufixo não causa
-problema e evita colisão entre staging e produção). Na criação, mantenha o App
-Name sugerido (com o sufixo) ou digite o da tabela, se o diálogo deixar; depois
-de criado, ele não muda. Os passos 7.4 a 7.7 dizem `<o App Name sugerido>`
-para esse campo.
+ser único no servidor inteiro, então o Dokploy acrescenta a todo App Name um
+sufixo aleatório de 6 caracteres: o `trajetto-worker-staging` da tabela vira,
+no painel, `trajetto-worker-staging-<sufixo>`. Na montagem de 10/2026 e na do
+worker de 26/11/2026 os App Names ficaram com esse sufixo, e o Dokploy
+instalado (v0.30.10) não deixa editar o App Name depois de criado. **Os nomes
+da tabela abaixo, usados no resto deste documento, são marcadores**: troque-os
+pelo App Name que o painel mostra (o sufixo não causa problema e evita colisão
+entre staging e produção). Vale também para o GitHub: cada variável
+`SWARM_*_SERVICE` ([seção 13](#13-configurar-o-github)) recebe o App Name
+real, copiado da aba _General_ da Application, nunca o marcador. Os passos
+7.4 a 7.7 dizem `<o App Name sugerido>` para esse campo.
 
-| Serviço                     | Onde criar                               | Name                   | App Name (staging)             | App Name (produção)               |
-| --------------------------- | ---------------------------------------- | ---------------------- | ------------------------------ | --------------------------------- |
-| banco                       | _Create Service → Database → PostgreSQL_ | `trajetto-postgres`    | `trajetto-postgres-staging`    | `trajetto-postgres-production`    |
-| Redis                       | _Create Service → Database → Redis_      | `trajetto-redis`       | `trajetto-redis-staging`       | `trajetto-redis-production`       |
-| IA                          | _Create Service → Application_           | `trajetto-ai`          | `trajetto-ai-staging`          | `trajetto-ai-production`          |
-| API                         | _Create Service → Application_           | `trajetto-api`         | `trajetto-api-staging`         | `trajetto-api-production`         |
-| migrations                  | _Create Service → Application_           | `trajetto-api-migrate` | `trajetto-api-migrate-staging` | `trajetto-api-migrate-production` |
-| web (projeto `trajetto-ui`) | `trajetto-ui/docs/deploy.md`             | `trajetto-ui`          | `trajetto-ui-staging`          | `trajetto-ui-production`          |
+| Serviço                                                | Onde criar                               | Name                   | App Name (staging)             | App Name (produção)               |
+| ------------------------------------------------------ | ---------------------------------------- | ---------------------- | ------------------------------ | --------------------------------- |
+| banco                                                  | _Create Service → Database → PostgreSQL_ | `trajetto-postgres`    | `trajetto-postgres-staging`    | `trajetto-postgres-production`    |
+| Redis                                                  | _Create Service → Database → Redis_      | `trajetto-redis`       | `trajetto-redis-staging`       | `trajetto-redis-production`       |
+| IA                                                     | _Create Service → Application_           | `trajetto-ai`          | `trajetto-ai-staging`          | `trajetto-ai-production`          |
+| API                                                    | _Create Service → Application_           | `trajetto-api`         | `trajetto-api-staging`         | `trajetto-api-production`         |
+| migrations                                             | _Create Service → Application_           | `trajetto-api-migrate` | `trajetto-api-migrate-staging` | `trajetto-api-migrate-production` |
+| worker (papel, [seção 19](#19-papéis-da-mesma-imagem)) | _Create Service → Application_           | `trajetto-worker`      | `trajetto-worker-staging`      | `trajetto-worker-production`      |
+| web (projeto `trajetto-ui`)                            | `trajetto-ui/docs/deploy.md`             | `trajetto-ui`          | `trajetto-ui-staging`          | `trajetto-ui-production`          |
 
 Onde ver depois: o App Name aparece no topo da página do serviço (e na aba
 _General_ dos Databases, como _Internal Host_). No host, `docker service ls`
@@ -1165,31 +1168,53 @@ a credencial: o deployment da Application termina em `error` com
    (marcador: `trajetto-redis-staging` ou `-production`; seção 7.2); Database
    Password `openssl rand -hex 32` (guarde); Docker Image `redis:7-alpine`.
 3. **Create** e **Deploy**. _External Port_ vazio.
-4. **Sem persistência e com teto de memória** (era o comando do compose): o
+4. **Com teto de memória** (o compose também desligava a persistência, que
+   aqui continua ligada; o fim deste passo diz por quê): o
    Redis só guarda chaves que expiram sozinhas (contadores do rate limit,
    tickets de socket, o intervalo do "esqueci minha senha", fotos de 5–60 s
    das leituras do MASTER e as chaves do geocodificador, `geocoding:*`, entre
    elas o cache cifrado, por empresa, de até 48 h da busca de endereço) e o
    pub/sub do Socket.IO ([ADR 0002](./adr/0002-redis-descartavel.md) e o
    adendo de 10/11/2026); um snapshot só traria de volta chaves que deviam ter expirado, e o
-   padrão `noeviction` de um Redis cheio desliga todo limitador de uma vez. Em
-   _Advanced_, no campo de comando personalizado (_Command_ ou _Run Command_,
-   conforme a versão), ponha **numa linha só**:
+   padrão `noeviction` de um Redis cheio desliga todo limitador de uma vez.
+   O Database Redis do Dokploy (v0.30.10) tem, em _Advanced_, dois campos:
+   _Custom command_ e _Args_ (_Add Argument_, um argumento por linha). O
+   padrão do Dokploy roda
+   `["/bin/sh","-c","redis-server --requirepass <senha>"]`, e qualquer
+   valor seu substitui esse padrão inteiro. O _Custom command_ troca o
+   ENTRYPOINT da imagem (o texto é cortado nos espaços); os _Args_ trocam só
+   o CMD, e o entrypoint da imagem continua passando o processo ao usuário
+   `redis`. Por isso: **_Custom command_ vazio** e estes 7 _Args_, um por
+   _Add Argument_, nesta ordem (`256mb` na produção, `64mb` na staging):
    ```
-   redis-server --requirepass <a senha do passo 2> --save "" --appendonly no --maxmemory 256mb --maxmemory-policy allkeys-lru
+   redis-server
+   --requirepass
+   <senha do Database>
+   --maxmemory
+   256mb
+   --maxmemory-policy
+   allkeys-lru
    ```
-   A senha precisa estar aqui: o comando personalizado substitui o padrão do
-   Dokploy, que é quem passava o `--requirepass`. Salve, **Deploy**, e confira:
+   A senha precisa estar aqui, porque os _Args_ substituem o padrão que
+   passava o `--requirepass`: ela passa a morar também nos _Args_, e trocar a
+   senha do Database é trocar esse argumento junto
+   ([seção 10](#redis), "Trocar a senha"). **Save**, **Deploy**, e confira:
    ```sh
    docker exec -it $(docker ps -q -f name=trajetto-redis-production | head -n 1) \
      redis-cli -a '<senha>' --no-auth-warning CONFIG GET maxmemory-policy   # allkeys-lru
+   docker exec -it $(docker ps -q -f name=trajetto-redis-production | head -n 1) \
+     redis-cli -a '<senha>' --no-auth-warning CONFIG GET maxmemory   # 268435456 (64mb: 67108864)
    ```
-   Se a sua versão não tiver campo de comando nos Databases, deixe o padrão:
-   funciona, só fica sem o teto e com snapshot em disco (lacuna da
-   [seção 5](#5-applications-em-vez-de-compose-o-que-mudou-e-o-que-ficou-de-fora)).
+   Assim ficou a staging em 26/11/2026: o `CONFIG GET` com `allkeys-lru` e
+   `64mb`, e o alerta `Teto do Redis` ([seção 20](#20-alertas-e-monitoramento))
+   verde. O `--save ""` e o `--appendonly no` do comando antigo ficaram de
+   fora: o `appendonly` já é `no` por padrão, e um argumento vazio nos _Args_
+   não foi testado. O snapshot do padrão do Redis continua (`CONFIG GET save`
+   mostra quando ele roda).
 5. Em _Advanced → Resources_, _Memory Limit_ `536870912` (512 MiB: os 256 MB
-   de dados mais os buffers das conexões de pub/sub de cada réplica). Os
-   campos de recursos do Dokploy recebem bytes (confira a dica do campo; se ele
+   de dados mais os buffers das conexões de pub/sub de cada réplica) na
+   produção e `167772160` (160 MiB, com os 64 MB) na staging. Os campos de
+   recursos do Dokploy recebem bytes (confira a dica do campo; se ele
    aceitar `512M`, tanto faz).
 
 ### 7.6 `trajetto-ai` (Application)
@@ -1206,7 +1231,7 @@ a credencial: o deployment da Application termina em `error` com
    | Username     | o usuário do token (seção 7.3)                                            |
    | Password     | o token `read:packages`                                                   |
 
-   **Save**.
+   **Save**. Não ligue _Autodeploy_: quem decide o deploy é o workflow.
 
 3. Aba _Environment_ (uma variável por linha, sem aspas) → **Save**:
    ```
@@ -2323,14 +2348,15 @@ Database com o digest novo; `RESUME trajetto;`. Sem o PgBouncer, o
   contêiner que alcançasse um Redis aberto poderia publicar nos canais do
   adapter do Socket.IO. A API recebe `REDIS_URL=redis://:<senha>@<App Name do
 Redis>:6379`.
-- **Nada durável**: o comando personalizado da [seção 7.5](#75-redis-database)
-  desliga RDB/AOF e põe o teto de 256 MB com `allkeys-lru`. Só guarda
+- **Nada durável**: os _Args_ da [seção 7.5](#75-redis-database) põem o
+  teto (256 MB na produção, 64 MB na staging) com `allkeys-lru`, sem AOF. Só guarda
   chaves que expiram sozinhas, entre elas as do geocodificador (`geocoding:*`,
   com o cache cifrado de até 48 h da busca de endereço), e o pub/sub do
   Socket.IO ([ADR 0002](./adr/0002-redis-descartavel.md)); não precisa de
   backup nem de restore.
-- **Trocar a senha**: nova senha no Database (e no comando, se personalizado)
-  e no `REDIS_URL` da API; **Deploy** do Redis e logo em seguida da API.
+- **Trocar a senha**: nova senha no Database, no argumento da senha dos
+  _Args_ ([seção 7.5](#75-redis-database)) e no `REDIS_URL` de cada
+  Application (a API e os papéis); **Deploy** do Redis e logo em seguida da API.
   Entre os dois, a API segue em modo degradado (rate limit local, tempo real
   sem cruzar réplicas).
 
@@ -2454,24 +2480,24 @@ _Add environment secret_ / _Add environment variable_.
 
 **`staging`** (sem revisores; o deploy de staging é automático):
 
-| Tipo      | Nome                                                                                                                                                                              | Valor                                                                                                                                                                                                                                                         | Obrigatório?                                                                               |
-| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| secret    | `DOKPLOY_URL`                                                                                                                                                                     | URL do painel, **https**: `https://dokploy.intrajetto.com`, pela Cloudflare (nunca o IP, que o firewall fecha; o script recusa http)                                                                                                                          | sim (com os três abaixo; nenhum dos quatro = deploy pulado com aviso)                      |
-| secret    | `DOKPLOY_API_KEY`                                                                                                                                                                 | a chave da seção 7.10                                                                                                                                                                                                                                         | sim                                                                                        |
-| secret    | `DOKPLOY_API_APPLICATION_ID`                                                                                                                                                      | applicationId da `trajetto-api` de staging                                                                                                                                                                                                                    | sim                                                                                        |
-| secret    | `DOKPLOY_MIGRATE_APPLICATION_ID`                                                                                                                                                  | applicationId da `trajetto-api-migrate` de staging ([seção 15](#15-migrations))                                                                                                                                                                               | sim                                                                                        |
-| secret    | `DOKPLOY_AI_APPLICATION_ID`                                                                                                                                                       | applicationId da `trajetto-ai` de staging                                                                                                                                                                                                                     | não (sem ele: aviso e a IA não é atualizada)                                               |
-| secret    | `DOKPLOY_PGBOUNCER_APPLICATION_ID`                                                                                                                                                | applicationId da `trajetto-pgbouncer` de staging (onda 17), só depois de ela existir: o deploy a implanta antes das migrations, e só quando o digest da imagem mudou                                                                                          | não (sem ele: aviso, e só a tag `staging` da `trajetto-pgbouncer` anda)                    |
-| secrets   | `DOKPLOY_WORKER_APPLICATION_ID`, `DOKPLOY_SCHEDULER_APPLICATION_ID`, `DOKPLOY_WORKER_EXTERNAL_APPLICATION_ID`, `DOKPLOY_INGEST_APPLICATION_ID`, `DOKPLOY_REALTIME_APPLICATION_ID` | opcionais: o applicationId de cada Application de papel de staging, só depois de ela existir; sem o secret, o papel não é implantado e a tag `<tag>-<papel>` segue a da API (plano de escala F3-31a)                                                          |
-| variable  | `API_PUBLIC_URL`                                                                                                                                                                  | a origem pública da API de staging, `https://api-staging.intrajetto.com` (sem barra no fim): o pipeline espera a `/health/liveness` dela responder o commit novo ([seção 14](#14-conferir-a-convergência))                                                    | sim, enquanto `ROLLOUT_VERIFY` não for `off` nem `ssh` (é a conferência padrão do staging) |
-| variable  | `SWARM_API_SERVICE`                                                                                                                                                               | `trajetto-api-staging` (o App Name da API)                                                                                                                                                                                                                    | só com `ROLLOUT_VERIFY=ssh`                                                                |
-| variables | `SWARM_WORKER_SERVICE`, `SWARM_SCHEDULER_SERVICE`, `SWARM_WORKER_EXTERNAL_SERVICE`, `SWARM_INGEST_SERVICE`, `SWARM_REALTIME_SERVICE`                                              | o App Name de cada Application de papel de staging (`trajetto-worker-staging`…), junto com o secret dela: a conferência por SSH confere cada papel implantado ([seção 14](#pelo-swarm-por-ssh-padrão-na-produção-rollout_verifyssh-no-staging))               | só com `ROLLOUT_VERIFY=ssh` e o papel implantado (sem ela, aviso)                          |
-| variable  | `SWARM_PGBOUNCER_SERVICE`                                                                                                                                                         | `trajetto-pgbouncer-staging` (o App Name do PgBouncer), junto com o secret dele: a conferência por SSH confere o PgBouncer antes das migrations                                                                                                               | só com `ROLLOUT_VERIFY=ssh` e o PgBouncer implantado (sem ela, aviso)                      |
-| secret    | `ROLLOUT_STATUS_TOKEN`                                                                                                                                                            | o mesmo valor do `ROLLOUT_STATUS_TOKEN` da `trajetto-api` de staging (`openssl rand -hex 32`): o deploy lê os passos pendentes da etapa de release em `<API_PUBLIC_URL>/health/rollout` ([seção 15](#quando-a-etapa-roda)); sem ele, aviso e a regra de antes |
-| variable  | `ROLLOUT_ROLES_EXPECTED`                                                                                                                                                          | os papéis que o deploy espera no commit novo ([seção 14](#os-papéis-da-mesma-imagem-rollout_roles_expected)): `all` enquanto só existe a `trajetto-api`; `api,worker` quando a `trajetto-worker` de staging existir (onda 12)                                 | não (sem ela, a conferência por papel não roda)                                            |
-| variable  | `RELEASE_SERIALIZE_WITH_APPLICATION_ID`                                                                                                                                           | o applicationId da `trajetto-api-migrate` de **produção**: na VPS única a etapa de staging espera a de produção terminar. Sai quando a staging for para o 2º VPS                                                                                              |
-| variable  | `RELEASE_TIMEOUT_SECONDS`                                                                                                                                                         | opcional (vazio = 1800, teto 3600): quanto a etapa de release pode levar no deploy, a espera pela do outro ambiente incluída                                                                                                                                  |
-| secrets   | `DEPLOY_SSH_HOST`, `DEPLOY_SSH_USER`, `DEPLOY_SSH_KNOWN_HOSTS`, `DEPLOY_VERIFY_SSH_KEY`                                                                                           | conferência do rollout ([seção 14](#14-conferir-a-convergência)); podem ficar no repositório, já que os dois ambientes dividem o host                                                                                                                         | só com `ROLLOUT_VERIFY=ssh`                                                                |
+| Tipo      | Nome                                                                                                                                                                              | Valor                                                                                                                                                                                                                                                                                   | Obrigatório?                                                                               |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| secret    | `DOKPLOY_URL`                                                                                                                                                                     | URL do painel, **https**: `https://dokploy.intrajetto.com`, pela Cloudflare (nunca o IP, que o firewall fecha; o script recusa http)                                                                                                                                                    | sim (com os três abaixo; nenhum dos quatro = deploy pulado com aviso)                      |
+| secret    | `DOKPLOY_API_KEY`                                                                                                                                                                 | a chave da seção 7.10                                                                                                                                                                                                                                                                   | sim                                                                                        |
+| secret    | `DOKPLOY_API_APPLICATION_ID`                                                                                                                                                      | applicationId da `trajetto-api` de staging                                                                                                                                                                                                                                              | sim                                                                                        |
+| secret    | `DOKPLOY_MIGRATE_APPLICATION_ID`                                                                                                                                                  | applicationId da `trajetto-api-migrate` de staging ([seção 15](#15-migrations))                                                                                                                                                                                                         | sim                                                                                        |
+| secret    | `DOKPLOY_AI_APPLICATION_ID`                                                                                                                                                       | applicationId da `trajetto-ai` de staging                                                                                                                                                                                                                                               | não (sem ele: aviso e a IA não é atualizada)                                               |
+| secret    | `DOKPLOY_PGBOUNCER_APPLICATION_ID`                                                                                                                                                | applicationId da `trajetto-pgbouncer` de staging (onda 17), só depois de ela existir: o deploy a implanta antes das migrations, e só quando o digest da imagem mudou                                                                                                                    | não (sem ele: aviso, e só a tag `staging` da `trajetto-pgbouncer` anda)                    |
+| secrets   | `DOKPLOY_WORKER_APPLICATION_ID`, `DOKPLOY_SCHEDULER_APPLICATION_ID`, `DOKPLOY_WORKER_EXTERNAL_APPLICATION_ID`, `DOKPLOY_INGEST_APPLICATION_ID`, `DOKPLOY_REALTIME_APPLICATION_ID` | opcionais: o applicationId de cada Application de papel de staging, só depois de ela existir; sem o secret, o papel não é implantado e a tag `<tag>-<papel>` segue a da API (plano de escala F3-31a)                                                                                    |
+| variable  | `API_PUBLIC_URL`                                                                                                                                                                  | a origem pública da API de staging, `https://api-staging.intrajetto.com` (sem barra no fim): o pipeline espera a `/health/liveness` dela responder o commit novo ([seção 14](#14-conferir-a-convergência))                                                                              | sim, enquanto `ROLLOUT_VERIFY` não for `off` nem `ssh` (é a conferência padrão do staging) |
+| variable  | `SWARM_API_SERVICE`                                                                                                                                                               | o App Name real da API de staging, copiado da aba _General_ (`trajetto-api-staging-<sufixo>`; o marcador sem sufixo não acha o serviço, [seção 7.2](#72-nomes-name-e-app-name))                                                                                                         | só com `ROLLOUT_VERIFY=ssh`                                                                |
+| variables | `SWARM_WORKER_SERVICE`, `SWARM_SCHEDULER_SERVICE`, `SWARM_WORKER_EXTERNAL_SERVICE`, `SWARM_INGEST_SERVICE`, `SWARM_REALTIME_SERVICE`                                              | o App Name real de cada Application de papel de staging, copiado da aba _General_ (`trajetto-worker-staging-<sufixo>`…), junto com o secret dela: a conferência por SSH confere cada papel implantado ([seção 14](#pelo-swarm-por-ssh-padrão-na-produção-rollout_verifyssh-no-staging)) | só com `ROLLOUT_VERIFY=ssh` e o papel implantado (sem ela, aviso)                          |
+| variable  | `SWARM_PGBOUNCER_SERVICE`                                                                                                                                                         | o App Name real do PgBouncer de staging, copiado da aba _General_ (`trajetto-pgbouncer-staging-<sufixo>`), junto com o secret dele: a conferência por SSH confere o PgBouncer antes das migrations                                                                                      | só com `ROLLOUT_VERIFY=ssh` e o PgBouncer implantado (sem ela, aviso)                      |
+| secret    | `ROLLOUT_STATUS_TOKEN`                                                                                                                                                            | o mesmo valor do `ROLLOUT_STATUS_TOKEN` da `trajetto-api` de staging (`openssl rand -hex 32`): o deploy lê os passos pendentes da etapa de release em `<API_PUBLIC_URL>/health/rollout` ([seção 15](#quando-a-etapa-roda)); sem ele, aviso e a regra de antes                           |
+| variable  | `ROLLOUT_ROLES_EXPECTED`                                                                                                                                                          | os papéis que o deploy espera no commit novo ([seção 14](#os-papéis-da-mesma-imagem-rollout_roles_expected)): `all` enquanto só existe a `trajetto-api`; `api,worker` quando a `trajetto-worker` de staging existir (onda 12)                                                           | não (sem ela, a conferência por papel não roda)                                            |
+| variable  | `RELEASE_SERIALIZE_WITH_APPLICATION_ID`                                                                                                                                           | o applicationId da `trajetto-api-migrate` de **produção**: na VPS única a etapa de staging espera a de produção terminar. Sai quando a staging for para o 2º VPS                                                                                                                        |
+| variable  | `RELEASE_TIMEOUT_SECONDS`                                                                                                                                                         | opcional (vazio = 1800, teto 3600): quanto a etapa de release pode levar no deploy, a espera pela do outro ambiente incluída                                                                                                                                                            |
+| secrets   | `DEPLOY_SSH_HOST`, `DEPLOY_SSH_USER`, `DEPLOY_SSH_KNOWN_HOSTS`, `DEPLOY_VERIFY_SSH_KEY`                                                                                           | conferência do rollout ([seção 14](#14-conferir-a-convergência)); podem ficar no repositório, já que os dois ambientes dividem o host                                                                                                                                                   | só com `ROLLOUT_VERIFY=ssh`                                                                |
 
 Sem o `DOKPLOY_MIGRATE_APPLICATION_ID`, com os outros três definidos, o job
 falha logo no começo ("configuração parcial"), antes de qualquer tag andar: a
@@ -2482,23 +2508,23 @@ aprovar uma ida para produção) e, em _Deployment branches and tags_,
 _Selected branches and tags_ → `main` (o _Run workflow_ de rollback também
 roda a partir de `main`):
 
-| Tipo      | Nome                                                                                                                                                                              | Valor                                                                                                                                                                                                  |
-| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| secret    | `DOKPLOY_URL`, `DOKPLOY_API_KEY`                                                                                                                                                  | os mesmos do staging (um painel só)                                                                                                                                                                    |
-| secret    | `DOKPLOY_API_APPLICATION_ID`                                                                                                                                                      | applicationId da `trajetto-api` de produção                                                                                                                                                            |
-| secret    | `DOKPLOY_MIGRATE_APPLICATION_ID`                                                                                                                                                  | applicationId da `trajetto-api-migrate` de produção ([seção 15](#15-migrations))                                                                                                                       |
-| secret    | `DOKPLOY_AI_APPLICATION_ID`                                                                                                                                                       | applicationId da `trajetto-ai` de produção                                                                                                                                                             |
-| secret    | `DOKPLOY_PGBOUNCER_APPLICATION_ID`                                                                                                                                                | opcional: applicationId da `trajetto-pgbouncer` de produção, só depois de ela existir (uma semana depois da staging); sem ele, só a tag `stable` dela anda                                             |
-| secrets   | `DOKPLOY_WORKER_APPLICATION_ID`, `DOKPLOY_SCHEDULER_APPLICATION_ID`, `DOKPLOY_WORKER_EXTERNAL_APPLICATION_ID`, `DOKPLOY_INGEST_APPLICATION_ID`, `DOKPLOY_REALTIME_APPLICATION_ID` | opcionais: o applicationId de cada Application de papel de produção, só depois de ela existir; sem o secret, o papel não é implantado e a tag `<tag>-<papel>` segue a da API (plano de escala F3-31a)  |
-| variable  | `API_PUBLIC_URL`                                                                                                                                                                  | a origem pública da API de produção; lida com `ROLLOUT_VERIFY=http` e para os passos pendentes da etapa de release (com o `ROLLOUT_STATUS_TOKEN`)                                                      |
-| variable  | `SWARM_API_SERVICE`                                                                                                                                                               | `trajetto-api-production`                                                                                                                                                                              |
-| variables | `SWARM_WORKER_SERVICE`, `SWARM_SCHEDULER_SERVICE`, `SWARM_WORKER_EXTERNAL_SERVICE`, `SWARM_INGEST_SERVICE`, `SWARM_REALTIME_SERVICE`                                              | o App Name de cada Application de papel de produção (`trajetto-worker-production`…), junto com o secret dela; lida pela conferência por SSH (o padrão da produção)                                     |
-| variable  | `SWARM_PGBOUNCER_SERVICE`                                                                                                                                                         | `trajetto-pgbouncer-production`, junto com o secret dele; lida pela conferência por SSH (o padrão da produção)                                                                                         |
-| secret    | `ROLLOUT_STATUS_TOKEN`                                                                                                                                                            | o mesmo valor do `ROLLOUT_STATUS_TOKEN` da `trajetto-api` de produção (outro valor, não o do staging); lido em `<API_PUBLIC_URL>/health/rollout`, então a `API_PUBLIC_URL` precisa existir aqui também |
-| variable  | `ROLLOUT_ROLES_EXPECTED`                                                                                                                                                          | `all` até a `trajetto-worker` de produção existir (onda 14); depois, `api,worker` ([seção 14](#os-papéis-da-mesma-imagem-rollout_roles_expected)). Sem ela, a conferência por papel não roda           |
-| variable  | `RELEASE_SERIALIZE_WITH_APPLICATION_ID`                                                                                                                                           | o applicationId da `trajetto-api-migrate` de **staging**                                                                                                                                               |
-| variable  | `RELEASE_TIMEOUT_SECONDS`                                                                                                                                                         | opcional (vazio = 1800, teto 3600)                                                                                                                                                                     |
-| secrets   | `DEPLOY_SSH_HOST`, `DEPLOY_SSH_USER`, `DEPLOY_SSH_KNOWN_HOSTS`, `DEPLOY_VERIFY_SSH_KEY`                                                                                           | conferência do rollout (só sem `ROLLOUT_VERIFY=http`)                                                                                                                                                  |
+| Tipo      | Nome                                                                                                                                                                              | Valor                                                                                                                                                                                                      |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| secret    | `DOKPLOY_URL`, `DOKPLOY_API_KEY`                                                                                                                                                  | os mesmos do staging (um painel só)                                                                                                                                                                        |
+| secret    | `DOKPLOY_API_APPLICATION_ID`                                                                                                                                                      | applicationId da `trajetto-api` de produção                                                                                                                                                                |
+| secret    | `DOKPLOY_MIGRATE_APPLICATION_ID`                                                                                                                                                  | applicationId da `trajetto-api-migrate` de produção ([seção 15](#15-migrations))                                                                                                                           |
+| secret    | `DOKPLOY_AI_APPLICATION_ID`                                                                                                                                                       | applicationId da `trajetto-ai` de produção                                                                                                                                                                 |
+| secret    | `DOKPLOY_PGBOUNCER_APPLICATION_ID`                                                                                                                                                | opcional: applicationId da `trajetto-pgbouncer` de produção, só depois de ela existir (uma semana depois da staging); sem ele, só a tag `stable` dela anda                                                 |
+| secrets   | `DOKPLOY_WORKER_APPLICATION_ID`, `DOKPLOY_SCHEDULER_APPLICATION_ID`, `DOKPLOY_WORKER_EXTERNAL_APPLICATION_ID`, `DOKPLOY_INGEST_APPLICATION_ID`, `DOKPLOY_REALTIME_APPLICATION_ID` | opcionais: o applicationId de cada Application de papel de produção, só depois de ela existir; sem o secret, o papel não é implantado e a tag `<tag>-<papel>` segue a da API (plano de escala F3-31a)      |
+| variable  | `API_PUBLIC_URL`                                                                                                                                                                  | a origem pública da API de produção; lida com `ROLLOUT_VERIFY=http` e para os passos pendentes da etapa de release (com o `ROLLOUT_STATUS_TOKEN`)                                                          |
+| variable  | `SWARM_API_SERVICE`                                                                                                                                                               | o App Name real da API de produção, copiado da aba _General_ (`trajetto-api-production-<sufixo>`)                                                                                                          |
+| variables | `SWARM_WORKER_SERVICE`, `SWARM_SCHEDULER_SERVICE`, `SWARM_WORKER_EXTERNAL_SERVICE`, `SWARM_INGEST_SERVICE`, `SWARM_REALTIME_SERVICE`                                              | o App Name real de cada Application de papel de produção, copiado da aba _General_ (`trajetto-worker-production-<sufixo>`…), junto com o secret dela; lida pela conferência por SSH (o padrão da produção) |
+| variable  | `SWARM_PGBOUNCER_SERVICE`                                                                                                                                                         | o App Name real do PgBouncer de produção, copiado da aba _General_ (`trajetto-pgbouncer-production-<sufixo>`), junto com o secret dele; lida pela conferência por SSH (o padrão da produção)               |
+| secret    | `ROLLOUT_STATUS_TOKEN`                                                                                                                                                            | o mesmo valor do `ROLLOUT_STATUS_TOKEN` da `trajetto-api` de produção (outro valor, não o do staging); lido em `<API_PUBLIC_URL>/health/rollout`, então a `API_PUBLIC_URL` precisa existir aqui também     |
+| variable  | `ROLLOUT_ROLES_EXPECTED`                                                                                                                                                          | `all` até a `trajetto-worker` de produção existir (onda 14); depois, `api,worker` ([seção 14](#os-papéis-da-mesma-imagem-rollout_roles_expected)). Sem ela, a conferência por papel não roda               |
+| variable  | `RELEASE_SERIALIZE_WITH_APPLICATION_ID`                                                                                                                                           | o applicationId da `trajetto-api-migrate` de **staging**                                                                                                                                                   |
+| variable  | `RELEASE_TIMEOUT_SECONDS`                                                                                                                                                         | opcional (vazio = 1800, teto 3600)                                                                                                                                                                         |
+| secrets   | `DEPLOY_SSH_HOST`, `DEPLOY_SSH_USER`, `DEPLOY_SSH_KNOWN_HOSTS`, `DEPLOY_VERIFY_SSH_KEY`                                                                                           | conferência do rollout (só sem `ROLLOUT_VERIFY=http`)                                                                                                                                                      |
 
 Os quatro `DOKPLOY_*` obrigatórios de um environment (`DOKPLOY_URL`,
 `DOKPLOY_API_KEY`, `DOKPLOY_API_APPLICATION_ID` e
@@ -3042,7 +3068,8 @@ produção, cada um a sua):
 2. **General → Provider: Docker**: _Docker Image_
    `ghcr.io/trajetto-organization/trajetto-api-migrate:staging` (produção:
    `:stable`), com a mesma credencial do GHCR da API
-   ([seção 7.3](#73-credencial-do-ghcr)) → **Save**.
+   ([seção 7.3](#73-credencial-do-ghcr)) → **Save**. Não ligue
+   _Autodeploy_: quem roda a etapa é o workflow.
 3. **Environment** → **Save**:
    ```
    DATABASE_URL=postgresql://trajetto:<SENHA_DO_POSTGRES>@<App Name do Postgres>:5432/trajetto?schema=public&connection_limit=2&connect_timeout=10
@@ -4430,6 +4457,33 @@ Nenhuma Application tem limite de tentativas (`MaxAttempts: 0`). Se uma
 réplica ainda assim ficar parada, **Deploy** da Application no painel (ou
 `docker service update --force <App Name>`) recria as tasks.
 
+### Duas tasks do worker no mesmo slot
+
+Incidente da staging, 26/11/2026: dois cliques em **Deploy** seguidos na
+`trajetto-worker` (com o _Update Config_ `start-first`) deixaram o Swarm
+com **duas** tasks em execução no mesmo slot, o `.1` com dois ids de task.
+As duas elegeram o cron (no log do Postgres, um `ERROR` de chave duplicada
+em `scheduled_job_execution_jobName_scheduledFor_key`, inofensivo: a
+unicidade barra a segunda execução) e dobraram a memória e as conexões do
+papel.
+
+- **Diagnóstico**: o `process_heartbeat` com duas linhas `worker`
+  atualizadas há pouco, e _Docker → Containers_ no painel (ou
+  `docker ps --filter name=<App Name>`) com dois contêineres
+  `<App Name>.1.<id>`:
+
+  ```sql
+  SELECT replica, role, build_commit, updated_at FROM process_heartbeat
+   WHERE role = 'worker' AND updated_at > now() - interval '2 minutes';
+  ```
+
+- **Correção**: **Stop** na Application, espere o _Stop Grace Period_ (40
+  s), confirme que não sobrou nenhum contêiner dela e dê **Deploy** uma vez
+  só. O `process_heartbeat` volta a ter um `worker` só.
+- **Lição**: um **Deploy** por vez em cada Application, esperando o
+  anterior terminar em _Deployments_. O pipeline já serializa os dele
+  (`deploy-roles.sh`, um papel depois do outro); o risco é o clique à mão.
+
 ## 18. Backup e restauração
 
 Decisão do dono (26/10/2026, final): **o único backup do banco é o Backup do
@@ -4905,12 +4959,23 @@ Application que consome a raia `internal` quando a fila de push crescer;
 
 **Orçamento de memória (U-15).** No boot, cada processo soma o heap
 principal (o `--max-old-space-size` do `NODE_OPTIONS`), as threads da
-planilha (`SPREADSHEET_READS_PER_PROCESS` × `SPREADSHEET_WORKER_MAX_OLD_MB`)
-e a reserva nativa (`NATIVE_RESERVE_MB`, 150) e compara com o `memory.max`
-do cgroup, o _Memory_ da Application. Sem `SPREADSHEET_WORKER_MAX_OLD_MB`,
+planilha (`SPREADSHEET_READS_PER_PROCESS` × `SPREADSHEET_WORKER_MAX_OLD_MB`),
+as do pool de CPU (`CPU_POOL_THREADS` × `CPU_POOL_THREAD_MAX_OLD_MB`, 2 × 64
+por padrão, em todo papel) e a reserva nativa (`NATIVE_RESERVE_MB`, 150) e
+compara com o `memory.max` do cgroup, o _Memory_ da Application:
+
+```
+heap + leituras × planilha + threads do pool × 64 + 150 ≤ Memory (MiB)
+```
+
+Medido na staging em 26/11/2026 (o log do boot, `memory budget fits`): o
+worker com 256 + 1 × 128 + 2 × 64 + 150 = 662 de 768, e a api com
+576 + 0 × 96 + 2 × 64 + 150 = 854 de 1.024 (no papel `all`, antes do corte,
+576 + 1 × 96 + 128 + 150 = 950 de 1.024). Sem `SPREADSHEET_WORKER_MAX_OLD_MB`,
 a thread recebe o que sobra por leitura, entre 256 e 768 MiB. A thread lê o
 .xlsx linha a linha, e a maior planilha que o leitor aceita cabe em 64 MiB:
-os 96 da api de staging e os 256 da produção a leem; só uma pasta com
+os 128 do worker de staging (quem lê as planilhas desde o corte de
+26/11/2026) e os 256 da produção a leem; só uma pasta com
 células mescladas ou links volta à leitura inteira do exceljs (~350 bytes
 por célula), que precisa de mais. Com
 `MEMORY_BUDGET_MODE=warn` (o padrão deste release), a conta que não fecha
@@ -5106,7 +5171,9 @@ régua espera. O que muda em cada papel está em
    _Settings → Environments_ → `staging` ou `production`: o secret
    `DOKPLOY_<PAPEL>_APPLICATION_ID` (`WORKER`, `SCHEDULER`,
    `WORKER_EXTERNAL`, `REALTIME` ou `INGEST`) e a variável
-   `SWARM_<PAPEL>_SERVICE` com o App Name. Atualize
+   `SWARM_<PAPEL>_SERVICE` com o App Name real, copiado da aba _General_ (o
+   marcador mais o sufixo de 6 caracteres, seção 7.2; lida só com
+   `ROLLOUT_VERIFY=ssh`). Atualize
    `ROLLOUT_ROLES_EXPECTED` com o valor da subseção do papel. Do run
    seguinte em diante, a ação de deploy implanta o papel na ordem da
    seção 3: worker, scheduler e worker-external antes da API; ingest e
@@ -5149,6 +5216,11 @@ outros sai da regra do orçamento de memória (acima): heap + 150 MiB de
 reserva nativa ≤ teto, com `SPREADSHEET_READS_PER_PROCESS=0`, arredondado
 para baixo. Para 320 MiB, `NODE_OPTIONS=--max-old-space-size=160`; para
 384, `224`; para 512, `352`. O boot confere a conta (`memory budget fits`).
+Esses heaps ainda não contam o pool de CPU (2 × 64 = 128 MiB por padrão,
+acima): foi essa conta que deixou o worker de staging fora do teto de 448
+(abaixo). Antes de criar um desses papéis, refaça a soma com o pool, ou com
+`CPU_POOL_THREADS=0` se o papel não faz o parse de NF-e nem a exportação
+(decisão do dono, ainda não tomada).
 
 #### `all` (a produção de hoje)
 
@@ -5157,8 +5229,12 @@ para baixo. Para 320 MiB, `NODE_OPTIONS=--max-old-space-size=160`; para
 - **_Environment_**: sem `PROCESS_ROLE` (ou `all`) e sem
   `WORKERS_ENABLED=false`. Na produção, desde a onda 12,
   `NODE_OPTIONS=--max-old-space-size=576` e
-  `SPREADSHEET_WORKER_MAX_OLD_MB=256` (576 + 256 + 150 = 982 de 1.024; com
-  `MEMORY_BUDGET_MODE=warn`, o boot só avisa se a conta não fechar).
+  `SPREADSHEET_WORKER_MAX_OLD_MB=256` (576 + 256 + 150 = 982 de 1.024, sem
+  o pool de CPU; com ele, 1.110, até o heap baixar a 480: o
+  [runbook](./runbooks/memory-budget.md); com `MEMORY_BUDGET_MODE=warn`, o
+  boot só avisa se a conta não fechar). Na staging, até o corte de
+  26/11/2026: 1024 MiB, heap 576 e `SPREADSHEET_WORKER_MAX_OLD_MB=96`
+  (950 de 1.024).
 - **Teto**: 2 × 1024 MiB (`1073741824`) na produção, CPU livre, com a
   _Domain_ `/` da seção 7.7.
 - **GitHub**: `ROLLOUT_ROLES_EXPECTED=all` (o `all` vale por api, worker e
@@ -5173,8 +5249,12 @@ para baixo. Para 320 MiB, `NODE_OPTIONS=--max-old-space-size=160`; para
   tirar (um `WORKERS_ENABLED=true` esquecido deixaria os workers na API).
   `DATABASE_URL` com `trajetto_http` e `connection_limit=6`, e
   `DATABASE_READ_URL` com `trajetto_read` e 3.
-- **Staging (fase B)**: `NODE_OPTIONS=--max-old-space-size=320` e
-  `SPREADSHEET_WORKER_MAX_OLD_MB=96`, no teto de 576 MiB (`603979776`).
+- **Staging (fase B)**: `NODE_OPTIONS=--max-old-space-size=576`,
+  `SPREADSHEET_READS_PER_PROCESS=0` (com `IMPORT_DURABLE_JOBS=true`, quem lê
+  as planilhas é o worker) e `SPREADSHEET_WORKER_MAX_OLD_MB=96`, no teto de
+  1024 MiB (`1073741824`): 576 + 0 + 128 + 150 = 854 de 1.024, medido em
+  26/11/2026. O teto de 576 MiB do plano não cabia nem com heap 320
+  (320 + 128 + 150 = 598).
 - **Produção (fase C)**: só com a importação durável (onda 14), que tira a
   planilha da API: `SPREADSHEET_READS_PER_PROCESS=0`,
   `NODE_OPTIONS=--max-old-space-size=448` e 2 × 768 MiB (`805306368`).
@@ -5193,42 +5273,57 @@ Na staging (fase B, onda 12), nesta ordem:
 2. _Environment_ (a cópia do da `trajetto-api` de staging), mudando:
    `PROCESS_ROLE=worker`, `SHUTDOWN_DRAIN_MS=0` (sem tráfego, não há o que
    drenar), `NODE_OPTIONS=--max-old-space-size=256`,
-   `SPREADSHEET_READS_PER_PROCESS=0`, `DATABASE_URL` com `trajetto_worker`
-   e `connection_limit=8`, e `BATCH_DATABASE_URL` com `trajetto_batch` e
-   3, direta. A `DATABASE_READ_URL` não vai: o pool de leitura serve rotas
+   `SPREADSHEET_READS_PER_PROCESS=1` e `SPREADSHEET_WORKER_MAX_OLD_MB=128`
+   (com `IMPORT_DURABLE_JOBS=true`, o worker é o processo que lê as
+   planilhas), `DATABASE_URL` com `trajetto_worker` e `connection_limit=8`,
+   e `BATCH_DATABASE_URL` com `trajetto_batch` e 3, direta. A `DATABASE_READ_URL` não vai: o pool de leitura serve rotas
    HTTP. O `HEALTHCHECK_PING_URL` fica: o ping sai do processo que roda o
    cron.
-3. Sem _Domain_. _Replicas_ 1. _Memory Limit_ `469762048` (448 MiB) e _CPU
-   Limit_ `250000000` (0,25 CPU).
+3. Sem _Domain_. _Replicas_ 1. _Memory Limit_ `805306368` (768 MiB) e _CPU
+   Limit_ `1000000000` (1 CPU). O plano dizia 448 MiB e 0,25 CPU, e os dois
+   falharam na staging em 26/11/2026. A memória não fecha:
+   256 + 1 × 128 + 2 × 64 + 150 = 662 MiB, e nem com
+   `SPREADSHEET_READS_PER_PROCESS=0` (534) cabe em 448; com 768, o boot
+   loga `memory budget fits` (662 de 768). Com 0,25 CPU, o boot teve
+   _timeouts_ de conexão com o banco (os logins SCRAM sem CPU) e só
+   estabilizou com 1 CPU.
 4. _Swarm Settings_: os blocos do passo 7 e o _Stop Grace Period_
    `40000000000`.
 5. **Deploy**. Em _Logs_: `process role resolved` com `role: worker` e
    `workers started`.
 6. `trajetto-api` de staging → _Environment_: `PROCESS_ROLE=api`,
-   `NODE_OPTIONS=--max-old-space-size=320`,
+   `NODE_OPTIONS=--max-old-space-size=576` (o teto fica em 1024 MiB),
+   `SPREADSHEET_READS_PER_PROCESS=0`,
    `SPREADSHEET_WORKER_MAX_OLD_MB=96`, `DATABASE_URL` com `trajetto_http`
    e `connection_limit=6`, e `DATABASE_READ_URL` com `trajetto_read` e 3 →
    **Deploy**.
 7. GitHub → environment `staging`: o secret `DOKPLOY_WORKER_APPLICATION_ID`
-   e as variáveis `SWARM_WORKER_SERVICE=trajetto-worker-staging` e
-   `ROLLOUT_ROLES_EXPECTED=api,worker`.
-8. Reinstale o `verify-rollout.sh` no host (passo 10).
+   e a variável `ROLLOUT_ROLES_EXPECTED=api,worker`. A variável
+   `SWARM_WORKER_SERVICE` leva o App Name real, copiado da aba _General_
+   (`trajetto-worker-staging-<sufixo>`, seção 7.2), e só é lida com
+   `ROLLOUT_VERIFY=ssh`: com `http` (o da staging), o papel é provado pelo
+   `process_heartbeat`, no `/health/rollout`, com o
+   `ROLLOUT_ROLES_EXPECTED` ([seção 14](#os-papéis-da-mesma-imagem-rollout_roles_expected)).
+8. Só com `ROLLOUT_VERIFY=ssh`: reinstale o `verify-rollout.sh` no host
+   (passo 10).
 9. Confira: uma notificação chega em menos de 2 s (o despertar); o SQL de
    duplicatas da eleição
    ([Staging com 2 réplicas](#staging-com-2-réplicas-plano-de-02112026-k15-decisão-d53),
    passo 4) volta vazio; e o `/health/rollout` tem os dois papéis no
-   commit (seção 14).
+   commit (seção 14), com **um** processo `worker` só (dois são o
+   [incidente de 26/11/2026](#duas-tasks-do-worker-no-mesmo-slot)).
 
 Na produção (fase C, onda 14), só se a régua fechar: a R1 com o Postgres
 de produção em 1.792 MiB (hit ratio > 99% medido) e a web em 2 × 512 MiB;
 senão a R2; senão, o worker espera o 2º VPS. Os mesmos passos, com
 `:stable-worker`, _App Name_ `trajetto-worker-production`, _Memory Limit_
 `1073741824` (1024 MiB), _CPU Limit_ `1500000000` (1,5 CPU),
-`NODE_OPTIONS=--max-old-space-size=512` e, com a importação durável,
-`SPREADSHEET_READS_PER_PROCESS=1` e `SPREADSHEET_WORKER_MAX_OLD_MB=320`; no
-GitHub, o environment `production`, com
-`SWARM_WORKER_SERVICE=trajetto-worker-production` e
-`ROLLOUT_ROLES_EXPECTED=api,worker`. Depois, a `trajetto-api` de produção
+`NODE_OPTIONS=--max-old-space-size=416` e, com a importação durável,
+`SPREADSHEET_READS_PER_PROCESS=1` e `SPREADSHEET_WORKER_MAX_OLD_MB=320`
+(416 + 320 + 128 + 150 = 1.014 de 1.024; o heap 512 do plano somava 1.110
+e não cabia); no GitHub, o environment `production`, com
+`SWARM_WORKER_SERVICE` = o App Name real (`trajetto-worker-production-<sufixo>`)
+e `ROLLOUT_ROLES_EXPECTED=api,worker`. Depois, a `trajetto-api` de produção
 passa ao papel `api` (subseção acima).
 
 **Reversão**: `PROCESS_ROLE=all` na `trajetto-api` PRIMEIRO (**Deploy**, e
@@ -5379,7 +5474,7 @@ já conta os 2 GiB dele. Se a produção continuar no papel `all` na fase C
 | ---------------------------- | ----------------------------- | -------------------------- | --------------------------------------------------------- | ------------------------------------------------------- | --------------------- | --------------------------------------------------------- | ---------------------------------------------------- | -------------------------------------- |
 | Database `trajetto-postgres` | `trajetto-postgres@sha256`    | —                          | —                                                         | 2048 (`2147483648`), CPU livre                          | 2048                  | 1792 (`1879048192`) se o hit ratio > 99%; senão 2048 e R2 | 3072 (`3221225472`)                                  | no prod-db-1 (12 GiB ou mais, a medir) |
 | `trajetto-api`               | `trajetto-api:stable`         | `all` até C; `api` desde C | `api.intrajetto.com`, `/`                                 | 2 × 1024 (`1073741824`), heap 768 (576 desde a onda 12) | 2 × 1024              | 2 × 768 (`805306368`), heap 448                           | 3 × 768                                              | 3 × 768, depois pela ELU               |
-| `trajetto-worker`            | `:stable-worker`              | `worker`                   | —                                                         | —                                                       | —                     | 1 × 1024, 1,5 CPU (`1500000000`), heap 512                | 1 × 1024                                             | 2 × 1024                               |
+| `trajetto-worker`            | `:stable-worker`              | `worker`                   | —                                                         | —                                                       | —                     | 1 × 1024, 1,5 CPU (`1500000000`), heap 416                | 1 × 1024                                             | 2 × 1024                               |
 | `trajetto-scheduler`         | `:stable-scheduler`           | `scheduler`                | —                                                         | —                                                       | —                     | —                                                         | —                                                    | 1 × 320 (`335544320`)                  |
 | `trajetto-worker-external`   | `:stable-worker-external`     | `worker-external`          | —                                                         | —                                                       | —                     | —                                                         | —                                                    | 1 × 384 (`402653184`)                  |
 | `trajetto-realtime`          | `:stable-realtime`            | `realtime`                 | `api.intrajetto.com`, `/socket.io`                        | —                                                       | —                     | —                                                         | —                                                    | 2 × 512 (`536870912`)                  |
@@ -5393,20 +5488,30 @@ já conta os 2 GiB dele. Se a produção continuar no papel `all` na fase C
 
 **Staging**
 
-| Application                  | Papel                | A                                                          | B                                                   | C                           | 2º VPS (onda 16 em diante)                      |
-| ---------------------------- | -------------------- | ---------------------------------------------------------- | --------------------------------------------------- | --------------------------- | ----------------------------------------------- |
-| Database `trajetto-postgres` | —                    | 576 (`603979776`), 0,5 CPU (`500000000`)                   | igual                                               | igual                       | 1024 (`1073741824`)                             |
-| `trajetto-api`               | `all`; `api` desde B | 576 (`603979776`), 0,5 CPU (`500000000`), heap 400         | 576, heap 320                                       | 512 (`536870912`), heap 288 | 576                                             |
-| `trajetto-worker`            | `worker`             | —                                                          | 448 (`469762048`), 0,25 CPU (`250000000`), heap 256 | 512, heap 224               | 512                                             |
-| `trajetto-scheduler`         | `scheduler`          | —                                                          | —                                                   | —                           | 320 (`335544320`), 0,25 CPU (`250000000`)       |
-| `trajetto-worker-external`   | `worker-external`    | —                                                          | —                                                   | —                           | 320 (`335544320`)                               |
-| `trajetto-realtime`          | `realtime`           | —                                                          | —                                                   | —                           | 384 (`402653184`), 0,25 CPU (`250000000`)       |
-| `trajetto-ingest`            | `ingest`             | —                                                          | —                                                   | —                           | 384 (`402653184`)                               |
-| `trajetto-pgbouncer`         | —                    | —                                                          | —                                                   | —                           | 32 (`33554432`), 0,1 CPU (`100000000`), onda 17 |
-| `trajetto-ui`                | —                    | 320 (`335544320`), 0,25 CPU (`250000000`)                  | igual                                               | igual                       | 384                                             |
-| `trajetto-ai`, sempre ligada | —                    | 768 (`805306368`), 1 CPU (`1000000000`)                    | igual                                               | igual                       | 1024                                            |
-| Database `trajetto-redis`    | —                    | 160 (`167772160`), 0,1 CPU (`100000000`), `maxmemory 64mb` | igual                                               | igual                       | 192 (`201326592`)                               |
-| `trajetto-api-migrate`       | release              | 384 (`402653184`), transitório                             | igual                                               | igual                       | 384                                             |
+| Application                  | Papel                | A                                                          | B                                                 | C                           | 2º VPS (onda 16 em diante)                      |
+| ---------------------------- | -------------------- | ---------------------------------------------------------- | ------------------------------------------------- | --------------------------- | ----------------------------------------------- |
+| Database `trajetto-postgres` | —                    | 576 (`603979776`), 0,5 CPU (`500000000`)                   | 576, CPU livre (decisão de 26/11/2026)            | igual                       | 1024 (`1073741824`)                             |
+| `trajetto-api`               | `all`; `api` desde B | 576 (`603979776`), 0,5 CPU (`500000000`), heap 400         | 1024 (`1073741824`), CPU livre, heap 576          | 512 (`536870912`), heap 288 | 576                                             |
+| `trajetto-worker`            | `worker`             | —                                                          | 768 (`805306368`), 1 CPU (`1000000000`), heap 256 | 512, heap 224               | 512                                             |
+| `trajetto-scheduler`         | `scheduler`          | —                                                          | —                                                 | —                           | 320 (`335544320`), 0,25 CPU (`250000000`)       |
+| `trajetto-worker-external`   | `worker-external`    | —                                                          | —                                                 | —                           | 320 (`335544320`)                               |
+| `trajetto-realtime`          | `realtime`           | —                                                          | —                                                 | —                           | 384 (`402653184`), 0,25 CPU (`250000000`)       |
+| `trajetto-ingest`            | `ingest`             | —                                                          | —                                                 | —                           | 384 (`402653184`)                               |
+| `trajetto-pgbouncer`         | —                    | —                                                          | —                                                 | —                           | 32 (`33554432`), 0,1 CPU (`100000000`), onda 17 |
+| `trajetto-ui`                | —                    | 320 (`335544320`), 0,25 CPU (`250000000`)                  | 768 (`805306368`), CPU livre, heap 512            | igual                       | 384                                             |
+| `trajetto-ai`, sempre ligada | —                    | 768 (`805306368`), 1 CPU (`1000000000`)                    | 1024 (`1073741824`), 2 CPU (`2000000000`)         | igual                       | 1024                                            |
+| Database `trajetto-redis`    | —                    | 160 (`167772160`), 0,1 CPU (`100000000`), `maxmemory 64mb` | igual                                             | igual                       | 192 (`201326592`)                               |
+| `trajetto-api-migrate`       | release              | 384 (`402653184`), transitório                             | igual                                             | igual                       | 384                                             |
+
+Na staging, a coluna B é o que o painel tem desde 26/11/2026, medido no
+boot de cada Application (subseções `api` e `worker`, acima; a web e a IA
+pelos guias delas, [seção 7.6](#76-trajetto-ai-application) e
+`trajetto-ui/docs/deploy.md`); o Postgres sem _CPU Limit_ é decisão do
+dono ([seção 27](#valores-por-ambiente)). As células da api e do worker da
+staging nas colunas C e 2º VPS são do plano e ainda não contam o pool de
+CPU: com ele, não fecham o orçamento de memória (a api da C,
+288 + 128 + 150 = 566 em 512; o worker da C, com a leitura da planilha,
+224 + 128 + 128 + 150 = 630 em 512). Refaça as duas antes da fase.
 
 As somas por fase, as réguas R1 e R2, a CPU e o disco estão na
 [seção 23](#23-recursos-da-vps-e-logs);
@@ -5713,7 +5818,7 @@ mais abaixo, é o resumo.
 | `Postgres: idade do xid`                                 | `SELECT datname, age(datfrozenxid) FROM pg_database ORDER BY 2 DESC` e o autovacuum da tabela mais velha                                                                                                                            |
 | `Postgres: transação de escrita aberta`                  | `SELECT pid, now() - xact_start, state, left(query, 80) FROM pg_stat_activity WHERE backend_xid IS NOT NULL ORDER BY 2 DESC`; uma sessão esquecida no `psql` termina com `pg_terminate_backend(pid)`                                |
 | `Postgres: pg_wal com`                                   | o arquivamento primeiro (se parado, o WAL não sai), depois um slot de replicação abandonado (`pg_replication_slots`)                                                                                                                |
-| `Redis despejou` / `Redis sem teto` / `noeviction`       | o comando personalizado do Database Redis ([seção 10](#10-postgres-e-redis)): `--maxmemory 256mb --maxmemory-policy allkeys-lru`; despejo com o teto certo = memória no limite, ver `used_memory_mb` em `/health/metrics`           |
+| `Redis despejou` / `Redis sem teto` / `noeviction`       | os _Args_ do Database Redis ([seção 7.5](#75-redis-database)): `--maxmemory 256mb` (`64mb` na staging) e `--maxmemory-policy allkeys-lru`; despejo com o teto certo = memória no limite, ver `used_memory_mb` em `/health/metrics`  |
 | `Verificação incompleta: métricas do banco`              | o SQLSTATE diz quem recusou (`57014` = `statement_timeout`, `42501` = permissão)                                                                                                                                                    |
 | `Volume de entregas`                                     | segurar a próxima coorte da rampa; subir `APPROVED_GATE_MONTHLY_DELIVERIES` só com um relatório de portão novo em `docs/desempenho` ([runbook](./runbooks/volume-near-gate.md))                                                     |
 | `Geocodificação: N consultas hoje`                       | ver o gasto do dia por escopo em `provider_quota_day` e corrigir `LOCATIONIQ_DAILY_QUOTA` ou os orçamentos pela tabela da decisão D40 ([runbook](./runbooks/geocoding-quota-high.md))                                               |
@@ -6194,19 +6299,22 @@ fase a fase, estão em
 A soma por fase (MiB), da coluna de cada fase nas tabelas de tetos, sem a
 migrate, que é o transitório:
 
-| Fase                          | Produção | Staging | Host  | Soma estável | Com o transitório       | Régua                                                      |
-| ----------------------------- | -------- | ------- | ----- | ------------ | ----------------------- | ---------------------------------------------------------- |
-| A (web de produção em 768)    | 7.232    | 2.400   | 1.280 | 10.912       | 11.296                  | R1 cabe (com os monitores no host, 11.488)                 |
-| B (web em 640)                | 6.976    | 2.848   | 1.280 | 11.104       | 11.488                  | R1 cabe só com a web em 640 e os monitores fora; senão, R2 |
-| C (Postgres 1.792, web 512)   | 6.976    | 2.848   | 1.280 | 11.104       | 11.488                  | R1 cabe só com os dois ajustes medidos; senão, R2 ou G-03  |
-| E (produção sozinha na VPS 1) | 9.344    | —       | 1.280 | 10.624       | 11.008                  | R1 cabe; o limite passa a ser a CPU                        |
-| 2º VPS (staging sozinha)      | —        | 5.152   | 1.280 | 6.432        | 7.456 (janela de 1 GiB) | folga para os ensaios e o standby temporário               |
+| Fase                          | Produção | Staging | Host  | Soma estável | Com o transitório       | Régua                                                                                        |
+| ----------------------------- | -------- | ------- | ----- | ------------ | ----------------------- | -------------------------------------------------------------------------------------------- |
+| A (web de produção em 768)    | 7.232    | 2.400   | 1.280 | 10.912       | 11.296                  | R1 cabe (com os monitores no host, 11.488)                                                   |
+| B (web em 640)                | 6.976    | 4.320   | 1.280 | 12.576       | 12.960                  | R1 não cabe com a staging de 26/11/2026 (1.460 acima, além da margem da R2): decisão do dono |
+| C (Postgres 1.792, web 512)   | 6.976    | 3.552   | 1.280 | 11.808       | 12.192                  | R1 não cabe (692 acima); R2 ou G-03, depois de refazer a api e o worker da staging           |
+| E (produção sozinha na VPS 1) | 9.344    | —       | 1.280 | 10.624       | 11.008                  | R1 cabe; o limite passa a ser a CPU                                                          |
+| 2º VPS (staging sozinha)      | —        | 5.152   | 1.280 | 6.432        | 7.456 (janela de 1 GiB) | folga para os ensaios e o standby temporário                                                 |
 
 ### CPU na VPS única
 
-Na fase A, os tetos da staging somam 2,35 vCPU (2,6 na B). Mesmo com a
-staging e a IA de produção no teto, sobram pelo menos 1,65 vCPU para a api
-e o Postgres da produção. Na fase E, com o Postgres (~1,5), a IA (2), o
+Na fase A, os tetos da staging somam 2,35 vCPU (3,1 na B, como ficou em
+26/11/2026: o worker com 1 e a IA com 2, e o Postgres, a api e a web da
+staging sem teto). Na A, mesmo com a staging e a IA de produção no teto,
+sobram pelo menos 1,65 vCPU para a api e o Postgres da produção; na B, os
+tetos deixam 0,9 vCPU, que os três sem teto da staging disputam com a
+produção. Na fase E, com o Postgres (~1,5), a IA (2), o
 worker (0,5) e o sistema (0,5), sobram ~1,5–2 vCPU para o HTTP: é o número
 do topo desta seção, e o motivo de o prod-1 vir antes do cliente de
 escala. A api fica sem _CPU Limit_ de propósito (o throttling do CFS
@@ -7090,7 +7198,7 @@ variável faz:
 | ------------------------------------------------------------------------------- | ----------------------------------------------- | ----------------------------------- | --------------------------------------- |
 | _Docker Image_                                                                  | `trajetto-postgres@sha256:<digest>`             | `trajetto-postgres@sha256:<digest>` | `trajetto-postgres@sha256:<digest>`     |
 | _Memory Limit_                                                                  | `603979776`                                     | `2147483648`                        | `2147483648`                            |
-| _CPU Limit_                                                                     | `500000000`                                     | vazio                               | vazio                                   |
+| _CPU Limit_                                                                     | vazio (decisão de 26/11/2026; abaixo)           | vazio                               | vazio                                   |
 | _Command_ e _Args_                                                              | vazios                                          | vazios                              | vazios                                  |
 | `POSTGRES_MEMORY_LIMIT_MB`                                                      | `576`                                           | `2048`                              | `2048`                                  |
 | `POSTGRES_MAX_WAL_SIZE`                                                         | `1GB`                                           | `8GB`                               | `8GB`                                   |
@@ -7106,6 +7214,19 @@ variável faz:
 | `SHOW shared_buffers` esperado                                                  | `108MB`                                         | `448MB`                             | `448MB`                                 |
 | `SHOW archive_mode` esperado                                                    | `off`, e `on` depois do passo 7                 | `off`                               | `on`                                    |
 | `PITR_EXPECTED` (na `trajetto-api`)                                             | `true`, no passo 10                             | —                                   | `true`, no passo 7                      |
+
+**A staging em 26/11/2026** (passos 1 a 5 do F1a, sem PITR): a imagem
+`trajetto-postgres@sha256:<digest>`, `POSTGRES_MEMORY_LIMIT_MB=576`,
+`POSTGRES_MAX_WAL_SIZE=1GB`, `POSTGRES_MAX_SLOT_WAL_KEEP_SIZE=2GB` e
+_Memory Limit_ `603979776`, ainda sem as `PGBACKREST_*` (os buckets não
+existem). Conferido: `SHOW shared_buffers` = `108MB`, o
+`pg_stat_statements` carregado, `archive_mode` = `off` e a colação igual à
+anotada. O _CPU Limit_ ficou **vazio de propósito**, por decisão do dono, e
+não por medição: os `500000000` do plano não foram testados; depois de o
+worker com 0,25 CPU não conseguir fazer os logins SCRAM no prazo
+([seção 19](#19-papéis-da-mesma-imagem), worker), o dono preferiu não
+limitar a CPU do banco que atende todo login. Os passos 6 a 10 (o PITR)
+ainda não foram feitos.
 
 O teto muda por fase (seção 3.2 do plano de escala): a produção vai a 1792
 MiB (`1879048192`) na fase C se o hit ratio passar de 99%, e a 3072 MiB
@@ -7132,7 +7253,8 @@ escrita e outro só de leitura, e a senha da cifra no cofre.
 2. Database → _Environment_: as variáveis da coluna da staging na tabela
    acima, **sem** `PITR_ARCHIVE`. **Save**.
 3. _Advanced → Resources_: _Memory Limit_ `603979776` e _CPU Limit_
-   `500000000`. Confira que _Command_ e _Args_ estão vazios. **Save**.
+   vazio (a decisão acima). Confira que _Command_ e _Args_ estão vazios.
+   **Save**.
 4. `CHECKPOINT`, depois _General → Docker Image_ com o digest → **Save** →
    **Deploy**:
 
@@ -7323,11 +7445,16 @@ Database, nas variáveis da tabela acima). O script vem dentro da imagem do
 banco, na mesma versão do pgBackRest. Só a staging por enquanto; a produção
 ganha os seus no passo 5 do F1b, com `trajetto-postgres-production`.
 
-| Job                   | Agenda (UTC)  | Comando (staging)                                                                                                                                                          | Check                                        |
-| --------------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
-| backup diferencial    | `0 5 * * 0-5` | `docker exec -u postgres $(docker ps -q -f label=com.docker.swarm.service.name=trajetto-postgres-staging) trajetto-backup diff`                                            | `PITR_BACKUP_DIFF_PING_URL`, período de 26 h |
-| backup completo       | `0 5 * * 6`   | `docker exec -u postgres $(docker ps -q -f label=com.docker.swarm.service.name=trajetto-postgres-staging) trajetto-backup full`                                            | `PITR_BACKUP_FULL_PING_URL`, 7 dias e 2 h    |
-| ensaio de restauração | `45 5 1 * *`  | `c=$(docker ps -q -f label=com.docker.swarm.service.name=trajetto-postgres-staging); docker exec "$c" cat /usr/local/bin/trajetto-restore-drill \| bash -s -- --from "$c"` | `PITR_DRILL_PING_URL`, 32 dias               |
+| Job                   | Agenda (UTC)  | Comando (staging)                                                                                                                                                          | Check                                                                         |
+| --------------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| backup diferencial    | `0 5 * * 0-5` | `docker exec -u postgres $(docker ps -q -f label=com.docker.swarm.service.name=trajetto-postgres-staging) trajetto-backup diff`                                            | `PITR_BACKUP_DIFF_PING_URL`, check _Cron_ `0 5 * * 0-5` (UTC), _grace_ de 2 h |
+| backup completo       | `0 5 * * 6`   | `docker exec -u postgres $(docker ps -q -f label=com.docker.swarm.service.name=trajetto-postgres-staging) trajetto-backup full`                                            | `PITR_BACKUP_FULL_PING_URL`, check _Cron_ `0 5 * * 6` (UTC), _grace_ de 3 h   |
+| ensaio de restauração | `45 5 1 * *`  | `c=$(docker ps -q -f label=com.docker.swarm.service.name=trajetto-postgres-staging); docker exec "$c" cat /usr/local/bin/trajetto-restore-drill \| bash -s -- --from "$c"` | `PITR_DRILL_PING_URL`, check _Cron_ `45 5 1 * *` (UTC), _grace_ de 3 h        |
+
+Cada check do healthchecks.io é do tipo _Cron_, com a mesma agenda do job e
+o fuso UTC, e não de período simples: o diferencial não roda no sábado (dia
+do full), e um período de 26 h alertaria todo sábado, com 48 h entre o diff
+de sexta e o de domingo.
 
 Os horários seguem o mapa do plano (decisão D28): o dump do Dokploy às
 03:00, os expurgos até 04:50, o pgBackRest às 05:00 com o full no sábado e

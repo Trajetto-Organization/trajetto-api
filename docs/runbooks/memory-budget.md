@@ -10,8 +10,8 @@ A leitura da planilha numa thread (F3-23b) deu a ela um heap só dela, **somado*
 
 ## Primeira ação
 
-1. Veja `memory_budget` em `/health/metrics` da réplica (ou o log do boot): `limit_mb`, `heap_mb`, `spreadsheet_reads`, `spreadsheet_max_old_mb` e `native_mb`.
-2. Aplique os valores de [`deploy.md` → Tetos por Application e por fase](../deploy.md#tetos-por-application-e-por-fase) na Application certa, no _Environment_ dela no Dokploy, e faça o Deploy. Na `trajetto-api` de produção com 1 GiB: `NODE_OPTIONS=--max-old-space-size=576` e `SPREADSHEET_WORKER_MAX_OLD_MB=256` (576 + 256 + 150 = 982 de 1.024); com o pool de CPU no padrão (2 × 64), a soma passa do teto até a onda 14 baixar o heap (`NODE_OPTIONS=--max-old-space-size=480`, 480 + 256 + 128 + 150 = 1.014). `CPU_POOL_THREADS=0` tira o pool da conta, e o parse das NF-e e a planilha da exportação voltam para a thread principal.
+1. Veja `memory_budget` em `/health/metrics` da réplica (ou o log do boot): `limit_mb`, `heap_mb`, `spreadsheet_reads`, `spreadsheet_max_old_mb`, `cpu_pool_threads`, `cpu_pool_thread_max_old_mb` e `native_mb`.
+2. Aplique os valores de [`deploy.md` → Tetos por Application e por fase](../deploy.md#tetos-por-application-e-por-fase) na Application certa, no _Environment_ dela no Dokploy, e faça o Deploy. Na `trajetto-api` de produção com 1 GiB: `NODE_OPTIONS=--max-old-space-size=576` e `SPREADSHEET_WORKER_MAX_OLD_MB=256` (576 + 256 + 150 = 982 de 1.024); com o pool de CPU no padrão (2 × 64), a soma passa do teto até a onda 14 baixar o heap (`NODE_OPTIONS=--max-old-space-size=480`, 480 + 256 + 128 + 150 = 1.014). `CPU_POOL_THREADS=0` tira o pool da conta, e o parse das NF-e e a planilha da exportação voltam para a thread principal. Na `trajetto-worker`, que lê as planilhas com a importação durável: na staging, 768 MiB com heap 256 e 1 × 128 (256 + 128 + 128 + 150 = 662, medido em 26/11/2026); na produção, 1 GiB com heap 416 e 1 × 320 (1.014). Os 448 MiB do plano antigo não cabem o worker nem sem leitura de planilha (256 + 128 + 150 = 534).
 3. Se o heap não pode baixar, suba o _Memory_ da Application (_Advanced → Resources_) e refaça a conta do host antes.
 
 ```sql
