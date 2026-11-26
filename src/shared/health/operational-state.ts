@@ -121,23 +121,35 @@ const CRON_ERROR_MAX_LENGTH = 500;
 
 /**
  * Every job this replica schedules, plus any job that has rows — so a job
- * that never ran still shows, with nulls, instead of being absent.
+ * that never ran still shows, with nulls, instead of being absent, and a job
+ * removed or renamed shows with a null schedule for the 30 days its rows are
+ * kept (the snapshot and the web leave those out).
  *
- * The success query reads (status, jobName, finishedAt) index-only; the
- * latest-row query walks the (jobName, scheduledFor) unique index. The table
- * holds 30 days of a few firings a day.
+ * Every part reads a few index entries per job, never the whole table: 30
+ * days of the per-minute jobs are ~144 000 rows (staging, 26/11/2026). The
+ * latest row used to come from a DISTINCT ON over all of them and the last
+ * success from a GROUP BY over every SUCCEEDED row: once a minute, a sort
+ * of the table that spilled to disk under work_mem 4MB (3.6 s once, on a
+ * cold cache) to keep ~20 rows. Now the job names come from a skip scan of
+ * the (jobName, scheduledFor) unique index, one probe per name — from the
+ * table and not from the registry, so a removed job still shows as before;
+ * the latest row is a backward probe of that index; the last success is
+ * max(finishedAt) on (status, jobName, finishedAt), which Postgres runs as
+ * one index-only probe that skips NULLs, as the GROUP BY's max() did. The
+ * stale count stays a range on status = 'RUNNING', a few rows at most.
  *
  * The partial streak takes every FAILED run since the last success and
- * keeps the job only when all of them were partial (HAVING bool_and; a
- * NULL lastError counts as a real failure). It used to keep only the
- * partials and date them from the last success, so a statement timeout on
- * two nights and one partial on the third read as a fresh streak: the
- * alert gave the job 26 h more of grace while it had not succeeded in 72.
+ * keeps the job only when all of them were partial (bool_and; a NULL
+ * lastError counts as a real failure; no FAILED run at all is a NULL
+ * bool_and, left out). It used to keep only the partials and date them
+ * from the last success, so a statement timeout on two nights and one
+ * partial on the third read as a fresh streak: the alert gave the job 26 h
+ * more of grace while it had not succeeded in 72.
  */
 async function readCronJobs(
   registered: ReadonlyArray<{ name: string; schedule: string }>,
 ): Promise<CronJobMetrics[]> {
-  // Three reads, one statement (one round trip, one pool checkout): each
+  // Four reads, one statement (one round trip, one pool checkout): each
   // json_agg'ed subquery keeps its own plan. Timestamps go through
   // AT TIME ZONE 'UTC' so the JSON carries an offset: the columns are
   // timestamp(3) holding UTC, and a bare "2026-10-28T03:00:00" would be
@@ -157,21 +169,41 @@ async function readCronJobs(
       partial: Array<{ jobName: string; since: string | null }>;
     }>
   >`
+    WITH RECURSIVE walk AS (
+      (SELECT "jobName" FROM "scheduled_job_execution"
+        ORDER BY "jobName" LIMIT 1)
+      UNION ALL
+      SELECT (
+        SELECT e."jobName" FROM "scheduled_job_execution" e
+        WHERE e."jobName" > w."jobName"
+        ORDER BY e."jobName" LIMIT 1
+      )
+      FROM walk w
+      WHERE w."jobName" IS NOT NULL
+    ),
+    jobs AS (SELECT "jobName" FROM walk WHERE "jobName" IS NOT NULL)
     SELECT
       (SELECT coalesce(json_agg(l), '[]'::json) FROM (
-        SELECT DISTINCT ON ("jobName")
-          "jobName", "status"::text AS status,
-          "scheduledFor" AT TIME ZONE 'UTC' AS "scheduledFor",
-          "finishedAt" AT TIME ZONE 'UTC' AS "finishedAt",
-          "attempts", "lastError"
-        FROM "scheduled_job_execution"
-        ORDER BY "jobName", "scheduledFor" DESC
+        SELECT j."jobName", e.status, e."scheduledFor", e."finishedAt",
+          e."attempts", e."lastError"
+        FROM jobs j
+        CROSS JOIN LATERAL (
+          SELECT x."status"::text AS status,
+            x."scheduledFor" AT TIME ZONE 'UTC' AS "scheduledFor",
+            x."finishedAt" AT TIME ZONE 'UTC' AS "finishedAt",
+            x."attempts", x."lastError"
+          FROM "scheduled_job_execution" x
+          WHERE x."jobName" = j."jobName"
+          ORDER BY x."scheduledFor" DESC
+          LIMIT 1
+        ) e
       ) l) AS latest,
       (SELECT coalesce(json_agg(s), '[]'::json) FROM (
-        SELECT "jobName", max("finishedAt") AT TIME ZONE 'UTC' AS last
-        FROM "scheduled_job_execution"
-        WHERE "status" = 'SUCCEEDED'
-        GROUP BY "jobName"
+        SELECT j."jobName", (
+          SELECT max(x."finishedAt") FROM "scheduled_job_execution" x
+          WHERE x."status" = 'SUCCEEDED' AND x."jobName" = j."jobName"
+        ) AT TIME ZONE 'UTC' AS last
+        FROM jobs j
       ) s) AS succeeded,
       (SELECT coalesce(json_agg(r), '[]'::json) FROM (
         SELECT "jobName", count(*)::int AS n
@@ -180,17 +212,21 @@ async function readCronJobs(
         GROUP BY "jobName"
       ) r) AS stale,
       (SELECT coalesce(json_agg(p), '[]'::json) FROM (
-        SELECT e."jobName", min(e."scheduledFor") AT TIME ZONE 'UTC' AS since
-        FROM "scheduled_job_execution" e
-        WHERE e."status" = 'FAILED'
-          AND e."scheduledFor" > coalesce((
-            SELECT max(s."scheduledFor") FROM "scheduled_job_execution" s
-            WHERE s."jobName" = e."jobName" AND s."status" = 'SUCCEEDED'
-          ), '-infinity'::timestamp)
-        GROUP BY e."jobName"
-        HAVING bool_and(
-          coalesce(starts_with(e."lastError", ${PARTIAL_RUN_MARKER}), false)
-        )
+        SELECT j."jobName", f.since AT TIME ZONE 'UTC' AS since
+        FROM jobs j
+        CROSS JOIN LATERAL (
+          SELECT min(x."scheduledFor") AS since,
+            bool_and(
+              coalesce(starts_with(x."lastError", ${PARTIAL_RUN_MARKER}), false)
+            ) AS only_partial
+          FROM "scheduled_job_execution" x
+          WHERE x."jobName" = j."jobName" AND x."status" = 'FAILED'
+            AND x."scheduledFor" > coalesce((
+              SELECT max(s."scheduledFor") FROM "scheduled_job_execution" s
+              WHERE s."jobName" = j."jobName" AND s."status" = 'SUCCEEDED'
+            ), '-infinity'::timestamp)
+        ) f
+        WHERE f.only_partial
       ) p) AS partial
   `;
 
