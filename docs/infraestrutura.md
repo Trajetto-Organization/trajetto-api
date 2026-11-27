@@ -715,9 +715,19 @@ confirmou `allkeys-lru` e `64mb`, e o alerta do `ops-heartbeat` (item
 F1-11 do plano de escala: `Redis sem teto de memória` ou
 `com maxmemory-policy noeviction`) ficou verde. A senha agora mora também
 nos _Args_: trocar a senha do Database é trocar esse argumento junto. O de
-produção, conferido pelo dono em 26/11/2026, ainda está no padrão do
-Dokploy (sem _Args_ nem _Custom command_, portanto sem teto): recebe os
-mesmos _Args_, com `256mb`, quando a staging for levada à produção.
+produção, que até 26/11/2026 estava no padrão do Dokploy (sem teto),
+recebeu em 27/11/2026, antes da primeira promoção do plano de escala, o
+_Custom command_ vazio, os mesmos 7 _Args_ com `256mb` e o _Memory Limit_
+`536870912` (512 MiB). O `CONFIG GET` confirmou `268435456` e
+`allkeys-lru`.
+
+Os dois Redis avisam na partida `Memory overcommit must be enabled`. É o
+`vm.overcommit_memory` do kernel da VPS, não do contêiner. Sem ele, o
+snapshot em disco (o `BGSAVE` do padrão) pode falhar com pouca memória, e
+o Redis só guarda chaves descartáveis
+([ADR 0002](./adr/0002-redis-descartavel.md)). Pendente: pôr
+`vm.overcommit_memory = 1` em `/etc/sysctl.conf` do host, como root, junto
+com o endurecimento do SSH.
 
 ### 5.3 Por que Application e nunca Compose
 
@@ -1061,9 +1071,9 @@ e [Criar a Application de um papel](./deploy.md#criar-a-application-de-um-papel)
 Uma Application de papel só existe depois de o dono criá-la: até lá, a
 linha diz "a criar", e o código dela fica inerte.
 
-Na staging, a coluna B é a do painel desde 26/11/2026 (o worker criado, a
-api no papel `api`, a imagem `trajetto-postgres` sem PITR e o Redis com os
-_Args_): os números e o porquê estão em
+Na staging, a coluna B é a do painel desde 26/11/2026: o worker criado, a
+api no papel `api`, a imagem `trajetto-postgres` e o Redis com os _Args_.
+O PITR da imagem foi ligado na mesma noite. Os números e o porquê estão em
 [`deploy.md` → Tetos por Application e por fase](./deploy.md#tetos-por-application-e-por-fase).
 
 **A confirmar com o dono:** que o painel tem estes valores (os tetos da
@@ -1598,6 +1608,14 @@ foi removido até 25/10, porque o bucket precisa ser privado. O endereço S3
 domínio próprio. **A confirmar com o dono:** que a URL pública `r2.dev` está
 desligada nos buckets.
 
+**O bucket do PITR da staging** (`trajetto-pitr-staging`, desde 26/11/2026)
+tem uma regra de _Bucket Lock_ só: `archive/trajetto/1`, 14 dias. As provas de
+27/11 ([`infra/r2/bucket-locks.md`](../infra/r2/bucket-locks.md#o-que-as-provas-deram-na-staging-27112026))
+mostraram duas coisas que o painel não diz. O **Delete** de um objeto travado
+mostra o aviso verde de sucesso, e o objeto fica. E a regra de `backup/` não
+serve com o pgBackRest: o backup falha ao regravar o manifesto. Por isso ela
+saiu, e não vai para a produção.
+
 **CORS** (cada bucket de fotos → _Settings → CORS Policy_): _AllowedOrigins_ =
 a origem da web do ambiente (`https://staging.intrajetto.com` ou
 `https://www.intrajetto.com`, nunca `*`), métodos `PUT`, `GET` e `HEAD`,
@@ -2091,7 +2109,20 @@ Auto Backup da Contabo o cobre. **A confirmar com o dono:** se há outra cópia.
 
 Política: uma cópia por dia, 30 dias, RPO de até 24 h, sem PITR. As cópias não
 são cifradas por nós (o R2 cifra em repouso). O RTO medido em 15/09/2026 foi de
-10,5 s para 94 MB. A política de privacidade e os termos prometem exatamente
+10,5 s para 94 MB.
+
+Na staging, além do dump, o PITR com pgBackRest está ligado desde
+26/11/2026 ([`deploy.md` → 27](./deploy.md#27-pitr-com-pgbackrest)):
+
+- **O histórico** vai a cada minuto para o bucket `trajetto-pitr-staging`.
+- **Os backups** são um diferencial por dia e um completo no sábado, pelos
+  _Schedules_ do servidor.
+- **O ensaio de restauração** roda todo dia 1º. O primeiro, em 27/11/2026,
+  restaurou em 496 s, sem perda.
+
+A produção continua só com o dump até o F1b.
+
+A política de privacidade e os termos prometem exatamente
 "diárias, guardadas por 30 dias": um teste da web compara esse texto com a
 seção de backup do `deploy.md`, então a agenda e a retenção não mudam sem
 mudar os dois.
@@ -2225,6 +2256,7 @@ Horários em UTC (São Paulo = UTC−3). Do mais antigo para o mais novo.
 | 29/10/2026      | entre 27/10 à noite e 02:14, firewall `default` aplicado à VPS; 02:51–03:00, regras só da Cloudflare; ~03:15, commits `577fc5a` e `d413cb1` da API enviados com o nome automático e o IPv6 da VPS (no texto e numa mensagem de commit; tratados como públicos depois das janelas abaixo, seção 1); ~12:45 e ~14:11, repositórios públicos temporariamente, depois privados (terceira janela da API e da web para os merges de produção); ~13:23, preferência por IPv4 no host; produção no ar (API `01526b0`, web `a1c5242`/v1.1.0), com a correção das URLs do banco e os certificados de `www` e `api` emitidos com o registro já com proxy; domínio da web de produção trocado do apex para `www`; Redirect Rule do apex; HSTS na borda; ~17:03, Email Obfuscation desligado; Web Analytics mantido (CSP e política); build manual do app sem `preview` (`213d6b0`); agendamento noturno das suítes da web removido no commit `7f83d8c` (vale quando chegar à `main`); ~21:50, Smart Tiered Cache; ~21:58, Early Hints; 22:23–22:26, token temporário criado, usado e apagado no mesmo dia; ~22:33, JSD desligado e políticas de bots de IA refeitas; ~22:42 (web) e ~22:48 (API), quarta janela pública, ainda aberta às 23:44 (fechamento a confirmar); ~23:45, pacotes do GHCR conferidos privados; ~23:50, teste do desafio HTTP-01 nos cinco hosts: 404 sem redirect                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | 30/10/2026      | `APP_ENV=production` na Application da API de produção (o console de integração passa a ser indexável; o staging segue com `noindex`); produção promovida pelo dono, com o `robots.txt` e o `/sitemap.xml` da API (`2d3e547`, `0208102`: em produção, só `/integration/docs`) e, na web, `/login`, `/forgot` e os guias de `/docs` no sitemap; a `trajetto-api` respondia como pública na API do GitHub às ~15:05 (fechamento a confirmar); o dono informa o registrador (GoDaddy), a titularidade das contas na conta Google da Trajetto e o que roda em `uptime` (Uptime Kuma) e `monitor` (Beszel); o `yarn dev` da API passa a gerar o client do Prisma antes de esperar o banco; o dev client do app passa a ser gerado por quem tem _Developer_ na Expo e baixado pelos _Viewers_; auditoria de instabilidade do CI (testes e código da API): com `NODE_ENV=test` o e-mail fica numa caixa em memória (sem Ethereal), nenhum teste conecta fora da máquina (trava do `setupTests.ts`), o `yarn test:e2e` roda em duas fases (réplicas por último, uma por vez) e o pipeline de notificações aproveita o ciclo em andamento em vez de perder o despertar; CI da API sem vermelho que não seja do código: `timeout-minutes` em todo job, `bash -eo pipefail` em todo workflow, Node `22.21.1` em todo job, Postgres, Redis e BuildKit por digest, o `audit-ci` bloqueando só push que muda dependência, o GHCR lido pelo `ghcr.sh` (separa "não existe" de "não respondeu"), o banco do Trivy com cache, os pesos PP-OCRv5 da IA versionados no repositório (o build não fala mais com o ModelScope), cache dos engines do Prisma, retentativas do Dokploy e da conferência pela liveness visíveis, e commit só de documentação promovido com o build do ancestral que o staging rodou (`[skip ci]` só para documentação passa a ser seguro) |
 | 26/11/2026      | staging: o `trajetto-worker` criado (768 MiB, 1 CPU: com 448 MiB e 0,25 CPU o boot não fechava a memória e os logins no banco estouravam o prazo), a `trajetto-api` no papel `api` (1 GiB, heap 576), a imagem `trajetto-postgres` sem PITR (_CPU Limit_ vazio, decisão do dono) e o Redis com os _Args_ (`64mb`, `allkeys-lru`); dois **Deploy** seguidos no worker deixaram duas tasks no mesmo slot, resolvido com Stop e um Deploy ([`deploy.md` → 17](./deploy.md#duas-tasks-do-worker-no-mesmo-slot))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| 27/11/2026      | staging: o PITR ligado em 26–27/11 (bucket `trajetto-pitr-staging` com a trava de 14 dias em `archive/trajetto/1`, stanza, arquivamento, primeiro full às 23:19 UTC de 26/11, os três _Schedules_ do servidor, ensaio com RTO de 496 s e sem perda, `PITR_EXPECTED=true` na api e no worker; [`deploy.md` → 27](./deploy.md#27-pitr-com-pgbackrest))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 
 ---
 

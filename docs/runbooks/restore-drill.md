@@ -33,6 +33,8 @@ O guarda de disco soma ao banco o WAL que a recuperação guarda no `pg_wal` at�
    docker exec "$c" cat /usr/local/bin/trajetto-restore-drill | bash -s -- --from "$c"
    ```
 
+   Sem SSH, use o botão de rodar agora do _Schedule_ do ensaio (o `pitr-<ambiente>-drill`, em [deploy.md, Os Schedule Jobs do servidor](../deploy.md#os-schedule-jobs-do-servidor)): ele roda esse mesmo comando no servidor, e a saída fica no histórico de execuções dele. O terminal do Database não serve: ele é o do contêiner, sem o `docker` do servidor.
+
    O script sai do próprio contêiner do banco, lê o _Environment_ dele, troca a chave de escrita pela de leitura e cria o contêiner do ensaio. Opções: `--target='2026-12-01 05:00:00+00'` (até um instante, em vez do fim do arquivo), `--repo=2` (o segundo repositório) e `--volume=<volume>` (o degrau do `prod-db-2`: um volume só do ensaio, nunca o do Database).
 
 3. O ping `/fail` com `drill-disk` (o backup, mais o WAL da recuperação, passa de `PITR_DRILL_MAX_DISK_FRACTION`, padrão 0,5, do disco livre; a mensagem diz quanto de cada) ou `drill-ram` (o servidor tem menos RAM livre que o teto do ensaio) não restaurou nada: mova o ensaio para o próximo degrau da tabela, ou rode na janela com a staging em 0.
@@ -45,7 +47,11 @@ O guarda de disco soma ao banco o WAL que a recuperação guarda no `pg_wal` at�
 
 ## Como confirmar
 
-O resumo do ensaio (na saída e no corpo do ping) traz `"result":"ok"`, o backup restaurado, `rto_seconds`, `loss_seconds` (o início do ensaio, ou o `--target`, menos o marcador), as migrations aplicadas e as contagens. Sem a imagem nova, `prisma migrate status` diz "Database schema is up to date!". Anote data, RTO e perda em "Ensaios feitos" no [deploy.md](../deploy.md#ensaiar-a-restauração).
+O resumo do ensaio (na saída e no corpo do ping) traz `"result":"ok"`, o backup restaurado, `rto_seconds`, `loss_seconds` (o início do ensaio, ou o `--target`, menos o marcador), as migrations aplicadas e as contagens.
+
+Um `loss_seconds` **negativo** quer dizer que não houve perda. O marcador é o último minuto que a cópia restaurada traz, e ele é mais novo que o início do ensaio: o restore leva minutos, e com o alvo `latest` a recuperação reproduz também o WAL que chegou ao repositório nesse meio tempo. O primeiro ensaio da staging, em 27/11/2026, deu −448 s com 474 s de restore.
+
+Sem a imagem nova, `prisma migrate status` diz "Database schema is up to date!". Anote data, RTO e perda em "Ensaios feitos" no [deploy.md](../deploy.md#ensaiar-a-restauração).
 
 ## Quando escalar
 

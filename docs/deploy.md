@@ -1207,7 +1207,8 @@ a credencial: o deployment da Application termina em `error` com
    ```
    Assim ficou a staging em 26/11/2026: o `CONFIG GET` com `allkeys-lru` e
    `64mb`, e o alerta `Teto do Redis` ([seção 20](#20-alertas-e-monitoramento))
-   verde. O `--save ""` e o `--appendonly no` do comando antigo ficaram de
+   verde; e a produção em 27/11/2026, antes da primeira promoção do plano de
+   escala: `268435456` e `allkeys-lru`. O `--save ""` e o `--appendonly no` do comando antigo ficaram de
    fora: o `appendonly` já é `no` por padrão, e um argumento vazio nos _Args_
    não foi testado. O snapshot do padrão do Redis continua (`CONFIG GET save`
    mostra quando ele roda).
@@ -2533,6 +2534,33 @@ o job move a tag e pula o deploy com aviso; só alguns = o job falha
 ("configuração parcial"). O `DOKPLOY_BACKUP_APPLICATION_ID` não existe
 mais (o backup é do Dokploy, sem Application): apague-o dos dois
 environments, se ficou lá.
+
+**Como ficaram em 27/11/2026, antes da primeira promoção do plano de
+escala.** A `production` recebeu o secret `ROLLOUT_STATUS_TOKEN` (outro
+valor, o mesmo da `trajetto-api` de produção) e as variáveis
+`ROLLOUT_ROLES_EXPECTED=all`, `RELEASE_SERIALIZE_WITH_APPLICATION_ID` (a
+migrate de staging) e `RELEASE_TIMEOUT_SECONDS=3600` (a primeira promoção
+aplica as 81 migrations de uma vez); a `API_PUBLIC_URL` já existia, e a
+`ROLLOUT_VERIFY=http` do repositório vale nela. Os `DOKPLOY_WORKER_*` e os
+`SWARM_*` ficam de fora até a `trajetto-worker` de produção existir. Na
+`staging`, a `RELEASE_SERIALIZE_WITH_APPLICATION_ID` estava com o sufixo do
+App Name, e não com o id: o script só avisava e seguia sem esperar. Agora
+ela tem o id da URL da migrate de produção. O valor é sempre o trecho da
+URL do Dokploy depois de `/application/`.
+
+**Sem plano pago, não há Required reviewers nem Ruleset.** A organização
+está no plano gratuito, e num repositório privado esse plano não oferece
+nem os _Required reviewers_ do environment nem a aplicação de um Ruleset
+(um Ruleset criado com o repositório público fica salvo, mas não vale
+depois que ele volta a ser privado; e não se abre o repositório para
+isso). Até a assinatura, **o clique no merge é a aprovação**: o deploy de
+produção começa logo depois. O dono só faz o merge com o `Secret scan` e
+o _Staging evidence_ do PR verdes. O _Staging evidence_ do `production.yml`
+roda de novo antes do deploy e reprova um commit que a staging não
+validou. A única trava que o plano gratuito aplica é a do tipo de merge
+(_Settings → General → Pull Requests_, só _Allow merge commits_). Na
+assinatura, crie o Ruleset da `main` (abaixo) e marque os _Required
+reviewers_.
 
 ### Variáveis e secrets do repositório
 
@@ -4707,6 +4735,12 @@ telas de torre, entregas e dashboard responderam e o smoke do k6 passou 12/12,
 inclusive escrita na tabela particionada). Falta o ensaio mensal com uma cópia
 real do Dokploy (restore pela aba _Backups_ num Database descartável).
 
+O primeiro ensaio do PITR da staging foi em 27/11/2026, pelo
+`trajetto-restore-drill` ([seção 27](#27-pitr-com-pgbackrest)). Ele
+restaurou o full de 26/11 mais o diferencial seguinte (143,9 MB). O RTO foi
+de 496 s, sendo 474 s de restore e 22 s de recuperação, e a perda foi
+nenhuma. As 216 migrations conferiram.
+
 ### O que o dump não cobre
 
 - **Bucket R2** (fotos de checklist e de entrega, assinaturas, anexos,
@@ -6588,7 +6622,8 @@ staging; `main` só recebe PR **de `staging`**, com **merge commit** (squash e
 rebase criam um commit que o staging nunca validou, e a promoção recusa); o
 environment `production` do GitHub tem **Required reviewers** e
 _Deployment branches_ restrito a `main`, então nada chega à produção sem
-aprovação. No Dokploy, as imagens privadas do GHCR são puxadas com um token
+aprovação (no plano gratuito, ainda não: o merge é a aprovação, ver a
+[seção 13](#13-configurar-o-github)). No Dokploy, as imagens privadas do GHCR são puxadas com um token
 _classic_ `read:packages`, informado no provider Docker de cada Application.
 
 ### Endereços
@@ -7213,7 +7248,7 @@ variável faz:
 | `PITR_ARCHIVE`                                                                  | `on`, só no passo 7                             | —                                   | `on`, só no passo 3                     |
 | `SHOW shared_buffers` esperado                                                  | `108MB`                                         | `448MB`                             | `448MB`                                 |
 | `SHOW archive_mode` esperado                                                    | `off`, e `on` depois do passo 7                 | `off`                               | `on`                                    |
-| `PITR_EXPECTED` (na `trajetto-api`)                                             | `true`, no passo 10                             | —                                   | `true`, no passo 7                      |
+| `PITR_EXPECTED` (na `trajetto-api` e no papel do cron)                          | `true`, no passo 10                             | —                                   | `true`, no passo 7                      |
 
 **A staging em 26/11/2026** (passos 1 a 5 do F1a, sem PITR): a imagem
 `trajetto-postgres@sha256:<digest>`, `POSTGRES_MEMORY_LIMIT_MB=576`,
@@ -7225,8 +7260,34 @@ anotada. O _CPU Limit_ ficou **vazio de propósito**, por decisão do dono, e
 não por medição: os `500000000` do plano não foram testados; depois de o
 worker com 0,25 CPU não conseguir fazer os logins SCRAM no prazo
 ([seção 19](#19-papéis-da-mesma-imagem), worker), o dono preferiu não
-limitar a CPU do banco que atende todo login. Os passos 6 a 10 (o PITR)
-ainda não foram feitos.
+limitar a CPU do banco que atende todo login.
+
+**O PITR da staging em 26–27/11/2026** (passos 6 a 10, sem SSH: os
+comandos no terminal do Database e o ensaio pelo _Schedule_, como diz cada
+passo):
+
+- **O primeiro full** terminou às 23:19:21 UTC de 26/11, e o aceite de 7
+  dias conta dali. Os 143,7 MB do banco viraram 20,2 MB no R2, em 569 s,
+  sem `archive_gap`. O primeiro diff, pelo _Schedule_, levou 22 s, sem
+  segmento faltando.
+- **O ensaio**, feito com a api e a web paradas, passou:
+  - `rto_seconds` 496: o restore levou 474 s e a recuperação, 22 s;
+  - `loss_seconds` −448, ou seja, nenhuma perda (o
+    [runbook](./runbooks/restore-drill.md) diz por que sai negativo);
+  - as 216 migrations e as contagens conferiram.
+- **`PITR_EXPECTED=true`** está na `trajetto-api` e no worker.
+- **A trava do bucket**, provada em 27/11 (os passos 3 a 5 do
+  [`bucket-locks.md`](../infra/r2/bucket-locks.md#o-que-as-provas-deram-na-staging-27112026)):
+  o WAL não sai, mesmo com o aviso verde do painel no **Delete**; um diff
+  interrompido, o `expire` e o diff seguinte terminam bem; e a regra de
+  `backup/` faz o diff falhar (`ObjectLockedByBucketPolicy`), por isso saiu
+  e não vai para a produção.
+- **O que domina o tempo** do full (569 s) e do restore (474 s) não é o
+  volume: é uma requisição ao R2 por arquivo do cluster, um de cada vez,
+  com `process-max=1`. O `repo-bundle` do pgBackRest junta os arquivos
+  pequenos num objeto só. Ele **não foi aplicado**: fica para medir antes
+  de o banco da produção crescer, com um ensaio depois. Ele muda só a forma
+  como os backups novos são guardados.
 
 O teto muda por fase (seção 3.2 do plano de escala): a produção vai a 1792
 MiB (`1879048192`) na fase C se o hit ratio passar de 99%, e a 3072 MiB
@@ -7308,6 +7369,17 @@ escrita e outro só de leitura, e a senha da cifra no cofre.
    `{"result":"ok","type":"full",…}`. Anote a hora do fim dele: o aceite
    conta 7 dias a partir dela.
 
+   Sem SSH, os mesmos comandos vão no terminal do Database (_Open
+   Terminal_, `/bin/sh`). Confira primeiro que é o contêiner certo: o
+   `/usr/local/bin/pgbackrest` existe nele, e num Postgres de outra imagem
+   não. Cada linha acima entra sem o `docker exec -u postgres "$c"` da
+   frente, entre aspas, depois de `su postgres -c`; as de `psql` e de `rm`
+   entram sem o `docker exec "$c"`. O terminal web perde a conexão num
+   comando que passa minutos sem escrever nada, e o `trajetto-backup full`
+   só escreve no fim. Se o prompt não voltar, a linha final está no corpo
+   do ping do check do full, no healthchecks.io, e o `info` mostra o
+   backup.
+
 9. O ensaio, à mão, na janela, com a api e a web da staging em 0 réplicas
    ([runbooks/restore-drill.md](./runbooks/restore-drill.md)):
 
@@ -7317,8 +7389,23 @@ escrita e outro só de leitura, e a senha da cifra no cofre.
 
    Anote o `rto_seconds` e o `loss_seconds` do resumo.
 
-10. `trajetto-api` da staging → _Environment_: `PITR_EXPECTED=true` →
-    **Save** → **Deploy**.
+   Sem SSH, o comando acima não tem onde rodar: o terminal do Database é o
+   do contêiner, e o ensaio cria outro contêiner pelo `docker` do servidor.
+   Crie antes o _Schedule_ do ensaio ([abaixo](#os-schedule-jobs-do-servidor))
+   e use o botão de rodar agora dele. A saída fica no histórico de
+   execuções do _Schedule_.
+
+10. `PITR_EXPECTED=true` → **Save** → **Deploy**, uma Application de cada
+    vez:
+    - na `trajetto-api` da staging, que mostra o valor no `/health/metrics`;
+    - na Application do papel que roda o cron, se houver uma (o
+      `trajetto-worker`, ou o `trajetto-scheduler` depois dele), porque o
+      alerta `pitr-archive-off` é julgado pelo `ops-heartbeat`, um cron.
+
+    Uma Application de papel copia o _Environment_ da `trajetto-api` só
+    quando nasce, e uma variável posta depois na `trajetto-api` não chega
+    até ela. Se a api estiver parada desde o passo 9, o **Deploy** dela já
+    a religa.
 
 Depois, os Schedule Jobs (abaixo) e a prova do Bucket Lock
 (`infra/r2/bucket-locks.md`, "Primeiro na staging").
@@ -7341,8 +7428,8 @@ segue sendo o backup dela (RPO de 24 h).
 
 Pré-condições: `DATABASE_REQUIRE_RUNTIME_ROLE=true` na produção há 7 dias
 ou mais; o F1a com 7 dias verdes; no `trajetto-pitr-prod`, a regra de
-Bucket Lock de `archive/trajetto/1` (e a de `backup/trajetto/2` só se a
-prova da staging passou). Até o F1b, o RPO da produção é o do dump do
+Bucket Lock de `archive/trajetto/1` (a de `backup/trajetto/2` não: a
+prova da staging falhou em 27/11/2026). Até o F1b, o RPO da produção é o do dump do
 Dokploy, 24 h; o dump continua depois dele.
 
 O passo 1 põe a chave de escrita e a cifra do repositório no ambiente do
@@ -7435,15 +7522,69 @@ confira:
    `archive-get` e o `pg_stat_reset_shared('archiver')`).
 5. Os Schedule Jobs da produção (abaixo).
 6. O ensaio à mão, na janela e com teto (passo 9 do F1a).
-7. `trajetto-api` de produção → `PITR_EXPECTED=true` → **Deploy**.
+7. `PITR_EXPECTED=true` → **Deploy** na `trajetto-api` de produção e, se o
+   cron já tiver saído dela, na Application do papel que o roda (passo 10
+   do F1a).
 
 ### Os Schedule Jobs do servidor
 
 Dokploy → _Schedules_ do servidor (tipo _Server_), um por linha, cada um
 com o seu check no healthchecks.io (a URL do check vai no _Environment_ do
 Database, nas variáveis da tabela acima). O script vem dentro da imagem do
-banco, na mesma versão do pgBackRest. Só a staging por enquanto; a produção
-ganha os seus no passo 5 do F1b, com `trajetto-postgres-production`.
+banco, na mesma versão do pgBackRest. A staging tem os três desde 26/11/2026;
+a produção ganha os seus no passo 5 do F1b, com
+`trajetto-postgres-production`.
+
+No painel:
+
+- **Onde fica.** É o item _Schedules_ do menu lateral, que roda no servidor,
+  onde está o `docker`. A aba _Schedules_ de uma Application rodaria dentro
+  do contêiner dela, sem `docker`.
+- **Os campos.** _Name_ (`pitr-staging-diff`, `pitr-staging-full`,
+  `pitr-staging-drill`), _Description_, a agenda (_custom_), _Timezone_
+  `UTC` e _Script_. Nesse tipo não há _Command_ nem _Shell Type_: o
+  comando vai no _Script_.
+- **O App Name real.** O `trajetto-postgres-staging` do script é o marcador
+  ([seção 7.2](#72-nomes-name-e-app-name)). Troque pelo App Name do
+  Database, com o sufixo que o Dokploy acrescenta: com o marcador, a busca
+  pelo contêiner não acha nada e o job falha toda noite.
+
+O _Script_ do diferencial é o abaixo. O do completo é igual, com `full` no
+lugar de `diff`:
+
+```sh
+#!/usr/bin/env bash
+set -euo pipefail
+c=$(docker ps -q -f label=com.docker.swarm.service.name=trajetto-postgres-staging)
+if [ -z "$c" ]; then
+  echo "pitr: contêiner do Database não encontrado" >&2
+  exit 1
+fi
+docker exec -u postgres "$c" trajetto-backup diff
+```
+
+E o do ensaio:
+
+```sh
+#!/usr/bin/env bash
+set -euo pipefail
+c=$(docker ps -q -f label=com.docker.swarm.service.name=trajetto-postgres-staging)
+if [ -z "$c" ]; then
+  echo "pitr: contêiner do Database não encontrado" >&2
+  exit 1
+fi
+docker exec "$c" cat /usr/local/bin/trajetto-restore-drill | bash -s -- --from "$c"
+```
+
+O teste se o contêiner foi achado transforma num erro claro o que seria um
+`docker exec` sem contêiner. Mesmo sem ele, a falha não passa despercebida:
+sem o ping de sucesso, o check alerta depois da _grace_.
+
+Depois de salvar, use o botão de rodar agora no **diferencial**. Ele prova o
+caminho inteiro: o `docker exec` pelo servidor, o _Environment_ do Database
+e o ping. O resumo `{"result":"ok","type":"diff",…}` aparece no histórico
+de execuções, e o check passa a _up_. Não rode o completo à mão: seria só
+um full a mais.
 
 | Job                   | Agenda (UTC)  | Comando (staging)                                                                                                                                                          | Check                                                                         |
 | --------------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
@@ -7500,7 +7641,8 @@ os alvos do [`slo.md`](./slo.md). Anote os dois em
 ### Reversão
 
 - **Do arquivamento**, na ordem inversa: `PITR_EXPECTED` fora da
-  `trajetto-api` (**Deploy**), depois `PITR_ARCHIVE` fora do Database →
+  `trajetto-api` e do papel do cron (**Deploy** em cada uma), depois
+  `PITR_ARCHIVE` fora do Database →
   `CHECKPOINT` → **Deploy**. O wrapper grava `archive_mode=off` explícito.
 - **Da imagem**: o digest anotado no passo 1, com `CHECKPOINT` antes. Os
   parâmetros entram como `-c` (nada no `postgresql.auto.conf`), então

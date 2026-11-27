@@ -21,10 +21,10 @@ do bucket, e não uma marca no objeto: apagar a regra solta os objetos.
 
 | Bucket                  | Prefixo                | Lock (dias) | Quem apaga, e quando                                                   | Situação                                  |
 | ----------------------- | ---------------------- | ----------- | ---------------------------------------------------------------------- | ----------------------------------------- |
-| `trajetto-pitr-staging` | `archive/trajetto/1`   | 14          | o `expire` do pgBackRest, o WAL de mais de 30 dias                     | aplicar no F1a, antes do `stanza-create`  |
-| `trajetto-pitr-staging` | `backup/trajetto/2`    | 14          | o `expire` do pgBackRest, os backups de mais de 30 dias                | só como prova (abaixo); deve sair         |
+| `trajetto-pitr-staging` | `archive/trajetto/1`   | 14          | o `expire` do pgBackRest, o WAL de mais de 30 dias                     | aplicada no F1a; provada em 27/11/2026    |
+| `trajetto-pitr-staging` | `backup/trajetto/2`    | 14          | o `expire` do pgBackRest, os backups de mais de 30 dias                | prova de 27/11/2026: falhou; removida     |
 | `trajetto-pitr-prod`    | `archive/trajetto/1`   | 14          | o `expire` do pgBackRest, o WAL de mais de 30 dias                     | aplicar no F1b (onda 6), antes do arquivo |
-| `trajetto-pitr-prod`    | `backup/trajetto/2`    | 14          | o `expire` do pgBackRest, os backups de mais de 30 dias                | só se a prova da staging passar           |
+| `trajetto-pitr-prod`    | `backup/trajetto/2`    | 14          | o `expire` do pgBackRest, os backups de mais de 30 dias                | não aplicar: a prova da staging falhou    |
 | `trajetto-backups-prod` | `trajetto-production/` | 14          | o backup do Dokploy, a 31ª cópia diária (Keep Latest 30)               | F0-03                                     |
 | `trajetto-offsite`      | (o bucket inteiro)     | 30          | a Expiration de 90 dias do próprio bucket (`infra/r2/offsite-copy.md`) | F1-23, na conta secundária                |
 | bucket de uploads       | `deliveryProofs/`      | 90          | ninguém: o código nunca apaga nem sobrescreve um PDF de comprovante    | F1-O8; sobe para 1825 depois do parecer   |
@@ -69,6 +69,7 @@ objetos travados que o seguinte quer retomar ou apagar.
 
 Por isso a regra de `backup/` só entra como prova na staging, e sai se a
 prova falhar (o plano já previa: "se falhar, o lock fica só em `archive/`").
+Ela falhou em 27/11/2026, ao regravar o manifesto, e saiu.
 Sem ela, os backups ficam protegidos pelo cofre do `backup.info` (abaixo) e
 pelo dump diário com trava própria (`trajetto-backups-prod`). A proteção
 completa dos backups vem do repo2 com Object Lock em outra empresa (V-01),
@@ -109,11 +110,32 @@ A conta: `<ACCOUNT_ID>` e as chaves nunca entram neste repositório.
    - Passou: repita o passo 4 com as duas regras e espere um `expire` real
      (30 dias) antes de levar a regra à produção.
 
+### O que as provas deram na staging (27/11/2026)
+
+Sem SSH, os comandos rodaram no terminal do Database, como `postgres`.
+
+- **Passo 3, o WAL que não sai:** o **Delete** de um segmento em
+  `archive/trajetto/16-1/…` mostrou no painel o aviso verde de sucesso, mas o
+  objeto ficou: o pgBackRest o leu do repositório em seguida, sem erro.
+  O aviso do painel não prova nada; a prova é ler o segmento de volta.
+- **Passo 4, o backup interrompido e o `expire`:** o diff interrompido falhou
+  com o código 3 e pingou `/fail`; o `expire` terminou bem, sem nada a
+  apagar ainda, e o diff seguinte terminou bem. A trava em `archive/` não
+  atrapalha nem a retomada nem a limpeza.
+- **Passo 5, a regra de `backup/`:** com a regra `backup/trajetto/2` (14
+  dias), o diff falhou ao regravar o `backup.manifest.copy` do rótulo novo:
+  o R2 respondeu `ObjectLockedByBucketPolicy`, como o manifesto reescrito
+  fazia esperar. A regra foi apagada, e o diff seguinte terminou bem e
+  apagou o rótulo que tinha ficado pela metade (o `repo-ls` de
+  `backup/trajetto` não o lista mais). Ela
+  não vai para a produção: os backups ficam com o cofre do `backup.info`, o
+  dump diário travado e, no primeiro cliente de escala, o repo2 (V-01).
+
 ## Na produção (F1b, onda 6)
 
 Antes do `stanza-create` da produção: a regra `archive/trajetto/1` de 14
-dias no `trajetto-pitr-prod`, e a de `backup/trajetto/2` só se a prova da
-staging passou. O dump (`trajetto-backups-prod`, F0-03) e o
+dias no `trajetto-pitr-prod`. A de `backup/trajetto/2` não: a prova da
+staging falhou em 27/11/2026 (acima). O dump (`trajetto-backups-prod`, F0-03) e o
 `deliveryProofs/` do bucket de uploads (F1-O8) não dependem do PITR.
 
 ## Guardar no cofre o `backup.info` cru, logo depois do `stanza-create`
@@ -213,8 +235,8 @@ da trava.
 ## O que a trava não cobre
 
 - O `backup.info` e o `archive.info`: o cofre acima.
-- Os backups, enquanto a regra de `backup/` não passar na prova: o dump
-  diário travado e, para o primeiro cliente de escala, o repo2 (V-01).
+- Os backups, porque a regra de `backup/` falhou na prova de 27/11/2026:
+  ficam o dump diário travado e, para o primeiro cliente de escala, o repo2 (V-01).
 - Uma chave de leitura vazada: a trava impede apagar, não ler. As cópias são
   cifradas (o PITR pela `PGBACKREST_REPO1_CIPHER_PASS`; o dump e os
   comprovantes pelo R2, em repouso).
