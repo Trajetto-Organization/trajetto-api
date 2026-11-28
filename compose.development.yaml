@@ -10,6 +10,11 @@ services:
     image: "postgres:16-alpine"
     container_name: trajetto-database
     restart: unless-stopped
+    # pg_stat_statements preloaded, as the trajetto-postgres image of the
+    # servers does (infra/postgres/postgres.params): its state reads "ready"
+    # here too, as in CI's E2E. Only the preload: building that image
+    # (pgBackRest compiled from source) is for the load harness and CI.
+    command: ["postgres", "-c", "shared_preload_libraries=pg_stat_statements"]
     # Loopback only: on a café or coworking network a port on 0.0.0.0 is
     # reachable by everyone on it.
     ports:

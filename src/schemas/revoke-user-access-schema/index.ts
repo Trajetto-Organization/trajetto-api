@@ -1,8 +1,9 @@
 import { z } from "zod";
+import { fieldError } from "@/shared/validation/field-error";
 
 const revokeUserAccessSchema = z.object({
   userId: z
-    .string({ required_error: "ID do usuário é obrigatório!" })
+    .string(fieldError({ required: "ID do usuário é obrigatório!" }))
     .uuid("ID do usuário é inválido."),
 });
 

@@ -1,9 +1,6 @@
 // ON_THE_WAY: the driver is heading to the address now (decision 6.4).
 type DeliveryMessageTopic =
-  | "DISPATCHED"
-  | "ON_THE_WAY"
-  | "DELIVERED"
-  | "FAILED";
+  "DISPATCHED" | "ON_THE_WAY" | "DELIVERED" | "FAILED";
 
 interface DeliveryMessageTemplateRecord {
   id: string;
@@ -12,7 +9,14 @@ interface DeliveryMessageTemplateRecord {
   channel: string;
 
   subject: string | null;
-  body: string;
+
+  /**
+   * Always present on the e-mail (CHECK in the database). Meaningless on
+   * WhatsApp, which goes out as a fixed template approved by Meta (plan of
+   * 02/11/2026, B3): nullable from migration 20261102120800, written NULL
+   * only from the next release, and read as "no text" meanwhile.
+   */
+  body: string | null;
 
   is_active: boolean;
 

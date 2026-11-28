@@ -3,10 +3,10 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 
 import { container } from "tsyringe";
-import { z } from "zod";
 
 import { createFuelSchema } from "@/schemas/create-fuel-schema";
 import { createVehicleChecklistSchema } from "@/schemas/create-vehicle-checklist-schema";
+import { validationError } from "@/shared/validation/validation-error";
 
 import type { UploadService } from "@/shared/services/upload-service";
 
@@ -160,9 +160,10 @@ async function vehicleMileage(): Promise<number> {
 
 /** What a stricter N+1 schema does to a body the N app froze in its queue. */
 function stricterNextVersion() {
-  return new z.ZodError([
+  // As `.parse()` throws it: zod 4's `new ZodError()` is not an Error.
+  return validationError([
     {
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ["odometer_unit"],
       message: "O campo odometer_unit é obrigatório.",
     },
@@ -294,17 +295,36 @@ describe("a resend that no longer passes validation (GAP5-3)", () => {
     expect(replay.json().code).toBe("SUBMISSION_OWNER_MISMATCH");
   });
 
-  it("does not turn a retyped fueling into a duplicate", async () => {
+  it("does not turn a retyped fueling into an unnoticed duplicate", async () => {
     const mileage = (await vehicleMileage()) + 50;
 
     const first = await post(fuelUrl(), await fuelBody(mileage));
     expect(first.statusCode, first.body).toBe(201);
 
     // The driver gives up on the "failed" item and types it again: a new key,
-    // the same odometer. The mileage rule is what keeps this from doubling.
+    // the same odometer, moments later. The mileage rule used to refuse it;
+    // since 05/11/2026 the odometer may stand still for less than 30 minutes
+    // (a second tank at the same stop), so the second-refuelling rule is what
+    // keeps it from doubling unseen: a build that asks gets the question...
+    const asked = await post(fuelUrl(), await fuelBody(mileage), {
+      "x-trajetto-client-version":
+        "platform=android; version=1.5.0; build=50; runtime=e2e; update=embedded; contract=5; outbox=1",
+    });
+
+    expect(asked.statusCode, asked.body).toBe(409);
+    expect(asked.json().code).toBe("FUEL_RECENT_REFUEL");
+
+    // ...and one that cannot ask records it flagged for the office.
     const retyped = await post(fuelUrl(), await fuelBody(mileage));
 
-    expect(retyped.statusCode).toBe(400);
+    expect(retyped.statusCode, retyped.body).toBe(201);
+    expect(
+      (
+        await prisma.fuel.findUniqueOrThrow({
+          where: { id: retyped.json().id },
+        })
+      ).alerts,
+    ).toEqual(["RECENT_REFUEL"]);
     expect(await vehicleMileage()).toBe(mileage);
   });
 });

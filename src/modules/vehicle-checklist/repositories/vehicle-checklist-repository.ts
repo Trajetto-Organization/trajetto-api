@@ -1,10 +1,15 @@
-import database from "@/../infra/database";
+import database, { readDatabase, readDatabaseWalk } from "@/../infra/database";
 import { Prisma } from "@prisma/client";
 import {
   IVehicleChecklistRepository,
+  ROUTES_AWAITING_END_CHECKLIST_LIMIT,
   type ChecklistMileageUpdate,
   type ChecklistPlacement,
 } from "./IVehicle-checklist-repository";
+import type {
+  RouteAwaitingEndChecklist,
+  RouteChecklistSummary,
+} from "../dtos/vehicle-checklist-dto";
 import { VehicleMileageInvalidError } from "@/modules/vehicle/usecases/errors/vehicle-mileage-invalid-error";
 import { editedReadingRefusal } from "@/modules/vehicle/usecases/errors/vehicle-mileage-out-of-order-error";
 import { VehicleNotFoundError } from "@/modules/vehicle/usecases/errors/vehicle-not-found-error";
@@ -19,6 +24,11 @@ import {
 import { placeReading } from "@/modules/fuel/usecases/fuel-rules";
 import { resolveTimeZone } from "@/shared/time/business-day";
 import { isSerializationFailure } from "@/shared/errors/prisma-error-meta";
+import {
+  ROUTE_LINK_SELECT,
+  listedPhase,
+  listedRoute,
+} from "@/shared/vehicle/route-columns";
 
 import {
   VehicleChecklist,
@@ -40,6 +50,33 @@ import {
 
 class VehicleChecklistRepository implements IVehicleChecklistRepository {
   constructor(private prisma = database) {}
+
+  /**
+   * The heavy reads' bulkhead (plano-escala F3-17), for the export: a pool of
+   * its own, 3 connections and 10 s a statement, so a burst of them waits
+   * among itself instead of taking the connections every other request needs.
+   * A repository built on another client (a test's) reads on that client. A
+   * getter, so a module that mocks infra/database without it only needs it
+   * when one of these reads runs.
+   * With DATABASE_REPLICA_URL, readDatabase() sends them to the standby
+   * while the replica guard vouches for it: lists only (plano-escala F4-42,
+   * tests/unitaires/database/read-routing-guard.test.ts).
+   */
+  private get read(): typeof this.prisma {
+    return this.prisma === database ? readDatabase() : this.prisma;
+  }
+
+  /**
+   * The export's batches on the same bulkhead (or standby), one walk per
+   * export (plano-escala F4-42): they page with Prisma's cursor, the last
+   * row of the batch before, and a standby that has not replayed a row
+   * read on the primary would answer an empty batch and end the export
+   * early. So the walk never goes from the primary back to the standby
+   * (readDatabaseWalk).
+   */
+  private readWalk(): () => typeof this.prisma {
+    return this.prisma === database ? readDatabaseWalk() : () => this.prisma;
+  }
 
   async createVehicleChecklist(
     checklistData: CreateVehicleChecklistProps,
@@ -113,17 +150,22 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
 
           if (!vehicle) throw new VehicleMileageInvalidError();
 
+          const at = recordDate(checklistData.checklist_date);
+          const timeZone = resolveTimeZone(placement?.timeZone);
+
           const placed = placeReading({
             mileage: checklistData.current_mileage,
             ...(await odometerTimeline(transaction, {
               businessId: checklistData.businessId,
               vehicleId: checklistData.vehicleId,
-              at: recordDate(checklistData.checklist_date),
-              timeZone: resolveTimeZone(placement?.timeZone),
+              at,
+              timeZone,
             })),
             odometer: vehicle.current_mileage,
             maintenanceFloor: vehicle.last_maintenance_mileage,
             previousMileage: null,
+            at,
+            timeZone,
           });
 
           if (!placed.fits) throw new VehicleMileageInvalidError();
@@ -144,16 +186,9 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
             if (moved.count !== 1) throw new VehicleMileageInvalidError();
           }
 
-          // `created_from` is accepted by the schema (the app stamps
-          // MOBILE_APP) and read by the use case for the outbox event's
-          // `origin`, but vehicle_checklist has no such column: spread into
-          // the insert, it failed every checklist the app sent with a 500,
-          // which the outbox then retried forever as a server error.
-          const { created_from: _origin, ...row } = checklistData;
-
           const checklist = await transaction.vehicleChecklist.create({
             data: {
-              ...row,
+              ...checklistData,
               photos: checklistData.photos,
               branchId: checklistData.branchId!,
               driverId: checklistData.driverId!,
@@ -231,6 +266,9 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
               cnh: true,
             },
           },
+          // Contract C3: the route it was made for, in the same query;
+          // listedRoute keeps only the company's own.
+          route: ROUTE_LINK_SELECT,
         },
         orderBy: resolveOrderBy(CHECKLIST_SORT, { sort, order }),
       }),
@@ -287,7 +325,11 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
       : [];
 
     return {
-      data: checklistsData,
+      data: checklistsData.map(({ route, ...checklist }) => ({
+        ...checklist,
+        route: listedRoute(checklist, route),
+        phase: listedPhase(checklist.phase),
+      })),
       conditionCounts: tallyConditions(conditionGroups),
       branchCounts: branches.map((branch) => ({
         id: branch.id,
@@ -349,11 +391,15 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
 
         if (!vehicle) throw new VehicleNotFoundError();
 
+        const record = {
+          at: mileageUpdate.at,
+          timeZone: resolveTimeZone(mileageUpdate.timeZone),
+        };
+
         const timeline = await odometerTimeline(transaction, {
           businessId,
           vehicleId,
-          at: mileageUpdate.at,
-          timeZone: resolveTimeZone(mileageUpdate.timeZone),
+          ...record,
           excludeChecklistId: mileageUpdate.checklistId ?? checklistId,
         });
 
@@ -366,10 +412,15 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
           odometer: vehicle.current_mileage,
           maintenanceFloor: vehicle.last_maintenance_mileage,
           previousMileage,
+          ...record,
         });
 
         if (!placement.fits) {
-          throw editedReadingRefusal(previousMileage !== null, timeline);
+          throw editedReadingRefusal(
+            previousMileage !== null,
+            timeline,
+            record,
+          );
         }
 
         // A date-only move re-checks the order and leaves the odometer as
@@ -506,6 +557,7 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
     const whereCondition = checklistListWhere(filters);
 
     const batchSize = 1000;
+    const read = this.readWalk();
     let cursor: string | undefined = undefined;
 
     while (true) {
@@ -521,7 +573,7 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
           } | null;
           driver: { name: string; cnh: string } | null;
         }
-      > = await this.prisma.vehicleChecklist.findMany({
+      > = await read().vehicleChecklist.findMany({
         where: whereCondition,
         include: {
           branch: {
@@ -595,6 +647,7 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
           overall_condition: checklist.overall_condition,
           notes: checklist.notes,
           branchName: checklist.branch?.corporate_reason,
+          created_from: checklist.created_from,
           created_at: checklist.created_at,
           updated_at: checklist.updated_at,
         };
@@ -607,8 +660,71 @@ class VehicleChecklistRepository implements IVehicleChecklistRepository {
   async countChecklistForExport(
     filters: ChecklistListFilters,
   ): Promise<number> {
-    return this.prisma.vehicleChecklist.count({
+    return this.read.vehicleChecklist.count({
       where: checklistListWhere(filters),
+    });
+  }
+
+  async listRouteChecklists(
+    businessId: string,
+    routeIds: string[],
+  ): Promise<RouteChecklistSummary[]> {
+    // Nothing to read for a driver with no route: no query either.
+    if (routeIds.length === 0) return [];
+
+    const rows = await this.prisma.vehicleChecklist.findMany({
+      // By routeId (vehicle_checklist_routeId_idx), always inside the tenant.
+      where: {
+        businessId,
+        routeId: { in: routeIds },
+        phase: { in: ["ROUTE_START", "ROUTE_END"] },
+      },
+      orderBy: [{ checklist_date: "desc" }, { id: "desc" }],
+      select: {
+        id: true,
+        routeId: true,
+        phase: true,
+        checklist_date: true,
+        overall_condition: true,
+      },
+    });
+
+    return rows.flatMap((row) =>
+      row.routeId && row.phase !== "STANDALONE"
+        ? [{ ...row, routeId: row.routeId, phase: row.phase }]
+        : [],
+    );
+  }
+
+  async listRoutesAwaitingEndChecklist({
+    businessId,
+    driverId,
+    completedSince,
+  }: {
+    businessId: string;
+    driverId: string;
+    completedSince: Date;
+  }): Promise<RouteAwaitingEndChecklist[]> {
+    // The driver's routes by (businessId, driverId, status); the arrival
+    // checklist through vehicle_checklist_routeId_idx — and only one of
+    // this company counts, whatever a foreign row names.
+    return this.prisma.route.findMany({
+      where: {
+        businessId,
+        driverId,
+        status: "COMPLETED",
+        completed_at: { gte: completedSince },
+        vehicleChecklists: { none: { businessId, phase: "ROUTE_END" } },
+      },
+      orderBy: [{ completed_at: "desc" }, { id: "desc" }],
+      take: ROUTES_AWAITING_END_CHECKLIST_LIMIT,
+      select: {
+        id: true,
+        code: true,
+        plan_version: true,
+        vehicle: { select: { id: true, license_plate: true } },
+        completed_at: true,
+      },
     });
   }
 }

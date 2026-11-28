@@ -38,6 +38,25 @@ function uniqueViolation(
 }
 
 /**
+ * P2003: what Postgres raises when a DELETE meets an ON DELETE RESTRICT key
+ * still pointing at the row. A twin that deleted it anyway left the use
+ * case's race branch (count said zero, a row arrived before the DELETE)
+ * untested.
+ */
+function foreignKeyViolation(
+  constraint: string,
+): Prisma.PrismaClientKnownRequestError {
+  return new Prisma.PrismaClientKnownRequestError(
+    `Foreign key constraint violated: \`${constraint} (index)\``,
+    {
+      code: "P2003",
+      clientVersion: "in-memory",
+      meta: { field_name: constraint },
+    },
+  );
+}
+
+/**
  * The index of the row an `update`/`delete` targets, or P2025 — never -1,
  * which `splice` and `array[index] =` silently accept.
  */
@@ -76,4 +95,10 @@ function assertUniqueValue<T extends { id?: string | null }>(
   if (taken) throw uniqueViolation([column]);
 }
 
-export { assertUniqueValue, recordNotFound, requireIndex, uniqueViolation };
+export {
+  assertUniqueValue,
+  foreignKeyViolation,
+  recordNotFound,
+  requireIndex,
+  uniqueViolation,
+};

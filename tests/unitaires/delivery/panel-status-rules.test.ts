@@ -16,6 +16,7 @@ import type { OutboxService } from "@/shared/notifications/outbox-service";
 import type { User } from "@/modules/user/dtos/user-dto";
 import type { CreateDeliveryProps } from "@/modules/delivery/dtos/delivery-dto";
 import type { Route, RouteStop } from "@/modules/route/dtos/route-dto";
+import { withoutCreationLine } from "../../support/status-trail";
 
 // The socket transport is the boundary: what is proven is which event the
 // use case hands it, and when.
@@ -128,7 +129,7 @@ describe("putting a delivery 'em rota' from the panel", () => {
     });
 
     expect(deliveries.deliveries[0].status).toBe("PENDING");
-    expect(deliveries.events).toEqual([]);
+    expect(withoutCreationLine(deliveries.events)).toEqual([]);
   });
 
   it.each(["PLANNED", "RELEASED"])(

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { responseDateTime } from "./response-date";
 
 import {
   createApiKeySchema,
@@ -23,8 +24,6 @@ import {
   RESERVED_API_SCOPES,
   SCOPE_DESCRIPTIONS,
 } from "@/shared/integration/api-key-rules";
-
-const isoDateTime = z.union([z.string(), z.date()]);
 
 const publicAddress = z.object({
   street: z.string(),
@@ -67,18 +66,42 @@ const publicDelivery = z.object({
 
   // A civil date stored as UTC midnight (decision 1.3). An integrator that
   // converts it to local time reads the day before in Brazil.
-  scheduled_date: isoDateTime
+  scheduled_date: responseDateTime()
     .nullable()
     .describe(
       "Data prevista, SEM hora: vem como meia-noite UTC do dia (`2026-09-17T00:00:00.000Z` é o dia 17). Leia a parte da data (os 10 primeiros caracteres) ou converta em UTC; convertida para o fuso do Brasil ela vira o dia anterior.",
     ),
-  delivered_at: isoDateTime.nullable(),
+  delivered_at: responseDateTime().nullable(),
   received_by: z.string().nullable(),
+
+  proof_url: z
+    .string()
+    .nullable()
+    .describe(
+      "Link do comprovante (o PDF), quando a entrega terminou: status DELIVERED ou FAILED. Nulo antes disso e numa entrega cancelada. É um link de PORTADOR: quem o tem abre o comprovante sem login, como quem escaneia o QR impresso nele — guarde-o como guarda o próprio documento e não o exponha a quem não deve ver o canhoto. Abrir o link redireciona (302) para o PDF, gerado na primeira abertura; vale enquanto o comprovante vale (PROOF_VERIFICATION_TTL_DAYS, 5 anos por padrão, contados da criação da entrega) e é o mesmo em toda leitura e em todo webhook da entrega.",
+    ),
 
   route: z.object({ id: z.string(), code: z.number() }).nullable(),
 
-  created_at: isoDateTime,
-  updated_at: isoDateTime,
+  created_at: responseDateTime(),
+  updated_at: responseDateTime(),
+});
+
+/**
+ * What a cancel answers (L9): the three identifiers and the new status, not
+ * the delivery — a cancel-only key was not granted the read.
+ */
+const publicDeliveryCancellation = z.object({
+  id: z.string(),
+  code: z.string().nullable(),
+  invoice_key: z.string().nullable(),
+
+  status: z.string().describe("Sempre CANCELLED: a entrega está cancelada."),
+  status_label: z.string().describe("Sempre `Cancelada`."),
+
+  updated_at: responseDateTime().describe(
+    "Quando a entrega mudou pela última vez. Num cancelamento feito agora, é o instante dele; numa repetição, o do cancelamento que já existia.",
+  ),
 });
 
 const publicRoute = z.object({
@@ -88,25 +111,25 @@ const publicRoute = z.object({
 
   status: z.string(),
 
-  scheduled_date: isoDateTime.describe(
+  scheduled_date: responseDateTime().describe(
     "Dia da rota, SEM hora: vem como meia-noite UTC do dia (`2026-09-17T00:00:00.000Z` é o dia 17). Leia a parte da data ou converta em UTC; convertida para o fuso do Brasil ela vira o dia anterior.",
   ),
   destination: z
     .string()
     .nullable()
     .describe("Destino da rota, texto livre, quando foi informado."),
-  planned_departure_at: isoDateTime
+  planned_departure_at: responseDateTime()
     .nullable()
     .describe(
       "Saída prevista (instante em UTC). Nulo quando não foi planejada.",
     ),
-  planned_arrival_at: isoDateTime
+  planned_arrival_at: responseDateTime()
     .nullable()
     .describe(
       "Retorno previsto (instante em UTC). Nulo quando não foi planejado.",
     ),
-  started_at: isoDateTime.nullable(),
-  completed_at: isoDateTime.nullable(),
+  started_at: responseDateTime().nullable(),
+  completed_at: responseDateTime().nullable(),
 
   driver: z.object({ id: z.string(), name: z.string() }).nullable(),
   vehicle: z.object({ id: z.string(), license_plate: z.string() }).nullable(),
@@ -123,10 +146,10 @@ const publicRoute = z.object({
     }),
   ),
 
-  created_at: isoDateTime,
+  created_at: responseDateTime(),
 });
 
-const cursorPage = <T extends z.ZodTypeAny>(item: T) =>
+const cursorPage = <T extends z.ZodType>(item: T) =>
   z.object({
     data: z.array(item),
     next_cursor: z
@@ -134,6 +157,25 @@ const cursorPage = <T extends z.ZodTypeAny>(item: T) =>
       .nullable()
       .describe(
         "Passe em `cursor` para a próxima página. Null significa que acabou.",
+      ),
+  });
+
+/** /deliveries and /routes: the page plus the next sync's starting point. */
+const syncedPage = <T extends z.ZodType>(item: T) =>
+  cursorPage(item).extend({
+    sync_watermark: responseDateTime().describe(
+      "O `updated_since` da próxima sincronização: o instante desta leitura menos uma margem de 2 minutos, que cobre uma gravação que confirma durante a leitura e a diferença entre relógios. Guarde o da PRIMEIRA página da varredura (um documento de uma página já lida que muda no meio da varredura fica acima dele). O que vier de novo na próxima por causa da sobreposição, deduplique pelo `id`, ficando com o `updated_at` mais recente.",
+    ),
+  });
+
+/** /events: the page plus where the next poll starts, last page included. */
+const eventPage = <T extends z.ZodType>(item: T) =>
+  cursorPage(item).extend({
+    resume_cursor: z
+      .string()
+      .nullable()
+      .describe(
+        "Onde a próxima consulta começa, também na última página: guarde-o e passe em `cursor` quando voltar a perguntar. Depois de ler uma página com `next_cursor`, ele é o mesmo cursor. Nulo só sem `cursor` e sem evento a ler.",
       ),
   });
 
@@ -162,19 +204,20 @@ const integrationSchemas = {
 };
 
 const integrationResponses = {
-  deliveryPage: cursorPage(publicDelivery),
+  deliveryPage: syncedPage(publicDelivery),
   delivery: publicDelivery,
+  deliveryCancellation: publicDeliveryCancellation,
 
-  routePage: cursorPage(publicRoute),
+  routePage: syncedPage(publicRoute),
   route: publicRoute,
 
-  eventPage: cursorPage(
+  eventPage: eventPage(
     z.object({
       id: z.string(),
       topic: z.string(),
       // The fact's time since MOB-08, no longer the write's: an integrator
       // who treats it as monotonic drops exactly the offline proofs.
-      occurred_at: isoDateTime.describe(
+      occurred_at: responseDateTime().describe(
         "Quando o fato aconteceu. Para o que o aplicativo do motorista enviou depois, sem sinal, é a hora registrada no aparelho (corrigida pelo relógio do servidor) e pode ser ANTERIOR a eventos já devolvidos em consultas anteriores. `updated_since` filtra pela hora em que o evento chegou ao Trajetto, não por este campo: não descarte um evento por ter `occurred_at` menor que o último visto.",
       ),
       delivery: z.object({
@@ -182,7 +225,40 @@ const integrationResponses = {
         code: z.string().nullable(),
         invoice_key: z.string().nullable(),
       }),
-      data: z.record(z.unknown()),
+      // Every key, always present (null when it does not apply): one shape
+      // for every topic, as in the webhooks.
+      data: z
+        .object({
+          status_from: z
+            .string()
+            .nullable()
+            .describe(
+              "Status da entrega antes do evento, numa mudança de status; nulo nos demais.",
+            ),
+          status_to: z
+            .string()
+            .nullable()
+            .describe(
+              "Status da entrega depois do evento, numa mudança de status; nulo nos demais.",
+            ),
+          received_by: z
+            .string()
+            .nullable()
+            .describe("Quem recebeu, no comprovante; nulo nos demais."),
+          note: z
+            .string()
+            .nullable()
+            .describe("A anotação registrada com o evento, quando houver."),
+          occurrence_code: z
+            .string()
+            .nullable()
+            .describe(
+              "O código do tipo de ocorrência no seu ERP, em `occurrence.reported` (o mesmo campo do webhook). Nulo nos demais tópicos e quando o tipo não tem código.",
+            ),
+        })
+        .describe(
+          "Os mesmos campos em todo tópico; o que não se aplica vem nulo.",
+        ),
     }),
   ),
 
@@ -242,9 +318,9 @@ const integrationResponses = {
         prefix: z.string(),
         scopes: z.array(z.string()),
         rate_limit_per_minute: z.number(),
-        last_used_at: isoDateTime.nullable(),
-        revoked_at: isoDateTime.nullable(),
-        created_at: isoDateTime,
+        last_used_at: responseDateTime().nullable(),
+        revoked_at: responseDateTime().nullable(),
+        created_at: responseDateTime(),
       }),
     ),
   }),
@@ -284,9 +360,9 @@ const integrationResponses = {
         url: z.string(),
         topics: z.array(z.string()),
         is_active: z.boolean(),
-        disabled_at: isoDateTime.nullable(),
+        disabled_at: responseDateTime().nullable(),
         consecutive_failures: z.number(),
-        created_at: isoDateTime,
+        created_at: responseDateTime(),
       }),
     ),
   }),
@@ -334,14 +410,14 @@ const integrationResponses = {
     response_body: z.string().nullable(),
     latency_ms: z.number().nullable(),
     lastError: z.string().nullable(),
-    deliveredAt: isoDateTime.nullable(),
-    availableAt: isoDateTime.describe("Quando tentamos de novo."),
-    leaseExpiresAt: isoDateTime
+    deliveredAt: responseDateTime().nullable(),
+    availableAt: responseDateTime().describe("Quando tentamos de novo."),
+    leaseExpiresAt: responseDateTime()
       .nullable()
       .describe(
         "Só numa entrega em envio (PROCESSING): até quando a tentativa atual vale. Já vencido, a tentativa morreu com o processo e o despachante vai retomá-la.",
       ),
-    created_at: isoDateTime,
+    created_at: responseDateTime(),
     endpoint: z.object({ id: z.string(), name: z.string(), url: z.string() }),
   }),
 
@@ -379,6 +455,20 @@ const integrationResponses = {
   }),
 
   resent: z.object({ message: z.string() }),
+
+  webhookTestScheduled: z.object({
+    message: z.string(),
+    data: z.object({
+      id: z
+        .string()
+        .describe("A linha do teste no monitor de envios (webhook_delivery)."),
+      event_id: z
+        .string()
+        .describe(
+          "O id do evento de teste: o `id` do corpo e o `X-Trajetto-Event-Id` que o receptor vê.",
+        ),
+    }),
+  }),
 
   resendScheduled: z.object({
     message: z.string(),

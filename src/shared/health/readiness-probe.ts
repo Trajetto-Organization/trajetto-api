@@ -1,6 +1,8 @@
 import type { PrismaClient } from "@prisma/client";
 
 import { createPrismaClient } from "@/shared/database/database-client";
+import { runtimeApplicationName } from "@/shared/database/pool-config";
+import { processRoleFromEnvironment } from "@/shared/lifecycle/process-role";
 
 /**
  * The readiness probe's own database connection (OBS-11).
@@ -22,6 +24,16 @@ import { createPrismaClient } from "@/shared/database/database-client";
  * 1) + tooling must stay under max_connections (connection_limit is in the
  * production DATABASE_URL modelled in .env.example; replicas are a field of
  * the API Application in Dokploy).
+ *
+ * Behind PgBouncer (wave 17) a connection of its own in the API is not
+ * enough: the probe's statement would wait in PgBouncer's pool with every
+ * request, and a saturated pool would take every replica out at once
+ * (query_wait_timeout) — the outage OBS-11 removed, one hop further. The
+ * trajetto-pgbouncer image has a `<db>_probe` alias, a pool of 2 server
+ * connections of its own to the same database (infra/pgbouncer), and
+ * READINESS_DATABASE_URL points the probe there (plano-escala F4-37).
+ * Postgres down is still a "no": the alias reaches the same database.
+ * Unset, the probe uses DATABASE_URL, as before.
  */
 
 /** Answer or give up well inside Traefik's 5 s health-check timeout. */
@@ -48,6 +60,39 @@ function probeUrl(databaseUrl: string): string {
   return url.toString();
 }
 
+/**
+ * The URL the probe connects to: READINESS_DATABASE_URL (the PgBouncer
+ * alias, plano-escala F4-37), else DATABASE_URL; empty counts as absent.
+ * Read when the client is first built.
+ */
+function readinessDatabaseUrl(
+  env: Record<string, string | undefined> = process.env,
+): string {
+  const readiness = env.READINESS_DATABASE_URL?.trim();
+
+  return readiness || env.DATABASE_URL || "";
+}
+
+/**
+ * A client on the probe's own pool for that URL (probeUrl): one
+ * connection, `trajetto-<role>-probe` in pg_stat_activity (plano-escala
+ * F3-02).
+ */
+function createProbeClient(databaseUrl: string): PrismaClient {
+  return createPrismaClient(
+    {},
+    {
+      url: probeUrl(databaseUrl),
+      overrides: {
+        applicationName: runtimeApplicationName(
+          processRoleFromEnvironment(process.env),
+          "probe",
+        ),
+      },
+    },
+  ) as unknown as PrismaClient;
+}
+
 interface ProbeClient {
   $queryRaw: (query: TemplateStringsArray) => Promise<unknown>;
 }
@@ -59,12 +104,7 @@ let reconnecting: Promise<void> | null = null;
 
 /** Created on first use, so importing this module opens nothing. */
 function probeClient(): PrismaClient {
-  if (!client) {
-    client = createPrismaClient(
-      {},
-      { url: probeUrl(process.env.DATABASE_URL ?? "") },
-    ) as unknown as PrismaClient;
-  }
+  if (!client) client = createProbeClient(readinessDatabaseUrl());
 
   return client;
 }
@@ -147,4 +187,10 @@ async function probeDatabase(
   return ready;
 }
 
-export { READINESS_TIMEOUT_MS, probeDatabase, probeUrl };
+export {
+  READINESS_TIMEOUT_MS,
+  createProbeClient,
+  probeDatabase,
+  probeUrl,
+  readinessDatabaseUrl,
+};

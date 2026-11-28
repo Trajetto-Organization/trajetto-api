@@ -5,6 +5,10 @@ import database from "@/../infra/database";
 import { relatedTo, rowsByKey } from "@/shared/database/related-rows";
 
 import { dateOnlyFromKey, dateOnlyKey } from "@/shared/time/business-day";
+import { storedBusinessZone } from "@/shared/time/business-time-zone";
+import { historyIdRange } from "@/shared/time/history-id-range";
+import { openStopsOnRoutesLeftOpen } from "@/shared/route/routes-left-open-query";
+import type { RoutePeriodDays } from "@/shared/route/route-period";
 import {
   ROUTE_LOOKBACK_DAYS,
   factInstant,
@@ -18,6 +22,8 @@ import type {
   DeliveryStatusName,
   FeedEntry,
   IOperationDayRepository,
+  LiveRoute,
+  LiveRouteKey,
   MonitoringRoute,
   OperationDay,
   RouteStatusName,
@@ -105,13 +111,17 @@ class OperationDayRepository implements IOperationDayRepository {
   // A client of its own only in the query-plan suite, which captures SQL.
   constructor(private prisma: PrismaClient = database) {}
 
+  // Once per request, and none on the caller's own company: the session
+  // lookup brought its zone (storedBusinessZone).
   async timeZoneOf(businessId: string): Promise<string | null> {
-    const business = await this.prisma.business.findUnique({
-      where: { id: businessId },
-      select: { timezone: true },
-    });
+    return storedBusinessZone(businessId, async () => {
+      const business = await this.prisma.business.findUnique({
+        where: { id: businessId },
+        select: { timezone: true },
+      });
 
-    return business?.timezone ?? null;
+      return business?.timezone ?? null;
+    });
   }
 
   /**
@@ -263,6 +273,10 @@ class OperationDayRepository implements IOperationDayRepository {
           AND e."type" = 'STATUS_CHANGE'
           AND e."status_to" = 'CANCELLED'
           AND e."created_at" >= ${utc(day.start)}
+          -- The floor of the day's ids (plano-escala F2-17): the months
+          -- since the day, not the whole partitioned history. No ceiling: a
+          -- cancellation backdated into the day is written after it.
+          AND e."id" >= ${historyIdRange(day.start, day.end).gte}::text
           AND LEAST(COALESCE(e."occurred_at", e."created_at"), e."created_at") < ${utc(day.end)}
       ),
       "requeued" AS (
@@ -382,6 +396,18 @@ class OperationDayRepository implements IOperationDayRepository {
     }));
   }
 
+  async listRoutesLeftOpen(
+    businessId: string,
+    startedBefore: Date,
+  ): Promise<Array<{ started_at: Date | null; open: number }>> {
+    // The list's two reads (routes, then only their stops, grouped), with
+    // every open stop counted, as the tower counts them.
+    return openStopsOnRoutesLeftOpen(this.prisma, {
+      businessId,
+      startedBefore,
+    });
+  }
+
   /**
    * Three sources, each the newest `limit` of the day by arrival.
    *
@@ -396,15 +422,28 @@ class OperationDayRepository implements IOperationDayRepository {
     limit: number,
   ): Promise<FeedEntry[]> {
     const inDay = { gte: day.start, lt: day.end };
+    // The ids of the day's rows (plano-escala F2-17): with delivery_event
+    // partitioned by month on its id, the day reads its one or two months,
+    // not the whole history. The same rows: an id is minted at the insert.
+    const dayIds = historyIdRange(day.start, day.end);
 
     const events = await this.prisma.deliveryEvent.findMany({
       where: {
         businessId,
+        id: dayIds,
         created_at: inDay,
         // A stop added to or taken off a plan is not something that happened
         // on the street (decision 14.7): the planning lines stay in the
         // delivery's own timeline, out of the tower's feed.
         type: { notIn: [...PLANNING_EVENT_TYPES] },
+        // Nor the status lines a delivery gets by itself (F2-06): its
+        // creation, and what a route's departure or ending moved. The route
+        // has its own line ("Rota N iniciada"); fifty of these would push
+        // every fact of the street out of the newest `limit`.
+        NOT: [
+          { type: "STATUS_CHANGE", status_from: null, status_to: "PENDING" },
+          { type: "STATUS_CHANGE", actor: "SYSTEM" },
+        ],
       },
       orderBy: [{ created_at: "desc" }, { id: "desc" }],
       take: limit,
@@ -418,6 +457,10 @@ class OperationDayRepository implements IOperationDayRepository {
         routeId: true,
         occurrenceId: true,
         deliveryId: true,
+        // E5: the record the web flags as "Fora do raio".
+        geofence_outcome: true,
+        distance_m: true,
+        accuracy_m: true,
       },
     });
 
@@ -425,7 +468,8 @@ class OperationDayRepository implements IOperationDayRepository {
       where: {
         businessId,
         created_at: inDay,
-        events: { none: { type: "OCCURRENCE" } },
+        // Its event is written with it or after it, inside the day's ids.
+        events: { none: { type: "OCCURRENCE", id: { gte: dayIds.gte } } },
         // Only "não entrega" (decision 14.3): a delivery-category occurrence
         // is the proof, already in the feed as its PROOF event, and a pause
         // is not an occurrence of the operation.
@@ -440,6 +484,9 @@ class OperationDayRepository implements IOperationDayRepository {
         authorization_status: true,
         occurrenceTypeId: true,
         deliveryId: true,
+        geofence_outcome: true,
+        distance_m: true,
+        accuracy_m: true,
       },
     });
 
@@ -596,6 +643,9 @@ class OperationDayRepository implements IOperationDayRepository {
               type?.blocks_delivery,
               occurrence?.authorization_status,
             )),
+        geofence_outcome: event.geofence_outcome,
+        distance_m: event.distance_m,
+        accuracy_m: event.accuracy_m,
         occurredAt: factInstant(event.occurred_at, event.created_at),
         receivedAt: event.created_at,
       });
@@ -623,6 +673,9 @@ class OperationDayRepository implements IOperationDayRepository {
           type.blocks_delivery,
           occurrence.authorization_status,
         ),
+        geofence_outcome: occurrence.geofence_outcome,
+        distance_m: occurrence.distance_m,
+        accuracy_m: occurrence.accuracy_m,
         occurredAt: factInstant(occurrence.occurred_at, occurrence.created_at),
         receivedAt: occurrence.created_at,
       });
@@ -637,11 +690,14 @@ class OperationDayRepository implements IOperationDayRepository {
 
   async listMonitoringRoutes(
     businessId: string,
-    day: OperationDay,
+    days: RoutePeriodDays,
     page: { skip: number; take: number },
   ): Promise<{ total: number; routes: MonitoringRoute[] }> {
     // The page of ids first, in the order a dispatcher reads the board:
-    // what is on the street, then what is about to leave, then the rest.
+    // what is on the street, then what is about to leave, then the rest —
+    // over several days, the latest day first inside each group. The days
+    // are a range of route (businessId, scheduled_date); the running ones,
+    // when the days reach today, a range of (businessId, status, ...).
     const ids = await this.prisma.$queryRaw<
       Array<{ id: string; total: number }>
     >`
@@ -650,8 +706,12 @@ class OperationDayRepository implements IOperationDayRepository {
       WHERE r."businessId" = ${businessId}
         AND r."status" <> 'CANCELLED'
         AND (
-          r."scheduled_date" = ${day.date}::date
-          OR (${day.isToday}::boolean AND r."status" = 'IN_PROGRESS')
+          r."scheduled_date" BETWEEN ${days.from}::date AND ${days.to}::date
+          ${
+            days.includesRunning
+              ? Prisma.sql`OR r."status" = 'IN_PROGRESS'`
+              : Prisma.empty
+          }
         )
       ORDER BY
         CASE r."status"
@@ -660,6 +720,11 @@ class OperationDayRepository implements IOperationDayRepository {
           WHEN 'PLANNED' THEN 2
           ELSE 3
         END,
+        ${
+          days.from !== days.to
+            ? Prisma.sql`r."scheduled_date" DESC,`
+            : Prisma.empty
+        }
         r."planned_departure_at" ASC NULLS LAST,
         r."code" ASC
       LIMIT ${page.take} OFFSET ${page.skip}
@@ -674,8 +739,15 @@ class OperationDayRepository implements IOperationDayRepository {
                 businessId,
                 status: { not: "CANCELLED" },
                 OR: [
-                  { scheduled_date: dateOnlyFromKey(day.date) },
-                  ...(day.isToday ? [{ status: "IN_PROGRESS" as const }] : []),
+                  {
+                    scheduled_date: {
+                      gte: dateOnlyFromKey(days.from),
+                      lte: dateOnlyFromKey(days.to),
+                    },
+                  },
+                  ...(days.includesRunning
+                    ? [{ status: "IN_PROGRESS" as const }]
+                    : []),
                 ],
               },
             })
@@ -725,6 +797,112 @@ class OperationDayRepository implements IOperationDayRepository {
       }));
 
     return { total: Number(ids[0].total), routes };
+  }
+
+  /**
+   * The live list (wave 4, GET /route/live), in one statement.
+   *
+   * The routes first, limited, then everything else joined to that page
+   * only: the CTE reads the company's running routes and today's released
+   * ones through route (businessId, status, scheduled_date) — two index
+   * ranges, both of live routes only, never the company's history — and
+   * sorts that handful in memory. Each page row then costs one probe of
+   * route_stop (routeId, status) for its counts, and a primary-key lookup
+   * each for the driver, the vehicle and driver_last_position. No delivery,
+   * no event, no position history (plan in query-plans.test.ts).
+   *
+   * The last point is joined by the driver AND the company: a driver moved
+   * to another company keeps a row the old one must not read.
+   */
+  async listLiveRoutes(
+    businessId: string,
+    query: { date: string; take: number; after?: LiveRouteKey },
+  ): Promise<LiveRoute[]> {
+    const { date, take, after } = query;
+
+    const rows = await this.prisma.$queryRaw<
+      Array<{
+        id: string;
+        code: number;
+        name: string | null;
+        status: "IN_PROGRESS" | "RELEASED";
+        scheduled_date: string;
+        started_at: Date | null;
+        driverId: string;
+        driverName: string | null;
+        vehiclePlate: string | null;
+        stopsTotal: number | null;
+        stopsResolved: number | null;
+        latitude: number | null;
+        longitude: number | null;
+        recordedAt: Date | null;
+      }>
+    >`
+      WITH "live" AS (
+        SELECT r."id", r."code", r."name", r."status"::text AS "status",
+               to_char(r."scheduled_date", 'YYYY-MM-DD') AS "scheduled_date",
+               r."started_at", r."driverId", r."vehicleId",
+               (CASE WHEN r."status" = 'IN_PROGRESS' THEN 0 ELSE 1 END) AS "rank"
+        FROM "route" r
+        WHERE r."businessId" = ${businessId}
+          AND (
+            r."status" = 'IN_PROGRESS'
+            OR (r."status" = 'RELEASED' AND r."scheduled_date" = ${date}::date)
+          )
+          ${
+            after
+              ? Prisma.sql`AND (
+                  (CASE WHEN r."status" = 'IN_PROGRESS' THEN 0 ELSE 1 END),
+                  r."code"
+                ) > (${after.rank}::int, ${after.code}::int)`
+              : Prisma.empty
+          }
+        ORDER BY "rank" ASC, r."code" ASC
+        LIMIT ${take}
+      )
+      SELECT l."id", l."code", l."name", l."status", l."scheduled_date",
+             l."started_at", l."driverId",
+             d."name" AS "driverName",
+             v."license_plate" AS "vehiclePlate",
+             st."total" AS "stopsTotal",
+             st."resolved" AS "stopsResolved",
+             p."latitude", p."longitude", p."recorded_at" AS "recordedAt"
+      FROM "live" l
+      LEFT JOIN "driver" d ON d."id" = l."driverId"
+      LEFT JOIN "vehicle" v ON v."id" = l."vehicleId"
+      LEFT JOIN LATERAL (
+        SELECT
+          (count(*) FILTER (WHERE rs."status" <> 'CANCELLED'))::int AS "total",
+          (count(*) FILTER (WHERE rs."status" IN ('COMPLETED', 'FAILED')))::int AS "resolved"
+        FROM "route_stop" rs
+        WHERE rs."routeId" = l."id"
+      ) st ON true
+      LEFT JOIN "driver_last_position" p
+        ON p."driverId" = l."driverId" AND p."businessId" = ${businessId}
+      ORDER BY l."rank" ASC, l."code" ASC
+    `;
+
+    return rows.map((row) => ({
+      id: row.id,
+      code: Number(row.code),
+      name: row.name,
+      status: row.status,
+      scheduled_date: row.scheduled_date,
+      started_at: row.started_at,
+      driverId: row.driverId,
+      driverName: row.driverName,
+      vehiclePlate: row.vehiclePlate,
+      stopsTotal: Number(row.stopsTotal ?? 0),
+      stopsResolved: Number(row.stopsResolved ?? 0),
+      lastPosition:
+        row.recordedAt && row.latitude !== null && row.longitude !== null
+          ? {
+              latitude: Number(row.latitude),
+              longitude: Number(row.longitude),
+              recorded_at: row.recordedAt,
+            }
+          : null,
+    }));
   }
 
   async listOpenPauses(

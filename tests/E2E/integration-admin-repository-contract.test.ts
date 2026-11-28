@@ -2,6 +2,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { randomUUID } from "node:crypto";
 
+import { v7 as uuidv7 } from "uuid";
+
 import { WebhookDeliveryStatus, type WebhookDelivery } from "@prisma/client";
 
 import { ApiKeyRepository } from "@/modules/integration/repositories/api-key-repository";
@@ -55,6 +57,8 @@ interface Harness {
   } | null>;
   delivery: (id: string) => Promise<WebhookDelivery | null>;
   deactivate: (businessId: string) => Promise<void>;
+  /** Writes the company's DELIVERIES entitlement row. */
+  setDeliveries: (businessId: string, enabled: boolean) => Promise<void>;
   lastUsedAt: (apiKeyId: string) => Promise<Date | null>;
 }
 
@@ -96,7 +100,7 @@ function deliveryRow(
   },
 ): WebhookDelivery {
   return {
-    id: randomUUID(),
+    id: uuidv7(),
     topic: "delivery.created",
     sourceEventId: randomUUID(),
     payload: { id: "delivery-1" },
@@ -150,6 +154,13 @@ function prismaHarness(): Harness {
         data: { is_active: false },
       });
     },
+    async setDeliveries(businessId, enabled) {
+      await prisma.businessEntitlement.upsert({
+        where: { businessId_module: { businessId, module: "DELIVERIES" } },
+        create: { businessId, module: "DELIVERIES", enabled },
+        update: { enabled },
+      });
+    },
     async lastUsedAt(apiKeyId) {
       return (
         (await prisma.apiKey.findUnique({ where: { id: apiKeyId } }))
@@ -198,6 +209,9 @@ function memoryHarness(timeZones: Map<string, string>): Harness {
     },
     async deactivate(businessId) {
       apiKeys.inactiveBusinesses.add(businessId);
+    },
+    async setDeliveries(businessId, enabled) {
+      apiKeys.deliveriesModule.set(businessId, enabled);
     },
     async lastUsedAt(apiKeyId) {
       return (
@@ -406,6 +420,7 @@ describe.each([
       id: first!.id,
       name: "Um editado",
       is_active: true,
+      disabled_at: null,
     });
   });
 
@@ -441,6 +456,47 @@ describe.each([
     expect(await h.endpoints.delete(one!.id, A)).toBe(false);
     expect(await h.endpoints.delete(one!.id, B)).toBe(true);
     expect(await h.deliveries.findForResend(row, B)).toBeNull();
+  });
+
+  it("test ping: the endpoint's state is read with it; one PENDING `ping` row for this company's endpoint only", async () => {
+    // Plan of 02/11/2026, L1: "Enviar teste" refuses a paused or switched-off
+    // endpoint (find tells which) and queues one row for the chosen one.
+    const chosen = await h.endpoints.createWithinQuota(B, endpoint("Ping"), 50);
+
+    expect(await h.endpoints.find(chosen!.id, B)).toEqual({
+      id: chosen!.id,
+      name: "Ping",
+      is_active: true,
+      disabled_at: null,
+    });
+
+    await h.switchOff(chosen!.id);
+    expect((await h.endpoints.find(chosen!.id, B))?.disabled_at).toBeInstanceOf(
+      Date,
+    );
+
+    // Another company's endpoint: nothing queued, nothing to say.
+    expect(await h.deliveries.queuePing(chosen!.id, A)).toBeNull();
+
+    const queued = await h.deliveries.queuePing(chosen!.id, B);
+
+    expect(queued).not.toBeNull();
+
+    const row = await h.delivery(queued!.id);
+
+    expect(row).toMatchObject({
+      endpointId: chosen!.id,
+      businessId: B,
+      topic: "ping",
+      sourceEventId: queued!.eventId,
+      status: "PENDING",
+      attempts: 0,
+    });
+    expect(JSON.parse(row!.signed_body!)).toMatchObject({
+      id: queued!.eventId,
+      topic: "ping",
+      data: { endpoint_id: chosen!.id },
+    });
   });
 
   it("monitor: queue of any age, settled rows inside the window, order, cap and nearest-rank p95", async () => {
@@ -625,6 +681,22 @@ describe.each([
       business: { is_active: true, timezone: "America/Manaus" },
     });
     expect(typeof credential!.token_hash).toBe("string");
+
+    // The module gate rides on the same lookup (L5): no row = never hired,
+    // then the row as the master switches it.
+    expect(credential!.business.entitlements).toEqual([]);
+
+    await h.setDeliveries(B, true);
+    expect(
+      (await h.apiKeys.findCredentialByPrefix(issued!.prefix))!.business
+        .entitlements,
+    ).toEqual([{ module: "DELIVERIES", enabled: true }]);
+
+    await h.setDeliveries(B, false);
+    expect(
+      (await h.apiKeys.findCredentialByPrefix(issued!.prefix))!.business
+        .entitlements,
+    ).toEqual([{ module: "DELIVERIES", enabled: false }]);
     expect(
       await h.apiKeys.findCredentialByPrefix("trj_naoexiste000000"),
     ).toBeNull();

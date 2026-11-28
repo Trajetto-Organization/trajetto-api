@@ -26,6 +26,7 @@ class ListFuelController {
       branchId,
       vehicleId,
       fuelTypeId,
+      alerts,
     } = request.query as z.infer<typeof listFuelSchema>;
 
     const listFuelUseCase = container.resolve(ListFuelUseCase);
@@ -43,6 +44,7 @@ class ListFuelController {
           branchIds: branchId,
           vehicleIds: vehicleId,
           fuelTypeIds: fuelTypeId,
+          alerts,
         })
         .then((result) => ({
           data: result.data,

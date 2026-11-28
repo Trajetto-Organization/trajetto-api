@@ -5,6 +5,7 @@ import { ListDriverController } from "@/modules/driver/usecases/list-driver/list
 
 import { UpdateDriverController } from "@/modules/driver/usecases/update-driver/update-driver-controller";
 import { DeleteDriverController } from "@/modules/driver/usecases/delete-driver/delete-driver-controller";
+import { AnonymizeDriverController } from "@/modules/driver/usecases/anonymize-driver/anonymize-driver-controller";
 
 import { ExportDriverController } from "@/modules/driver/usecases/export-driver/export-driver-controller";
 import { SearchDriverCursorController } from "@/modules/driver/usecases/search-driver-cursor/search-driver-cursor-controller";
@@ -33,6 +34,7 @@ const searchDriverCursorController = new SearchDriverCursorController();
 
 const updateDriverController = new UpdateDriverController();
 const deleteDriverController = new DeleteDriverController();
+const anonymizeDriverController = new AnonymizeDriverController();
 
 async function driverRoutes(app: FastifyInstance) {
   app.post(
@@ -48,7 +50,7 @@ async function driverRoutes(app: FastifyInstance) {
         tags: ["driver"],
         summary: "Cadastra um motorista",
         description:
-          "Cadastra um motorista na empresa do caminho: dados pessoais, endereço, CNH (número, categoria e validade — as duas últimas opcionais, a validade como data civil AAAA-MM-DD) e, opcionalmente, a filial. CPF e CNH são únicos POR EMPRESA (decisão 8.1): o mesmo motorista autônomo pode trabalhar para duas transportadoras, e o 409 nunca revela cadastro de outra. Avisa as telas abertas da empresa (`catalogChanged`, entidade `driver`).",
+          'Cadastra um motorista na empresa do caminho: dados pessoais, endereço, CNH (número, categoria e validade — as duas últimas opcionais, a validade como data civil AAAA-MM-DD) e, opcionalmente, a filial. O CPF, com ou sem máscara, tem os dígitos verificadores conferidos pela regra do login: errado ou com um dígito só repetido, 400 VALIDATION_ERROR com "O CPF informado não é válido.". CPF e CNH são únicos POR EMPRESA (decisão 8.1): o mesmo motorista autônomo pode trabalhar para duas transportadoras, e o 409 nunca revela cadastro de outra. Avisa as telas abertas da empresa (`catalogChanged`, entidade `driver`).',
         params: driverSchemas.businessIdParam,
         body: driverSchemas.createDriver,
         response: {
@@ -155,7 +157,7 @@ async function driverRoutes(app: FastifyInstance) {
         tags: ["driver"],
         summary: "Edita um motorista",
         description:
-          "Edita os dados do motorista da empresa do caminho. Inativar um motorista com rota planejada, liberada ou em andamento é recusado com 409 DRIVER_HAS_OPEN_ROUTES e a contagem (decisão 8.3): a rota em andamento precisa terminar ou ser cancelada, e as outras, ir para outro motorista ou ser canceladas. Motorista de outra empresa responde 404, como um inexistente. Avisa as telas abertas da empresa (`catalogChanged`, entidade `driver`).",
+          "Edita os dados do motorista da empresa do caminho. O CPF enviado passa pela mesma regra do cadastro, mesmo igual ao gravado: um cadastro antigo com CPF inválido só salva com o CPF corrigido, inativar inclusive, quando o CPF vai no corpo (para cortar o acesso sem o cadastro: PATCH /user/revoke-access/:userId). Inativar um motorista com rota planejada, liberada ou em andamento é recusado com 409 DRIVER_HAS_OPEN_ROUTES e a contagem (decisão 8.3): a rota em andamento precisa terminar ou ser cancelada, e as outras, ir para outro motorista ou ser canceladas. Inativar encerra todas as sessões do login do motorista (e apaga os aparelhos de push delas) e anula o QR Code de acesso ainda não usado; a próxima requisição do app recebe 403 AUTH_DRIVER_INACTIVE. Motorista de outra empresa responde 404, como um inexistente. Avisa as telas abertas da empresa (`catalogChanged`, entidade `driver`).",
         params: driverSchemas.driverBusinessParams,
         body: driverSchemas.updateDriver,
         response: {
@@ -199,6 +201,34 @@ async function driverRoutes(app: FastifyInstance) {
       },
     },
     deleteDriverController.handle,
+  );
+
+  app.post(
+    "/anonymize-driver/:driverId/business/:businessId",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [
+        verifyBusinessActive,
+        verifyPermission("driver_manage", "write"),
+      ],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["driver"],
+        summary: "Remove e anonimiza um motorista com histórico",
+        description:
+          "Para o motorista que já trabalhou e que a exclusão recusa por histórico (plano de escala F3-27, LGPD). Responde 202 e põe na fila o job USER_ANONYMIZE, que apaga os dados pessoais dele e do login do app (nome, que vira 'Motorista removido', CPF, RG, CNH, nascimento, endereço, e-mail, telefone, foto, sessões, aparelhos e a trilha de GPS recente) e mantém o histórico (entregas, comprovantes, assinaturas, mensagens) com o autor anônimo. O login perde o acesso. Pedir de novo responde o mesmo job. Motorista de outra empresa responde 404, como um inexistente. Empresa desativada responde 403 TENANT_INACTIVE.",
+        params: driverSchemas.driverBusinessParams,
+        response: {
+          202: driverResponses.driverAnonymizeScheduled,
+          400: driverResponses.validationErrors,
+          403: driverResponses.writeForbidden,
+          404: driverResponses.notFound,
+          409: driverResponses.anonymizeConflicts,
+          500: driverResponses.internalServerError,
+        },
+      },
+    },
+    anonymizeDriverController.handle,
   );
 }
 

@@ -25,9 +25,8 @@ import { createPrismaClient } from "@/shared/database/database-client";
 const pool = vi.hoisted(() => ({ inFlight: 0, peak: 0 }));
 
 vi.mock("@/../infra/database", async () => {
-  const { createPrismaClient } = await import(
-    "@/shared/database/database-client"
-  );
+  const { createPrismaClient } =
+    await import("@/shared/database/database-client");
 
   const counted = createPrismaClient().$extends({
     query: {
@@ -388,6 +387,7 @@ describe("one screen, at most two connections", () => {
       new UserRepository(),
       new DeliveryRepository(),
       { getFileUrl: async (key: string) => key } as never,
+      new BusinessRepository(),
     );
 
     const { peak, result } = await peakOf(() =>

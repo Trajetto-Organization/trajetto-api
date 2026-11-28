@@ -1,6 +1,16 @@
 import database from "@/../infra/database";
 
 import {
+  PARTIAL_RUN_MARKER,
+  isPartialRunMessage,
+} from "@/shared/errors/partial-run-error";
+import { PARTITION_OWNER_ROLE } from "@/shared/database/partition-owner";
+import {
+  registeredPartitions,
+  retentionCutoff,
+  type PartitionedTable,
+} from "@/shared/database/partitions";
+import {
   parsePartitionBound,
   type PartitionRange,
 } from "@/shared/route/driver-position-rules";
@@ -10,8 +20,9 @@ import { isStuck } from "./worker-heartbeat";
 /**
  * The state of the machinery behind the queues, for /health/metrics: which
  * workers are alive on which replica (OBS-10), when each cron job last
- * succeeded (OBS-10, INV-07) and how many days of driver_position partitions
- * are left (INV-07). Each read is a handful of rows from a small table.
+ * succeeded (OBS-10, INV-07) and how the partitions of every registered
+ * table stand (INV-07, plano-escala F2-09). Each read is a handful of rows
+ * from a small table or from the catalog.
  */
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -28,6 +39,22 @@ const HEARTBEAT_VISIBLE_MS = 10 * 60 * 1000;
  * inserts are a few days from being refused (no DEFAULT partition).
  */
 const RUNWAY_MIN_DAYS = 3;
+
+/**
+ * Below this, the lookahead is being eaten (plano-escala F2-09): the job
+ * keeps 7 days ahead, so right before its run there are 6; under 5 means
+ * two nights in a row without it, with days still left to act before a
+ * position or a queue row is refused. The earlier warning of the two.
+ */
+const LOOKAHEAD_MIN_DAYS = 5;
+
+/**
+ * A partition past the retention by more than this is stuck: three nights
+ * of the job failing to detach or drop it (a lock that never came, a
+ * DETACH left pending, a permission). The disk keeps it until somebody
+ * looks.
+ */
+const PARTITION_STUCK_GRACE_DAYS = 3;
 
 interface WorkerMetrics {
   replica: string;
@@ -73,6 +100,20 @@ interface CronJobMetrics {
 
   /** RUNNING rows whose lease ran out: a run whose replica died mid-way. */
   stale_running: number;
+
+  /**
+   * The latest run stopped with work left (FAILED "[partial]", F1-17): the
+   * catch-up sweep retries it inside the partial window.
+   */
+  last_partial: boolean;
+
+  /**
+   * The first partial run since the last success: how long the job has
+   * done nothing but partials. Null when the latest run is not partial, and
+   * when a run that really failed came after the last success: then the
+   * job is not "only slow", and the alert judges it by its last success.
+   */
+  partial_since: string | null;
 }
 
 /** Enough of the error to recognise it on a screen. */
@@ -80,16 +121,35 @@ const CRON_ERROR_MAX_LENGTH = 500;
 
 /**
  * Every job this replica schedules, plus any job that has rows — so a job
- * that never ran still shows, with nulls, instead of being absent.
+ * that never ran still shows, with nulls, instead of being absent, and a job
+ * removed or renamed shows with a null schedule for the 30 days its rows are
+ * kept (the snapshot and the web leave those out).
  *
- * The success query reads (status, jobName, finishedAt) index-only; the
- * latest-row query walks the (jobName, scheduledFor) unique index. The table
- * holds 30 days of a few firings a day.
+ * Every part reads a few index entries per job, never the whole table: 30
+ * days of the per-minute jobs are ~144 000 rows (staging, 26/11/2026). The
+ * latest row used to come from a DISTINCT ON over all of them and the last
+ * success from a GROUP BY over every SUCCEEDED row: once a minute, a sort
+ * of the table that spilled to disk under work_mem 4MB (3.6 s once, on a
+ * cold cache) to keep ~20 rows. Now the job names come from a skip scan of
+ * the (jobName, scheduledFor) unique index, one probe per name — from the
+ * table and not from the registry, so a removed job still shows as before;
+ * the latest row is a backward probe of that index; the last success is
+ * max(finishedAt) on (status, jobName, finishedAt), which Postgres runs as
+ * one index-only probe that skips NULLs, as the GROUP BY's max() did. The
+ * stale count stays a range on status = 'RUNNING', a few rows at most.
+ *
+ * The partial streak takes every FAILED run since the last success and
+ * keeps the job only when all of them were partial (bool_and; a NULL
+ * lastError counts as a real failure; no FAILED run at all is a NULL
+ * bool_and, left out). It used to keep only the partials and date them
+ * from the last success, so a statement timeout on two nights and one
+ * partial on the third read as a fresh streak: the alert gave the job 26 h
+ * more of grace while it had not succeeded in 72.
  */
 async function readCronJobs(
   registered: ReadonlyArray<{ name: string; schedule: string }>,
 ): Promise<CronJobMetrics[]> {
-  // Three reads, one statement (one round trip, one pool checkout): each
+  // Four reads, one statement (one round trip, one pool checkout): each
   // json_agg'ed subquery keeps its own plan. Timestamps go through
   // AT TIME ZONE 'UTC' so the JSON carries an offset: the columns are
   // timestamp(3) holding UTC, and a bare "2026-10-28T03:00:00" would be
@@ -106,30 +166,68 @@ async function readCronJobs(
       }>;
       succeeded: Array<{ jobName: string; last: string | null }>;
       stale: Array<{ jobName: string; n: number }>;
+      partial: Array<{ jobName: string; since: string | null }>;
     }>
   >`
+    WITH RECURSIVE walk AS (
+      (SELECT "jobName" FROM "scheduled_job_execution"
+        ORDER BY "jobName" LIMIT 1)
+      UNION ALL
+      SELECT (
+        SELECT e."jobName" FROM "scheduled_job_execution" e
+        WHERE e."jobName" > w."jobName"
+        ORDER BY e."jobName" LIMIT 1
+      )
+      FROM walk w
+      WHERE w."jobName" IS NOT NULL
+    ),
+    jobs AS (SELECT "jobName" FROM walk WHERE "jobName" IS NOT NULL)
     SELECT
       (SELECT coalesce(json_agg(l), '[]'::json) FROM (
-        SELECT DISTINCT ON ("jobName")
-          "jobName", "status"::text AS status,
-          "scheduledFor" AT TIME ZONE 'UTC' AS "scheduledFor",
-          "finishedAt" AT TIME ZONE 'UTC' AS "finishedAt",
-          "attempts", "lastError"
-        FROM "scheduled_job_execution"
-        ORDER BY "jobName", "scheduledFor" DESC
+        SELECT j."jobName", e.status, e."scheduledFor", e."finishedAt",
+          e."attempts", e."lastError"
+        FROM jobs j
+        CROSS JOIN LATERAL (
+          SELECT x."status"::text AS status,
+            x."scheduledFor" AT TIME ZONE 'UTC' AS "scheduledFor",
+            x."finishedAt" AT TIME ZONE 'UTC' AS "finishedAt",
+            x."attempts", x."lastError"
+          FROM "scheduled_job_execution" x
+          WHERE x."jobName" = j."jobName"
+          ORDER BY x."scheduledFor" DESC
+          LIMIT 1
+        ) e
       ) l) AS latest,
       (SELECT coalesce(json_agg(s), '[]'::json) FROM (
-        SELECT "jobName", max("finishedAt") AT TIME ZONE 'UTC' AS last
-        FROM "scheduled_job_execution"
-        WHERE "status" = 'SUCCEEDED'
-        GROUP BY "jobName"
+        SELECT j."jobName", (
+          SELECT max(x."finishedAt") FROM "scheduled_job_execution" x
+          WHERE x."status" = 'SUCCEEDED' AND x."jobName" = j."jobName"
+        ) AT TIME ZONE 'UTC' AS last
+        FROM jobs j
       ) s) AS succeeded,
       (SELECT coalesce(json_agg(r), '[]'::json) FROM (
         SELECT "jobName", count(*)::int AS n
         FROM "scheduled_job_execution"
         WHERE "status" = 'RUNNING' AND "leaseExpiresAt" < now()
         GROUP BY "jobName"
-      ) r) AS stale
+      ) r) AS stale,
+      (SELECT coalesce(json_agg(p), '[]'::json) FROM (
+        SELECT j."jobName", f.since AT TIME ZONE 'UTC' AS since
+        FROM jobs j
+        CROSS JOIN LATERAL (
+          SELECT min(x."scheduledFor") AS since,
+            bool_and(
+              coalesce(starts_with(x."lastError", ${PARTIAL_RUN_MARKER}), false)
+            ) AS only_partial
+          FROM "scheduled_job_execution" x
+          WHERE x."jobName" = j."jobName" AND x."status" = 'FAILED'
+            AND x."scheduledFor" > coalesce((
+              SELECT max(s."scheduledFor") FROM "scheduled_job_execution" s
+              WHERE s."jobName" = j."jobName" AND s."status" = 'SUCCEEDED'
+            ), '-infinity'::timestamp)
+        ) f
+        WHERE f.only_partial
+      ) p) AS partial
   `;
 
   const iso = (value: string | null | undefined) =>
@@ -138,6 +236,7 @@ async function readCronJobs(
   const latest = row?.latest ?? [];
   const succeeded = row?.succeeded ?? [];
   const stale = row?.stale ?? [];
+  const partial = row?.partial ?? [];
 
   const schedules = new Map(registered.map((job) => [job.name, job.schedule]));
   const latestBy = new Map(latest.map((row) => [row.jobName, row]));
@@ -145,11 +244,17 @@ async function readCronJobs(
     succeeded.map((entry) => [entry.jobName, iso(entry.last)]),
   );
   const staleBy = new Map(stale.map((row) => [row.jobName, row.n]));
+  const partialBy = new Map(
+    partial.map((entry) => [entry.jobName, iso(entry.since)]),
+  );
 
   const names = [...new Set([...schedules.keys(), ...latestBy.keys()])].sort();
 
   return names.map((job) => {
     const row = latestBy.get(job);
+    const lastPartial =
+      row?.status === "FAILED" && isPartialRunMessage(row.lastError);
+    const partialSince = lastPartial ? partialBy.get(job) : undefined;
 
     return {
       job,
@@ -161,6 +266,8 @@ async function readCronJobs(
       attempts: row?.attempts ?? null,
       last_error: row?.lastError?.slice(0, CRON_ERROR_MAX_LENGTH) ?? null,
       stale_running: staleBy.get(job) ?? 0,
+      last_partial: lastPartial,
+      partial_since: partialSince ?? null,
     };
   });
 }
@@ -209,28 +316,212 @@ function partitionRunway(
   };
 }
 
-/** The attached partitions of driver_position, from the catalogue. */
-async function readPartitionRunway(now = new Date()): Promise<PartitionRunway> {
-  const bounds = await database.$queryRaw<Array<{ bound: string }>>`
-    SELECT pg_get_expr(c.relpartbound, c.oid) AS bound
-    FROM pg_inherits i
-    JOIN pg_class c ON c.oid = i.inhrelid
-    WHERE i.inhparent = '"driver_position"'::regclass
-  `;
+/** One partitioned table on /health/metrics (`partitions.<table>`). */
+interface PartitionTableMetrics {
+  /** Attached partitions, a pending detach included. */
+  partitions: number;
 
-  const ranges = bounds
-    .map((row) => parsePartitionBound(row.bound))
+  /** Whole days until the last partition ends; null when there is none. */
+  lookahead_days: number | null;
+  last_partition_ends_at: string | null;
+  oldest_partition_starts_at: string | null;
+  /** Null: a kept table, nothing is ever detached (F2-16). */
+  retention_days: number | null;
+
+  /** At least 3 days ahead (partition-runway-low under it). */
+  runway_ok: boolean;
+
+  /** At least 5 days ahead (partition-lookahead-low under it). */
+  lookahead_ok: boolean;
+
+  /** Partitions a DETACH … CONCURRENTLY left half-way. */
+  detach_pending: number;
+
+  /** Partitions past the retention by more than 3 days: never dropped. */
+  stuck: string[];
+
+  /**
+   * trajetto_partitions owns the parent and every partition
+   * (infra/sql/10-partitions.sql): the job can run as it, which is what a
+   * runtime without a superuser needs.
+   */
+  owner_ok: boolean;
+}
+
+interface PartitionCatalogRow {
+  relname: string;
+  bound: string | null;
+  detach_pending: boolean;
+  owned: boolean;
+}
+
+/**
+ * How one table's partitions stand. Pure: the catalog's rows, the
+ * registry's entry and an instant. A table that keeps no lookahead (one
+ * being retired, whose rows go to its successor) is not judged on it.
+ */
+function partitionTableState(
+  table: PartitionedTable,
+  parent: { owned: boolean; partitioned?: boolean } | null,
+  rows: readonly PartitionCatalogRow[],
+  now: Date = new Date(),
+): PartitionTableMetrics {
+  // A queue before its swap (F5-09), or a history table before its copy
+  // window (F2-17), is a plain table with no partition to judge: neither a
+  // runway nor an owner to page about yet. The window's shell, once the
+  // window renamed it to its table, is gone on purpose: the same.
+  if (
+    (table.plainUntilSwap && parent?.partitioned === false) ||
+    (table.shellUntilWindow && parent === null)
+  ) {
+    return {
+      partitions: 0,
+      lookahead_days: null,
+      last_partition_ends_at: null,
+      oldest_partition_starts_at: null,
+      retention_days: table.retentionDays,
+      runway_ok: true,
+      lookahead_ok: true,
+      detach_pending: 0,
+      stuck: [],
+      owner_ok: true,
+    };
+  }
+
+  const ranged = rows.map((row) => ({
+    row,
+    range: row.bound ? parsePartitionBound(row.bound) : null,
+  }));
+  const ranges = ranged
+    .map((each) => each.range)
     .filter((range): range is PartitionRange => range !== null);
 
-  return partitionRunway(ranges, now);
+  const runway = partitionRunway(ranges, now);
+  const judged = table.lookahead > 0;
+  const days = runway.partition_runway_days;
+  const unbounded = ranges.length > 0 && days === null && runway.runway_ok;
+
+  // A queue's grace is its own (QUEUE_PARTITION_STUCK_ALERT_DAYS, F5-11).
+  const stuckBy =
+    retentionCutoff(table, now).getTime() -
+    (table.stuckGraceDays ?? PARTITION_STUCK_GRACE_DAYS) * DAY_MS;
+  const starts = ranges
+    .map((range) => range.from)
+    .filter((from) => Number.isFinite(from));
+
+  return {
+    partitions: rows.length,
+    lookahead_days: days,
+    last_partition_ends_at: runway.last_partition_ends_at,
+    oldest_partition_starts_at:
+      starts.length > 0 ? new Date(Math.min(...starts)).toISOString() : null,
+    retention_days: table.retentionDays,
+    runway_ok: !judged || runway.runway_ok,
+    lookahead_ok:
+      !judged || unbounded || (days !== null && days >= LOOKAHEAD_MIN_DAYS),
+    detach_pending: rows.filter((row) => row.detach_pending).length,
+    stuck: ranged
+      .filter(({ range }) => range !== null && range.to <= stuckBy)
+      .map(({ row }) => row.relname)
+      .sort(),
+    owner_ok: parent !== null && parent.owned && rows.every((row) => row.owned),
+  };
+}
+
+/**
+ * Every registered table's partitions, from the catalog, in one statement:
+ * the bounds, the pending detaches and whether trajetto_partitions owns
+ * each one. A registered table that does not exist reads as having no
+ * partition, which is what it means for an insert.
+ */
+async function readPartitionStates(
+  now: Date = new Date(),
+  tables: readonly PartitionedTable[] = registeredPartitions(),
+): Promise<Record<string, PartitionTableMetrics>> {
+  const rows = await database.$queryRawUnsafe<
+    Array<{
+      parent: string;
+      parent_owned: boolean;
+      parent_partitioned: boolean;
+      relname: string | null;
+      bound: string | null;
+      detach_pending: boolean | null;
+      owned: boolean;
+    }>
+  >(
+    `SELECT t.name AS parent,
+            coalesce(p.relowner = r.oid, false) AS parent_owned,
+            p.relkind = 'p' AS parent_partitioned,
+            c.relname::text AS relname,
+            pg_get_expr(c.relpartbound, c.oid) AS bound,
+            i.inhdetachpending AS detach_pending,
+            coalesce(c.relowner = r.oid, false) AS owned
+       FROM unnest($1::text[]) AS t(name)
+       JOIN pg_class p ON p.oid = to_regclass(quote_ident(t.name))
+       LEFT JOIN pg_roles r ON r.rolname = $2
+       LEFT JOIN pg_inherits i ON i.inhparent = p.oid
+       LEFT JOIN pg_class c ON c.oid = i.inhrelid`,
+    tables.map((table) => table.table),
+    PARTITION_OWNER_ROLE,
+  );
+
+  return Object.fromEntries(
+    tables.map((table) => {
+      const own = rows.filter((row) => row.parent === table.table);
+      const parent =
+        own.length > 0
+          ? {
+              owned: own[0].parent_owned,
+              partitioned: own[0].parent_partitioned,
+            }
+          : null;
+      const partitions = own
+        .filter((row) => row.relname !== null)
+        .map((row) => ({
+          relname: row.relname as string,
+          bound: row.bound,
+          detach_pending: row.detach_pending === true,
+          owned: row.owned,
+        }));
+
+      return [table.table, partitionTableState(table, parent, partitions, now)];
+    }),
+  );
+}
+
+/**
+ * The shape /health/metrics had before the registry, kept as the
+ * `driver_position` alias for one release: the web's Sistema screen reads
+ * it (trajetto-ui, system-metrics).
+ */
+function legacyRunway(
+  state: PartitionTableMetrics | undefined,
+): PartitionRunway {
+  if (!state) return partitionRunway([]);
+
+  return {
+    partition_runway_days: state.lookahead_days,
+    last_partition_ends_at: state.last_partition_ends_at,
+    runway_ok: state.runway_ok,
+  };
 }
 
 export {
   HEARTBEAT_VISIBLE_MS,
+  LOOKAHEAD_MIN_DAYS,
+  PARTITION_STUCK_GRACE_DAYS,
   RUNWAY_MIN_DAYS,
+  legacyRunway,
   partitionRunway,
+  partitionTableState,
   readCronJobs,
-  readPartitionRunway,
+  readPartitionStates,
   readWorkerHeartbeats,
 };
-export type { CronJobMetrics, PartitionRunway, WorkerMetrics };
+export type {
+  CronJobMetrics,
+  PartitionCatalogRow,
+  PartitionRunway,
+  PartitionTableMetrics,
+  WorkerMetrics,
+};

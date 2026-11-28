@@ -7,6 +7,7 @@ import {
   ENDPOINT_PAUSED_REASON,
   REPLAY_WINDOW_DAYS,
 } from "@/shared/integration/webhook-dispatch-rules";
+import { PING_TOPIC } from "@/shared/integration/webhook-catalogue";
 
 import type {
   IWebhookDeliveryRepository,
@@ -227,6 +228,70 @@ class InMemoryWebhookDeliveryRepository implements IWebhookDeliveryRepository {
     }
 
     return released;
+  }
+
+  /**
+   * As queueWebhookPing: one PENDING `ping` row for this company's endpoint,
+   * with the envelope a receiver gets (the signature is the dispatcher's
+   * business, not the twin's), or null for another company's endpoint.
+   */
+  async queuePing(
+    endpointId: string,
+    businessId: string,
+  ): Promise<{ id: string; eventId: string } | null> {
+    const endpoint = this.endpoints.endpoints.find(
+      (candidate) =>
+        candidate.id === endpointId && candidate.businessId === businessId,
+    );
+
+    if (!endpoint) return null;
+
+    const now = this.now();
+    const eventId = randomUUID();
+    const sequence =
+      this.deliveries.reduce(
+        (highest, row) =>
+          Math.max(
+            highest,
+            Number((row.payload as { sequence?: number })?.sequence ?? 0),
+          ),
+        0,
+      ) + 1;
+
+    const envelope = {
+      id: eventId,
+      sequence,
+      topic: PING_TOPIC,
+      created_at: now.toISOString(),
+      data: { endpoint_id: endpointId },
+    };
+
+    const row: WebhookDelivery = {
+      id: randomUUID(),
+      endpointId,
+      businessId,
+      topic: PING_TOPIC,
+      sourceEventId: eventId,
+      payload: envelope as WebhookDelivery["payload"],
+      signature: "",
+      signed_body: JSON.stringify(envelope),
+      status: WebhookDeliveryStatus.PENDING,
+      attempts: 0,
+      availableAt: now,
+      leaseExpiresAt: null,
+      response_status: null,
+      response_body: null,
+      latency_ms: null,
+      deliveredAt: null,
+      lastError: null,
+      resent_from_id: null,
+      created_at: now,
+      updated_at: now,
+    };
+
+    this.deliveries.push(row);
+
+    return { id: row.id, eventId };
   }
 
   async releaseHeldIfEndpointBack(

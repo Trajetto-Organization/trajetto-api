@@ -11,6 +11,13 @@ import {
   REVERSAL_STALE_AFTER_MS,
 } from "@/modules/import/services/import-reversal";
 import { createPrismaClient } from "@/shared/database/database-client";
+import { container } from "tsyringe";
+import { env } from "@/env";
+import { BackgroundJobRepository } from "@/shared/jobs/background-job-repository";
+import { JobStoppedError } from "@/shared/jobs/job-errors";
+import { JobRunner } from "@/shared/jobs/job-runner";
+import { registerJobHandlers } from "@/shared/jobs/job-handlers";
+import { ReverseImportUseCase } from "@/modules/import/usecases/reverse-import/reverse-import-usecase";
 
 /**
  * Undoing a big upload on Postgres, through the HTTP route.
@@ -24,7 +31,10 @@ import { createPrismaClient } from "@/shared/database/database-client";
  * polls get-import). Proven here with real volume, a webhook subscriber (so
  * every removed delivery writes its `delivery.cancelled` row, the slow part),
  * rows the undo must keep, a crash halfway that a retry resumes without
- * announcing anything twice, and a run that lost its lease.
+ * announcing anything twice, and a run that lost its lease. With
+ * IMPORT_DURABLE_JOBS (plano-escala F3-24) the same undo runs as a job of
+ * the `jobs` queue instead of this replica's queue, and a stop between two
+ * batches hands it to the next process.
  */
 const prisma = createPrismaClient();
 
@@ -471,4 +481,136 @@ describe("an undo that stopped halfway on Postgres", () => {
       ),
     ).resolves.toMatchObject({ removedDeliveries: 30 });
   }, 120_000);
+});
+
+describe("a large undo as a durable job (F3-24)", () => {
+  const runner = () => {
+    const instance = new JobRunner({
+      store: new BackgroundJobRepository(),
+      sweepIntervalMs: 60_000,
+      owner: () => `reversal-${randomUUID().slice(0, 4)}`,
+    });
+
+    registerJobHandlers(instance);
+
+    return instance;
+  };
+
+  const jobsOf = (importId: string) =>
+    prisma.backgroundJob.findMany({
+      where: { kind: "IMPORT_REVERSAL", subjectId: importId },
+      select: { status: true, attempts: true },
+    });
+
+  /** The cancellations announced for these deliveries. */
+  async function cancelledOf(ids: string[]): Promise<string[]> {
+    const wanted = new Set(ids);
+
+    return (await cancelledIds()).filter((id) => wanted.has(id));
+  }
+
+  beforeAll(() => {
+    env.IMPORT_DURABLE_JOBS = true;
+  });
+
+  afterAll(() => {
+    env.IMPORT_DURABLE_JOBS = false;
+  });
+
+  it("answers 202 and runs in the job, not in this replica's queue; a second click follows it", async () => {
+    const total = REVERSAL_BATCH_SIZE * 2 + 10;
+    const record = await seedImport(total);
+    const ids = (
+      await prisma.delivery.findMany({
+        where: { importId: record.id },
+        select: { id: true },
+      })
+    ).map((row) => row.id);
+
+    const response = await reverse(record.id);
+
+    expect(response.statusCode, response.body).toBe(202);
+    expect(response.json().data.reversal).toMatchObject({ state: "RUNNING" });
+    expect(importQueue.size()).toBe(0);
+    expect(await jobsOf(record.id)).toEqual([
+      { status: "PENDING", attempts: 0 },
+    ]);
+
+    // The second click: the same job, followed.
+    expect((await reverse(record.id)).statusCode).toBe(202);
+    expect(await jobsOf(record.id)).toHaveLength(1);
+
+    expect(await runner().processBatch()).toBe(1);
+
+    const settled = await followUntilSettled(record.id);
+
+    expect(settled.status).toBe("REVERSED");
+    expect(settled.reversal).toMatchObject({
+      state: "DONE",
+      removedDeliveries: total,
+    });
+    expect(await jobsOf(record.id)).toEqual([
+      { status: "SUCCEEDED", attempts: 1 },
+    ]);
+
+    const announced = await cancelledOf(ids);
+
+    expect(announced).toHaveLength(total);
+    expect(new Set(announced).size).toBe(total);
+  }, 300_000);
+
+  it("stops between two batches when asked and is finished by the next process, each removal announced once", async () => {
+    const total = REVERSAL_BATCH_SIZE * 3;
+    const record = await seedImport(total);
+    const ids = (
+      await prisma.delivery.findMany({
+        where: { importId: record.id },
+        select: { id: true },
+      })
+    ).map((row) => row.id);
+
+    expect((await reverse(record.id)).statusCode).toBe(202);
+
+    // SIGTERM after the first delivery batch: the third look between two
+    // batches (the routes', the first's, the second's) says stop.
+    let looks = 0;
+    const stopping = new JobRunner({
+      store: new BackgroundJobRepository(),
+      sweepIntervalMs: 60_000,
+      owner: () => "stopping",
+    });
+
+    stopping.register("IMPORT_REVERSAL", {
+      run: (job) =>
+        container.resolve(ReverseImportUseCase).runJob({
+          ...job,
+          throwIfStopped: () => {
+            looks += 1;
+
+            if (looks === 3) throw new JobStoppedError(job.id);
+          },
+        }),
+    });
+
+    await stopping.processBatch();
+
+    expect(await jobsOf(record.id)).toEqual([
+      { status: "PENDING", attempts: 0 },
+    ]);
+    expect(
+      await prisma.delivery.count({ where: { importId: record.id } }),
+    ).toBe(total - REVERSAL_BATCH_SIZE);
+
+    expect(await runner().processBatch()).toBe(1);
+
+    const settled = await followUntilSettled(record.id);
+
+    expect(settled.status).toBe("REVERSED");
+    expect(settled.reversal.removedDeliveries).toBe(total);
+
+    const announced = await cancelledOf(ids);
+
+    expect(announced).toHaveLength(total);
+    expect(new Set(announced).size).toBe(total);
+  }, 300_000);
 });

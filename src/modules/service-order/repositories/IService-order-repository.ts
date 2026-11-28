@@ -9,6 +9,9 @@ import {
   SearchServiceOrderByVehicleWithCursorProps,
   ServiceOrderListQuery,
   DeleteServiceOrderResult,
+  ServiceOrderDetail,
+  SearchDriverServiceOrdersProps,
+  CursorPaginatedServiceOrderDetail,
 } from "../dtos/service-order-dto";
 
 import { Prisma } from "@prisma/client";
@@ -59,10 +62,32 @@ interface IServiceOrderRepository {
   searchServiceOrderWithCursor: (
     props: SearchServiceOrderWithCursorProps,
   ) => Promise<CursorPaginatedServiceOrder>;
+  /**
+   * One vehicle's orders as the detail reads them, newest first by cursor,
+   * inside one company. The use case cuts each one for its reader: a driver
+   * never gets the money (service-order-views.ts), and `search` compares
+   * only fields of the driver's view, so it cannot find an order by it.
+   */
   searchServiceOrderByVehicleWithCursor: (
     props: SearchServiceOrderByVehicleWithCursorProps,
-  ) => Promise<CursorPaginatedServiceOrder>;
+  ) => Promise<CursorPaginatedServiceOrderDetail>;
   countServiceOrderForExport: (query: ServiceOrderListQuery) => Promise<number>;
+  /**
+   * One order with its links and parts, inside this company only: another
+   * company's id answers null, like one that exists nowhere (wave 3).
+   */
+  findServiceOrderDetail: (
+    serviceOrderId: string,
+    businessId: string,
+  ) => Promise<ServiceOrderDetail | null>;
+  /**
+   * "Minhas OS" (wave 3), newest first by cursor: the caller's orders
+   * (`assigned`, by the responsibleUserId index) or the orders of the given
+   * vehicles that are not the caller's (`vehicle`, by the vehicleId index).
+   */
+  searchServiceOrdersOfDriverWithCursor: (
+    props: SearchDriverServiceOrdersProps,
+  ) => Promise<CursorPaginatedServiceOrderDetail>;
 }
 
 export { IServiceOrderRepository };

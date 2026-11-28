@@ -20,7 +20,7 @@ const listChatRecipientsSchema = cursorPaginationSchema.extend({
 
   app: z
     .enum(["WITH_APP", "WITHOUT_APP"], {
-      errorMap: () => ({ message: "Filtro de aplicativo inválido." }),
+      error: "Filtro de aplicativo inválido.",
     })
     .optional()
     .describe(

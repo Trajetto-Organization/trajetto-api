@@ -1,6 +1,11 @@
 import type { Prisma } from "@prisma/client";
 
 import database from "@/../infra/database";
+import {
+  recordEventSubmission,
+  submittedEventId,
+} from "@/shared/delivery/event-submission";
+import { markSiblingStopsOnTheWay } from "@/shared/delivery/stop-group";
 
 import type {
   ApplyOnTheWayInput,
@@ -82,16 +87,33 @@ class StopOnTheWayRepository implements IStopOnTheWayRepository {
     clientSubmissionId: string,
     businessId: string,
   ): Promise<RecordedOnTheWay | null> {
-    const found = await this.prisma.deliveryEvent.findFirst({
-      where: { client_submission_id: clientSubmissionId, businessId },
-      select: {
-        type: true,
-        deliveryId: true,
-        routeId: true,
-        occurred_at: true,
-        created_at: true,
-      },
-    });
+    const select = {
+      type: true,
+      deliveryId: true,
+      routeId: true,
+      occurred_at: true,
+      created_at: true,
+    } as const;
+
+    // The key's own table first (plano-escala F2-14), then the legacy
+    // column the previous image writes during the rolling deploy (U-10
+    // removes that leg after the copy window).
+    const eventId = await submittedEventId(
+      this.prisma,
+      clientSubmissionId,
+      businessId,
+    );
+
+    const found =
+      (eventId &&
+        (await this.prisma.deliveryEvent.findFirst({
+          where: { id: eventId, businessId },
+          select,
+        }))) ||
+      (await this.prisma.deliveryEvent.findFirst({
+        where: { client_submission_id: clientSubmissionId, businessId },
+        select,
+      }));
 
     if (!found) return null;
 
@@ -159,7 +181,15 @@ class StopOnTheWayRepository implements IStopOnTheWayRepository {
 
     if (stamped.count === 0) throw new StopOnTheWayWriteMissedError();
 
-    await tx.deliveryEvent.create({
+    // The stop's other NF-e at the same door are on the way too (B6).
+    await markSiblingStopsOnTheWay(tx, {
+      routeId: input.routeId,
+      stopId: input.stopId,
+      at: input.stopOnTheWayAt,
+    });
+
+    const event = await tx.deliveryEvent.create({
+      select: { id: true },
       data: {
         type: "ON_THE_WAY",
         deliveryId: input.deliveryId,
@@ -179,6 +209,13 @@ class StopOnTheWayRepository implements IStopOnTheWayRepository {
         // Always set: a replay answers with exactly this instant.
         occurred_at: input.at,
       },
+    });
+
+    // The key commits with its event (plano-escala F2-14).
+    await recordEventSubmission(tx, {
+      clientSubmissionId: input.client_submission_id,
+      eventId: event.id,
+      businessId: input.businessId,
     });
   }
 }

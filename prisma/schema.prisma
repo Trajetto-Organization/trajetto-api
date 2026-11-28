@@ -91,6 +91,14 @@ enum RecordOrigin {
   WEB_DASHBOARD // Created via web dashboard
 }
 
+/// What the office should look at on a refuelling (05/11/2026,
+/// 20261105130000). Stored on the record, never a refusal of its own.
+enum FuelAlert {
+  /// Another refuelling of the same vehicle less than 30 minutes away from
+  /// this one's date, either side (modules/fuel/usecases/fuel-rules.ts).
+  RECENT_REFUEL
+}
+
 model Business {
   id               String  @id @default(uuid(7))
   corporate_reason String  @unique
@@ -108,6 +116,15 @@ model Business {
   telephone        String
   email            String  @unique
   is_active        Boolean @default(true)
+
+  /// The scheduled purge (plano-escala F3-25): NULL until a MASTER schedules
+  /// it — every company of before stays NULL, inactive or not, and is never
+  /// purged — then SCHEDULED (inactive since deactivated_at, the data going
+  /// on purge_after), PURGING (the TENANT_OFFBOARD job started: no way back)
+  /// and PURGED. Reactivating is allowed only while SCHEDULED.
+  purge_state    BusinessPurgeState?
+  deactivated_at DateTime?
+  purge_after    DateTime?
 
   /// IANA zone of the carrier's operation: what "today", "the last N days",
   /// the AI quota month and every daily bucket mean for this company. Brazil
@@ -133,8 +150,7 @@ model Business {
   branches  Branch[]
   suppliers Supplier[]
 
-  Activity     Activity[]
-  Notification Notification[]
+  Activity Activity[]
 
   chatThreads    ChatThread[]
   supportTickets SupportTicket[]
@@ -175,6 +191,7 @@ model Business {
   deliveries          Delivery[]
 
   externalRecipients     ExternalRecipient[]
+  customerSuppressions   CustomerMessageSuppression[]
   deliveryProofDocuments DeliveryProofDocument[]
   deliveryProofAudits    DeliveryProofAudit[]
 
@@ -182,10 +199,14 @@ model Business {
   apiKeyUsage              ApiKeyUsageDaily[]
   driverPositions          DriverLastPosition[]
   webhookEndpoints         WebhookEndpoint[]
-  webhookDeliveries        WebhookDelivery[]
   deliveryMessageTemplates DeliveryMessageTemplate[]
 
   driverPauses DriverPause[]
+
+  settings               BusinessSettings?
+  driverEnrollmentTokens DriverEnrollmentToken[]
+
+  tenantDayCounts TenantDayCount[]
 
   @@map("business")
 }
@@ -193,6 +214,61 @@ model Business {
 enum BusinessModule {
   FLEET
   DELIVERIES
+}
+
+/// When a driver's route asks for the vehicle checklist (plan of 02/11/2026,
+/// item C4). The app holds "Iniciar rota" until the departure checklist is
+/// done (offline too); the server records, never refuses (decision D08).
+enum ChecklistRequirement {
+  NONE
+  ROUTE_START
+  ROUTE_END
+  ROUTE_START_AND_END
+}
+
+/// What an action at the customer's address does when the phone is outside
+/// the radius (items E3/E4; decisions D12-D14). It covers every action there
+/// — arrival, proof and occurrence (the owner's call on D13). ALERT asks the
+/// driver to confirm and flags the record; BLOCK refuses an arrival or a
+/// proof made outside the radius, never an occurrence (flagged instead). A
+/// position without accuracy, or an address without a point, never blocks,
+/// and the server never refuses a queued offline submission, only flags it.
+enum GeofenceMode {
+  DISABLED
+  ALERT
+  BLOCK
+}
+
+/// The company's own settings (item M1): what its admin decides for the
+/// operation, as opposed to the plan the MASTER sells (modules, limits).
+/// One row per company at most, written on the first save; a company without
+/// it reads BUSINESS_SETTINGS_DEFAULTS (src/shared/business/business-settings.ts),
+/// the same values as the column defaults. A setting only applies while its
+/// module is on (item M6): the checklist needs FLEET and DELIVERIES, the
+/// geofence DELIVERIES.
+model BusinessSettings {
+  id String @id @default(uuid(7))
+
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  businessId String   @unique
+
+  checklist_requirement ChecklistRequirement @default(NONE)
+
+  /// Named after the arrival for history, but it governs every action at the
+  /// customer's address (see GeofenceMode).
+  arrival_geofence_mode     GeofenceMode @default(DISABLED)
+  /// Metres, 50 to 5,000 (CHECK business_settings_geofence_radius_chk).
+  arrival_geofence_radius_m Int          @default(500)
+
+  /// Who saved last. SET NULL: removing that user keeps the settings.
+  updatedBy   User?   @relation(fields: [updatedById], references: [id], onDelete: SetNull)
+  updatedById String?
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@index([updatedById])
+  @@map("business_settings")
 }
 
 // Sellable modules per company — the on/off of access. A missing row means
@@ -218,7 +294,13 @@ model BusinessEntitlement {
 model User {
   id             String    @id @default(uuid(7))
   name           String
-  email          String    @unique
+  /// Optional for a driver's login only (decision D02 of the plan of
+  /// 02/11/2026): a driver signs in by QR code or CPF and password. Loosened
+  /// in migration 20261102120100 (nullable-expand); since the release after
+  /// it, creating a driver's login without an e-mail writes NULL. Every other
+  /// user keeps one (the request schemas require it), and an edit never
+  /// clears one. The unique index allows any number of NULLs.
+  email          String?   @unique
   email_verified DateTime? @map("email_verified")
   password       String
   avatar         String?
@@ -238,7 +320,6 @@ model User {
   serviceOrders          ServiceOrder[] // Responsible user
   accountsPayable        AccountPayable[] @relation("AccountPayableResponsible")
   accountsPayableCreated AccountPayable[] @relation("AccountPayableCreatedBy")
-  Notification           Notification[]
   Activity               Activity[]
 
   two_factor_enabled Boolean @default(false)
@@ -253,10 +334,17 @@ model User {
   failed_login_at       DateTime?
   login_locked_until    DateTime?
 
+  /// Wave 2 (06/11/2026): the password was set by somebody else — the
+  /// manager's initial password for a driver's login, or the manager's reset
+  /// — so the person must create their own at the next sign-in. Only the
+  /// clients enforce it (the app's blocking screen, the web's redirect): the
+  /// API refuses nothing, so the app's offline outbox is never turned away.
+  /// Cleared by every password the person sets themselves.
+  must_change_password Boolean @default(false)
+
   TwoFactorConfirmation  TwoFactorConfirmation?
   KanbanCard             KanbanCard[]
   PendingDeletion        PendingDeletion[]
-  NotificationDelivery   NotificationDelivery[]
   NotificationPreference NotificationPreference[]
   PushDeviceToken        PushDeviceToken[]
   Import                 Import[]
@@ -295,6 +383,23 @@ model User {
   // Stamped when the user's last socket disconnects — the "visto por
   // último" the SAC sees next to a driver's name in the chat.
   last_seen_at DateTime?
+
+  /// When the login was removed and anonymized (plano-escala F3-27): name,
+  /// e-mail, phone, photo, tokens and devices went; what the person wrote
+  /// stays, under an anonymous author. Null = a person.
+  anonymized_at DateTime?
+
+  // Plan of 02/11/2026: the vehicles this person answers for (F1), the
+  // company settings they saved last (M1) and the driver's access codes (D3):
+  // their own, and the ones they issued as a manager.
+  responsibleVehicles          Vehicle[]               @relation("VehicleResponsible")
+  businessSettingsUpdates      BusinessSettings[]
+  driverEnrollmentTokens       DriverEnrollmentToken[] @relation("DriverEnrollmentTokenUser")
+  issuedDriverEnrollmentTokens DriverEnrollmentToken[] @relation("DriverEnrollmentTokenIssuer")
+  // Wave 2: the phones where this login may sign in by CPF and password.
+  driverTrustedDevices         DriverTrustedDevice[]
+  // Plano-escala U-05: whether a socket of this login is open right now.
+  presence                     UserPresence?
 
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
@@ -373,12 +478,116 @@ model RefreshToken {
   user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   userId          String
 
+  /// The phone this session is bound to (plan of 02/11/2026, D3/D4/D7): the
+  /// app's Android ID, sent when a driver signs in by QR code or by CPF and
+  /// password, and carried by every rotation of the family. Null on web
+  /// sessions and on mobile sessions opened before it existed.
+  device_id String?
+
   created_at DateTime @default(now())
 
   @@index([userId, family_id])
   @@index([family_id, revoked_at])
   @@index([expires_in])
   @@map("refresh_token")
+}
+
+/// Whose sessions to look at again (plano-escala F5-21): one row per
+/// subject, written by triggers on the columns the session check reads
+/// (src/shared/auth/session-revocation.ts lists them), in the same
+/// transaction as the change. Never what changed, and nothing writes here
+/// by hand: the revocation feed (F5-22) reads it from the last id it saw,
+/// and the sockets and the session cache act on it. A refresh rotation
+/// writes nothing. Kept 7 days (the nightly refresh-token purge).
+model SessionRevocationLog {
+  id BigInt @id @default(autoincrement())
+
+  /// user, business, branch, driver, profile or refresh_family.
+  kind String
+
+  /// The user, company, branch, driver, profile or refresh-token family.
+  subject_id String
+
+  /// UTC, as the trigger writes it.
+  at DateTime @default(now())
+
+  @@index([at])
+  @@map("session_revocation_log")
+}
+
+/// The one-time access a manager shows a driver as a QR code (or reads out as
+/// an 8-character code), so the driver signs in without e-mail or password
+/// (plan of 02/11/2026, item D3; decision D01). Only hashes are stored — the
+/// QR's opaque token and the short code are shown once. One row per driver
+/// login: issuing a new one replaces it (upsert on userId), so a single code
+/// is ever live. It expires in about ten minutes, is consumed atomically once
+/// (consumed_at), counts refused presentations (attempts) and records the
+/// phone that consumed it (device_id), which the session is bound to (D4).
+/// Inactivating the driver deletes it (D5).
+model DriverEnrollmentToken {
+  id String @id @default(uuid(7))
+
+  user   User   @relation("DriverEnrollmentTokenUser", fields: [userId], references: [id], onDelete: Cascade)
+  userId String @unique
+
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  businessId String
+
+  /// SHA-256 (hex) of the QR's opaque token.
+  token_hash String  @unique
+  /// SHA-256 (hex) of the normalized short code; null = issued without one.
+  code_hash  String? @unique
+
+  expires_at  DateTime
+  consumed_at DateTime?
+
+  /// The manager who issued it. SET NULL: removing them keeps the record.
+  createdBy   User?   @relation("DriverEnrollmentTokenIssuer", fields: [createdById], references: [id], onDelete: SetNull)
+  createdById String?
+
+  device_id String?
+  attempts  Int     @default(0)
+
+  created_at DateTime @default(now())
+
+  @@index([businessId])
+  @@index([createdById])
+  @@map("driver_enrollment_token")
+}
+
+/// A phone a driver's login trusts for the CPF and password sign-in (wave 2,
+/// 06/11/2026). The CPF is public, so CPF and password are accepted only on a
+/// phone that already entered this login by the manager's QR code: a new
+/// phone needs a QR. The enrollment token cannot be this record — it is one
+/// row per login, rewritten by every QR issued — so the trust lives here.
+///
+/// Added when a QR is consumed on the phone (`qr`), or by the migration for
+/// the phones drivers were already using (`backfill`). Removed when the
+/// manager or the driver disconnects the phone, and when the driver is made
+/// inactive or the access revoked (D5). A password change never touches it:
+/// trust only says "this phone may try a password".
+model DriverTrustedDevice {
+  id String @id @default(uuid(7))
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+
+  /// SHA-256 (hex) of the normalized device id, like refresh_token.token_hash:
+  /// the Android ID itself is never stored here.
+  device_hash String
+
+  /// `qr` or `backfill` (a CHECK in the migration).
+  source String
+
+  created_at DateTime @default(now())
+
+  /// The last sign-in on this phone: the QR that trusted it, then every CPF
+  /// and password that matched on it.
+  last_login_at DateTime @default(now())
+
+  @@unique([userId, device_hash])
+  @@index([userId])
+  @@map("driver_trusted_device")
 }
 
 model ForgotPasswordVerificationToken {
@@ -603,6 +812,11 @@ model Driver {
   status         DriverStatus
   contract_type  ContractType
 
+  /// When the driver was removed and anonymized (plano-escala F3-27): the
+  /// personal data went (name 'Motorista removido', CPF, CNH, address), the
+  /// history stays under this row. Null = a person.
+  anonymized_at DateTime?
+
   business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
   businessId String
 
@@ -631,6 +845,9 @@ model Driver {
   @@index([businessId, created_at])
   // ON DELETE SET NULL when a branch is deleted.
   @@index([branchId])
+  // The driver's login by CPF (D8) looks in every company: the unique above
+  // leads with the company and cannot serve it.
+  @@index([cpf])
   @@map("driver")
 }
 
@@ -676,6 +893,13 @@ model Vehicle {
   branch   Branch? @relation(fields: [branchId], references: [id])
   branchId String?
 
+  /// Who answers for this vehicle in the company (plan of 02/11/2026, F1;
+  /// decision D44): the person a failed checklist alerts (F2). Null = the
+  /// company's admins. A user of the same company (the use case checks it);
+  /// SET NULL when that user is removed.
+  responsibleUser   User?   @relation("VehicleResponsible", fields: [responsibleUserId], references: [id], onDelete: SetNull)
+  responsibleUserId String?
+
   serviceOrders ServiceOrder[]
 
   created_at       DateTime           @default(now())
@@ -699,6 +923,7 @@ model Vehicle {
   @@index([driverId])
   @@index([fuelTypeId])
   @@index([vehicleTypeId])
+  @@index([responsibleUserId])
   @@map("vehicle")
 }
 
@@ -955,22 +1180,27 @@ model Activity {
 
 // For notifications targeted to specific users
 model Notification {
-  id         String    @id @default(uuid(7))
+  id         String  @id @default(uuid(7))
   type       String // "service-order", "vehicle", etc.
   title      String
   message    String
   link       String?
-  read       Boolean   @default(false)
+  read       Boolean @default(false)
   entityId   String?
+  /// The company the notification is about. No foreign key since F5-15
+  /// (plano-escala): the bell is partitioned by month and a month is
+  /// dropped whole; deleting a company takes its bell rows in SQL
+  /// (queue-row-cleanup.ts).
   businessId String?
-  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId     String // recipient user ID
-  business   Business? @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  /// The recipient. No foreign key either: deleting a user takes the
+  /// user's bell in the same statement as their deliveries.
+  userId     String
 
-  // Set when the notification pipeline created this row. The unique
-  // constraint is what makes the IN_APP channel idempotent: a delivery
-  // retried after a crash can't insert the same notification twice.
-  deliveryId String? @unique
+  /// Set when the notification pipeline created this row. Its id is the
+  /// delivery's (F5-14), so a delivery retried after a crash meets the
+  /// primary key; the unique this column had leaves with the monthly
+  /// partitions of F5-15, where a unique must include the id.
+  deliveryId String?
 
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
@@ -1043,7 +1273,7 @@ enum ScheduledJobExecutionStatus {
 
 model DomainOutboxEvent {
   id            String  @id @default(uuid(7))
-  eventKey      String  @unique
+  eventKey      String
   topic         String
   aggregateType String
   aggregateId   String
@@ -1065,8 +1295,6 @@ model DomainOutboxEvent {
   /// while investigating, never on a hot path.
   correlationId String?
 
-  deliveries NotificationDelivery[]
-
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
@@ -1081,6 +1309,28 @@ model DomainOutboxEvent {
   @@index([status, availableAt])
   @@index([aggregateType, aggregateId])
   @@map("domain_outbox_event")
+}
+
+/// The outbox's idempotency keys (plano-escala F5-02): one row per event
+/// written under a key its caller gave (a submission id, a deterministic
+/// notice key) or a group's mergeKey, in the event's own transaction. The
+/// queues are partitioned by day on their id later in the plan (F5-09),
+/// where the global unique on domain_outbox_event.eventKey cannot stay;
+/// this primary key is what keeps a repeated key a P2002 for the caller,
+/// publishOnce once per key and two merges of one group a single row
+/// (outbox-service.ts). The random key of an event without one never
+/// collides and gets no row. No foreign key, so the queues can be dropped
+/// by day: the keys go with their events in the nightly purge
+/// (cleanup-notification-pipeline).
+model OutboxEventKey {
+  event_key  String   @id
+  /// The domain_outbox_event the key wrote (no foreign key, see above).
+  event_id   String
+  created_at DateTime @default(now())
+
+  // The purge's sweep of keys whose event is gone walks the oldest first.
+  @@index([created_at])
+  @@map("outbox_event_key")
 }
 
 model NotificationDelivery {
@@ -1100,6 +1350,16 @@ model NotificationDelivery {
 
   channel NotificationChannel
 
+  /// The event's company, copied when it expands (plano-escala F3-09), so
+  /// the fair claim of wave 12 (F3-10) can take each lane company by
+  /// company. No foreign key and no backfill: the rows from before, and
+  /// the platform's own events, are NULL, the claim's "no company" bucket.
+  /// Indexed per lane in raw SQL, with the lane's claim predicate:
+  /// notification_delivery_business_internal_idx and _external_idx
+  /// (business_id, availableAt), migration and prisma/concurrent
+  /// 20261117210000_notification_delivery_business.
+  business_id String?
+
   status         NotificationDeliveryStatus @default(PENDING)
   attempts       Int                        @default(0)
   availableAt    DateTime                   @default(now())
@@ -1113,7 +1373,7 @@ model NotificationDelivery {
   // twice" when a customer reports a duplicate.
   //
   // Kept as long as the row: 30 days after the event was processed for a
-  // DELIVERED row (the purge cascades from the event). A FAILED row is copied
+  // DELIVERED row (the purge takes it with its event). A FAILED row is copied
   // to NotificationDeadLetter before that purge and kept there for 90 days.
   providerMessageId String?
 
@@ -1126,12 +1386,11 @@ model NotificationDelivery {
   providerStatus   String?
   providerStatusAt DateTime?
 
-  event DomainOutboxEvent @relation(fields: [outboxEventId], references: [id], onDelete: Cascade)
-  user  User?             @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  externalRecipient ExternalRecipient? @relation(fields: [externalRecipientId], references: [id], onDelete: Cascade)
-
-  receipts NotificationProviderReceipt[]
+  // No relation to the event, the user nor the external recipient since
+  // F5-06 (plano-escala): the queues are dropped by day, and a foreign key
+  // would hold the drop. Each deletion takes its own queue rows instead
+  // (F5-05), and a delivery whose recipient is gone closes as
+  // recipient_gone.
 
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
@@ -1143,11 +1402,12 @@ model NotificationDelivery {
   // gap at the provider (the delivery id is Resend's idempotency key);
   // WhatsApp and push cannot.
   //
-  // Enforced by TWO PARTIAL unique indexes in raw SQL (see
-  // migrations/20260916090000_external_recipient), one per kind of recipient:
-  // a plain @@unique over a nullable column treats every NULL as distinct in
-  // Postgres, so the external rows would have had no uniqueness at all and a
-  // retried event would have inserted a second WhatsApp row.
+  // Enforced by the id since F5-06 (plano-escala): it is decided by the
+  // event, the recipient and the channel (src/shared/notifications/
+  // delivery-id.ts), so a retried expansion computes the same primary keys.
+  // Until then two PARTIAL unique indexes in raw SQL did it
+  // (migrations/20260916090000_external_recipient; dropped by
+  // 20261118120000_queue_contract and prisma/post-deploy/05-queue-contract.sql).
   //
   // No ([status, availableAt]) index: the claim runs on one partial index per
   // delivery lane (raw SQL, created in
@@ -1165,9 +1425,12 @@ model NotificationDelivery {
   //     WHERE "providerMessageId" IS NOT NULL — a provider callback that
   //     carries only the provider's own id.
   //
-  // ([outboxEventId]) is for the purge: the cascade from a deleted event
-  // deletes by outboxEventId alone, which the partial uniques cannot serve —
-  // without it, one sequential scan per purged event.
+  // ([outboxEventId]) is for the purge: it deletes an event's deliveries by
+  // outboxEventId alone — without it, one sequential scan per purged event.
+  //
+  // No unique on (event, recipient, channel) since F5-06: the delivery's id
+  // is decided by them (deliveryIdFor, F5-03), and the primary key keeps an
+  // event expanded twice to one row per recipient and channel.
   //
   // No index on created_at, on purpose. A BRIN was tried (20260924091100) and
   // dropped (20260924130000): every claim and settle moves `status`, so no
@@ -1200,8 +1463,8 @@ model NotificationProviderReceipt {
 
   /// Null when the report names a message no delivery can be tied to (a row
   /// already purged, or a send that predates the delivery id travelling with
-  /// the message). Cascade: the ledger lives as long as what it explains.
-  delivery   NotificationDelivery? @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+  /// the message). No foreign key since F5-06: the queues are dropped by
+  /// day, and the purge takes the receipts with their delivery.
   deliveryId String?
 
   /// 'meta' | 'resend' | 'expo'. Text rather than an enum: a provider is
@@ -1232,7 +1495,12 @@ model NotificationProviderReceipt {
 
   created_at DateTime @default(now())
 
-  @@unique([provider, providerMessageId, status])
+  // Every writer also sets the id from this same key (receipt-id.ts,
+  // plano-escala F5-04) and, under a lock per fact, inserts only the facts
+  // no row holds yet (insertReceipts): the unique can go when the table is
+  // partitioned (F5-06), with a plain index on the same columns for that
+  // read.
+  @@index([provider, providerMessageId, status], map: "notification_provider_receipt_fact_idx")
   @@index([deliveryId])
   // The receipts job (Expo tickets not checked yet) and the metrics (failed
   // reports in the last 24 hours) both ask "this provider, this status,
@@ -1280,6 +1548,60 @@ model NotificationDeadLetter {
   /// The archive's listing (newest failure first) and its own purge.
   @@index([failedAt])
   @@map("notification_dead_letter")
+}
+
+/// An outbox event that exhausted its expansions, moved out of
+/// domain_outbox_event by the nightly purge (plano-escala F5-10).
+///
+/// A FAILED event stays in the queue table 30 days, like a PUBLISHED one:
+/// the queues become partitioned by day (F5-09), and a day is dropped
+/// whole (F5-11). Then the purge copies it here and deletes it, in one
+/// statement, and the copy is kept OUTBOX_FAILED_RETENTION_DAYS (90) from
+/// the failure — the same 90 days a FAILED event always had. GET
+/// /health/dead-letter/events lists both places; a replay requeues an
+/// event still in the queue table and creates a NEW event from a copy
+/// here (outbox-dead-letter.ts).
+///
+/// No foreign keys: the row must outlive the event, the company and the
+/// actor it names, so everything a replay needs is copied.
+model OutboxEventDeadLetter {
+  /// The event's own id, so archiving the same event twice is a no-op.
+  id String @id
+
+  eventKey      String
+  topic         String
+  aggregateType String
+  aggregateId   String
+  businessId    String?
+  actorId       String?
+  payload       Json
+  attempts      Int
+  lastError     String?
+  correlationId String?
+
+  /// When the event was published and when it gave up (its updated_at),
+  /// both copied.
+  created_at DateTime
+  failedAt   DateTime
+
+  archived_at DateTime @default(now())
+
+  /// Set by the replay, with the event it created: a second replay of the
+  /// same copy is a no-op, and the listing leaves it out.
+  replayed_at       DateTime?
+  replayed_event_id String?
+
+  /// The deliveries the event already had, DELIVERED or FAILED, which the
+  /// move deletes with it (a replica that lost the lease expanded it, and
+  /// it failed under the new owner): recipient, channel, status, attempts,
+  /// deliveredAt and the provider's id and status, times in epoch ms. The
+  /// replay gives them back to the new event, so its expansion creates only
+  /// what the original never had. Null when there were none.
+  settled_deliveries Json?
+
+  /// The listing (newest failure first) and the archive's own purge.
+  @@index([failedAt])
+  @@map("outbox_event_dead_letter")
 }
 
 enum NotificationCategory {
@@ -1393,6 +1715,329 @@ model WorkerHeartbeat {
   @@map("worker_heartbeat")
 }
 
+/// What each step the release step runs after `migrate deploy` last did
+/// (plano-escala F5-08): one row per file of infra/sql and prisma/post-deploy,
+/// keyed by its path, plus the run itself under "@release". Written only by
+/// infra/scripts/release-steps.ts; read by GET /health/rollout, whose pending
+/// steps make the next deploy run the release step again (U-11). The status
+/// is one of applied, skipped, pending, failed or retired (a CHECK in the
+/// migration).
+model ReleaseStepState {
+  step       String   @id
+  status     String
+  detail     String?
+  updated_at DateTime @default(now())
+
+  @@map("release_step_state")
+}
+
+/// Which history of the cluster the database lives in (plano-escala U-14):
+/// one row, an epoch bumped by the release step (infra/sql/50-cluster-epoch.sql)
+/// whenever the cluster's system_identifier (a new cluster: a logical
+/// restore, a pg_upgrade) or timeline (a PITR, a promote) changed. After a
+/// PITR or a failover transaction ids are handed out again; the integration
+/// feed's cursor carries this epoch (F2-04, F2-05) so it never mistakes a
+/// reused id for one it already served. The ops heartbeat alerts
+/// cluster-epoch-stale while the pair differs from the cluster's. The
+/// single-row CHECK (id = 1) is raw SQL, pinned in
+/// tests/E2E/raw-sql-objects.test.ts. Read by raw SQL only.
+model ClusterEpoch {
+  id                Int      @id @db.SmallInt
+  epoch             Int
+  system_identifier BigInt
+  timeline          Int
+  changed_at        DateTime @db.Timestamptz(6)
+
+  @@map("cluster_epoch")
+}
+
+/// Who has a socket open right now (plano-escala U-05, F4.6): one row per
+/// login while a socket of it is open on some realtime process, with the
+/// last beat. The process holding the socket writes it on connect, again
+/// every 60 s for every login it holds, and once more when the socket goes;
+/// the row leaves when no socket came back within PRESENCE_GRACE_MS, which
+/// is when "visto por último" (user.last_seen_at) is stamped. Online = a
+/// beat younger than 90 s, read by the chat's thread list from any process,
+/// one without sockets included. Written by raw SQL only
+/// (src/shared/socket/presence.ts).
+model UserPresence {
+  user_id      String   @id
+  heartbeat_at DateTime @db.Timestamptz(6)
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  // The sweep of the rows a dead process left behind.
+  @@index([heartbeat_at])
+  @@map("user_presence")
+}
+
+/// The replica guard's heartbeat (plano-escala F4-41): one row (id 1, a
+/// CHECK in the migration) whose beat_at every process with
+/// DATABASE_REPLICA_URL writes on the primary every 5 s and reads back on
+/// the standby; its age there decides whether readDatabase() may use it
+/// (src/shared/database/replica-guard.ts). Written by raw SQL only.
+model ReplicaHeartbeat {
+  id      Int      @id @db.SmallInt
+  beat_at DateTime @default(now()) @db.Timestamptz(6)
+
+  @@map("replica_heartbeat")
+}
+
+/// The scale plan's series (plano-escala F1, item F1-08): one row per
+/// process per minute, written by a local timer with jitter in every process
+/// (never a cron: the election would leave a single writer), so the triggers
+/// of ADR 0001 are read from 14 days of numbers instead of a guess. Infra
+/// numbers only — never a businessId, an IP or anybody's id. Read by psql;
+/// no route serves it.
+model OpsSample {
+  /// uuid v7: time-ordered, so new rows land at the end of the index.
+  id String @id @default(uuid(7))
+
+  /// The end of the minute the row covers.
+  ts DateTime
+
+  /// The process's PROCESS_ROLE label (plano-escala F3-01: "all", "api",
+  /// "worker"...), or "cluster" for the elected heartbeat's row. Rows
+  /// written before wave 12 say "http" for an HTTP-only replica.
+  role String
+
+  /// The container's hostname: one per Swarm task.
+  replica String
+
+  /// The build's commit (APP_COMMIT_SHA); null in a local build.
+  commit String?
+
+  /// The numbers, versioned by their `v` field (1 today).
+  metrics Json
+
+  @@index([ts])
+  @@map("ops_sample")
+}
+
+/// Every process alive, one row each (plano-escala F3-03): its role, the
+/// queues it claims, whether it runs the cron and takes sockets, its build,
+/// its node, its environment and the fingerprint of the configuration that
+/// must not diverge between processes. UPSERTed every 30 s (± 5) with the
+/// database's now(), deleted on SIGTERM, purged after 7 days without a
+/// beat. The wake (F3-04) counts the live consumers of a queue here; the
+/// deploy's check reads the commits and the fingerprints. Read and written
+/// by raw SQL only (src/shared/health/process-heartbeat.ts).
+model ProcessHeartbeat {
+  /// The ops_sample's replica: the container's hostname, plus `/<slot>`.
+  replica String @id
+
+  /// PROCESS_ROLE: all, api, worker, scheduler, realtime...
+  role String
+
+  /// APP_ENV of the process: a row of another environment in this
+  /// database is a process pointed at the wrong one (F3-34).
+  app_env String
+
+  build_commit String?
+
+  /// sha256 (16 hex) of the settings and identities every process must
+  /// share; null until the database's and Redis's identities were read.
+  config_fingerprint String?
+
+  /// SWARM_NODE_HOSTNAME (F4-50); null without it.
+  node_hostname String?
+
+  /// The queues it claims (WORKER_QUEUES, resolved).
+  queues  String[] @default([])
+  cron    Boolean
+  sockets Boolean
+
+  started_at DateTime
+  updated_at DateTime @default(now())
+
+  /// What the image says the realtime role runs and speaks (F3-31c: the
+  /// trajetto.realtime-source and trajetto.contract-epoch labels): the
+  /// mixed-versions alert leaves out the realtime the deploy held on its
+  /// build. Null in an image without them.
+  realtime_source String?
+  contract_epoch  Int?
+
+  @@index([updated_at])
+  @@map("process_heartbeat")
+}
+
+/// Where a company's scheduled purge stands (plano-escala F3-25; see
+/// Business.purge_state). Never scheduled is NULL.
+enum BusinessPurgeState {
+  SCHEDULED
+  PURGING
+  PURGED
+}
+
+/// What a durable job does (plano-escala F3-22). A kind no process has a
+/// handler for is never claimed: it waits for the release that brings one.
+enum BackgroundJobKind {
+  SPREADSHEET_IMPORT
+  IMPORT_REVERSAL
+  TENANT_OFFBOARD
+  USER_ANONYMIZE
+  PARTITION_ARCHIVE
+  ROLLUP_BACKFILL
+}
+
+enum BackgroundJobStatus {
+  PENDING
+  PROCESSING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
+/// The durable jobs of the `jobs` queue (plano-escala F3-22): claimed with
+/// the fair claim and SKIP LOCKED, leased for 120 s and renewed every 40 s,
+/// the progress written under a fence on `attempts`
+/// (src/shared/jobs/job-runner.ts). Written and read by
+/// src/shared/jobs/background-job-repository.ts only.
+model BackgroundJob {
+  /// uuid v7: time-ordered, so new rows land at the end of the index.
+  id   String            @id @default(uuid(7))
+  kind BackgroundJobKind
+
+  /// The company the job works for; null for the platform's own (an
+  /// archive, a backfill). No relation on purpose: a company's purge is a
+  /// job that outlives the company.
+  businessId String?
+
+  /// The domain record the job works on (the upload, the user, the
+  /// company): one live job per kind and subject.
+  subjectId String?
+
+  status         BackgroundJobStatus @default(PENDING)
+  availableAt    DateTime            @default(now())
+  attempts       Int                 @default(0)
+  maxAttempts    Int                 @default(5)
+  leaseExpiresAt DateTime?
+
+  /// The process holding the lease (its heartbeat replica), for the logs.
+  leaseOwner String?
+
+  /// The cursor the job resumes from, written under the fence.
+  progress Json?
+
+  /// What the job was asked to do; never a secret.
+  payload Json @default("{}")
+
+  lastError String?
+
+  created_at  DateTime  @default(now())
+  updated_at  DateTime  @default(now()) @updatedAt
+  finished_at DateTime?
+
+  // Raw SQL, not declared here (Prisma cannot express a partial index;
+  // 20261119100000_background_job):
+  // background_job_fair_idx ("businessId", "availableAt") and
+  // background_job_due_idx ("availableAt"), both WHERE status IN
+  // ('PENDING', 'PROCESSING'), for the claim; and the unique
+  // background_job_live_subject_key ("kind", "subjectId") over the same
+  // statuses, one live job per subject.
+  @@index([status, finished_at])
+  @@map("background_job")
+}
+
+/// The hourly cost of the top statements (plano-escala F1-12): the
+/// difference of pg_stat_statements' cumulative counters between two hourly
+/// readings, for the 200 most expensive statements of the hour, by role.
+/// The query text may carry literals: read by psql, no route serves it.
+/// Written by src/jobs/cron/snapshot-query-stats-job.ts.
+model PgssSnapshot {
+  /// uuid v7: time-ordered, so new rows land at the end of the index.
+  id String @id @default(uuid(7))
+
+  /// The hourly run that wrote the row, and where its period starts: the
+  /// previous run, or the statistics' reset.
+  taken_at     DateTime
+  period_start DateTime
+
+  /// "previous" (against the baseline), "new" (entered the view in the
+  /// period), "recreated" (came back after an eviction) or "reset".
+  basis String
+
+  /// The role's oid and pg_stat_statements' own keys.
+  userid   BigInt
+  toplevel Boolean
+  queryid  BigInt
+  query    String?
+
+  /// The period's growth of each counter; max_exec_time_ms is cumulative
+  /// since the entry began (PG16 keeps one maximum per entry).
+  calls               BigInt
+  total_exec_time_ms  Float
+  total_plan_time_ms  Float
+  max_exec_time_ms    Float
+  rows                BigInt
+  shared_blks_hit     BigInt
+  shared_blks_read    BigInt
+  shared_blks_dirtied BigInt
+  shared_blks_written BigInt
+  temp_blks_written   BigInt
+  wal_bytes           BigInt
+
+  @@index([taken_at])
+  @@index([queryid, taken_at])
+  @@map("pgss_snapshot")
+}
+
+/// Every statement's cumulative counters at the last hourly reading: what
+/// the next one subtracts. Replaced whole by each run.
+model PgssBaseline {
+  userid              BigInt
+  toplevel            Boolean
+  queryid             BigInt
+  calls               BigInt
+  total_exec_time_ms  Float
+  total_plan_time_ms  Float
+  rows                BigInt
+  shared_blks_hit     BigInt
+  shared_blks_read    BigInt
+  shared_blks_dirtied BigInt
+  shared_blks_written BigInt
+  temp_blks_written   BigInt
+  wal_bytes           BigInt
+
+  @@id([userid, toplevel, queryid])
+  @@map("pgss_baseline")
+}
+
+/// A provider's day, counted per scope (plano-escala F2-32; decision D23):
+/// what is money or a contract must not vanish with a Redis eviction. One
+/// row per provider, scope and UTC day, taken one unit at a time by an
+/// INSERT ... ON CONFLICT DO UPDATE that only counts below the limit
+/// (shared/services/provider-quota). The geocoder's scopes are
+/// "geocoding-job", "address-search", "address-search:<businessId>" and
+/// "proof-reverse"; wave 13 adds "whatsapp:<businessId>". Platform rows,
+/// not a company's: a company's scope carries its id, never its data.
+model ProviderQuotaDay {
+  provider   String
+  scope      String
+  day        DateTime @db.Date
+  used       Int      @default(0)
+  updated_at DateTime @default(now())
+
+  @@id([provider, scope, day])
+  // The nightly retention (purge-ops-series-job.ts) and the day's sum the
+  // ops heartbeat reads for the quota alert.
+  @@index([day])
+  @@map("provider_quota_day")
+}
+
+/// What the last hourly reading saw of pg_stat_statements itself: one row
+/// (CHECK id = 1). A stats_reset that moved is a reset; a dealloc that grew
+/// is evictions.
+model PgssState {
+  id          Int       @id @default(1)
+  taken_at    DateTime
+  stats_reset DateTime?
+  dealloc     BigInt
+  statements  Int
+
+  @@map("pgss_state")
+}
+
 enum AIAnalysisType {
   FUEL_ODOMETER
   CHECKLIST
@@ -1481,6 +2126,11 @@ model AIAnalysisRequest {
   // burst cannot starve the others) reads the backlog in (businessId,
   // created_at) order from ai_analysis_request_fair_claim_idx — partial on
   // PENDING/PROCESSING, so raw SQL (20260924091500_ai_analysis_request_fair_claim).
+  //
+  // With QUEUE_FAIR_CLAIM_ENABLED the claim walks the companies instead
+  // (plano-escala F3-12), the receipts first: ai_analysis_request_proof_fair_idx
+  // and ai_analysis_request_other_fair_idx, by (businessId, availableAt), and
+  // ai_analysis_request_due_idx for the fill (raw SQL, 20261118180000_ai_fair).
   @@index([status, availableAt])
   @@index([type, recordId])
   // ON DELETE CASCADE from the usage period.
@@ -1726,6 +2376,18 @@ model Fuel {
   // 🆕 RECORD ORIGIN: Track where the record was created
   created_from RecordOrigin @default(WEB_DASHBOARD) // Enum: MOBILE_APP, WEB_DASHBOARD
 
+  /// What the office should look at (05/11/2026, 20261105130000), decided
+  /// inside the create's serializable transaction for every refuelling,
+  /// whoever sends it. Empty for the records made before it (no backfill).
+  alerts                    FuelAlert[] @default([])
+  /// The driver's reason when they confirmed a second refuelling of the
+  /// vehicle within 30 minutes (RECENT_REFUEL). Kept when an edit clears the
+  /// alert.
+  recent_refuel_reason      String?     @db.VarChar(300)
+  /// The refueling_date of the other refuelling that raised RECENT_REFUEL.
+  /// A historical fact: deleting that refuelling leaves it as it is.
+  recent_refuel_previous_at DateTime?
+
   business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
   businessId String
 
@@ -1741,12 +2403,19 @@ model Fuel {
   fuelType   FuelType @relation(fields: [fuelTypeId], references: [id])
   fuelTypeId String
 
+  /// The route the refuelling was made on, when it came from the route
+  /// (plan of 02/11/2026, C5/F3). SET NULL: the refuelling is a record of the
+  /// vehicle and outlives the route.
+  route   Route?  @relation(fields: [routeId], references: [id], onDelete: SetNull)
+  routeId String?
+
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
   @@unique([businessId, client_submission_id])
   @@index([businessId, created_at])
   @@index([branchId])
+  @@index([routeId])
   // Replaces ([vehicleId]) and ([refueling_date]), absorbing the first as its
   // prefix. Serves getPreviousFuelByVehicleId, which runs on every refuelling
   // created (consumption maths) and used to either sort or walk a global date
@@ -1815,6 +2484,11 @@ model VehicleChecklist {
   /// The server's verdict on that pre-check (§P5.2); null = not compared yet.
   mileage_device_agreement DeviceAgreement?
 
+  /// Where the checklist was made (the web's "App"/"Web" badge). A driver's
+  /// is always MOBILE_APP, decided by the server from the caller
+  /// (shared/vehicle/record-origin.ts); the web's form sends none.
+  created_from RecordOrigin @default(WEB_DASHBOARD) // Enum: MOBILE_APP, WEB_DASHBOARD
+
   business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
   businessId String
 
@@ -1827,6 +2501,15 @@ model VehicleChecklist {
   driver   Driver @relation(fields: [driverId], references: [id])
   driverId String
 
+  /// The route this checklist was made for, and for which moment of it
+  /// (plan of 02/11/2026, C4/F3; decision D09: one per route). STANDALONE =
+  /// made outside a route, every legacy row included. The route's "checklist
+  /// done?" is derived from these rows, never stored on the route. SET NULL:
+  /// the checklist outlives the route.
+  route   Route?         @relation(fields: [routeId], references: [id], onDelete: SetNull)
+  routeId String?
+  phase   ChecklistPhase @default(STANDALONE)
+
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
@@ -1836,7 +2519,15 @@ model VehicleChecklist {
   @@index([vehicleId])
   @@index([driverId])
   @@index([checklist_date])
+  @@index([routeId])
   @@map("vehicle_checklist")
+}
+
+/// Which moment of a route a checklist answered (plan of 02/11/2026, C4).
+enum ChecklistPhase {
+  STANDALONE
+  ROUTE_START
+  ROUTE_END
 }
 
 // ── Deliveries module ────────────────────────────────────────────────────
@@ -1857,6 +2548,22 @@ enum DeliveryKind {
 enum DeliveryGeoSource {
   MANUAL // a dispatcher pinned it on the route map
   GEOCODER // resolved from the address by the geocoding provider (slice 2)
+}
+
+/// How precisely the geocoder placed an address (plan of 02/11/2026, E1).
+enum DeliveryGeoPrecision {
+  ADDRESS // the house number
+  STREET // the street, not the number
+  NEIGHBORHOOD // only the district: no point stored
+  CITY // only the city: no point stored
+}
+
+/// Where the geocoding of a delivery's address stands (E1).
+enum DeliveryGeocodeStatus {
+  RESOLVED // point stored (ADDRESS or STREET)
+  COARSE // only a district or a city: no point, "não avaliável"
+  NOT_FOUND // the provider knows no such address
+  FAILED // the provider failed (timeout, 429, 5xx): retried, a few times
 }
 
 enum RouteStatus {
@@ -1911,6 +2618,16 @@ model Route {
   // Required to cancel a route that already left, so the trail says why.
   cancellation_reason String?
 
+  /// Why a dispatcher closed the route with stops still open ("Encerrar com
+  /// pendências", plan of 02/11/2026 K11, decision D26): the open stops were
+  /// cancelled and their deliveries went back to PENDING. Null on a route
+  /// that closed by itself.
+  closure_reason String?
+
+  /// When the hourly sweep warned the admins that this route was left open
+  /// (K11, D26): the claim that makes the warning once per route.
+  left_open_alerted_at DateTime?
+
   /// When the route was last released to the driver; null while PLANNED (an
   /// "unrelease" clears it). Tells, for a pause tapped offline, whether a
   /// released route existed at the tap (decision 14.4).
@@ -1949,6 +2666,10 @@ model Route {
   chatMessages   ChatMessage[]
   supportTickets SupportTicket[]
 
+  // What happened to the vehicle on this route (plan of 02/11/2026, C4/F3).
+  vehicleChecklists VehicleChecklist[]
+  fuels             Fuel[]
+
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
@@ -1956,6 +2677,18 @@ model Route {
   @@unique([businessId, client_submission_id])
   // Serves the panel: routes of a company by status and day.
   @@index([businessId, status, scheduled_date])
+  // The period of the routes list and of the tower's board (plan of
+  // 09/11/2026): a range of days with no status fixed. The index above leads
+  // with the status, and Postgres 16 has no skip scan, so a range there read
+  // every route of the company to keep a week of them.
+  @@index([businessId, scheduled_date])
+  // The routes list newest first (plan of 02/11/2026, K14): without it every
+  // page read and sorted all of the company's routes.
+  @@index([businessId, created_at(sort: Desc)])
+  // The public API's incremental sync, `updated_since` (plan of 02/11/2026,
+  // L6): without it a page read every route of the company (or of the
+  // table) to find the few that changed.
+  @@index([businessId, updated_at])
   // Serves the app: the released or running route of one driver.
   @@index([businessId, driverId, status])
   // A vehicle may be in at most ONE route in progress — the truck is on one
@@ -1997,21 +2730,27 @@ model RouteStop {
   delivery   Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
   deliveryId String
 
+  /// Which stops of the route are the same visit (plan of 02/11/2026, B6;
+  /// decision D37): a hash of the normalized address with the recipient's
+  /// document or phone. Siblings share one customer message per moment.
+  /// Null = a group of its own (every stop made before it existed).
+  stop_group_key String?
+
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
   @@unique([routeId, sequence])
   @@index([routeId, status])
+  // The siblings of a stop in its route (B6).
+  @@index([routeId, stop_group_key])
   // A delivery may have at most ONE open stop across all routes. Also a
   // partial unique index in raw SQL — see the migration.
   @@index([deliveryId])
-  // "Not on an open stop" (`stops: { none: { status in PENDING, ARRIVED } }`)
-  // is an uncorrelated NOT IN: Postgres hashes every open stop of the
-  // platform. Prisma binds the status as CAST($n AS enum), which the partial
-  // unique index above cannot match, so without this the hash came from a
-  // scan of every stop ever made (db-perf 10/2026: 150 ms per query, six
-  // queries per route-builder load, one per refresh of the app's list).
-  @@index([status, deliveryId])
+  // No ([status, deliveryId]) any more (F2-21b): "not on an open stop" goes
+  // through the company's open routes since F2-21
+  // (src/shared/route/open-stop-anti-join.ts). On a database that serves,
+  // the index leaves by prisma/post-deploy/03-route-stop-status-index.sql
+  // once every live process announces it no longer needs it.
   @@map("route_stop")
 }
 
@@ -2113,6 +2852,16 @@ model OccurrenceType {
   /// pause tapped BEFORE this instant is still accepted.
   deactivated_at DateTime?
 
+  /// The company's own code for this type, the "código do ERP" (plan of
+  /// 02/11/2026, L8): what an ERP matches an occurrence by, since the name
+  /// can be renamed. Optional, unique per company (a null never collides).
+  code String?
+
+  /// When a requires_* flag last changed (plan of 02/11/2026, K2; decision
+  /// D29). A driver's report tapped offline BEFORE it is accepted under the
+  /// rules it was made with and flagged for review, like deactivated_at.
+  requirements_changed_at DateTime?
+
   business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
   businessId String
 
@@ -2125,6 +2874,8 @@ model OccurrenceType {
   @@unique([businessId, name])
   // A null system_key never collides: company types have none.
   @@unique([businessId, system_key])
+  // Likewise a null code.
+  @@unique([businessId, code])
   // ([businessId]) removed: the uniques and the index below lead with it.
   // The app's payload and the web's pickers read one category's active types.
   @@index([businessId, category, is_active])
@@ -2207,13 +2958,49 @@ model ExternalRecipient {
   business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
   businessId String
 
-  deliveries NotificationDelivery[]
-
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
   @@index([businessId, created_at])
   @@map("external_recipient")
+}
+
+/// "Parar de receber" by phone and e-mail inside the carrier (plan of
+/// 02/11/2026, B5, decision D38). The opt-out link used to stop only the
+/// delivery it came from (ExternalRecipient.opted_out_at); somebody who
+/// receives many deliveries from the same carrier kept getting the next
+/// one's messages. The click now also writes one row per address the
+/// recipient row holds, and every customer message checks it at expansion
+/// and again at send time. Internal notifications never read it.
+///
+/// Kept while the carrier exists (cascade with the business); the carrier's
+/// team undoes it from the delivery (POST /delivery/reactivate-customer-
+/// messages, contract C2), which deletes the rows of that recipient's phone
+/// and e-mail. Upsert by the unique key: a second click, or two replicas, is
+/// a no-op.
+model CustomerMessageSuppression {
+  id String @id @default(uuid(7))
+
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  businessId String
+
+  channel CustomerMessageChannel
+
+  /// WHATSAPP: the phone as one line, E.164 without the "+"
+  /// (normalizeSuppressionPhone: the digits the WhatsApp sender puts in
+  /// `to`, a dialling prefix dropped, the ninth digit of an old 8-digit
+  /// mobile added). EMAIL: trimmed and lower-cased, the whole field and,
+  /// for a list ("a;b", recipient-email.ts), each address of it too.
+  address String
+
+  /// The delivery whose link was clicked. No foreign key on purpose: the row
+  /// outlives that delivery, and the hot delivery table stays untouched.
+  source_delivery_id String?
+
+  created_at DateTime @default(now())
+
+  @@unique([businessId, channel, address])
+  @@map("customer_message_suppression")
 }
 
 /// The consolidated PDF a delivery leaves behind.
@@ -2326,7 +3113,12 @@ model DeliveryMessageTemplate {
   /// Ignored by WhatsApp and SMS-shaped channels, which carry no subject.
   subject String?
 
-  body String
+  /// Required on the e-mail (CHECK delivery_message_template_email_body_chk).
+  /// Meaningless on WhatsApp, which goes out as a fixed template approved by
+  /// Meta (plan of 02/11/2026, B3): loosened in migration 20261102120800
+  /// (nullable-expand) and still never written NULL in this release —
+  /// readers treat a WhatsApp row's body as absent.
+  body String?
 
   is_active Boolean @default(true)
 
@@ -2466,8 +3258,9 @@ model ApiKey {
   business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
   businessId String
 
-  usage      ApiKeyUsageDaily[]
-  deliveries Delivery[]
+  usage          ApiKeyUsageDaily[]
+  deliveries     Delivery[]
+  deliveryEvents DeliveryEvent[]
 
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
@@ -2559,11 +3352,58 @@ model DriverLastPosition {
 
   updated_at DateTime @updatedAt
 
-  @@index([businessId, recorded_at(sort: Desc)])
+  /// By company only (plano-escala F2-13): every flush rewrites recorded_at,
+  /// and an index holding it made every rewrite a non-HOT update (a new
+  /// entry in each index, a dead one for the vacuum). With no indexed
+  /// column changed, and fillfactor 80 (raw SQL in
+  /// migrations/20261117170000_driver_last_position_hot), the rewrite stays
+  /// on its page. The tower sorts a company's few rows (one per driver).
+  @@index([businessId])
   @@map("driver_last_position")
 }
 
-/// Where a driver was, while a route of theirs was running.
+/// Where a driver was, while a route of theirs was running: the lean trail
+/// (plano-escala F2-10), table driver_position_v2.
+///
+/// The only table in the product that grows with TIME rather than with a
+/// business event: up to about 2.400 points per driver in a ten-hour day
+/// (see DriverPositionLegacy for the cadence). Each row keeps only what the
+/// trail is read by, about 204 bytes against the legacy 565, measured on
+/// interleaved flushes: the point IS (driverId, recorded_at), so that is
+/// the primary key and the resend's dedupe (the insert skips duplicates);
+/// no surrogate id, no created_at, no index by company (the one reader is
+/// one driver's trail, down the primary key); the ids as uuid, not text.
+/// Partitioned by day in the database (the migration does it), purged by
+/// dropping a day; no foreign key, as before.
+model DriverPosition {
+  driverId   String  @db.Uuid
+  businessId String  @db.Uuid
+  routeId    String? @db.Uuid
+
+  latitude  Float
+  longitude Float
+
+  accuracy Float?
+  speed    Float?
+  heading  Float?
+
+  battery Int? @db.SmallInt
+
+  /// When the DEVICE recorded it, never when it arrived.
+  recorded_at DateTime
+
+  /// Contains the partition key, so it stays local to each partition.
+  @@id([driverId, recorded_at])
+  @@map("driver_position_v2")
+}
+
+/// The LEGACY trail (plano-escala F2-10): where a driver was, while a route
+/// of theirs was running, until the lean trail (DriverPosition, table
+/// driver_position_v2) replaced it. Nothing writes here once the release
+/// with F2-10 is live; DriverPositionRepository.listTrail still reads it,
+/// with the lean one, until DRIVER_POSITION_RETENTION_DAYS has passed and
+/// a later release drops it (F2-12). The partition job keeps its days in
+/// the meantime, so a rollback to the image before writes here again.
 ///
 /// The only table in the product that grows with TIME rather than with a
 /// business event. The app takes a point every 15 s AND 50 m on Android
@@ -2579,7 +3419,7 @@ model DriverLastPosition {
 /// INSERT check the referenced table, and this is the hottest write path in
 /// the product for data whose only reader is a map. An orphan position is a
 /// dot that does not draw, not corruption.
-model DriverPosition {
+model DriverPositionLegacy {
   id String @default(uuid(7))
 
   driverId   String
@@ -2624,6 +3464,102 @@ model DriverPosition {
   @@map("driver_position")
 }
 
+/// What became of a company's rows of one archived partition
+/// (plano-escala F2-11): ARCHIVED, an object in the archive bucket;
+/// PENDING, an upload that started (its key is known before the first byte
+/// goes up); SKIPPED, the rows of a company that no longer exists, left out
+/// on purpose and counted.
+enum ArchiveObjectStatus {
+  PENDING
+  ARCHIVED
+  SKIPPED
+}
+
+/// One company's rows of one partition, archived to R2 before the
+/// partition is dropped (plano-escala F2-11): the trail's days today, at
+/// trail/<yyyymmdd>/<businessId>.csv.gz. The nightly partition job only
+/// drops a day whose rows here add up to its count (ArchivePartition).
+///
+/// No foreign keys: a row must outlive its company, so the company's exit
+/// can still find and delete its objects (deleteTrailArchive), and outlive
+/// the partition it describes. Purged a week after the bucket's
+/// Expiration (TRAIL_ARCHIVE_RETENTION_DAYS) removed its object.
+model ArchiveManifest {
+  id String @id @default(uuid(7))
+
+  /// The parent the rows came from: driver_position_v2, or the legacy
+  /// driver_position.
+  source_table String
+
+  /// The partition, by the registry's name (driver_position_v2_20261001).
+  partition_name String
+
+  businessId String
+
+  /// Where the object is, or would have been for a SKIPPED company.
+  object_key String
+
+  status ArchiveObjectStatus @default(PENDING)
+
+  /// The CSV's rows (header aside), or the rows left out when SKIPPED;
+  /// null while PENDING.
+  row_count Int?
+
+  /// The object's bytes and the sha256 of exactly those bytes (the gzip),
+  /// so a download checks with sha256sum.
+  byte_size BigInt?
+  sha256    String?
+
+  created_at  DateTime  @default(now())
+  archived_at DateTime?
+
+  /// One object per company per partition: a rerun after a crash finds
+  /// the row and rewrites the same key.
+  @@unique([partition_name, businessId])
+  /// deleteTrailArchive, by company.
+  @@index([businessId])
+  /// The manifest's purge, oldest first.
+  @@index([created_at])
+  @@map("archive_manifest")
+}
+
+/// A partition whose archive was checked (plano-escala F2-11): its
+/// manifest added up to its count, taken after the uploads. Only then is
+/// the day detached and dropped; a day detached on an earlier night and
+/// left behind is dropped only with its row here.
+model ArchivePartition {
+  partition_name String @id
+
+  source_table String
+
+  /// count(*) of the partition when it was checked.
+  row_count BigInt
+
+  /// The objects written for it (the companies archived).
+  objects Int
+
+  verified_at DateTime @default(now())
+
+  /// The purge, with the manifest's.
+  @@index([verified_at])
+  @@map("archive_partition")
+}
+
+/// The drivers removed and anonymized (plano-escala F3-27, decision D49)
+/// whose rows may still be in the trail's archive: rewriting hundreds of
+/// archived objects per request is not done, so whatever restores a day of
+/// the archive leaves these drivers' rows out (trail-archive.ts,
+/// withoutRedactedDrivers). The objects expire with the archive's
+/// retention (180 days); a row here is kept as long as they may exist.
+model TrailArchiveRedaction {
+  driverId   String   @id
+  businessId String
+  created_at DateTime @default(now())
+
+  @@index([businessId])
+  @@map("trail_archive_redaction")
+}
+
 /// Where a customer's system wants to be told things.
 model WebhookEndpoint {
   id String @id @default(uuid(7))
@@ -2660,10 +3596,16 @@ model WebhookEndpoint {
 
   consecutive_failures Int @default(0)
 
+  /// The URL's host, lower case (plano-escala F3-14): the dispatcher caps
+  /// the calls in flight to one host across every endpoint pointed at it
+  /// (WEBHOOK_HOST_GLOBAL_CONCURRENCY), the case of an aggregator's ERP that
+  /// receives every tenant's events. Written with the URL; null on rows an
+  /// older image saved until the dispatcher's minute fills it, and null
+  /// counts as no host cap.
+  destination_host String?
+
   business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
   businessId String
-
-  deliveries WebhookDelivery[]
 
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
@@ -2682,7 +3624,6 @@ model WebhookEndpoint {
 model WebhookDelivery {
   id String @id @default(uuid(7))
 
-  endpoint   WebhookEndpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
   endpointId String
 
   topic String
@@ -2732,7 +3673,9 @@ model WebhookDelivery {
   /// which is the first question when a duplicate is reported.
   resent_from_id String?
 
-  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  // No relation to the endpoint nor the company since F5-06: the queues
+  // are dropped by day; deleting an endpoint or a company takes its rows
+  // explicitly (F5-05).
   businessId String
 
   created_at DateTime @default(now())
@@ -2885,6 +3828,44 @@ model Delivery {
   geo_source     DeliveryGeoSource?
   geo_updated_at DateTime?
 
+  /// How precisely the geocoder placed the address (plan of 02/11/2026, E1):
+  /// ADDRESS or STREET with a point; NEIGHBORHOOD or CITY never get one (a
+  /// district's centre is no customer's door), and the geofence does not
+  /// weigh them. Meaningless on a MANUAL point, which is exact.
+  geo_precision        DeliveryGeoPrecision?
+  /// The geocoding job's bookkeeping (E1): null = not tried yet (or the
+  /// address changed since: update-delivery clears all four with the
+  /// point). geocode_attempted_at doubles as the claim's lease.
+  geocode_status       DeliveryGeocodeStatus?
+  geocode_attempted_at DateTime?
+  geocode_attempts     Int                    @default(0)
+  /// The date of a copied verdict (review of plano-escala F2-33; migration
+  /// 20261117130000): set only on a NOT_FOUND or COARSE taken from another
+  /// delivery of the company at the same door, to the date of the
+  /// provider's answer it copies. The reuse window reads it before
+  /// geocode_attempted_at, so a copy of a copy never stretches the window,
+  /// while geocode_attempted_at stays the claim's instant (the API's last
+  /// attempt). Null on the delivery's own answer, on any other outcome and
+  /// after an address edit; meaningful only with NOT_FOUND or COARSE.
+  geocode_verdict_at   DateTime?
+  /// Which deliveries of the company stand at the same door (14/11/2026;
+  /// src/shared/delivery/address-key.ts): the SHA-256 of the canonical
+  /// street, number, district, city and UF, never the CEP. A delivery
+  /// without a point takes the one another delivery of the company has at
+  /// the same key. Null for a row written before it (the owner's backfill
+  /// fills them) or without a street, a house number ("s/n" is none: the
+  /// address names a street, not a door) or a city.
+  address_key          String?
+  /// The ROOT delivery a copied point came from (pre-push review of the
+  /// batch of 14/11/2026; migration 20261114130000): set with every point
+  /// taken from another delivery at the same address key, null on a point
+  /// of the delivery's own (a pin, a geocoder's answer, one given at the
+  /// create) and after an address edit. A pin on the root moves the open
+  /// copies still holding its previous point, and clearing it clears them
+  /// (address-point-propagation.ts). Deliberately no foreign key (the
+  /// migration says why).
+  geo_copied_from      String?
+
   status         DeliveryStatus @default(PENDING)
   // A civil date, no time window (decision 1.5); see Route.scheduled_date.
   scheduled_date DateTime?      @db.Date
@@ -2996,6 +3977,12 @@ model Delivery {
   // without it a small company's page walked the primary key of every
   // company until it found its own hundred rows.
   @@index([businessId, id])
+  // The public API's incremental sync, `updated_since` (plan of 02/11/2026,
+  // L6): the window read, then the page sorted, instead of (businessId, id)
+  // walked until a page of changed rows turned up — the whole history of the
+  // company for an ERP polling every minute. Costs no HOT update: updated_at
+  // was already indexed (delivery_failed_recent_idx, below).
+  @@index([businessId, updated_at])
   // Raw SQL, because Prisma cannot declare a partial index (`migrate diff`
   // ignores them — never "clean them up"; see
   // migrations/20260924090500_delivery_read_indexes). They serve the
@@ -3005,6 +3992,23 @@ model Delivery {
   //     INCLUDE ("driverId") WHERE status = 'DELIVERED'
   //   delivery_failed_recent_idx ("businessId", "updated_at")
   //     INCLUDE ("driverId") WHERE status = 'FAILED'
+  // And the geocoding job's claim (plan of 02/11/2026, E1; migration
+  // 20261103120000), newest first, only the open deliveries still without a
+  // point and not settled by the geocoder:
+  //   delivery_geocode_pending_idx ("created_at") WHERE latitude IS NULL
+  //     AND geo_source IS NULL AND (geocode_status IS NULL OR
+  //     geocode_status = 'FAILED') AND status IN ('PENDING', 'IN_TRANSIT')
+  // And the point reuse at one door (14/11/2026; migration
+  // 20261114120000), only the rows with a key, the newest point of each
+  // source first:
+  //   delivery_address_key_idx ("businessId", "address_key", "geo_source",
+  //     "geo_updated_at" DESC NULLS LAST, "id" DESC)
+  //     WHERE address_key IS NOT NULL
+  // And the copies a pin moves with it (migration 20261114130000), only the
+  // open ones:
+  //   delivery_geo_copied_from_idx ("businessId", "geo_copied_from")
+  //     WHERE geo_copied_from IS NOT NULL
+  //       AND status IN ('PENDING', 'IN_TRANSIT')
   @@map("delivery")
 }
 
@@ -3102,6 +4106,13 @@ model DeliveryOccurrence {
   /// The ticket this occurrence opened, if any (decision 14.5).
   supportTicket SupportTicket?
 
+  /// The geofence record, as on DeliveryEvent (plan of 02/11/2026, E3/E4).
+  /// An occurrence is never refused for the radius, so OUTSIDE here is
+  /// always a flag for review, read by the "Ocorrências" list.
+  distance_m       Float?
+  accuracy_m       Float?
+  geofence_outcome GeofenceOutcome?
+
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt
 
@@ -3177,6 +4188,23 @@ enum DeviceAgreement {
 enum GeocodeSource {
   PROVIDER // the configured reverse geocoder answered
   UNAVAILABLE // tried and failed or disabled: the PDF prints the delivery address, labelled
+}
+
+/// The channel a customer suppression applies to (D38): only the two that
+/// reach somebody outside the company.
+enum CustomerMessageChannel {
+  WHATSAPP
+  EMAIL
+}
+
+/// Where an action at the customer's address was made, relative to the
+/// company's radius (plan of 02/11/2026, E2). NOT_EVALUATED: no address
+/// point, accuracy worse than the radius, a stale position, or the geofence
+/// off — never a reason to block.
+enum GeofenceOutcome {
+  INSIDE
+  OUTSIDE
+  NOT_EVALUATED
 }
 
 /// Who produced an event, which the timeline has to show and cannot infer.
@@ -3270,6 +4298,16 @@ model DeliveryEvent {
   /// UNAVAILABLE is retried only after 24 h from this instant.
   gps_geocoded_at    DateTime?
 
+  /// The geofence record of an action at the customer's address (plan of
+  /// 02/11/2026, E2/E4): metres to the address point and the phone's
+  /// accuracy, as the server computed them, and the verdict. OUTSIDE is the
+  /// "fora do raio" flag (an ALERT the driver confirmed, or a queued offline
+  /// submission the server accepted). Stored, so a replay answers with what
+  /// was decided then and a later radius does not rewrite the past.
+  distance_m       Float?
+  accuracy_m       Float?
+  geofence_outcome GeofenceOutcome?
+
   // OCCURRENCE (and the STATUS_CHANGE an authorization decision causes): the
   // occurrence this event is about, so the feed can name its type. SetNull
   // for the same reason as the route. Indexed partially in raw SQL
@@ -3288,6 +4326,15 @@ model DeliveryEvent {
   reportedBy   User?   @relation(fields: [reportedById], references: [id], onDelete: Restrict)
   reportedById String?
 
+  /// The API key behind an INTEGRATION event (plan of 02/11/2026, L9; D49):
+  /// the cancel through POST /integration/v1/deliveries/:id/cancel, so the
+  /// trail names which integration acted instead of a bare "integração".
+  /// Null for every other actor. SET NULL like Delivery.apiKeyId: keys are
+  /// revoked, not deleted. Indexed partially in raw SQL
+  /// (delivery_event_apiKeyId_partial_idx): almost every event is null here.
+  apiKey   ApiKey? @relation(fields: [apiKeyId], references: [id], onDelete: SetNull)
+  apiKeyId String?
+
   /// When it happened on the phone (arrival, proof), when the app says so.
   /// See DeliveryOccurrence.occurred_at: null means created_at, and
   /// created_at stays the cursor of every incremental read — backdating it
@@ -3295,6 +4342,17 @@ model DeliveryEvent {
   occurred_at DateTime?
 
   created_at DateTime @default(now())
+
+  /// The id of the transaction that wrote the row (pg_current_xact_id(),
+  /// the 64-bit xid8): commit order for the integration feed (plano-escala
+  /// F2-03, F2-05), the same for every event of one transaction. Filled by
+  /// the database's DEFAULT only; NULL on the rows from before it, read as
+  /// 0. `@ignore`: Prisma never reads or writes it, and a BigInt in a
+  /// response would break the JSON. The feed's index
+  /// ("businessId", COALESCE("txid", 0), "id") is an expression Prisma
+  /// cannot declare: raw SQL in migrations/20261117140000_delivery_event_txid
+  /// and prisma/concurrent, pinned in tests/E2E/raw-sql-objects.test.ts.
+  txid BigInt? @default(dbgenerated("((pg_current_xact_id())::text)::bigint")) @ignore
 
   // ([deliveryId]) removed: (deliveryId, created_at) below serves every
   // lookup by delivery; a second copy on the 3M-row table only cost writes
@@ -3318,8 +4376,35 @@ model DeliveryEvent {
   // ("reasonId") WHERE "reasonId" IS NOT NULL, raw SQL in
   // migrations/20260924090300_foreign_key_indexes. occurrenceId likewise:
   // delivery_event_occurrenceId_partial_idx, in
-  // migrations/20260928120200_final_phase_schema.
+  // migrations/20260928120200_final_phase_schema. apiKeyId likewise:
+  // delivery_event_apiKeyId_partial_idx, in
+  // migrations/20261110120000_delivery_event_api_key.
   @@map("delivery_event")
+}
+
+/// The driver app's submission keys of the trail (plano-escala F2-14): one
+/// row per delivery_event written with a client_submission_id, in the same
+/// transaction as the event. delivery_event moves to a table partitioned by
+/// month on its id (F2-16, F2-17), and a partitioned table cannot hold a
+/// unique index without the partition key: the global "this key was already
+/// used" moves here, to the primary key. Named after the column on purpose:
+/// a P2002 of either unique (this one, or the legacy
+/// delivery_event_client_submission_id_key while it exists) names
+/// client_submission_id, and every caller takes the same replay-or-409 path.
+/// No foreign key: the trail's partitions are detached and dropped by month,
+/// and nothing here may hold them. Purged after
+/// DELIVERY_EVENT_SUBMISSION_RETENTION_DAYS (cleanup-delivery-event-submissions).
+model DeliveryEventSubmission {
+  client_submission_id String   @id(map: "delivery_event_submission_client_submission_id_pkey")
+  /// The delivery_event the key wrote (its id; no foreign key, see above).
+  event_id             String
+  /// The event's company: the replay lookup answers only inside it.
+  businessId           String
+  created_at           DateTime @default(now())
+
+  // The nightly purge walks the oldest rows first.
+  @@index([created_at])
+  @@map("delivery_event_submission")
 }
 
 // ============================================================================
@@ -3781,4 +4866,62 @@ model DriverPause {
   // SET NULL when a route is deleted.
   @@index([routeId])
   @@map("driver_pause")
+}
+
+/// The dashboard's count of one closed day (plano-escala F4-20): how many
+/// rows of `metric` the company had on `day`, so the overview and the trends
+/// add closed days up instead of counting months of deliveries on every
+/// view. Only closed days: today is always counted live. Written by the
+/// rollup job (F4-21); nothing reads it before DASHBOARD_ROLLUP_MODE (F4-22).
+/// CASCADE, like the API's daily usage: a number is nothing without its
+/// company, and the purge deletes these rows before it (purge-plan.ts).
+model TenantDayCount {
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  businessId String
+
+  /// What was counted, named by the job (src/shared/rollup/tenant-day-rules.ts):
+  /// `delivery@<IANA zone>`, the company's deliveries created on `day` in that
+  /// zone, with a row (zero too) for every day between the first and the
+  /// last; and `pending:delivery`, a marked UTC day the job took and has not
+  /// counted yet (value 0), kept here so that a run that dies loses none.
+  metric String
+
+  /// The civil day the count is of.
+  day DateTime @db.Date
+
+  value BigInt
+
+  computed_at DateTime @default(now())
+
+  @@id([businessId, metric, day])
+  @@map("tenant_day_count")
+}
+
+/// A closed day whose rows changed after it was counted (plano-escala
+/// F4-20): written by the triggers of migration
+/// 20261119130100_delivery_day_dirty_trigger when a delivery changes status
+/// or is deleted, with the UTC day of its created_at. The rollup job
+/// (F4-21) counts the marked days again and takes their rows away.
+///
+/// No foreign key: the row is written inside the DELETE of the company's
+/// own deliveries (the purge, the cascade of a company deleted by hand),
+/// where a key to the company would fail that DELETE. And no unique key
+/// on (businessId, day): a trigger that inserted under one would wait for
+/// the open transaction that marked the same day first, and two
+/// transactions marking two days in opposite orders would deadlock. The
+/// trigger skips a day already marked instead, so a duplicate is rare and
+/// harmless: the job reads the days, not the rows.
+model TenantDayDirty {
+  id BigInt @id @default(autoincrement())
+
+  businessId String
+
+  /// The UTC day of the changed row's created_at.
+  day DateTime @db.Date
+
+  marked_at DateTime @default(now())
+
+  // The trigger's "already marked?" and the purge, by company.
+  @@index([businessId, day])
+  @@map("tenant_day_dirty")
 }

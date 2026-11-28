@@ -23,11 +23,27 @@ const ROUTE_STATUSES_HANDING_OVER_VEHICLE = [
 type HandingOverRouteStatus =
   (typeof ROUTE_STATUSES_HANDING_OVER_VEHICLE)[number];
 
+/**
+ * How long an ended route waits in the driver's list for its arrival
+ * checklist (C4, decision D08). The route closes itself when its last stop
+ * resolves, so it has no open stop left; the app still has to ask for that
+ * checklist. A day covers the drive back to the base and a phone that only
+ * reconnects there; past it the web keeps the "checklist de chegada
+ * pendente" flag and the driver's list moves on.
+ *
+ * The same window lets the driver of that ended route READ its vehicle
+ * (canDriverReadVehicle): the checklist screen fills mileage and branch
+ * from GET /vehicle/get-vehicle, asked exactly when the route is COMPLETED.
+ */
+const ENDED_ROUTE_CHECKLIST_WINDOW_MS = 24 * 60 * 60 * 1000;
+
 /** A route as far as vehicle custody is concerned. */
 interface VehicleAssignment {
   vehicleId?: string | null;
   driverId: string;
   status: string;
+  /** Only read for a COMPLETED route (the arrival checklist window). */
+  completed_at?: Date | string | null;
 }
 
 function routeHandsOverVehicle(
@@ -59,6 +75,36 @@ function canDriverOperateVehicle(
 }
 
 /**
+ * Whether the driver may READ the vehicle (GET /vehicle/get-vehicle): every
+ * vehicle they may operate, plus the vehicle of their own route that ended
+ * within the arrival checklist window. The substitute who drove truck X got
+ * 403 the moment his route closed itself on the last stop, which is when
+ * the app reads X to fill the arrival checklist the create accepts. Read
+ * only: fuel, checklist without a route, the list and the histories keep
+ * canDriverOperateVehicle.
+ */
+function canDriverReadVehicle(
+  vehicle: { id: string; driverId?: string | null },
+  driverId: string,
+  routes: ReadonlyArray<VehicleAssignment>,
+  now: Date,
+): boolean {
+  if (canDriverOperateVehicle(vehicle, driverId, routes)) return true;
+  if (!driverId) return false;
+
+  const windowStart = now.getTime() - ENDED_ROUTE_CHECKLIST_WINDOW_MS;
+
+  return routes.some(
+    (route) =>
+      route.vehicleId === vehicle.id &&
+      route.driverId === driverId &&
+      route.status === "COMPLETED" &&
+      route.completed_at != null &&
+      new Date(route.completed_at).getTime() >= windowStart,
+  );
+}
+
+/**
  * The same rule as a Prisma `where` on Vehicle, so a list of "my vehicles"
  * and the single-vehicle check can never disagree.
  */
@@ -80,10 +126,37 @@ function driverOperableVehicleWhere(
   };
 }
 
+/** canDriverReadVehicle as a Prisma `where` on Vehicle. */
+function driverReadableVehicleWhere(
+  driverId: string,
+  now: Date,
+): Prisma.VehicleWhereInput {
+  return {
+    OR: [
+      ...(driverOperableVehicleWhere(driverId)
+        .OR as Prisma.VehicleWhereInput[]),
+      {
+        routes: {
+          some: {
+            driverId,
+            status: "COMPLETED",
+            completed_at: {
+              gte: new Date(now.getTime() - ENDED_ROUTE_CHECKLIST_WINDOW_MS),
+            },
+          },
+        },
+      },
+    ],
+  };
+}
+
 export {
+  ENDED_ROUTE_CHECKLIST_WINDOW_MS,
   ROUTE_STATUSES_HANDING_OVER_VEHICLE,
   canDriverOperateVehicle,
+  canDriverReadVehicle,
   driverOperableVehicleWhere,
+  driverReadableVehicleWhere,
   routeHandsOverVehicle,
 };
 export type { VehicleAssignment };

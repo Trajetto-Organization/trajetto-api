@@ -45,12 +45,7 @@ const TOWER_TYPE = "018ff100-0000-7000-8000-0000000000e1";
 const PROBLEM_TYPE = "018ff100-0000-7000-8000-0000000000e2";
 
 type Who =
-  | "admin"
-  | "driverA"
-  | "driverB"
-  | "master"
-  | "inactiveAdmin"
-  | "former";
+  "admin" | "driverA" | "driverB" | "master" | "inactiveAdmin" | "former";
 
 const users = {} as Record<Who, { id: string; token: string }>;
 
@@ -88,9 +83,9 @@ async function seedDriver(id: string, name: string): Promise<void> {
       id,
       name,
       birth_date: new Date("1990-01-01"),
-      cnh: `cnh-${id.slice(-4)}`,
-      cpf: `cpf-${id.slice(-4)}`,
-      rg: `rg-${id.slice(-4)}`,
+      cnh: `cnh-${id}`,
+      cpf: `cpf-${id}`,
+      rg: `rg-${id}`,
       cep: "01001000",
       city: "São Paulo",
       uf: "SP",

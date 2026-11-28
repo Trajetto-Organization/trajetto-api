@@ -1,8 +1,8 @@
 import fastify from "fastify";
-import {
-  serializerCompiler,
-  validatorCompiler,
-} from "fastify-type-provider-zod";
+import fastifyRateLimit from "@fastify/rate-limit";
+import { validatorCompiler } from "fastify-type-provider-zod";
+
+import { parsingSerializerCompiler } from "@/shared/http/response-serializer";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -18,7 +18,32 @@ import { readBuildInfo } from "@/shared/build-info";
  * The commit comes from the image (Dockerfile: GIT_SHA → APP_COMMIT_SHA) and
  * is read once; the probe still touches no dependency. The response schema
  * strips unknown keys, so the fields must be in it — not just in the body.
+ *
+ * It also names the deployment (`environment`, the APP_ENV). Staging and
+ * production share one Docker network, and the web server may reach the API
+ * by its App Name there: typing the other environment's name would send one
+ * environment's credentials to the other's API. The web compares this field
+ * with its own APP_ENV at boot (trajetto-ui/src/lib/env-check.ts) and
+ * refuses to start on a mismatch.
  */
+const deployment = vi.hoisted(() => ({
+  appEnv: undefined as string | undefined,
+}));
+
+// The real env, with APP_ENV replaced only when a test sets one.
+vi.mock("@/env", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/env")>();
+
+  return {
+    env: new Proxy(actual.env, {
+      get: (target, key) =>
+        key === "APP_ENV" && deployment.appEnv
+          ? deployment.appEnv
+          : target[key as keyof typeof target],
+    }),
+  };
+});
+
 vi.mock("@/../infra/database", () => ({
   default: {
     $queryRaw: vi.fn(() => {
@@ -44,7 +69,10 @@ async function liveness() {
   const app = fastify();
 
   app.setValidatorCompiler(validatorCompiler);
-  app.setSerializerCompiler(serializerCompiler);
+  app.setSerializerCompiler(parsingSerializerCompiler);
+  // health-routes builds its own namespaced bucket with app.rateLimit(),
+  // which only exists once the plugin is registered (as in src/http.ts).
+  app.register(fastifyRateLimit, { global: false });
   app.register(healthRoutes);
 
   const response = await app.inject({
@@ -59,6 +87,7 @@ async function liveness() {
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  deployment.appEnv = undefined;
 });
 
 describe("GET /health/liveness", () => {
@@ -72,6 +101,7 @@ describe("GET /health/liveness", () => {
       status: "alive",
       version: "0a1b2c3",
       commit: SHA,
+      environment: "development",
     });
   });
 
@@ -85,7 +115,21 @@ describe("GET /health/liveness", () => {
       status: "alive",
       version: "dev",
       commit: null,
+      environment: "development",
     });
+  });
+
+  it("names the deployment it belongs to", async () => {
+    // Staging and production run the same image (NODE_ENV=production), so
+    // APP_ENV is the only thing that tells them apart.
+    for (const appEnv of ["staging", "production"] as const) {
+      deployment.appEnv = appEnv;
+
+      const response = await liveness();
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json().environment, appEnv).toBe(appEnv);
+    }
   });
 });
 

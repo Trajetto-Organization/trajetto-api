@@ -30,12 +30,27 @@ const PROVIDER_SECRETS = [
   "RESEND_WEBHOOK_SECRET",
   "META_WHATSAPP_ACCESS_TOKEN",
   "META_WHATSAPP_APP_SECRET",
+  // Plan of 02/11/2026 (A8): Expo's project access token.
+  "EXPO_ACCESS_TOKEN",
   "R2_SECRET_ACCESS_KEY",
   "AI_LOCAL_TOKEN",
   "DATABASE_URL",
+  // The side pools of plano-escala F3-16.
+  "DATABASE_READ_URL",
+  "BATCH_DATABASE_URL",
+  // The readiness probe's pool in PgBouncer (plano-escala F4-37).
+  "READINESS_DATABASE_URL",
+  // The standby of readDatabase() (plano-escala F4-41).
+  "DATABASE_REPLICA_URL",
+  // The pub/sub's own Redis (plano-escala F5-01).
+  "PUBSUB_REDIS_URL",
+  // PgBouncer's stats login (plano-escala F4-36).
+  "PGBOUNCER_STATS_URL",
   "JWT_SECRET",
   "HEALTHCHECK_PING_URL",
   "WEBHOOK_SECRETS_KEY",
+  // The scrape's token of /metrics (plano-escala F5-29).
+  "METRICS_TOKEN",
 ] as const;
 
 describe("the process logger and the provider credentials", () => {

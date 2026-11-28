@@ -13,6 +13,7 @@ import {
 } from "@/shared/delivery/customer-notice";
 import { callerNotFound } from "@/shared/delivery/caller-not-found";
 import { violatesUniqueOn } from "@/shared/delivery/unique-violation";
+import { submissionReused } from "@/shared/delivery/submission-reused";
 import { DELIVERY_STATUS_LABELS } from "@/shared/delivery/delivery-rules";
 
 import { AppError } from "@/shared/errors/AppError";
@@ -60,14 +61,6 @@ function stopNotFound(): AppError {
     "Parada não encontrada nesta rota.",
     404,
     "ROUTE_STOP_NOT_FOUND",
-  );
-}
-
-function submissionReused(): AppError {
-  return new AppError(
-    "Esta chave de envio já foi usada em outro registro. Gere uma chave nova e envie de novo.",
-    409,
-    "SUBMISSION_ID_REUSED",
   );
 }
 

@@ -3,6 +3,7 @@ import { v7 as uuidV7 } from "uuid";
 
 import database from "@/../infra/database";
 
+import { settlesWithin } from "@/shared/lifecycle/deadline";
 import { logger } from "@/shared/logging/logger";
 import {
   businessDateKey,
@@ -341,16 +342,32 @@ class ApiUsageRecorder {
     log.info("API usage counter started");
   }
 
-  async shutdown(): Promise<void> {
+  /**
+   * `deadlineMs` is the shutdown plan's workers deadline
+   * (shared/lifecycle/shutdown-plan.ts). The last flush used to wait for the
+   * database however long it took: with the pool exhausted mid-deploy that
+   * is pool_timeout (20 s), past the watchdog, and the steps after the
+   * workers never ran. Past the deadline the batch is given up — the ten
+   * seconds of counts a SIGKILL costs anyway. Without it (a test), the
+   * flush is awaited.
+   */
+  async shutdown(options: { deadlineMs?: number } = {}): Promise<void> {
     if (this.timer) clearInterval(this.timer);
 
     this.timer = null;
 
     // The last ten seconds, on the way out. Cheap, and it is the batch most
     // likely to be the one somebody asks about after a deploy.
-    await this.flush().catch((error) => {
+    const flushed = this.flush().catch((error) => {
       log.error({ err: error }, "API usage final flush failed");
     });
+
+    if (!(await settlesWithin(flushed, options.deadlineMs ?? Infinity))) {
+      log.warn(
+        { deadlineMs: options.deadlineMs },
+        "API usage final flush still waiting on the database at the shutdown deadline; its counts are not written",
+      );
+    }
 
     log.info("API usage counter stopped");
   }

@@ -34,6 +34,11 @@ class InMemoryApiKeyRepository implements IApiKeyRepository {
     public timeZones: Map<string, string> = new Map(),
     /** Companies switched off (Business.is_active false); all others are active. */
     public inactiveBusinesses: Set<string> = new Set(),
+    /**
+     * Each company's DELIVERIES entitlement row, as BusinessEntitlement
+     * holds it: absent = never hired (no row), false = switched off.
+     */
+    public deliveriesModule: Map<string, boolean> = new Map(),
   ) {}
 
   async createWithinQuota(
@@ -167,6 +172,14 @@ class InMemoryApiKeyRepository implements IApiKeyRepository {
         is_active: !this.inactiveBusinesses.has(key.businessId),
         timezone:
           this.timeZones.get(key.businessId) ?? DEFAULT_BUSINESS_TIMEZONE,
+        entitlements: this.deliveriesModule.has(key.businessId)
+          ? [
+              {
+                module: "DELIVERIES",
+                enabled: this.deliveriesModule.get(key.businessId)!,
+              },
+            ]
+          : [],
       },
     };
   }

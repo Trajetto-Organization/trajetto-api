@@ -20,6 +20,7 @@ class ListUnroutedDeliveriesController {
       businessId,
       page: query.page,
       pageSize: query.pageSize,
+      cursor: query.cursor,
       search: query.search,
       shipperIds: query.shipperIds,
       cities: query.cities,
@@ -30,13 +31,16 @@ class ListUnroutedDeliveriesController {
       includeUnscheduled: query.includeUnscheduled,
     });
 
+    // total and facets only on a first page: a cursor page keeps the first
+    // one's (G9).
     return reply.status(200).send({
       data: page.data,
       meta: {
-        total: page.total,
+        ...(page.total !== undefined && { total: page.total }),
         page: query.page,
         pageSize: query.pageSize,
-        facets: page.facets,
+        ...(page.facets && { facets: page.facets }),
+        nextCursor: page.nextCursor,
       },
     });
   }

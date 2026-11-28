@@ -48,7 +48,7 @@ function fixture(name: string): Record<string, unknown> {
 /** What CreateFuelController applies, in its order, to a JSON body. */
 function acceptFuel(
   body: Record<string, unknown>,
-  schema: z.ZodTypeAny = createFuelSchema,
+  schema: z.ZodType<z.output<typeof createFuelSchema>> = createFuelSchema,
 ) {
   const { photo, ...fields } = body;
 

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { responseDateTime } from "@/routes/documentation/response-date";
 import { tenantLockedShape } from "@/shared/validation/tenant-locked-field";
 
 import { occurredAtField } from "@/shared/delivery/occurred-at";
@@ -9,10 +10,11 @@ import {
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 
 import { errorResponse } from "@/routes/documentation/common-responses";
+import { fieldError } from "@/shared/validation/field-error";
 
 const coordinate = (label: string, bound: number) =>
   z.coerce
-    .number({ invalid_type_error: `A ${label} deve ser um número.` })
+    .number(fieldError({ invalid: `A ${label} deve ser um número.` }))
     .min(-bound, `A ${label} é inválida.`)
     .max(bound, `A ${label} é inválida.`)
     .nullable()
@@ -30,9 +32,11 @@ const markStopOnTheWaySchema = z
   .object({
     ...tenantLockedShape,
     client_submission_id: z
-      .string({
-        required_error: "A chave de idempotência do envio é obrigatória.",
-      })
+      .string(
+        fieldError({
+          required: "A chave de idempotência do envio é obrigatória.",
+        }),
+      )
       .uuid("A chave de idempotência do envio é inválida.")
       .describe(
         "Chave de idempotência do envio (UUID), gerada uma vez pelo app e repetida em cada retentativa: reenviar a mesma chave devolve a mesma resposta sem gravar de novo.",
@@ -62,8 +66,6 @@ const markStopOnTheWayParams = updateDeleteBusinessSchema
   .merge(routeIdParamSchema)
   .merge(routeStopIdParamSchema);
 
-const isoDateTime = z.union([z.string(), z.date()]);
-
 const markStopOnTheWayResponses = {
   marked: z.object({
     message: z.string().default("Parada marcada como a caminho."),
@@ -71,7 +73,7 @@ const markStopOnTheWayResponses = {
       stopId: z.string(),
       routeId: z.string(),
       deliveryId: z.string(),
-      on_the_way_at: isoDateTime.describe(
+      on_the_way_at: responseDateTime().describe(
         "O instante que esta marcação registrou (o toque, corrigido pelo relógio do aparelho). Um reenvio com a mesma chave devolve este mesmo valor.",
       ),
     }),

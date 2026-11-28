@@ -70,6 +70,17 @@ interface ISupportTicketRepository {
   ) => Promise<SupportTicket | null>;
 
   /**
+   * The driver's OPEN general (DRIVER) ticket with this subject (case
+   * ignored) and no message yet, newest first: what a second "Novo assunto"
+   * with the same title answers instead of another empty ticket.
+   */
+  findEmptyOpenDriverTicket: (
+    businessId: string,
+    driverId: string,
+    subject: string,
+  ) => Promise<SupportTicket | null>;
+
+  /**
    * The ticket of the newest message in this thread NOT sent by the driver's
    * user, with when it was sent. Null when there is none. `before` looks
    * only at messages older than that instant (the repair files an old

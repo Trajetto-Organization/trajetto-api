@@ -415,6 +415,51 @@ describe.each(both)("the deactivation guard (%s)", (label, repo) => {
     await repo.updateDriver({ driverId, driverData: { status: "ACTIVE" } });
   });
 
+  it("counts a branch's open routes through its drivers, and only theirs (K10)", async () => {
+    // Caio and Enzo are in Norte; Ana is in no branch.
+    const inNorte = ids[label === "prisma" ? 2 : 4];
+    const outside = ids[1];
+    const routes = [
+      { driverId: inNorte, status: "IN_PROGRESS" },
+      { driverId: inNorte, status: "COMPLETED" },
+      { driverId: outside, status: "RELEASED" },
+    ] as const;
+
+    if (label === "prisma") {
+      await prisma.route.createMany({
+        data: routes.map((route, index) => ({
+          code: 100 + index,
+          scheduled_date: new Date("2026-09-28"),
+          businessId: A,
+          ...route,
+        })),
+      });
+    } else {
+      memoryRoutes.push(...routes.map((route) => ({ ...route })));
+    }
+
+    expect(await repo.countOpenRoutesOfBranch(NORTE)).toEqual({
+      PLANNED: 0,
+      RELEASED: 0,
+      IN_PROGRESS: 1,
+    });
+
+    if (label === "prisma") {
+      await prisma.route.updateMany({
+        where: { driverId: { in: [inNorte, outside] } },
+        data: { status: "CANCELLED" },
+      });
+    } else {
+      for (const route of memoryRoutes) route.status = "CANCELLED";
+    }
+
+    expect(await repo.countOpenRoutesOfBranch(NORTE)).toEqual({
+      PLANNED: 0,
+      RELEASED: 0,
+      IN_PROGRESS: 0,
+    });
+  });
+
   it("stores the expiry as the civil day and clears it with null", async () => {
     const driverId = ids[4];
 
@@ -658,6 +703,55 @@ describe("the delete re-checks the history itself", () => {
 
       await expect(repo.deleteDriver(driverId)).rejects.toMatchObject({
         code: "DRIVER_HAS_PAUSES",
+        statusCode: 409,
+      });
+      expect(await repo.findDriverById(driverId)).not.toBeNull();
+    },
+  );
+
+  // Decision D-39: the chat thread is CASCADE on the driver, so the delete
+  // erased the conversation without a word. It counts as history now, on
+  // the use case's count and on the recount under the lock.
+  it.each(both)(
+    "counts the conversation and refuses a driver who only talked (%s)",
+    async (label, repo) => {
+      const driverId = label === "prisma" ? accentedIds[4] : accentedIds[5];
+
+      if (label === "prisma") {
+        const sender = await prisma.user.create({
+          data: {
+            name: "Despachante",
+            email: `${randomUUID()}@exemplo.com.br`,
+            password: "not-used-here",
+            role: "BUSINESS_ADMIN",
+            businessId: C,
+          },
+        });
+        const thread = await prisma.chatThread.create({
+          data: { businessId: C, driverId },
+        });
+
+        await prisma.chatMessage.createMany({
+          data: [1, 2].map(() => ({
+            kind: "TEXT" as const,
+            body: "Pode seguir.",
+            threadId: thread.id,
+            senderId: sender.id,
+          })),
+        });
+      } else {
+        memoryRepo.conversation.push(
+          { driverId, kind: "chatMessages" },
+          { driverId, kind: "chatMessages" },
+        );
+      }
+
+      expect(await repo.countDriverConversation(driverId)).toEqual({
+        chatMessages: 2,
+        supportTickets: 0,
+      });
+      await expect(repo.deleteDriver(driverId)).rejects.toMatchObject({
+        code: "DRIVER_HAS_OPERATION",
         statusCode: 409,
       });
       expect(await repo.findDriverById(driverId)).not.toBeNull();

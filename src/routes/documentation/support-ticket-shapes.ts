@@ -1,10 +1,10 @@
 import { z } from "zod";
+import { responseDateTime } from "./response-date";
 
 /**
  * The support ticket wire shapes (decision 14.5), shared by the chat and the
  * ticket documentation without importing each other.
  */
-const isoDateTime = z.union([z.string(), z.date()]);
 const person = z.object({ id: z.string(), name: z.string() });
 
 const ticketKind = z.enum([
@@ -44,8 +44,16 @@ const ticketSummary = z.object({
       id: z.string(),
       code: z.number().int(),
       name: z.string().nullable(),
+      status: z
+        .string()
+        .describe(
+          "PLANNED, RELEASED, IN_PROGRESS, COMPLETED ou CANCELLED: diz quando a rota do atendimento terminou ou foi cancelada.",
+        ),
     })
-    .nullable(),
+    .nullable()
+    .describe(
+      "Null num atendimento de rota (kind ROUTE) quer dizer que a rota foi excluída (desfazer uma importação): o assunto guarda o nome dela.",
+    ),
   occurrence: z
     .object({
       id: z.string(),
@@ -118,7 +126,6 @@ const driverTicketViewShape = ticketSummary
   });
 
 export {
-  isoDateTime,
   person,
   ticketKind,
   ticketOutcome,

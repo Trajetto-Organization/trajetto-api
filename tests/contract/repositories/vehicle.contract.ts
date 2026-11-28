@@ -23,7 +23,11 @@ const VEHICLE_FIXTURE = {
   vehicleTypeA: fixedId("0ff8", 1),
   driverA: fixedId("0ff9", 1),
   branchA: fixedId("0ffa", 1),
+  // Plan of 02/11/2026 (F1): a user of A who can answer for a vehicle.
+  responsibleA: fixedId("0ffb", 1),
+  responsibleName: "Pessoa Contrato 1",
   vehicleTypeName: "Truck Baú",
+  fuelTypeName: "Diesel",
   driverName: "Zeca Pagodinho",
   branchName: "Filial Centro",
 } as const;
@@ -107,6 +111,13 @@ interface VehicleHarness {
   kind: Kind;
   repo: IVehicleRepository;
   id(key: string): string;
+
+  /**
+   * Puts a route of company A on the street with this vehicle (an
+   * IN_PROGRESS row the route repository would have written); the function
+   * it returns ends that route.
+   */
+  routeOnTheRoad(vehicleId: string): Promise<() => Promise<void>>;
 }
 
 async function seedVehicles(
@@ -243,6 +254,87 @@ function vehicleRepositoryContract(harness: () => VehicleHarness): void {
       );
     });
 
+    // Plan of 02/11/2026 (F1): null = the company's admins, on every legacy
+    // row; set, kept by an edit that does not name it, and cleared by null.
+    it("stores, keeps and clears the vehicle's responsible user", async () => {
+      const h = harness();
+      const before = await h.repo.findVehicleById(h.id("v1"));
+
+      expect(before?.responsibleUserId).toBeNull();
+
+      await h.repo.updateVehicle({
+        vehicleId: h.id("v1"),
+        vehicleData: { responsibleUserId: F.responsibleA },
+      });
+      await h.repo.updateVehicle({
+        vehicleId: h.id("v1"),
+        vehicleData: {
+          maintenance_interval_months: before?.maintenance_interval_months,
+        },
+      });
+
+      expect(
+        (await h.repo.findVehicleById(h.id("v1")))?.responsibleUserId,
+      ).toBe(F.responsibleA);
+
+      await h.repo.updateVehicle({
+        vehicleId: h.id("v1"),
+        vehicleData: { responsibleUserId: null },
+      });
+
+      expect(
+        (await h.repo.findVehicleById(h.id("v1")))?.responsibleUserId,
+      ).toBeNull();
+    });
+
+    // The names the edit and the OS prefill read (F1, F4): the responsible
+    // user's and the branch's, null without one, on the list and the detail.
+    it("names the responsible user and the branch on the list and the detail", async () => {
+      const h = harness();
+
+      await h.repo.updateVehicle({
+        vehicleId: h.id("v1"),
+        vehicleData: { responsibleUserId: F.responsibleA },
+      });
+
+      try {
+        const page = await list({ search: "AAA1B11" });
+        const named = page.data.find((row) => row.id === h.id("v1"));
+
+        expect(named).toMatchObject({
+          responsibleUser: { name: F.responsibleName },
+          branch: { corporate_reason: F.branchName, name: F.branchName },
+        });
+
+        const bare = (await list({ search: "AAA2B22" })).data.find(
+          (row) => row.id === h.id("v2"),
+        );
+
+        expect(bare).toMatchObject({ responsibleUser: null, branch: null });
+
+        expect(
+          await h.repo.getVehicleByIdAndBusiness({
+            businessId: A,
+            vehicleId: h.id("v1"),
+          }),
+        ).toMatchObject({
+          responsibleUser: { name: F.responsibleName },
+          branch: { corporate_reason: F.branchName, name: F.branchName },
+        });
+        expect(
+          await h.repo.getVehicleByIdAndBusiness({
+            businessId: A,
+            vehicleId: h.id("v2"),
+          }),
+        ).toMatchObject({ responsibleUser: null, branch: null });
+      } finally {
+        await h.repo.updateVehicle({
+          vehicleId: h.id("v1"),
+          vehicleData: { responsibleUserId: null },
+        });
+      }
+    });
+
     it("finds a plate and a RENAVAM whatever the case, inside the company only", async () => {
       const h = harness();
 
@@ -289,6 +381,75 @@ function vehicleRepositoryContract(harness: () => VehicleHarness): void {
       // v2 is BLOCKED (outside the `where`): Prisma still positions on it,
       // and skip: 1 drops the first row after it (v1).
       expect((await page(h.id("v2"))).data).toEqual([]);
+    });
+
+    // Audit of 11/2026: the driver's "Meus veículos" card read
+    // "Combustível: N/A" — the full rows never carried the fuel.
+    it("carries the driver, the type and the fuel on the full rows; the choice rows leave the fuel out", async () => {
+      const h = harness();
+      const rowOf = async (fields: "full" | "choice") =>
+        (
+          await h.repo.searchVehicleWithCursor({
+            limit: 10,
+            businessId: A,
+            fields,
+          })
+        ).data.find((row) => row.id === h.id("v1"));
+
+      expect(await rowOf("full")).toMatchObject({
+        driver: { name: F.driverName },
+        vehicleType: { description: F.vehicleTypeName },
+        fuelType: { description: F.fuelTypeName },
+      });
+      expect(await rowOf("choice")).not.toHaveProperty("fuelType");
+    });
+  });
+
+  // Last: it adds a vehicle and a route the reads above do not expect.
+  describe("the status a truck taken out of BLOCKED gets (decision 8.3)", () => {
+    it("is IN_ROUTE while a route of the company runs with it, ACTIVE once none does", async () => {
+      const h = harness();
+      const truck = await h.repo.createVehicle(base(9, { status: "BLOCKED" }));
+
+      const unblock = () =>
+        h.repo.updateVehicle({
+          vehicleData: { status: "ACTIVE", description: "Desbloqueado" },
+          vehicleId: truck.id,
+          statusFromRunningRoute: { businessId: A },
+        });
+
+      const endRoute = await h.routeOnTheRoad(truck.id);
+
+      const onTheRoad = await unblock();
+      expect(onTheRoad.status).toBe("IN_ROUTE");
+      expect(onTheRoad.description).toBe("Desbloqueado");
+
+      // Another company's scope never sees A's route.
+      expect(
+        (
+          await h.repo.updateVehicle({
+            vehicleData: { status: "ACTIVE" },
+            vehicleId: truck.id,
+            statusFromRunningRoute: { businessId: B },
+          })
+        ).status,
+      ).toBe("ACTIVE");
+
+      await endRoute();
+
+      expect((await unblock()).status).toBe("ACTIVE");
+
+      const { vehicle } = await h.repo.updateVehicleWithinLimit(
+        {
+          vehicleData: { status: "IN_ROUTE" },
+          vehicleId: truck.id,
+          businessId: A,
+          statusFromRunningRoute: { businessId: A },
+        },
+        { max: 0 },
+      );
+
+      expect(vehicle?.status).toBe("ACTIVE");
     });
   });
 }

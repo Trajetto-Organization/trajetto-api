@@ -1,0 +1,536 @@
+#!/usr/bin/env bash
+#
+# trajetto-restore-drill: the monthly PITR drill (plano-escala F1-02;
+# docs/runbooks/restore-drill.md). A backup is only a backup once it
+# restores: this restores the newest one (or a chosen instant) into a
+# throwaway container of the very image the Database runs, starts it, reads
+# it, measures the RTO and the loss, and pings healthchecks.io with a JSON
+# summary that carries no secret.
+#
+# Two halves of one file, so the host needs nothing installed:
+#
+#   on the host, by the Schedule Job (or by hand), with the Database's
+#   container (the script comes out of it, matching its image):
+#
+#     c=$(docker ps -q -f label=com.docker.swarm.service.name=<Database App Name>)
+#     docker exec "$c" cat /usr/local/bin/trajetto-restore-drill | bash -s -- --from "$c"
+#
+#   it reads the Database's environment, swaps the repository's WRITE keys
+#   for the read-only ones (PITR_DRILL_REPO<n>_S3_KEY/_SECRET; the drill
+#   never holds a key that can delete a backup), and creates the drill
+#   container, always capped:
+#
+#     docker run --rm --cpus 1 --memory 1g --memory-swap 1g --blkio-weight 100
+#
+#   (the I/O weight only where the kernel supports it), deleting the
+#   environment file before it starts. Inside, `--inside`:
+#
+#   1. the disk and the RAM first: the newest backup's database size, plus
+#      the WAL the recovery keeps in pg_wal (the drill's own max_wal_size
+#      plus the Database's POSTGRES_MAX_WAL_SIZE, or less when the archive
+#      holds less since the backup), must fit in
+#      PITR_DRILL_MAX_DISK_FRACTION (0.5) of the free disk, and the host
+#      must have the container's cap free; otherwise /fail with
+#      'drill-disk' or 'drill-ram', and the runbook moves the drill;
+#   2. pgbackrest restore --archive-mode=off (to the end of the archive, or
+#      --target=<instant> with --type=time);
+#   3. the server through the image's own entrypoint (recovery refuses a
+#      max_connections below the primary's), with -c archive_mode=off
+#      -c listen_addresses= -c shared_buffers=128MB -c max_wal_size=1GB on
+#      top, and only the local socket, trusted, for this container alone;
+#   4. _prisma_migrations (applied, none half-way), the counts of the main
+#      tables, and the marker: max(ts) of ops_sample's 'cluster' rows, one a
+#      minute; the loss is the drill's start (or the target) minus it;
+#   5. the JSON summary on stdout and in the ping;
+#   6. at the end, whatever the result (a docker stop included), the copy
+#      is wiped from PGDATA: it holds production's personal data, and a
+#      named volume (--volume) outlives the container. Only what the drill
+#      restored: it never restores over anything (drill-dirty).
+#
+# Options: --repo=2 (the second repository, F5-34), --target=<timestamp
+# with zone>, --volume=<docker volume> (host half: restore into it instead
+# of the container's own disk, from the prod-db-2 on; a volume of the
+# drill's own, empty, and left empty), --network=<docker
+# network> (host half: when the repository is only reachable there, as in
+# the image's S3 proof; R2 needs none).
+#
+# Exit status: 0 ok; 1 usage or configuration; 3 not enough disk or RAM;
+# 4 the restore, the recovery or the checks failed.
+set -Eeuo pipefail
+
+STANZA=trajetto
+MODE=""
+FROM=""
+REPO=1
+TARGET=""
+VOLUME=""
+NETWORK=""
+
+usage() {
+  echo "uso: trajetto-restore-drill --from <contêiner do Database> [--repo=2] [--target=<instante>] [--volume=<volume>] [--network=<rede>]" >&2
+  echo "     trajetto-restore-drill --inside [--repo=2] [--target=<instante>]" >&2
+  exit 1
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --from)
+      [ "$#" -ge 2 ] || usage
+      MODE=host
+      FROM=$2
+      shift
+      ;;
+    --from=*)
+      MODE=host
+      FROM=${1#--from=}
+      ;;
+    --inside) MODE=inside ;;
+    --repo=[12]) REPO=${1#--repo=} ;;
+    --target=*) TARGET=${1#--target=} ;;
+    --volume=*) VOLUME=${1#--volume=} ;;
+    --network=*) NETWORK=${1#--network=} ;;
+    *) usage ;;
+  esac
+  shift
+done
+[ -n "$MODE" ] || usage
+if [ -n "$TARGET" ] \
+  && ! [[ "$TARGET" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}[\ T][0-9]{2}:[0-9]{2}(:[0-9]{2}(\.[0-9]{1,6})?)?(Z|[+-][0-9]{2}(:?[0-9]{2})?)$ ]]; then
+  echo "trajetto-restore-drill: --target precisa de data, hora e fuso (2026-12-01 05:00:00+00): '${TARGET}'" >&2
+  exit 1
+fi
+if [ -n "$NETWORK" ] && ! [[ "$NETWORK" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then
+  echo "trajetto-restore-drill: --network precisa do nome de uma rede do Docker" >&2
+  exit 1
+fi
+if [ -n "$VOLUME" ] && ! [[ "$VOLUME" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then
+  echo "trajetto-restore-drill: --volume precisa do nome de um volume do Docker" >&2
+  exit 1
+fi
+
+# --- output without secrets, and the ping -----------------------------------------
+
+SECRETS=()
+remember_secret() { if [ -n "$1" ]; then SECRETS+=("$1"); fi; }
+
+redact() {
+  local text=$1 secret
+  for secret in "${SECRETS[@]+"${SECRETS[@]}"}"; do
+    text=${text//"$secret"/<redacted>}
+  done
+  printf '%s' "$text"
+}
+
+json_string() {
+  local text
+  text=$(redact "$1")
+  text=${text//\\/\\\\}
+  text=${text//\"/\\\"}
+  text=${text//$'\t'/ }
+  text=${text//$'\r'/}
+  text=${text//$'\n'/\\n}
+  printf '"%s"' "$text"
+}
+
+PING_URL=""
+
+# ping [start|fail] [body]: wget (the image's busybox) or curl (a host);
+# never fails the drill, never prints the URL.
+ping() {
+  local suffix=${1:-} body=${2:-} url attempt
+  [ -n "$PING_URL" ] || return 0
+  url=${PING_URL%/}${suffix:+/$suffix}
+  for attempt in 1 2 3; do
+    if command -v wget > /dev/null 2>&1; then
+      wget -q -T 10 -O /dev/null --header 'Content-Type: application/json' \
+        --post-data "$body" "$url" > /dev/null 2>&1 && return 0
+    elif command -v curl > /dev/null 2>&1; then
+      curl -fsS -m 10 -o /dev/null -H 'Content-Type: application/json' \
+        --data-raw "$body" "$url" > /dev/null 2>&1 && return 0
+    else
+      break
+    fi
+    [ "$attempt" -eq 3 ] || sleep $((attempt * 2))
+  done
+  echo "trajetto-restore-drill: AVISO: o healthchecks não respondeu." >&2
+}
+
+LOG=$(mktemp)
+WORKDIR=""
+SERVER=""
+RESTORED=""
+
+# wipe_copy: everything in PGDATA, which held nothing before the restore
+# (the drill-dirty check). The copy is production's personal data, and a
+# named volume (--volume) outlives the container: without this, it stayed
+# there for good, and the next month's drill stopped at drill-dirty.
+wipe_copy() {
+  local entries
+  shopt -s dotglob nullglob
+  entries=("$PGDATA"/*)
+  shopt -u dotglob nullglob
+  if [ "${#entries[@]}" -gt 0 ]; then rm -rf -- "${entries[@]}" 2> /dev/null || true; fi
+  if [ -n "$(ls -A "$PGDATA" 2> /dev/null)" ]; then
+    echo "trajetto-restore-drill: AVISO: a cópia restaurada ficou em ${PGDATA}: apague à mão (docs/runbooks/restore-drill.md)." >&2
+  else
+    echo "trajetto-restore-drill: cópia restaurada apagada de ${PGDATA}." >&2
+  fi
+}
+
+# SIGTERM (a smart shutdown: no client is left by then), then at most a
+# minute before the KILL; then the copy goes, whatever the result. Not
+# SIGINT: a job started in the background of a script ignores it unless it
+# sets its own handler.
+cleanup() {
+  if [ -n "$SERVER" ]; then
+    kill -TERM "$SERVER" 2> /dev/null || true
+    for _ in $(seq 1 60); do
+      kill -0 "$SERVER" 2> /dev/null || break
+      sleep 1
+    done
+    kill -KILL "$SERVER" 2> /dev/null || true
+    wait "$SERVER" 2> /dev/null || true
+  fi
+  if [ -n "$RESTORED" ]; then wipe_copy; fi
+  rm -f "$LOG"
+  if [ -n "$WORKDIR" ]; then rm -rf "$WORKDIR"; fi
+}
+trap cleanup EXIT
+
+fail() {
+  local code=$1 reason=$2 detail=$3 tail_text=""
+  [ -s "$LOG" ] && tail_text=$(tail -n 20 "$LOG")
+  echo "trajetto-restore-drill: FALHOU (${reason}): $(redact "$detail")" >&2
+  if [ -n "$tail_text" ]; then
+    redact "$tail_text" >&2
+    echo >&2
+  fi
+  ping fail "{\"result\":\"fail\",\"reason\":\"${reason}\",\"repo\":${REPO},\"detail\":$(json_string "$detail"),\"log\":$(json_string "$tail_text")}"
+  exit "$code"
+}
+
+# --- the host half -----------------------------------------------------------------
+
+if [ "$MODE" = host ]; then
+  command -v docker > /dev/null 2>&1 || {
+    echo "trajetto-restore-drill: --from roda no servidor, com o docker." >&2
+    exit 1
+  }
+  [[ "$FROM" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || usage
+
+  image=$(docker inspect --format '{{.Config.Image}}' "$FROM" 2> /dev/null) || {
+    echo "trajetto-restore-drill: contêiner ${FROM} não encontrado." >&2
+    exit 1
+  }
+
+  # The Database's environment, read once, never printed.
+  declare -A db_env=()
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    db_env[${line%%=*}]=${line#*=}
+  done < <(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$FROM")
+  for name in "${!db_env[@]}"; do
+    case "$name" in
+      *_S3_KEY | *_S3_KEY_SECRET | *_CIPHER_PASS | *_PING_URL) remember_secret "${db_env[$name]}" ;;
+    esac
+  done
+  PING_URL=${db_env[PITR_DRILL_PING_URL]:-}
+
+  WORKDIR=$(mktemp -d)
+  chmod 0700 "$WORKDIR"
+  envfile="${WORKDIR}/drill.env"
+  (
+    umask 077
+    : > "$envfile"
+  )
+  put() { printf '%s=%s\n' "$1" "$2" >> "$envfile"; }
+
+  missing=()
+  repos=(1)
+  [ "$REPO" = 1 ] || repos+=("$REPO")
+  for n in "${repos[@]}"; do
+    type=${db_env[PGBACKREST_REPO${n}_TYPE]:-}
+    [ "$n" != 1 ] || type=${type:-s3}
+    # Everything of the repository but its write keys...
+    for name in "${!db_env[@]}"; do
+      case "$name" in
+        PGBACKREST_REPO${n}_S3_KEY | PGBACKREST_REPO${n}_S3_KEY_SECRET) ;;
+        PGBACKREST_REPO${n}_*) put "$name" "${db_env[$name]}" ;;
+      esac
+    done
+    # ...and the read-only ones in their place.
+    if [ "$type" = s3 ]; then
+      for part in S3_KEY S3_KEY_SECRET; do
+        value=${db_env[PITR_DRILL_REPO${n}_${part}]:-}
+        if [ -n "$value" ]; then
+          put "PGBACKREST_REPO${n}_${part}" "$value"
+        else
+          missing+=("PITR_DRILL_REPO${n}_${part}")
+        fi
+      done
+    fi
+    [ -n "${db_env[PGBACKREST_REPO${n}_CIPHER_PASS]:-}" ] || missing+=("PGBACKREST_REPO${n}_CIPHER_PASS")
+  done
+  # POSTGRES_MAX_WAL_SIZE: how far apart the Database's checkpoints can be,
+  # which the disk guard needs (the drill's server runs its own, on top).
+  for name in POSTGRES_USER POSTGRES_DB POSTGRES_MAX_CONNECTIONS POSTGRES_MAX_WAL_SIZE PITR_DRILL_PING_URL PITR_DRILL_MAX_DISK_FRACTION PITR_DRILL_TIMEOUT_SECONDS; do
+    if [ -n "${db_env[$name]:-}" ]; then put "$name" "${db_env[$name]}"; fi
+  done
+  # The derived memory matches the container's cap; the drill's own
+  # shared_buffers comes on top (-c, last).
+  put POSTGRES_MEMORY_LIMIT_MB 1024
+
+  if [ "${#missing[@]}" -gt 0 ]; then
+    fail 1 drill-config "faltam no Environment do Database: ${missing[*]}. O ensaio nunca usa a chave de escrita."
+  fi
+
+  args=(--inside "--repo=${REPO}")
+  [ -z "$TARGET" ] || args+=("--target=${TARGET}")
+  placement=()
+  [ -z "$VOLUME" ] || placement=(--mount "type=volume,src=${VOLUME},dst=/var/lib/postgresql/data")
+  [ -z "$NETWORK" ] || placement+=(--network "$NETWORK")
+
+  # The I/O weight needs io.weight in the kernel (cgroup v2 with BFQ); where
+  # it is missing, runc refuses to START a container that asks for it, so a
+  # throwaway probe decides. CPU and memory caps are never optional.
+  io_weight=(--blkio-weight 100)
+  if ! docker run --rm --network none "${io_weight[@]}" --entrypoint true "$image" > /dev/null 2>&1; then
+    echo "trajetto-restore-drill: AVISO: este kernel não aceita peso de I/O (io.weight): o ensaio roda com o teto de CPU e memória, sem ele." >&2
+    io_weight=()
+  fi
+
+  name="trajetto-restore-drill-$(date -u +%Y%m%d%H%M%S)"
+  cid=$(docker create --rm --name "$name" --cpus 1 --memory 1g --memory-swap 1g \
+    "${io_weight[@]+"${io_weight[@]}"}" --env-file "$envfile" "${placement[@]+"${placement[@]}"}" \
+    "$image" trajetto-restore-drill "${args[@]}" 2> "$LOG") \
+    || fail 1 drill-config "docker create do contêiner do ensaio falhou"
+  # Docker read the file at create: no copy of a key stays on the disk.
+  rm -f "$envfile"
+  status=0
+  docker start --attach "$cid" || status=$?
+  exit "$status"
+fi
+
+# --- the container half --------------------------------------------------------------
+
+# A docker stop (INT: the image keeps the official postgres's STOPSIGNAL;
+# the drill is the container's PID 1, which ignores a signal it has no
+# handler for), a Ctrl-C through docker start --attach, a TERM or a HUP
+# end through cleanup too, and with it the wipe. Once: a second signal
+# never cuts the wipe short.
+on_signal() {
+  trap '' TERM INT HUP
+  exit "$1"
+}
+trap 'on_signal 143' TERM
+trap 'on_signal 130' INT
+trap 'on_signal 129' HUP
+
+for name in "${!PGBACKREST_REPO@}" "${!PITR_@}"; do
+  case "$name" in
+    *_S3_KEY | *_S3_KEY_SECRET | *_CIPHER_PASS | *_PING_URL) remember_secret "${!name:-}" ;;
+  esac
+done
+PING_URL=${PITR_DRILL_PING_URL:-}
+export PGDATA=${PGDATA:-/var/lib/postgresql/data}
+SOCKET=${TRAJETTO_DRILL_SOCKET:-/tmp/trajetto-drill-socket}
+DB_USER=${POSTGRES_USER:-postgres}
+# 0,5 as typed in a Brazilian panel is 0.5.
+FRACTION=${PITR_DRILL_MAX_DISK_FRACTION:-0.5}
+FRACTION=${FRACTION/,/.}
+TIMEOUT=${PITR_DRILL_TIMEOUT_SECONDS:-3600}
+MEMINFO=${TRAJETTO_MEMINFO:-/proc/meminfo}
+CGROUP_ROOT=${TRAJETTO_CGROUP_ROOT:-/sys/fs/cgroup}
+[[ "$FRACTION" =~ ^0?\.[0-9]+$|^1(\.0+)?$ ]] || FRACTION=0.5
+[[ "$TIMEOUT" =~ ^[0-9]{1,6}$ ]] || TIMEOUT=3600
+# The copy's own max_wal_size, never the Database's (8GB in production,
+# sized for its writes): the segments a replay keeps in pg_wal grow with it,
+# on the disk production uses.
+DRILL_MAX_WAL=1GB
+
+# mib_of <Postgres size>: MiB of a size the wrapper accepts (MB, GB, TB).
+mib_of() {
+  [[ "$1" =~ ^([1-9][0-9]{0,6})(MB|GB|TB)$ ]] || return 1
+  case "${BASH_REMATCH[2]}" in
+    MB) echo "$((BASH_REMATCH[1]))" ;;
+    GB) echo "$((BASH_REMATCH[1] * 1024))" ;;
+    TB) echo "$((BASH_REMATCH[1] * 1048576))" ;;
+  esac
+}
+
+# segno_of <segment name>: its position, at the image's 16 MiB a segment
+# (256 to a log file); empty for anything else.
+segno_of() {
+  [[ "$1" =~ ^[0-9A-F]{24}$ ]] || return 0
+  echo "$((16#${1:8:8} * 256 + 16#${1:16:8}))"
+}
+
+as_postgres() { if [ "$(id -u)" = 0 ]; then gosu postgres "$@"; else "$@"; fi; }
+pgbr() { as_postgres pgbackrest --stanza="$STANZA" --repo="$REPO" "$@"; }
+# psql_db <database> [psql args]: through the drill's own socket.
+psql_db() {
+  local db=$1
+  shift
+  as_postgres psql -X -v ON_ERROR_STOP=1 -h "$SOCKET" -U "$DB_USER" -d "$db" -Atq "$@"
+}
+
+started=$(date +%s)
+ping start ""
+
+# --- 1. the disk and the RAM, before anything is written ----------------------
+
+pgbr info > "$LOG" 2>&1 || fail 4 drill-info "pgbackrest info falhou (o token de leitura alcança o repositório?)"
+newest=$(awk '
+  /^ *db \(current\)/ { current = 1; next }
+  /^ *db \(/ { current = 0 }
+  current && /^ *wal archive min\/max / { split($NF, range, "/"); archive_max = range[2] }
+  current && /^ *(full|diff|incr) backup: / { label = $3 }
+  current && /^ *wal start\/stop: / { wal_start = $3 }
+  current && /^ *database size: / { size = $3; sub(/,$/, "", size) }
+  END {
+    if (label != "") print label, size, (wal_start == "" ? "-" : wal_start), (archive_max == "" ? "-" : archive_max)
+  }
+' "$LOG")
+[ -n "$newest" ] || fail 4 drill-no-backup "o repositório não tem backup da base atual"
+read -r label size_text wal_start archive_max <<< "$newest"
+
+# pgBackRest prints sizes in 1024-based units with one decimal (29.3MB).
+size_bytes=$(awk -v s="$size_text" 'BEGIN {
+  n = s; unit = s
+  sub(/[A-Za-z]+$/, "", n); sub(/^[0-9.]+/, "", unit)
+  m = 1
+  if (unit == "KB") m = 1024
+  else if (unit == "MB") m = 1024 ^ 2
+  else if (unit == "GB") m = 1024 ^ 3
+  else if (unit == "TB") m = 1024 ^ 4
+  else if (unit == "PB") m = 1024 ^ 5
+  else if (unit != "B") { print ""; exit }
+  printf "%.0f", n * m
+}')
+[ -n "$size_bytes" ] || fail 4 drill-info "tamanho do backup ilegível: ${size_text}"
+
+# The WAL the recovery keeps. Each segment restore_command fetches stays in
+# pg_wal until a restartpoint, and a restartpoint only happens at a
+# checkpoint the Database wrote: up to the drill's own max_wal_size plus the
+# Database's distance between checkpoints, at most its max_wal_size (the
+# wrapper's 8GB when unset or unreadable). With archive_timeout=60s every
+# minute is a whole segment, so a day-old backup replays some 22 GiB; the
+# bound only gives way to the WAL there is since the backup's start.
+source_wal_mib=$(mib_of "${POSTGRES_MAX_WAL_SIZE:-}") || source_wal_mib=$(mib_of 8GB)
+wal_mib=$(($(mib_of "$DRILL_MAX_WAL") + source_wal_mib))
+first_seg=$(segno_of "$wal_start")
+last_seg=$(segno_of "$archive_max")
+if [ -n "$first_seg" ] && [ -n "$last_seg" ] && [ "$last_seg" -ge "$first_seg" ] \
+  && [ $(((last_seg - first_seg + 1) * 16)) -lt "$wal_mib" ]; then
+  wal_mib=$(((last_seg - first_seg + 1) * 16))
+fi
+
+mkdir -p "$PGDATA"
+free_kb=$(df -Pk "$PGDATA" | awk 'NR == 2 { print $4 }')
+[[ "$free_kb" =~ ^[0-9]+$ ]] || fail 4 drill-info "df não leu o disco de ${PGDATA}"
+if awk -v need="$size_bytes" -v wal="$wal_mib" -v free="$free_kb" -v f="$FRACTION" 'BEGIN { exit !(need + wal * 1048576 > free * 1024 * f) }'; then
+  fail 3 drill-disk "o backup ${label} restaura ${size_text}, mais até ${wal_mib} MiB de WAL na recuperação, e o disco tem $((free_kb / 1024)) MiB livres: passa de ${FRACTION} do livre. Mova o ensaio (docs/runbooks/restore-drill.md)"
+fi
+
+cap_mb=1024
+if [ -r "${CGROUP_ROOT}/memory.max" ] && [[ "$(cat "${CGROUP_ROOT}/memory.max")" =~ ^[0-9]+$ ]]; then
+  cap_mb=$(($(cat "${CGROUP_ROOT}/memory.max") / 1048576))
+fi
+available_mb=$(awk '/^MemAvailable:/ { printf "%d", $2 / 1024 }' "$MEMINFO" 2> /dev/null || true)
+if [[ "$available_mb" =~ ^[0-9]+$ ]] && [ "$available_mb" -lt "$cap_mb" ]; then
+  fail 3 drill-ram "o servidor tem ${available_mb} MiB livres, menos que o teto do ensaio (${cap_mb} MiB). Rode na janela, com a staging em 0 (docs/runbooks/restore-drill.md)"
+fi
+
+# --- 2. the restore -------------------------------------------------------------------
+
+if [ -n "$(ls -A "$PGDATA" 2> /dev/null)" ]; then
+  fail 1 drill-dirty "${PGDATA} não está vazio: o ensaio nunca restaura por cima de nada"
+fi
+chown postgres:postgres "$PGDATA" 2> /dev/null || true
+chmod 0700 "$PGDATA"
+
+restore_args=(--pg1-path="$PGDATA" --archive-mode=off)
+if [ -n "$TARGET" ]; then
+  restore_args+=(--type=time "--target=${TARGET}" --target-action=promote)
+fi
+restore_started=$(date +%s)
+# From here on, whatever lands in PGDATA is the drill's, and goes at the end.
+RESTORED=yes
+pgbr "${restore_args[@]}" restore > "$LOG" 2>&1 \
+  || fail 4 drill-restore "pgbackrest restore de ${label} falhou"
+restored=$(date +%s)
+
+# --- 3. the server, alone in this container ---------------------------------------------
+
+# Only the local socket, trusted: no TCP listener, and the cluster's own
+# pg_hba.conf (which may want a password the drill does not have) is not read.
+mkdir -p "$SOCKET"
+chmod 0700 "$SOCKET"
+chown postgres:postgres "$SOCKET" 2> /dev/null || true
+hba="${SOCKET}.hba"
+printf 'local all all trust\n' > "$hba"
+chmod 0644 "$hba"
+
+trajetto-entrypoint.sh postgres -c archive_mode=off -c listen_addresses= \
+  -c shared_buffers=128MB -c "max_wal_size=${DRILL_MAX_WAL}" \
+  -c "unix_socket_directories=${SOCKET}" -c "hba_file=${hba}" > "$LOG" 2>&1 &
+SERVER=$!
+
+ready=""
+deadline=$((restored + TIMEOUT))
+while [ "$(date +%s)" -lt "$deadline" ]; do
+  kill -0 "$SERVER" 2> /dev/null || fail 4 drill-recovery "o servidor restaurado saiu durante a recuperação"
+  if [ "$(psql_db postgres -c 'SELECT pg_is_in_recovery()' 2> /dev/null || true)" = f ]; then
+    ready=$(date +%s)
+    break
+  fi
+  sleep 1
+done
+[ -n "$ready" ] || fail 4 drill-recovery "a recuperação não terminou em ${TIMEOUT} s"
+
+# --- 4. what the copy holds -------------------------------------------------------------------
+
+# The application's database: POSTGRES_DB, else the user's (the official
+# image's rule).
+APP_DB=${POSTGRES_DB:-$DB_USER}
+query() { psql_db "$APP_DB" "$@"; }
+if ! query -c 'SELECT 1' > /dev/null 2>&1; then
+  fail 4 drill-checks "o banco ${APP_DB} não abre na cópia"
+fi
+
+migrations=$(query -F ' ' -c "SELECT count(*) FILTER (WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL), count(*) FILTER (WHERE finished_at IS NULL AND rolled_back_at IS NULL), coalesce(max(migration_name) FILTER (WHERE finished_at IS NOT NULL), '') FROM _prisma_migrations" 2> "$LOG") \
+  || fail 4 drill-migrations "_prisma_migrations não lê na cópia"
+read -r applied unfinished last_migration <<< "$migrations"
+if [ "${applied:-0}" -eq 0 ] || [ "${unfinished:-1}" -ne 0 ]; then
+  fail 4 drill-migrations "_prisma_migrations: ${applied:-0} aplicadas, ${unfinished:-?} pela metade"
+fi
+
+counts=$(query -c "SELECT coalesce(string_agg(format('\"%s\":%s', t, (xpath('/row/c/text()', query_to_xml(format('SELECT count(*) AS c FROM public.%I', t), false, true, '')))[1]::text), ',' ORDER BY t), '') FROM unnest(ARRAY['business', 'user', 'driver', 'vehicle', 'route', 'delivery']) AS t WHERE to_regclass(format('public.%I', t)) IS NOT NULL" 2> "$LOG") \
+  || fail 4 drill-checks "as contagens não leram"
+
+# The marker: the elected heartbeat writes one 'cluster' row a minute.
+marker=$(query -c "SELECT coalesce((xpath('/row/m/text()', query_to_xml('SELECT extract(epoch FROM max(ts))::bigint AS m FROM public.ops_sample WHERE role = ''cluster''', false, true, '')))[1]::text, '') WHERE to_regclass('public.ops_sample') IS NOT NULL" 2> "$LOG") \
+  || fail 4 drill-checks "o marcador do ops_sample não leu"
+
+reference=$started
+if [ -n "$TARGET" ]; then
+  reference=$(printf '%s\n' "SELECT extract(epoch FROM :'target'::timestamptz)::bigint" \
+    | psql_db postgres -v "target=${TARGET}") \
+    || fail 1 drill-config "--target ilegível para o Postgres"
+fi
+
+loss="null"
+marker_json="null"
+if [[ "$marker" =~ ^[0-9]+$ ]]; then
+  loss=$((reference - marker))
+  marker_json="\"$(date -u -d "@${marker}" +%Y-%m-%dT%H:%M:%SZ 2> /dev/null || echo "$marker")\""
+fi
+
+# --- 5. the summary -------------------------------------------------------------------------------
+
+summary="{\"result\":\"ok\",\"repo\":${REPO},\"backup\":\"${label}\",\"backup_size\":\"${size_text}\",\"target\":$([ -n "$TARGET" ] && json_string "$TARGET" || echo '"latest"'),\"restore_seconds\":$((restored - restore_started)),\"recovery_seconds\":$((ready - restored)),\"rto_seconds\":$((ready - restore_started)),\"marker\":${marker_json},\"loss_seconds\":${loss},\"migrations\":{\"applied\":${applied},\"last\":$(json_string "$last_migration")},\"counts\":{${counts}}}"
+printf '%s\n' "$summary"
+if [ "$loss" = null ]; then
+  echo "trajetto-restore-drill: AVISO: sem linha 'cluster' no ops_sample da cópia: a perda não foi medida." >&2
+fi
+ping "" "$summary"

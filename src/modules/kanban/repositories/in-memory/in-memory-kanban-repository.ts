@@ -16,6 +16,7 @@ import {
 } from "../../dtos/kanban-dto";
 
 import { KanbanColumnNotFoundError } from "../../usecases/errors/kanban-column-not-found-error";
+import { KanbanColumnHasCardsError } from "../../usecases/errors/kanban-column-has-cards-error";
 import { KanbanCardNotFoundError } from "../../usecases/errors/kanban-card-not-found-error";
 import { KanbanOneOrMoreColumnNotBelongBusinessError } from "../../usecases/errors/kanban-one-or-more-column-not-belong-business-error";
 
@@ -168,10 +169,12 @@ class InMemoryKanbanRepository implements IKanbanRepository {
 
     if (index === -1) throw new KanbanColumnNotFoundError();
 
-    const [column] = this.columns.splice(index, 1);
+    // As the real one: a column with cards is refused, never cascaded.
+    const cardsCount = this.cardsOf(columnId).length;
 
-    // ON DELETE CASCADE.
-    this.cards = this.cards.filter((card) => card.columnId !== columnId);
+    if (cardsCount > 0) throw new KanbanColumnHasCardsError(cardsCount);
+
+    const [column] = this.columns.splice(index, 1);
 
     this.compact(
       this.columns.filter((item) => item.businessId === column.businessId),

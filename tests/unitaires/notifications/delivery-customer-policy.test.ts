@@ -172,10 +172,52 @@ describe("who hears about a delivery", () => {
 });
 
 describe("what the message says", () => {
-  it("speaks in the company's words, not ours", async () => {
+  /**
+   * Plan of 02/11/2026 (B2). On WhatsApp the moment goes out as a fixed
+   * UTILITY template approved by Meta — the carrier's own text used to ride
+   * a single parameter of a template Meta filed as Marketing. The row is the
+   * switch; the carrier's name, the recipient and the NF-e are the
+   * parameters; the tracking token ends both URL buttons.
+   */
+  it("goes out as the moment's fixed template, with the token in both buttons", async () => {
     await seedTemplate(
       "DELIVERED",
       "WHATSAPP",
+      "texto antigo da empresa, que não é mais enviado",
+    );
+
+    const [recipient] =
+      await deliveryDeliveredPolicy.resolveExternalRecipients!(
+        payload(),
+        deps(),
+      );
+
+    const rendered = await deliveryDeliveredPolicy.renderExternal!(
+      payload({ deliveredAt: new Date("2026-09-17T17:30:00.000Z") }),
+      recipient,
+      deps(),
+      "WHATSAPP",
+    );
+
+    expect(rendered!.whatsapp).toEqual({
+      name: "trajetto_cliente_entregue",
+      parameters: [
+        "Padaria Central Ltda",
+        "Silva Log",
+        "NF-e 12345",
+        "17/09/2026, 14:30",
+      ],
+      urlButtonSuffixes: [recipient.access_token, recipient.access_token],
+    });
+
+    // The company's old text never reaches the customer.
+    expect(JSON.stringify(rendered)).not.toContain("texto antigo");
+  });
+
+  it("speaks in the company's words on the e-mail", async () => {
+    await seedTemplate(
+      "DELIVERED",
+      "EMAIL",
       "Oi {{destinatario}}! Sua NF {{nota}} foi entregue por {{transportadora}}. Acompanhe: {{link}}",
     );
 
@@ -189,16 +231,14 @@ describe("what the message says", () => {
       payload(),
       recipient,
       deps(),
-      "WHATSAPP",
+      "EMAIL",
     );
-
-    expect(rendered).not.toBeNull();
 
     expect(rendered!.body).toContain("Oi Padaria Central Ltda!");
     expect(rendered!.body).toContain("NF 12345");
-
     expect(rendered!.body).toContain("Silva Log");
     expect(rendered!.body).toContain(recipient.access_token);
+    expect(rendered!.whatsapp).toBeUndefined();
   });
 
   it("sends nothing at all when the company never wrote that message", async () => {
@@ -276,33 +316,60 @@ describe("what the message says", () => {
     ).toBeNull();
   });
 
-  it("always carries a way to stop", async () => {
-    await seedTemplate(
-      "DELIVERED",
-      "WHATSAPP",
-      "Entregue. Para não receber mais: {{link_descadastro}}",
-    );
+  it("always carries a way to stop: the button ends in the token", async () => {
+    await seedTemplate("DISPATCHED", "WHATSAPP", "");
 
     const [recipient] =
-      await deliveryDeliveredPolicy.resolveExternalRecipients!(
+      await deliveryDispatchedPolicy.resolveExternalRecipients!(
         payload(),
         deps(),
       );
 
-    const rendered = await deliveryDeliveredPolicy.renderExternal!(
+    const rendered = await deliveryDispatchedPolicy.renderExternal!(
       payload(),
       recipient,
       deps(),
       "WHATSAPP",
     );
 
-    expect(rendered!.body).toContain("/parar");
+    expect(rendered!.whatsapp!.name).toBe("trajetto_cliente_saiu_para_entrega");
+    expect(rendered!.whatsapp!.urlButtonSuffixes).toHaveLength(2);
+    expect(rendered!.whatsapp!.urlButtonSuffixes[1]).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("names the order, or says there is no number, when the delivery has no NF-e", async () => {
+    await seedTemplate("DISPATCHED", "WHATSAPP", "");
+
+    const [recipient] =
+      await deliveryDispatchedPolicy.resolveExternalRecipients!(
+        payload(),
+        deps(),
+      );
+
+    const withOrder = await deliveryDispatchedPolicy.renderExternal!(
+      payload({ invoiceNumber: null }),
+      recipient,
+      deps(),
+      "WHATSAPP",
+    );
+
+    expect(withOrder!.whatsapp!.parameters[2]).toBe("pedido PED-4471");
+
+    const bare = await deliveryDispatchedPolicy.renderExternal!(
+      payload({ invoiceNumber: null, code: null }),
+      recipient,
+      deps(),
+      "WHATSAPP",
+    );
+
+    // Meta refuses an empty parameter: the fallback goes instead.
+    expect(bare!.whatsapp!.parameters[2]).toBe("sem número informado");
   });
 
   it("does not escape the company's own punctuation", async () => {
-    // These are plain-text messages. Escaping turns "Café & Cia" into
-    // "Café &amp; Cia" in somebody's WhatsApp.
-    await seedTemplate("DELIVERED", "WHATSAPP", "{{transportadora}} & você");
+    // Plain text. Escaping turns "Café & Cia" into "Café &amp; Cia" in
+    // somebody's WhatsApp.
+    await seedTemplate("DELIVERED", "WHATSAPP", "");
 
     businesses.business[0].fantasy_name = "Café & Cia";
 
@@ -319,13 +386,11 @@ describe("what the message says", () => {
       "WHATSAPP",
     );
 
-    // The opt-out link is appended after it: this template lacks one, which
-    // the save refuses and the send makes up for (whatsapp-opt-out.test.ts).
-    expect(rendered!.body).toMatch(/^Café & Cia & você Para não receber/);
+    expect(rendered!.whatsapp!.parameters[1]).toBe("Café & Cia");
   });
 
   it("falls back to the corporate name when there is no trading name", async () => {
-    await seedTemplate("DELIVERED", "WHATSAPP", "{{transportadora}}");
+    await seedTemplate("DELIVERED", "WHATSAPP", "");
 
     businesses.business[0].fantasy_name = null;
 
@@ -342,7 +407,127 @@ describe("what the message says", () => {
       "WHATSAPP",
     );
 
-    expect(rendered!.body).toMatch(/^Transportes Silva Ltda Para não receber/);
+    expect(rendered!.whatsapp!.parameters[1]).toBe("Transportes Silva Ltda");
+  });
+});
+
+/**
+ * One message per stop (plan of 02/11/2026, B6): a payload that speaks of
+ * the stop's NF-e lists them all, carries one link — the lowest delivery id
+ * of the stop, the same on every moment — goes on while any of them is still
+ * true, and stops for everybody once the person asked any of them to.
+ */
+describe("a message about a whole stop", () => {
+  const SIBLING = "018f0000-0000-7000-8000-0000000000e0";
+
+  const stopPayload = (overrides: Partial<DeliveryCustomerPayload> = {}) =>
+    payload({
+      routeId: "018f0000-0000-7000-8000-00000000aa01",
+      stopGroupKey: "grupo",
+      deliveries: [
+        { deliveryId: DELIVERY, invoiceNumber: "12345", code: null },
+        { deliveryId: SIBLING, invoiceNumber: "12346", code: null },
+      ],
+      ...overrides,
+    });
+
+  beforeEach(() => {
+    recipients.deliveryStates.set(SIBLING, {
+      status: "IN_TRANSIT",
+      name: "Padaria Central Ltda",
+      email: "contato@padaria.com.br",
+      telephone: "11999999999",
+    });
+  });
+
+  it("lists every NF-e and carries the link of the stop's lowest delivery", async () => {
+    await seedTemplate("DISPATCHED", "WHATSAPP", "");
+
+    const [recipient] =
+      await deliveryDispatchedPolicy.resolveExternalRecipients!(
+        stopPayload(),
+        deps(),
+      );
+
+    // SIBLING sorts before DELIVERY: its row carries the stop's link.
+    expect(recipients.recipients.map((row) => row.deliveryId)).toEqual([
+      SIBLING,
+    ]);
+
+    const rendered = await deliveryDispatchedPolicy.renderExternal!(
+      stopPayload(),
+      recipient,
+      deps(),
+      "WHATSAPP",
+    );
+
+    expect(rendered!.whatsapp!.parameters[2]).toBe("NF-e 12345 e 12346");
+    expect(rendered!.whatsapp!.urlButtonSuffixes[0]).toBe(
+      recipient.access_token,
+    );
+  });
+
+  it("leaves out the NF-e the moment stopped being true of", async () => {
+    await seedTemplate("DISPATCHED", "WHATSAPP", "");
+
+    recipients.deliveryStates.set(SIBLING, {
+      ...recipients.deliveryStates.get(SIBLING)!,
+      status: "CANCELLED",
+    });
+
+    const [recipient] =
+      await deliveryDispatchedPolicy.resolveExternalRecipients!(
+        stopPayload(),
+        deps(),
+      );
+
+    expect(
+      await deliveryDispatchedPolicy.supersededReason!(stopPayload(), deps()),
+    ).toBeNull();
+
+    const rendered = await deliveryDispatchedPolicy.renderExternal!(
+      stopPayload(),
+      recipient,
+      deps(),
+      "WHATSAPP",
+    );
+
+    expect(rendered!.whatsapp!.parameters[2]).toBe("NF-e 12345");
+  });
+
+  it("is superseded only once every NF-e of the stop moved past it", async () => {
+    for (const id of [DELIVERY, SIBLING]) {
+      recipients.deliveryStates.set(id, {
+        ...recipients.deliveryStates.get(id)!,
+        status: "DELIVERED",
+      });
+    }
+
+    expect(
+      await deliveryDispatchedPolicy.supersededReason!(stopPayload(), deps()),
+    ).toMatch(/superada/);
+  });
+
+  it("stops for the whole stop once the person asked any of its messages to", async () => {
+    await seedTemplate("DISPATCHED", "WHATSAPP", "");
+
+    const other = await recipients.ensureForDelivery({
+      deliveryId: DELIVERY,
+      businessId: BUSINESS,
+      name: "Padaria Central Ltda",
+      email: null,
+      telephone: "11999999999",
+    });
+
+    other.opted_out_at = new Date();
+
+    const [recipient] =
+      await deliveryDispatchedPolicy.resolveExternalRecipients!(
+        stopPayload(),
+        deps(),
+      );
+
+    expect(recipient.opted_out_at).not.toBeNull();
   });
 });
 

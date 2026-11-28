@@ -10,7 +10,7 @@ import {
   ExportAccountPayablesProps,
 } from "../dtos/account-payable-dto";
 
-import database from "@/../infra/database";
+import database, { readDatabaseWalk } from "@/../infra/database";
 import { Prisma } from "@prisma/client";
 
 import { buildSearchOr } from "@/shared/pagination/search-or";
@@ -49,6 +49,24 @@ const EXPORT_BATCH_SIZE = 1000;
 
 class AccountPayableRepository implements IAccountPayableRepository {
   constructor(private prisma = database) {}
+
+  /**
+   * The heavy reads' bulkhead (plano-escala F3-17), for the export: a pool of
+   * its own, 3 connections and 10 s a statement, so a burst of them waits
+   * among itself instead of taking the connections every other request needs.
+   * A repository built on another client (a test's) reads on that client.
+   * Asked when the export runs, so a module that mocks infra/database
+   * without it only needs it then.
+   * With DATABASE_REPLICA_URL, the batches go to the standby while the
+   * replica guard vouches for it: lists only (plano-escala F4-42,
+   * tests/unitaires/database/read-routing-guard.test.ts). One walk per
+   * export, which never goes from the primary back to the standby: the
+   * batches page with Prisma's cursor, and a standby that has not replayed
+   * the last row of a batch read on the primary would end the export there.
+   */
+  private readWalk(): () => typeof this.prisma {
+    return this.prisma === database ? readDatabaseWalk() : () => this.prisma;
+  }
 
   // `tx` lets the use case create the bill and its outbox event atomically.
   async createAccountPayable(
@@ -174,17 +192,19 @@ class AccountPayableRepository implements IAccountPayableRepository {
   }: ExportAccountPayablesProps): AsyncGenerator<AccountPayable> {
     const where = accountPayableListWhere(filters, {
       todayStart: clock.todayStart,
+      // A field reference, the same on every client: not a read.
       amountRef: this.prisma.accountPayable.fields.amount,
       withStatus: true,
     });
 
     const orderBy = resolveOrderBy(ACCOUNT_PAYABLE_SORT, { sort, order });
+    const read = this.readWalk();
     let cursor: string | undefined;
 
     // Keyset over the list's own order (the id tiebreaker makes it total),
     // one batch in memory at a time.
     while (true) {
-      const batch = await this.prisma.accountPayable.findMany({
+      const batch = await read().accountPayable.findMany({
         where,
         orderBy,
         include: ACCOUNT_PAYABLE_INCLUDE,

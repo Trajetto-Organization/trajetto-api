@@ -1,5 +1,5 @@
 import { Decimal } from "@prisma/client/runtime/client";
-import { LocationSource, RecordOrigin } from "@prisma/client";
+import { FuelAlert, LocationSource, RecordOrigin } from "@prisma/client";
 
 import type { SortOrder } from "@/shared/pagination/list-query";
 import type {
@@ -9,6 +9,7 @@ import type {
   FuelSortKey,
 } from "../usecases/list-fuel/fuel-list";
 import type { DevicePrecheck } from "@/shared/ai-precheck/device-precheck";
+import type { ListedRoute } from "@/shared/vehicle/route-columns";
 
 interface Fuel {
   id: string;
@@ -43,11 +44,28 @@ interface Fuel {
   // 🆕 RECORD ORIGIN: Track where the record was created
   created_from: RecordOrigin;
 
+  /**
+   * What the office should look at (05/11/2026, fuel-rules.ts): RECENT_REFUEL
+   * for another refuelling of the vehicle within 30 minutes. Always read
+   * from the database (empty by default); optional here for the fixtures
+   * written before it.
+   */
+  alerts?: FuelAlert[];
+
+  /** The driver's reason when they confirmed RECENT_REFUEL; null otherwise. */
+  recent_refuel_reason?: string | null;
+
+  /** The other refuelling's date behind RECENT_REFUEL; null otherwise. */
+  recent_refuel_previous_at?: Date | string | null;
+
   // AI Verification fields
   odometer_ai_reading?: number | null;
   odometer_ai_status: string;
   odometer_ai_details?: any;
   odometer_ai_analyzed_at?: Date | string | null;
+
+  /** The route it was made on (plan of 02/11/2026, C5/F3); null outside one. */
+  routeId?: string | null;
 
   created_at: Date | string;
   updated_at: Date | string;
@@ -84,6 +102,12 @@ interface CreateFuelProps {
   created_from: RecordOrigin;
 
   /**
+   * The route it was made on (plan of 02/11/2026, C5/F3). The use case
+   * checks it is the driver's route and the vehicle is the route's.
+   */
+  routeId?: string | null;
+
+  /**
    * The phone's offline check of the odometer photo, as sent (decision
    * 14.2). The use case moves it to `odometer_device_precheck` or drops it.
    */
@@ -91,6 +115,14 @@ interface CreateFuelProps {
 
   /** Where the accepted check is stored; set by the use case only. */
   odometer_device_precheck?: DevicePrecheck;
+
+  /**
+   * The driver's answer to a second refuelling of the vehicle within 30
+   * minutes (05/11/2026), as sent. Not columns: the use case takes them out
+   * and hands the repository the confirmed reason (confirmedRecentReason).
+   */
+  confirm_recent?: boolean;
+  recent_reason?: string;
 }
 
 interface UpdateFuelProps {
@@ -126,8 +158,15 @@ interface UpdateFuel {
   fuelId: string;
 }
 
+/**
+ * A refuelling as the list and the vehicle history send it: the record, its
+ * relation names, and the route it was made on (contract C3; null outside
+ * one or when the route is not the row's company's).
+ */
+type FuelListRow = Fuel & { route: ListedRoute | null };
+
 interface ListFuelProps {
-  data: Fuel[];
+  data: FuelListRow[];
   /** Refuelings per facet combination over the base (search + scope). */
   groups: FuelListGroup[];
   /** Names of the branches, vehicles and fuel types the options point at. */
@@ -207,7 +246,7 @@ interface SearchFuelByVehicleWithCursorProps {
 }
 
 interface CursorPaginatedFuel {
-  data: Fuel[];
+  data: FuelListRow[];
   nextCursor: string | null;
   hasMore: boolean;
 }
@@ -223,6 +262,27 @@ interface PreviousFuelReading {
   liters_amount: number;
 }
 
+/**
+ * A refuelling made on a route, as the route detail lists it (plan of
+ * 02/11/2026, F3): the amounts as plain numbers, no photo or location.
+ */
+interface RouteFuelSummary {
+  id: string;
+  refueling_date: Date;
+  liters_amount: number;
+  price_per_liter: number;
+  total_amount: number;
+  current_mileage: number;
+  vehicleId: string;
+  driverId: string;
+  odometer_ai_status: string;
+
+  /** Its alerts and what raised RECENT_REFUEL (05/11/2026), as the list. */
+  alerts: FuelAlert[];
+  recent_refuel_reason: string | null;
+  recent_refuel_previous_at: Date | null;
+}
+
 export {
   Fuel,
   CreateFuelProps,
@@ -231,8 +291,10 @@ export {
   ListFuelProps,
   ListFuelByBusinessIdProps,
   GetFuelByIdAndBusinessProps,
+  FuelListRow,
   FuelWithRelations,
   SearchFuelByVehicleWithCursorProps,
   CursorPaginatedFuel,
   PreviousFuelReading,
+  RouteFuelSummary,
 };

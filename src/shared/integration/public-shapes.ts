@@ -1,5 +1,7 @@
 import { DELIVERY_STATUS_LABELS } from "@/shared/delivery/delivery-rules";
 
+import { proofUrlFor } from "./proof-link";
+
 /**
  * What the public API answers with, and — more importantly — what it does not.
  *
@@ -46,6 +48,12 @@ interface PublicDelivery {
   delivered_at: string | null;
   received_by: string | null;
 
+  /**
+   * The bearer link to the receipt once the delivery ended (L7), null before.
+   * Whoever holds it opens the PDF, like the QR printed on it (ADR 0009).
+   */
+  proof_url: string | null;
+
   /** The route it rides on, by OUR id and the number a person says out loud. */
   route: { id: string; code: number } | null;
 
@@ -80,6 +88,24 @@ interface PublicRoute {
   created_at: string;
 }
 
+/**
+ * What POST /integration/v1/deliveries/:id/cancel answers (L9): the three
+ * identifiers and the new status, and nothing else. A cancel-only key does
+ * not carry `deliveries:read`, and answering with the whole delivery would
+ * hand it the recipient and the address it was never granted (hasScope: no
+ * scope implies another).
+ */
+interface PublicDeliveryCancellation {
+  id: string;
+  code: string | null;
+  invoice_key: string | null;
+
+  status: string;
+  status_label: string;
+
+  updated_at: string;
+}
+
 interface PublicEvent {
   id: string;
   topic: string;
@@ -108,6 +134,8 @@ function toIso(value: Date | string | null | undefined): string | null {
  */
 function toPublicDelivery(delivery: {
   id: string;
+  /** Never published: it signs proof_url. */
+  businessId: string;
   code: string | null;
   invoice_key: string | null;
   invoice_number: string | null;
@@ -165,10 +193,32 @@ function toPublicDelivery(delivery: {
     delivered_at: toIso(delivery.delivered_at),
     received_by: delivery.received_by,
 
+    proof_url: proofUrlFor(delivery),
+
     route: route ? { id: route.id, code: route.code } : null,
 
     created_at: toIso(delivery.created_at)!,
     updated_at: toIso(delivery.updated_at)!,
+  };
+}
+
+/**
+ * The published delivery narrowed to the cancellation's answer: picked field
+ * by field, so a field added to PublicDelivery never reaches a cancel-only
+ * key by itself.
+ */
+function toPublicDeliveryCancellation(
+  delivery: PublicDelivery,
+): PublicDeliveryCancellation {
+  return {
+    id: delivery.id,
+    code: delivery.code,
+    invoice_key: delivery.invoice_key,
+
+    status: delivery.status,
+    status_label: delivery.status_label,
+
+    updated_at: delivery.updated_at,
   };
 }
 
@@ -227,5 +277,10 @@ function toPublicRoute(route: {
   };
 }
 
-export { toIso, toPublicDelivery, toPublicRoute };
-export type { PublicDelivery, PublicEvent, PublicRoute };
+export { toIso, toPublicDelivery, toPublicDeliveryCancellation, toPublicRoute };
+export type {
+  PublicDelivery,
+  PublicDeliveryCancellation,
+  PublicEvent,
+  PublicRoute,
+};

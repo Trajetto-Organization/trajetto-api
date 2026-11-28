@@ -6,6 +6,9 @@ import { randomUUID } from "node:crypto";
 import { sign } from "jsonwebtoken";
 import auth from "@/config/auth";
 import { createPrismaClient } from "@/shared/database/database-client";
+import { v7 as uuidV7 } from "uuid";
+
+import { swapCutoff } from "./support/queue-partitions";
 
 /**
  * How long the webhook ledger keeps a row, and what the monitor reads.
@@ -193,9 +196,8 @@ describe("the nightly purge of the webhook ledger", () => {
       ).id;
     }
 
-    const { cleanupWebhookDeliveriesJob } = await import(
-      "@/jobs/cron/cleanup-webhook-deliveries-job"
-    );
+    const { cleanupWebhookDeliveriesJob } =
+      await import("@/jobs/cron/cleanup-webhook-deliveries-job");
 
     await cleanupWebhookDeliveriesJob.handler();
 
@@ -216,9 +218,8 @@ describe("the nightly purge of the webhook ledger", () => {
   });
 
   it("walks the partial purge index, oldest settled row first", async () => {
-    const { settledWebhookDeliveriesBefore } = await import(
-      "@/jobs/cron/cleanup-webhook-deliveries-job"
-    );
+    const { settledWebhookDeliveriesBefore } =
+      await import("@/jobs/cron/cleanup-webhook-deliveries-job");
 
     const cutoff = new Date(Date.now() - 31 * DAY_MS);
 
@@ -288,5 +289,85 @@ describe("the monitor's counters", () => {
 
     expect(meta.delivered).toBe(100);
     expect(meta.p95LatencyMs).toBe(95);
+  });
+});
+
+/**
+ * The ledger partitioned by day (plano-escala F5-12): once the swap of
+ * F5-09 made webhook_delivery partitioned, the partition-maintenance job
+ * drops a whole day past WEBHOOK_DELIVERY_RETENTION_DAYS (31), through the
+ * webhook-deliveries gate. The job's clock is moved 32 days past the
+ * swap's first day, so that day is past the retention; the resend
+ * is asked with the same clock.
+ */
+describe("the ledger partitioned by day", () => {
+  const FIRST_DAY = swapCutoff("day").getTime();
+  const LATER = new Date(FIRST_DAY + 32 * DAY_MS + 3_600_000);
+  const stamp = (ms: number) =>
+    new Date(ms).toISOString().slice(0, 10).replace(/-/g, "");
+
+  async function at(
+    status: WebhookDeliveryStatus,
+    ms: number,
+  ): Promise<string> {
+    const created = await prisma.webhookDelivery.create({
+      data: {
+        ...row(MONITORED, monitoredEndpoint, status, new Date(ms)),
+        id: uuidV7({ msecs: ms }),
+      },
+      select: { id: true },
+    });
+
+    return created.id;
+  }
+
+  async function present(name: string): Promise<boolean> {
+    const [found] = await prisma.$queryRaw<Array<{ present: boolean }>>`
+      SELECT to_regclass(quote_ident(${name})) IS NOT NULL AS present
+    `;
+
+    return found.present;
+  }
+
+  it("drops a settled day past the retention and never one the dispatcher still owns", async () => {
+    const settled = await at("DELIVERED", FIRST_DAY + 3_600_000);
+    // Thirty days old on the job's clock: still resendable.
+    const resendable = await at(
+      "DELIVERED",
+      LATER.getTime() - 30 * DAY_MS + 3_600_000,
+    );
+
+    const { maintainPartitions } =
+      await import("@/jobs/cron/partition-maintenance-job");
+
+    await maintainPartitions({ now: LATER });
+
+    expect(await present(`webhook_delivery_${stamp(FIRST_DAY)}`)).toBe(false);
+    expect(await prisma.webhookDelivery.count({ where: { id: settled } })).toBe(
+      0,
+    );
+
+    // The legacy partition is past the retention too, but holds the
+    // PENDING and PROCESSING rows of the first test: it stays.
+    expect(await present("webhook_delivery_legacy")).toBe(true);
+    expect(
+      await prisma.webhookDelivery.count({
+        where: {
+          businessId: PURGED,
+          status: { in: ["PENDING", "PROCESSING"] },
+        },
+      }),
+    ).toBe(2);
+
+    // A resend of thirty days is still accepted.
+    const { container } = await import("tsyringe");
+    const { ResendWebhookDeliveryUseCase } =
+      await import("@/modules/integration/usecases/integration-admin/webhook-monitor-usecases");
+
+    await expect(
+      container
+        .resolve(ResendWebhookDeliveryUseCase)
+        .execute(ADMIN, MONITORED, resendable, LATER),
+    ).resolves.toMatchObject({ held: false });
   });
 });

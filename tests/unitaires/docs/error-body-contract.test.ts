@@ -53,6 +53,16 @@ beforeAll(async () => {
     throw new Error("boom");
   });
 
+  // A unique violation no use case mapped: the handler's 409 floor (batch
+  // of 14/11/2026), which used to be the 500.
+  app.get(`${PROBE}/unique-conflict`, { schema: hidden }, async () => {
+    throw new Prisma.PrismaClientKnownRequestError("Unique constraint", {
+      code: "P2002",
+      clientVersion: "test",
+      meta: { target: ["businessId", "license_plate"] },
+    });
+  });
+
   app.get(`${PROBE}/database-down`, { schema: hidden }, async () => {
     throw new Prisma.PrismaClientInitializationError(
       "Can't reach database server at `localhost:5432`",
@@ -61,8 +71,36 @@ beforeAll(async () => {
     );
   });
 
+  // A lock wait past lock_timeout (plano-escala U-13): 503 SERVICE_BUSY,
+  // in the outage's shape.
+  app.get(`${PROBE}/database-busy`, { schema: hidden }, async () => {
+    throw new Prisma.PrismaClientKnownRequestError("Raw query failed.", {
+      code: "P2010",
+      clientVersion: "test",
+      meta: {
+        driverAdapterError: Object.assign(new Error("postgres"), {
+          name: "DriverAdapterError",
+          cause: {
+            kind: "postgres",
+            originalCode: "55P03",
+            code: "55P03",
+            originalMessage: "canceling statement due to lock timeout",
+          },
+        }),
+      },
+    });
+  });
+
+  // With the diagnostic the log reads (ADDRESS_SEARCH_DISABLED): never
+  // in the body.
   app.get(`${PROBE}/busy`, { schema: hidden }, async () => {
-    throw new ServiceBusyError("Ocupado.", "SERVICE_BUSY", 3);
+    throw new ServiceBusyError(
+      "Ocupado.",
+      "SERVICE_BUSY",
+      3,
+      503,
+      "ADDRESS_SEARCH_URL is not set",
+    );
   });
 
   // A controller that still answers by itself, through a route whose
@@ -238,9 +276,17 @@ describe("the published error schemas (strict)", () => {
       url: `${PROBE}/inline-without-code`,
     });
     await capture("internal", { method: "GET", url: `${PROBE}/crash` });
+    await capture("uniqueConflict", {
+      method: "GET",
+      url: `${PROBE}/unique-conflict`,
+    });
     await capture("databaseDown", {
       method: "GET",
       url: `${PROBE}/database-down`,
+    });
+    await capture("databaseBusy", {
+      method: "GET",
+      url: `${PROBE}/database-busy`,
     });
     await capture("busy", { method: "GET", url: `${PROBE}/busy` });
     await capture("invalidKey", {
@@ -255,7 +301,16 @@ describe("the published error schemas (strict)", () => {
     expect(bodies.appError.status).toBe(409);
     expect(bodies.inline.status).toBe(404);
     expect(bodies.internal.status).toBe(500);
+    expect(bodies.uniqueConflict.status).toBe(409);
+    expect(bodies.uniqueConflict.body).toEqual({
+      code: "UNIQUE_CONFLICT",
+      message: "Já existe um registro com este valor nesta empresa (placa).",
+    });
+    expect(bodies.uniqueConflict.headers["x-error-code"]).toBe(
+      "UNIQUE_CONFLICT",
+    );
     expect(bodies.databaseDown.status).toBe(503);
+    expect(bodies.databaseBusy.status).toBe(503);
     expect(bodies.busy.status).toBe(503);
     expect(bodies.invalidKey.status).toBe(401);
 
@@ -264,7 +319,15 @@ describe("the published error schemas (strict)", () => {
       expect(typeof captured.body.code).toBe("string");
     }
     expect(bodies.databaseDown.headers["retry-after"]).toBeDefined();
+    expect(bodies.databaseBusy.headers["retry-after"]).toBe("2");
     expect(bodies.busy.headers["retry-after"]).toBeDefined();
+    expect(bodies.databaseBusy.body.code).toBe("SERVICE_BUSY");
+    expect(typeof bodies.databaseBusy.body.requestId).toBe("string");
+    // The diagnostic is for the log: the body is the code and the message.
+    expect(bodies.busy.body).toEqual({
+      code: "SERVICE_BUSY",
+      message: "Ocupado.",
+    });
   });
 
   /** The bodies a route can answer with on `status`, from the real ones. */
@@ -283,13 +346,23 @@ describe("the published error schemas (strict)", () => {
     if (status === 500) return [bodies.internal.body];
 
     if (status === 503) {
-      // The keyed routes can only be refused by the outage (enum); the
-      // session routes also by a dependency's own 503.
-      const onlyOutage = schema.properties?.code?.enum?.length === 1;
+      // The keyed routes can only be refused by the database (an enum of
+      // the outage and the busy answer, both with requestId); the session
+      // routes also by a dependency's own 503.
+      const enumerated: unknown[] | undefined = schema.properties?.code?.enum;
+      const onlyDatabase =
+        Array.isArray(enumerated) &&
+        enumerated.every(
+          (code) => code === "SERVICE_UNAVAILABLE" || code === "SERVICE_BUSY",
+        );
 
-      return onlyOutage
-        ? [bodies.databaseDown.body]
-        : [bodies.databaseDown.body, bodies.busy.body];
+      return onlyDatabase
+        ? [bodies.databaseDown.body, bodies.databaseBusy.body]
+        : [
+            bodies.databaseDown.body,
+            bodies.databaseBusy.body,
+            bodies.busy.body,
+          ];
     }
 
     if (status >= 400 && status < 500) {
@@ -297,6 +370,7 @@ describe("the published error schemas (strict)", () => {
         as4xx(bodies.appError),
         as4xx(bodies.inline),
         bodies.invalidKey.body,
+        ...(status === 409 ? [bodies.uniqueConflict.body] : []),
       ];
     }
 

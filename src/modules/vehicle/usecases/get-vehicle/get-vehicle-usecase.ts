@@ -62,11 +62,15 @@ class GetVehicleUseCase {
     // A driver reads only a vehicle they may operate: the one they are
     // responsible for, or the one their released or running route uses
     // (FLEET-ASSIGN-1). The substitute driver used to be refused here.
+    // Plus, read only, the vehicle of their route that ended within the
+    // arrival checklist window: the app reads it (mileage, branch) for that
+    // checklist right when the route closes itself (C4, D08).
     if (findUser.role === "BUSINESS_USER" && findUser.driverId) {
-      const allowed = await this.vehicle.canDriverOperateVehicle({
+      const allowed = await this.vehicle.canDriverReadVehicle({
         vehicleId,
         driverId: findUser.driverId,
         businessId,
+        now: new Date(),
       });
 
       if (!allowed) {

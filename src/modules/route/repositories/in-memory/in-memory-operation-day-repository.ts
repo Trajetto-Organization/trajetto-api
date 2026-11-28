@@ -14,12 +14,19 @@ import {
   stopSettledAt,
   type RouteMoveKind,
 } from "@/shared/route/operation-day-rules";
+import type { GeofenceOutcome } from "@/shared/delivery/geofence/geofence-rules";
+import {
+  isRouteInPeriod,
+  type RoutePeriodDays,
+} from "@/shared/route/route-period";
 
 import type {
   DayDeliveryCount,
   DeliveryStatusName,
   FeedEntry,
   IOperationDayRepository,
+  LiveRoute,
+  LiveRouteKey,
   MonitoringRoute,
   OperationDay,
   RouteStatusName,
@@ -98,9 +105,28 @@ interface OperationRows {
     occurrenceId: string | null;
     type: string;
     actor: string;
+    /** Optional so the fixtures written before F2-06 still type-check. */
+    status_from?: DeliveryStatusName | null;
     status_to: DeliveryStatusName | null;
     occurred_at: Date | null;
     created_at: Date;
+
+    /** E4/E5; optional so the fixtures written before the geofence type-check. */
+    geofence_outcome?: GeofenceOutcome | null;
+    distance_m?: number | null;
+    accuracy_m?: number | null;
+  }>;
+
+  /**
+   * driver_last_position (wave 4, the live list). Optional so the fixtures
+   * written before it still type-check.
+   */
+  lastPositions?: Array<{
+    driverId: string;
+    businessId: string;
+    latitude: number;
+    longitude: number;
+    recorded_at: Date;
   }>;
 
   /** Optional so the fixtures written before pauses still type-check. */
@@ -123,6 +149,11 @@ interface OperationRows {
 
     occurred_at: Date | null;
     created_at: Date;
+
+    /** E4/E5, as on the events. */
+    geofence_outcome?: GeofenceOutcome | null;
+    distance_m?: number | null;
+    accuracy_m?: number | null;
   }>;
 }
 
@@ -144,6 +175,7 @@ function emptyRows(): OperationRows {
     stops: [],
     deliveries: [],
     events: [],
+    lastPositions: [],
     pauses: [],
     occurrences: [],
   };
@@ -460,6 +492,29 @@ class InMemoryOperationDayRepository implements IOperationDayRepository {
       }));
   }
 
+  async listRoutesLeftOpen(
+    businessId: string,
+    startedBefore: Date,
+  ): Promise<Array<{ started_at: Date | null; open: number }>> {
+    return this.rows.routes
+      .filter(
+        (route) =>
+          route.businessId === businessId &&
+          route.status === "IN_PROGRESS" &&
+          route.started_at !== null &&
+          route.started_at.getTime() < startedBefore.getTime(),
+      )
+      .map((route) => ({
+        started_at: route.started_at,
+        open: this.rows.stops.filter(
+          (stop) =>
+            stop.routeId === route.id &&
+            (stop.status === "PENDING" || stop.status === "ARRIVED"),
+        ).length,
+      }))
+      .filter((route) => route.open > 0);
+  }
+
   async listFeed(
     businessId: string,
     day: OperationDay,
@@ -496,7 +551,16 @@ class InMemoryOperationDayRepository implements IOperationDayRepository {
           event.businessId === businessId &&
           isWithinDay(event.created_at, day) &&
           // The real query's `type NOT IN` (decision 14.7).
-          !(PLANNING_EVENT_TYPES as readonly string[]).includes(event.type),
+          !(PLANNING_EVENT_TYPES as readonly string[]).includes(event.type) &&
+          // And its NOT on the status lines a delivery gets by itself
+          // (F2-06): its creation, and a route's SYSTEM moves.
+          !(
+            event.type === "STATUS_CHANGE" &&
+            // An explicit null: a fixture that leaves the key out is an
+            // older line with a status it came from.
+            ((event.status_from === null && event.status_to === "PENDING") ||
+              event.actor === "SYSTEM")
+          ),
       ),
     );
 
@@ -527,6 +591,9 @@ class InMemoryOperationDayRepository implements IOperationDayRepository {
               type?.blocks_delivery,
               occurrence?.authorization_status,
             )),
+        geofence_outcome: event.geofence_outcome ?? null,
+        distance_m: event.distance_m ?? null,
+        accuracy_m: event.accuracy_m ?? null,
         occurredAt: factInstant(event.occurred_at, event.created_at),
         receivedAt: event.created_at,
       });
@@ -565,6 +632,9 @@ class InMemoryOperationDayRepository implements IOperationDayRepository {
           type?.blocks_delivery,
           occurrence.authorization_status,
         ),
+        geofence_outcome: occurrence.geofence_outcome ?? null,
+        distance_m: occurrence.distance_m ?? null,
+        accuracy_m: occurrence.accuracy_m ?? null,
         occurredAt: factInstant(occurrence.occurred_at, occurrence.created_at),
         receivedAt: occurrence.created_at,
       });
@@ -622,17 +692,26 @@ class InMemoryOperationDayRepository implements IOperationDayRepository {
 
   async listMonitoringRoutes(
     businessId: string,
-    day: OperationDay,
+    days: RoutePeriodDays,
     page: { skip: number; take: number },
   ): Promise<{ total: number; routes: MonitoringRoute[] }> {
-    const ids = this.dayRouteIds(businessId, day);
+    // Several days: the latest first inside each group, as the SQL orders.
+    const byDay = days.from !== days.to;
 
     const ordered = this.rows.routes
-      .filter((route) => ids.has(route.id))
+      .filter(
+        (route) =>
+          route.businessId === businessId &&
+          route.status !== "CANCELLED" &&
+          isRouteInPeriod(route, days),
+      )
       .sort(
         (a, b) =>
           (MONITORING_ORDER[a.status] ?? 3) -
             (MONITORING_ORDER[b.status] ?? 3) ||
+          (byDay
+            ? b.scheduled_date.getTime() - a.scheduled_date.getTime()
+            : 0) ||
           // NULLS LAST, as in the SQL.
           (a.planned_departure_at?.getTime() ?? Infinity) -
             (b.planned_departure_at?.getTime() ?? Infinity) ||
@@ -666,6 +745,74 @@ class InMemoryOperationDayRepository implements IOperationDayRepository {
       }));
 
     return { total: ordered.length, routes };
+  }
+
+  async listLiveRoutes(
+    businessId: string,
+    query: { date: string; take: number; after?: LiveRouteKey },
+  ): Promise<LiveRoute[]> {
+    const { date, take, after } = query;
+
+    const keyOf = (route: OperationRows["routes"][number]): LiveRouteKey => ({
+      rank: route.status === "IN_PROGRESS" ? 0 : 1,
+      code: route.code,
+    });
+
+    const compare = (a: LiveRouteKey, b: LiveRouteKey) =>
+      a.rank - b.rank || a.code - b.code;
+
+    return this.rows.routes
+      .filter(
+        (route) =>
+          route.businessId === businessId &&
+          (route.status === "IN_PROGRESS" ||
+            (route.status === "RELEASED" &&
+              dateOnlyKey(route.scheduled_date) === date)) &&
+          (!after || compare(keyOf(route), after) > 0),
+      )
+      .sort((a, b) => compare(keyOf(a), keyOf(b)))
+      .slice(0, take)
+      .map((route) => {
+        const stops = this.rows.stops.filter(
+          (stop) => stop.routeId === route.id,
+        );
+
+        // By the driver AND the company, as the SQL joins it.
+        const position = (this.rows.lastPositions ?? []).find(
+          (row) =>
+            row.driverId === route.driverId && row.businessId === businessId,
+        );
+
+        return {
+          id: route.id,
+          code: route.code,
+          name: route.name,
+          status: route.status as LiveRoute["status"],
+          scheduled_date: dateOnlyKey(route.scheduled_date),
+          started_at: route.started_at,
+          driverId: route.driverId,
+          driverName:
+            this.rows.drivers.find((driver) => driver.id === route.driverId)
+              ?.name ?? null,
+          vehiclePlate: route.vehicleId
+            ? (this.rows.vehicles.find(
+                (vehicle) => vehicle.id === route.vehicleId,
+              )?.license_plate ?? null)
+            : null,
+          stopsTotal: stops.filter((stop) => stop.status !== "CANCELLED")
+            .length,
+          stopsResolved: stops.filter(
+            (stop) => stop.status === "COMPLETED" || stop.status === "FAILED",
+          ).length,
+          lastPosition: position
+            ? {
+                latitude: position.latitude,
+                longitude: position.longitude,
+                recorded_at: position.recorded_at,
+              }
+            : null,
+        };
+      });
   }
 
   async listOpenPauses(

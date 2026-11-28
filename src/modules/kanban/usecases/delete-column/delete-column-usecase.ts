@@ -57,7 +57,9 @@ class DeleteKanbanColumnUseCase {
     try {
       return await this.kanban.deleteColumn(columnId);
     } catch (error) {
-      // Deleted meanwhile by someone else: the repository says "not found".
+      // Deleted meanwhile by someone else ("not found"), or still holding
+      // cards (KANBAN_COLUMN_HAS_CARDS, counted by the repository under the
+      // column's lock so a card written in between is seen).
       if (error instanceof AppError) throw error;
 
       throw new AppError(

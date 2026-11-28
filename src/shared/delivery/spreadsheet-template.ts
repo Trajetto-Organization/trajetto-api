@@ -65,6 +65,7 @@ const TEMPLATE_COLUMNS: TemplateColumn[] = [
     key: "recipient_email",
     header: "E-mail",
     aliases: ["email", "email do destinatario"],
+    help: 'Um ou mais (até 5), separados por ";" ou ",". O e-mail que não for válido fica de fora dos avisos ao cliente; a entrega entra do mesmo jeito.',
   },
 
   {
@@ -110,6 +111,23 @@ const TEMPLATE_COLUMNS: TemplateColumn[] = [
     key: "neighborhood",
     header: "Bairro",
     example: "Sé",
+  },
+  // Plan of 02/11/2026, E1: the point a company already has for the
+  // address. Stored as the delivery's point (MANUAL); without it, the
+  // geocoder finds the address.
+  {
+    key: "latitude",
+    header: "Latitude",
+    aliases: ["lat"],
+    example: "-23,5505",
+    help: "Opcional, em graus decimais (vírgula ou ponto). Preencha junto com a longitude; sem as duas, o Trajetto localiza o endereço sozinho.",
+  },
+  {
+    key: "longitude",
+    header: "Longitude",
+    aliases: ["lng", "lon", "long"],
+    example: "-46,6333",
+    help: "Opcional, em graus decimais (vírgula ou ponto). Preencha junto com a latitude.",
   },
 
   {

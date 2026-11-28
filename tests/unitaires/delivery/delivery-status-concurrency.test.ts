@@ -20,6 +20,7 @@ import { DeliveryStatusConflictError } from "@/modules/delivery/usecases/errors/
 import { AppError } from "@/shared/errors/AppError";
 
 import { InMemoryWebhookFanOutService } from "@/shared/integration/in-memory/in-memory-webhook-fan-out-service";
+import { withoutCreationLine } from "../../support/status-trail";
 
 // Nothing here asserts on webhooks; the use cases simply require one.
 const webhookStub = new InMemoryWebhookFanOutService();
@@ -314,7 +315,7 @@ describe("the proof write", () => {
       ),
     ).rejects.toBeInstanceOf(DeliveryStatusConflictError);
 
-    expect(deliveryRepository.events).toHaveLength(0);
+    expect(withoutCreationLine(deliveryRepository.events)).toHaveLength(0);
     expect(deliveryRepository.deliveries[0].status).toBe("CANCELLED");
   });
 
@@ -336,7 +337,7 @@ describe("the proof write", () => {
       "IN_TRANSIT",
     );
 
-    expect(deliveryRepository.events).toHaveLength(1);
+    expect(withoutCreationLine(deliveryRepository.events)).toHaveLength(1);
     expect(deliveryRepository.deliveries[0].status).toBe("DELIVERED");
     expect(deliveryRepository.deliveries[0].received_by).toBe("Porteiro");
   });

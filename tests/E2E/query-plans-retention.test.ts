@@ -5,7 +5,8 @@ import { randomUUID } from "node:crypto";
 import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
- * Retention of the API usage counts (db-perf 10/2026, docs/desempenho/banco-2026-10.md).
+ * Retention of the API usage counts (db-perf 10/2026,
+ * docs/desempenho/README.md).
  *
  * api_key_usage_daily grew by a row per key, day, route, method and status
  * class with nothing ever removing one, while the screen reads 90 days at
@@ -78,9 +79,8 @@ afterAll(async () => {
 
 describe("the nightly API usage purge", () => {
   it("keeps 400 days and removes what is older", async () => {
-    const { cleanupApiUsageJob, API_USAGE_RETENTION_DAYS } = await import(
-      "@/jobs/cron/cleanup-api-usage-job"
-    );
+    const { cleanupApiUsageJob, API_USAGE_RETENTION_DAYS } =
+      await import("@/jobs/cron/cleanup-api-usage-job");
 
     expect(API_USAGE_RETENTION_DAYS).toBe(400);
 
@@ -103,9 +103,8 @@ describe("the nightly API usage purge", () => {
   });
 
   it("walks the oldest days through the day index, not the table", async () => {
-    const { apiUsageRowsBefore } = await import(
-      "@/jobs/cron/cleanup-api-usage-job"
-    );
+    const { apiUsageRowsBefore } =
+      await import("@/jobs/cron/cleanup-api-usage-job");
 
     const cutoff = new Date(Date.now() - 400 * DAY_MS);
 
@@ -126,9 +125,8 @@ describe("the nightly API usage purge", () => {
   });
 
   it("is scheduled", async () => {
-    const { CronSchedulerService } = await import(
-      "@/shared/services/cron-scheduler-service"
-    );
+    const { CronSchedulerService } =
+      await import("@/shared/services/cron-scheduler-service");
     const { registerCronJobs } = await import("@/jobs/cron");
 
     const names: string[] = [];

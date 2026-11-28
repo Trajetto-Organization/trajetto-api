@@ -1,13 +1,45 @@
 # Dependency updates (INFRA-16).
 #
-# Security updates also need "Dependabot alerts" and "Dependabot security
-# updates" switched on in the repository (or organization) settings; this
-# file adds the scheduled version updates that keep the pins moving:
-# - npm: minor and patch grouped into one weekly PR; majors one by one.
+# Dependabot reads this file from the DEFAULT branch (main) only: a change
+# committed to staging takes effect when staging is promoted. When it lands
+# on main, every ecosystem below runs at once (seen on 29/10/2026).
+#
+# Why monthly, few PRs and no automatic rebase: every push to a
+# dependabot/* branch runs ci.yml (unit suite, gitleaks, AI pytest: about 11
+# billed minutes on the 2-vCPU runner), every automatic rebase is another
+# push, and every merge into staging runs the whole pipeline (about 60 billed
+# minutes since 10/11/2026, 75 before). The bill grows with the number of PRs
+# and rebases, not with how old a version is, so:
+# - one run a month, on the 1st, at 06:00 in São Paulo;
+# - npm opens three PRs at most per run (prisma, minor-and-patch, majors),
+#   every other ecosystem one or two;
+# - no automatic rebase: a PR is a proposal, rebased with `@dependabot
+#   rebase` (one CI run) right before it is applied;
+# - cooldown: a version is proposed only after it has been public for a
+#   week (a month for a major). A broken or hijacked release is usually
+#   pulled within days. Dependabot's default is 3 days, even without this key.
+#
+# Ecosystems:
+# - npm: minor and patch in one PR; every major in ONE "majors" PR that is a
+#   to-do list, never merged as is: each major is a migration done on its
+#   own work branch. `@dependabot ignore <name> major version` on that PR
+#   drops a major that was decided against.
 # - github-actions: every action is pinned by commit SHA with its version in
 #   a comment, and Dependabot moves both together.
 # - docker: the base images are pinned by digest. Majors of Node and Postgres
 #   are decisions (LTS line, pg_dump must match the server), not updates.
+#
+# Security updates: Dependabot raises them only against the default branch
+# and applies none of the options below to them (docs.github.com,
+# "target-branch"). A PR into main has no staging build to promote, and here
+# its Staging evidence (pr.yml) would wait for a staging build that never
+# comes (up to 45 billed minutes). So "Dependabot security
+# updates" stays OFF in the repository settings and "Dependabot alerts"
+# stays ON: an alert is fixed on a work branch from staging, like any other
+# change, and the audit gate (audit-gate.sh) blocks a CRITICAL advisory in a
+# production dependency whenever the dependencies change. This replaces the
+# 30/10/2026 choice of security updates as the watch (docs/deploy.md,
+# "Cadeia de suprimentos"; docs/infraestrutura.md, 7.7).
 #
 # Every PR targets `staging`, never `main`: code reaches production only
 # through the staging pipeline (built once, validated, then promoted by the
@@ -21,11 +53,16 @@ updates:
     target-branch: staging
     directory: "/"
     schedule:
-      interval: weekly
-      day: monday
+      interval: monthly
       time: "06:00"
       timezone: America/Sao_Paulo
-    open-pull-requests-limit: 10
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
+    rebase-strategy: disabled
+    # Three groups cover every update type, so three PRs is the most one run
+    # opens; the margin is for an update Dependabot cannot place in its group.
+    open-pull-requests-limit: 5
     groups:
       # The Prisma CLI, the client, the pg adapter and pg move in ONE PR: a
       # CLI that generates for one version and a runtime of another fails at
@@ -36,12 +73,36 @@ updates:
         update-types: [minor, patch]
       minor-and-patch:
         update-types: [minor, patch]
+      # The list of migrations waiting, one PR a month instead of one PR (and
+      # its rebases) per major. The ignore rules below still apply.
+      majors:
+        update-types: [major]
     ignore:
       # Prisma 8 is a rewrite (new query API, new migration system), not a
       # bump: it is a decision with its own measurement. Lift this when it is.
       - dependency-name: prisma
         update-types: [version-update:semver-major]
       - dependency-name: "@prisma/*"
+        update-types: [version-update:semver-major]
+      # pg is pinned to exactly 8.23.1: inside an interactive transaction
+      # Prisma 7 runs queries in parallel on one pg client, which pg 8 queues
+      # and pg 9 no longer does. Lift this only after src/shared/database/pg-driver.ts
+      # serializes `DriverClient.query`, or Prisma fixes it (docs/arquitetura.md,
+      # "pg fixo em exatamente 8.23.1"). Its types follow the same major.
+      - dependency-name: pg
+        update-types: [version-update:semver-major]
+      - dependency-name: "@types/pg"
+        update-types: [version-update:semver-major]
+      # dotenv-expand stays on 12.x (13.0.0 only moves its own dotenv; its
+      # lib/main.js is byte-identical to 12.0.1). 1000.0.0 bundles
+      # @dotenvx/primitives (a 136 KB minified entry, 298 KB package) and runs
+      # every `$(...)` it finds in a .env value through the shell, quoted or
+      # backslash-escaped alike, including text pulled in by `${VAR}`. With
+      # `expand(dotenv.config())`, our call, it also hangs on `X=${X}y` when X
+      # is unset and leaves `X=${X:-default}` unexpanded. We only expand
+      # `${VAR}` in a developer's .env (the image has no .env): nothing to
+      # gain. Lift this only after reading the new bundle again.
+      - dependency-name: dotenv-expand
         update-types: [version-update:semver-major]
     commit-message:
       prefix: chore(deps)
@@ -50,10 +111,13 @@ updates:
     target-branch: staging
     directory: "/"
     schedule:
-      interval: weekly
-      day: monday
+      interval: monthly
       time: "06:00"
       timezone: America/Sao_Paulo
+    # GitHub Actions takes only default-days (no per-semver cooldown).
+    cooldown:
+      default-days: 7
+    rebase-strategy: disabled
     groups:
       actions:
         patterns: ["*"]
@@ -65,11 +129,18 @@ updates:
     directories:
       - "/"
       - "/infra/ai-ocr"
+      # trajetto-pgbouncer (Alpine by digest): its libraries (OpenSSL,
+      # c-ares, libevent) only move when this digest does, because CI
+      # rebuilds the image only for a new tree of infra/pgbouncer.
+      - "/infra/pgbouncer"
     schedule:
-      interval: weekly
-      day: monday
+      interval: monthly
       time: "06:00"
       timezone: America/Sao_Paulo
+    # Docker takes only default-days (no per-semver cooldown).
+    cooldown:
+      default-days: 7
+    rebase-strategy: disabled
     ignore:
       - dependency-name: node
         update-types: [version-update:semver-major]
@@ -92,11 +163,23 @@ updates:
   # runtime and OpenCV are what the benchmark measured (ADR 0010): moving
   # them is a new measurement, not a routine bump — which is also why they
   # are the first layers, and what does get bumped is the last one.
+  # Grouped: each PR here runs the whole ci.yml (the Node suite included),
+  # so five separate pytest/pluggy/iniconfig PRs cost five runs for one
+  # layer's worth of change.
   - package-ecosystem: pip
     target-branch: staging
     directory: "/infra/ai-ocr"
     schedule:
       interval: monthly
+      time: "06:00"
+      timezone: America/Sao_Paulo
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
+    rebase-strategy: disabled
+    groups:
+      ai-requirements:
+        patterns: ["*"]
     ignore:
       - dependency-name: rapidocr
       - dependency-name: onnxruntime
@@ -108,13 +191,29 @@ updates:
 
   # The load harness pins Traefik and k6 by digest (tests/load/compose.load.yaml).
   # Traefik stays on the major Dokploy runs; a new major is a decision.
+  # Postgres and Redis stay on the lines production runs (postgres:16-alpine,
+  # redis:7-alpine — docs/infraestrutura.md): a load test against another
+  # major measures a database production does not have.
+  # Grouped for the same reason as pip: one PR, one ci.yml run.
   - package-ecosystem: docker-compose
     target-branch: staging
     directory: "/tests/load"
     schedule:
       interval: monthly
+      time: "06:00"
+      timezone: America/Sao_Paulo
+    cooldown:
+      default-days: 7
+    rebase-strategy: disabled
+    groups:
+      load-harness:
+        patterns: ["*"]
     ignore:
       - dependency-name: traefik
+        update-types: [version-update:semver-major]
+      - dependency-name: postgres
+        update-types: [version-update:semver-major]
+      - dependency-name: redis
         update-types: [version-update:semver-major]
     commit-message:
       prefix: chore(load)

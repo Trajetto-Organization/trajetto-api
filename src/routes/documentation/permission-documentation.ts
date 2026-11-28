@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { responseDateTime } from "./response-date";
 
 import { createPermissionSchema } from "@/schemas/create-permission-schema";
 import { listPermissionSchema } from "@/schemas/list-permission-schema";
@@ -45,8 +46,8 @@ const permissionResponses = {
     canWrite: z.boolean(),
     businessId: z.string(),
     profileAccessId: z.string(),
-    created_at: z.union([z.string(), z.date()]),
-    updated_at: z.union([z.string(), z.date()]),
+    created_at: responseDateTime(),
+    updated_at: responseDateTime(),
     profileAccess: z.object({ name: z.string() }),
   }),
 

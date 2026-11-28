@@ -1,8 +1,8 @@
 import fastify from "fastify";
-import {
-  serializerCompiler,
-  validatorCompiler,
-} from "fastify-type-provider-zod";
+import fastifyRateLimit from "@fastify/rate-limit";
+import { validatorCompiler } from "fastify-type-provider-zod";
+
+import { parsingSerializerCompiler } from "@/shared/http/response-serializer";
 
 import { describe, expect, it } from "vitest";
 
@@ -22,7 +22,10 @@ describe("readiness while draining", () => {
   it("answers 503 draining, through the real route and its response schema", async () => {
     const app = fastify();
     app.setValidatorCompiler(validatorCompiler);
-    app.setSerializerCompiler(serializerCompiler);
+    app.setSerializerCompiler(parsingSerializerCompiler);
+    // health-routes builds its own namespaced bucket with app.rateLimit(),
+    // which only exists once the plugin is registered (as in src/http.ts).
+    app.register(fastifyRateLimit, { global: false });
     app.register(healthRoutes);
 
     markDraining();

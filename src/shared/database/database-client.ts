@@ -5,7 +5,11 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient, type Prisma } from "@prisma/client";
 
 import { createPool } from "./pg-driver";
-import { poolSettingsFrom, type DatabasePoolSettings } from "./pool-config";
+import {
+  poolSettingsFrom,
+  type DatabasePoolSettings,
+  type StatementCeiling,
+} from "./pool-config";
 
 /**
  * Every PrismaClient of the API, its scripts and its tests is built here
@@ -31,11 +35,18 @@ type ClientOptions = Omit<
 >;
 
 interface ConnectionOptions {
-  /** The database URL; DATABASE_URL at connect time when absent. */
-  url?: string;
+  /**
+   * The database URL; DATABASE_URL at connect time when absent. A function
+   * is read at connect time too: the read and batch pools fall back to
+   * DATABASE_URL, which a script may load from .env after the import.
+   */
+  url?: string | (() => string | undefined);
 
   /** Settings that win over the URL's (the readiness probe's own pool). */
   overrides?: Partial<Omit<DatabasePoolSettings, "connectionString">>;
+
+  /** The pool's own statement_timeout, over the URL's (pool-config.ts). */
+  ceiling?: StatementCeiling;
 }
 
 interface DatabaseConnection<Client> {
@@ -63,7 +74,12 @@ function loadEnvironmentOnce(): void {
 function settingsFor(connection: ConnectionOptions): DatabasePoolSettings {
   loadEnvironmentOnce();
 
-  const settings = poolSettingsFrom(connection.url ?? process.env.DATABASE_URL);
+  const url =
+    typeof connection.url === "function" ? connection.url() : connection.url;
+  const settings = poolSettingsFrom(
+    url ?? process.env.DATABASE_URL,
+    connection.ceiling,
+  );
 
   return { ...settings, ...connection.overrides };
 }

@@ -14,11 +14,10 @@ import {
   DELIVERY_SORT_KEYS,
 } from "@/modules/delivery/usecases/list-delivery/delivery-list";
 import {
-  DELIVERY_PERIODS,
   MAX_CUSTOM_PERIOD_DAYS,
-  periodDateField,
   refineDeliveryPeriod,
 } from "@/modules/delivery/usecases/list-delivery/delivery-period";
+import { listPeriodFields } from "@/shared/time/list-period";
 
 /**
  * The deliveries listing's querystring (decision 8.8): the page, the search,
@@ -35,21 +34,9 @@ const deliveryListFilterFields = {
   ),
   // The meeting of 14/10/2026: the screen opens on today, with presets and a
   // custom range. Absent = every date (the API's answer before the period).
-  period: z
-    .enum(DELIVERY_PERIODS, {
-      errorMap: () => ({
-        message: `Período inválido. Use: ${DELIVERY_PERIODS.join(", ")}.`,
-      }),
-    })
-    .optional()
-    .describe(
-      `Período pela data de criação, em dias civis no fuso da empresa: today (hoje), 7d, 14d ou 30d (os últimos N dias, hoje incluído) ou custom (com from e to, até ${MAX_CUSTOM_PERIOD_DAYS} dias). Ausente, todas as datas. Uma busca que é exatamente o ID, o pedido, a chave ou o número da NF de uma entrega ignora o período (o link de uma notificação acha a entrega antiga).`,
-    ),
-  from: periodDateField("A data inicial do período").describe(
-    "Primeiro dia do período custom (AAAA-MM-DD), incluído. Só com period=custom.",
-  ),
-  to: periodDateField("A data final do período").describe(
-    "Último dia do período custom (AAAA-MM-DD), incluído. Só com period=custom.",
+  // The fields and their rules are every listing's (shared/time/list-period).
+  ...listPeriodFields(
+    `Período pela data de criação, em dias civis no fuso da empresa: today (hoje), 7d, 14d ou 30d (os últimos N dias, hoje incluído) ou custom (com from e to, até ${MAX_CUSTOM_PERIOD_DAYS} dias). Ausente, todas as datas. Uma busca que é exatamente o ID, o pedido, a chave ou o número da NF de uma entrega ignora o período (o link de uma notificação acha a entrega antiga).`,
   ),
 };
 
@@ -64,6 +51,13 @@ const listDeliverySchema = listPagesSchema
       ),
     ...sortFields(DELIVERY_SORT_KEYS, DELIVERY_SORT_FALLBACK),
     ...deliveryListFilterFields,
+    // plano-escala F2-30: list-only, the export does not take it.
+    facets: z
+      .enum(["skip"], { error: "facets aceita só o valor skip." })
+      .optional()
+      .describe(
+        "`skip`: só a página, sem contar nada (sem `total`, sem os cartões e sem as opções dos filtros; `searchMeta.facetsSkipped` = true). Para quem vira a página com os mesmos filtros e já tem as contagens da página anterior. As linhas são as mesmas.",
+      ),
   })
   .superRefine(refineDeliveryPeriod);
 

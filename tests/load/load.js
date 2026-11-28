@@ -1,4 +1,4 @@
-import { perSurfaceBreakdown } from "./lib/api.js";
+import { SUMMARY_TREND_STATS, perSurfaceBreakdown } from "./lib/api.js";
 import { pause, runOneOperation } from "./lib/mix.js";
 
 /**
@@ -37,6 +37,9 @@ export const options = {
       ),
     },
   },
+
+  // p99 too: the 100k gate judges it (tests/load/gate.sh, LOAD-08).
+  summaryTrendStats: SUMMARY_TREND_STATS,
 
   thresholds: {
     ...perSurfaceBreakdown(),

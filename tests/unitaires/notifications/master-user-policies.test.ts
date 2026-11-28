@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   masterUserWelcomedPolicy,
   masterUserCreatedPolicy,
+  masterUserUpdatedPolicy,
   masterUserAccountUpdatedPolicy,
 } from "@/shared/notifications/policies/master-user-policies";
 
@@ -48,6 +49,25 @@ describe("master-user topics", () => {
 
     expect(welcomed.title).toBe("Bem-vindo ao Trajetto");
     expect(welcomed.message).toContain("Gabriel");
+  });
+
+  /**
+   * The use case mails the edited master directly, with the old and new
+   * name or e-mail (update-master-user-usecase.ts), so the pipeline's copy
+   * of the same event was a second e-mail in the same inbox (decision
+   * D-52). The notice itself stays: bell and phone cannot be silenced.
+   */
+  it("account-updated sends no second e-mail, and stays mandatory with its WhatsApp", () => {
+    expect(masterUserAccountUpdatedPolicy.suppressEmail).toBe(true);
+    expect(masterUserAccountUpdatedPolicy.mandatory).toBe(true);
+    expect(masterUserAccountUpdatedPolicy.renderWhatsApp).toBeDefined();
+  });
+
+  it("keeps the confirmations of the master's own act as they were (decision D-49)", () => {
+    for (const policy of [masterUserCreatedPolicy, masterUserUpdatedPolicy]) {
+      expect(policy.suppressEmail).toBeUndefined();
+      expect(policy.renderWhatsApp).toBeDefined();
+    }
   });
 
   it("account-updated tells the affected master who changed what", () => {

@@ -66,6 +66,26 @@ interface PeriodCountBucket {
   count: number;
 }
 
+/**
+ * The "Entregas" series read from the closed days the rollup job stored
+ * (plano-escala F4-22, decision D52), each day not stored, marked or still
+ * open counted live. `now` says which days are over: the repository never
+ * reads the clock.
+ */
+interface DeliveriesFromRollup {
+  now: Date;
+}
+
+/** A window of the "Entregas" series, cut as countManyByPeriod cuts it. */
+interface DeliveryWindow {
+  from: Date;
+  to: Date;
+  granularity: PeriodGranularity;
+}
+
+/** How a window of deliveries is counted: today's way, or the rollup's. */
+type DeliveryCountSource = "live" | "rollup";
+
 interface PeriodCostBucket {
   period: string;
   internal: number;
@@ -125,6 +145,9 @@ interface VehicleTypeCountResult {
 
 export {
   DashboardEntity,
+  DeliveriesFromRollup,
+  DeliveryCountSource,
+  DeliveryWindow,
   PeriodGranularity,
   PeriodCountBucket,
   PeriodCostBucket,

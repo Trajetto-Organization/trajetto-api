@@ -1,0 +1,22 @@
+{
+  "Rules": [
+    {
+      "ID": "trajetto-expire-trail",
+      "Status": "Enabled",
+      "Filter": { "Prefix": "trail/" },
+      "Expiration": { "Days": 180 }
+    },
+    {
+      "ID": "trajetto-expire-history",
+      "Status": "Enabled",
+      "Filter": { "Prefix": "archive/" },
+      "Expiration": { "Days": 1830 }
+    },
+    {
+      "ID": "trajetto-abort-multipart",
+      "Status": "Enabled",
+      "Filter": { "Prefix": "" },
+      "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 7 }
+    }
+  ]
+}

@@ -16,6 +16,10 @@ import {
   type TicketSummary,
 } from "../../shared/ticket-presenter";
 import { resolveTicketScope } from "../ticket-access";
+import {
+  loadBusinessTimeZone,
+  type BusinessLookup,
+} from "@/shared/time/business-time-zone";
 
 interface ListSupportTicketsRequest {
   userId: string;
@@ -36,6 +40,8 @@ interface ListSupportTicketsResponse {
   data: Array<TicketSummary | (DriverTicketView & { unreadCount: number })>;
   total: number;
   counts: SupportTicketCounts;
+  /** The company's zone the Atendimentos tab prints in (H6, D22). */
+  meta: { timeZone: string };
 }
 
 /**
@@ -50,6 +56,8 @@ class ListSupportTicketsUseCase {
     private user: IUserRepository,
     @inject("SupportTicketRepository")
     private tickets: ISupportTicketRepository,
+    @inject("BusinessRepository")
+    private business: BusinessLookup,
   ) {}
 
   async execute(
@@ -93,6 +101,13 @@ class ListSupportTicketsUseCase {
       this.tickets.lastMessages(ids),
     ]);
 
+    // The tab prints on the company's clock, like the route detail (H6,
+    // decision D22). After the reads above: two connections at most.
+    const timeZone = await loadBusinessTimeZone(
+      this.business,
+      scope.businessId,
+    );
+
     return {
       data: data.map((row) => {
         const summary = presentTicket(row, {
@@ -106,6 +121,7 @@ class ListSupportTicketsUseCase {
       }),
       total,
       counts,
+      meta: { timeZone },
     };
   }
 }

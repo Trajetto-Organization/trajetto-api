@@ -561,8 +561,9 @@ describe("the other profiles of the same company", () => {
 
     expect(overview.deliveryOperation).toBeNull();
 
+    // Refused at the guard (plan of 02/11/2026, H5: allowDriver:false).
     const response = await get(DRIVER_USER, "/delivery/operation-summary");
-    expectRefused(response, "DRIVER_CANNOT_VIEW_PANELS");
+    expectRefused(response, "PERMISSION_DENIED");
   });
 });
 

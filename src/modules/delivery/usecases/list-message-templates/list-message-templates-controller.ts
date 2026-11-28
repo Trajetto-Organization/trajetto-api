@@ -18,12 +18,13 @@ class ListMessageTemplatesController {
 
     const result = await useCase.execute({ userId: id, businessId });
 
-    // Plain JSON, not NDJSON: there are at most six of these, and a stream
-    // over six rows is machinery around a list that fits on one screen.
+    // Plain JSON, not NDJSON: there are at most eight of these, and a stream
+    // over eight rows is machinery around a list that fits on one screen.
     return reply.status(200).send({
       message: "Mensagens obtidas com sucesso.",
       data: result.data,
       total: result.total,
+      whatsapp_previews: result.whatsappPreviews,
     });
   }
 }

@@ -3,6 +3,14 @@ import { container } from "tsyringe";
 
 import database from "@/../infra/database";
 import { RedisConnection } from "@/../infra/cache/redis-connection";
+import { env } from "@/env";
+import { registeredPartitions } from "@/shared/database/partitions";
+import { GEOCODER_PROVIDER } from "@/shared/delivery/geocoding/geocoding-budget";
+import {
+  DEFAULT_MAX_ATTEMPTS,
+  MUST_FINISH_JOB_KINDS,
+} from "@/shared/jobs/background-job-repository";
+import { quotaDay } from "@/shared/services/provider-quota/provider-quota-repository";
 
 import { readWebhookQueueMetrics } from "@/shared/integration/webhook-metrics";
 import {
@@ -17,11 +25,15 @@ import { PROVIDER_PAUSED_MARKER } from "@/shared/ai/provider-failure";
 import "@/shared/services/proof-signing/proof-signing-service";
 import type { ProofSigningService } from "@/shared/services/proof-signing/proof-signing-service";
 import type { OperationalSnapshot } from "./alert-rules";
+import { readClusterEpochState } from "./cluster-epoch";
+import { readFeedTxidState } from "./feed-txid";
 import { connectionUsagePercent } from "./metrics-math";
 import { deliveryBacklogSql } from "./metrics-queries";
+import { LIVE_WINDOW_SECONDS } from "./process-heartbeat";
 import {
   readCronJobs,
-  readPartitionRunway,
+  legacyRunway,
+  readPartitionStates,
   readWorkerHeartbeats,
 } from "./operational-state";
 
@@ -46,6 +58,27 @@ const FAILURE_WINDOW_MS = 10 * 60 * 1000;
 const FAILURE_SAMPLE = 200;
 
 const REDIS_TIMEOUT_MS = 2_000;
+
+/**
+ * Each process writes its ops_sample row 0–15 s after its minute ends: three
+ * minutes always holds a live replica's newest one, and a replica stopped
+ * longer than that is gone.
+ */
+const SOCKET_SAMPLE_WINDOW_MS = 3 * 60 * 1000;
+
+/**
+ * The feed's epoch conversions alert for a quarter of an hour after they
+ * happen: long enough to be seen across a few heartbeats, short enough to
+ * clear by itself once the integrators hold cursors of the new epoch.
+ */
+const FEED_CONVERSION_WINDOW_MS = 15 * 60 * 1000;
+
+/**
+ * The providers' refusals for rate alert for a day after they happen
+ * (plano-escala F3-15c): the trigger is "a 429 or a 130429 in the day",
+ * and the owner turns the bucket on, or lowers it, before it clears.
+ */
+const PROVIDER_THROTTLE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 /**
  * The AI reader's refusal of our token: LocalOcrHttpError messages start with
@@ -99,8 +132,19 @@ async function part<T>(
   }
 }
 
+/** The client of the cluster-wide checks (F2-03, U-14); see below. */
+type MaintenanceClient = Pick<Prisma.TransactionClient, "$queryRaw">;
+
+/**
+ * `maintenance` runs the cluster-wide checks (the feed's txid, the
+ * cluster's epoch): the ops heartbeat passes the maintenance pool,
+ * databaseBatch, which only the crons may import
+ * (tests/unitaires/database/database-read-guard.test.ts); a test calling
+ * this directly reads them on the app's pool.
+ */
 async function collectOperationalSnapshot(
   now: Date = new Date(),
+  maintenance: MaintenanceClient = database,
 ): Promise<OperationalSnapshot> {
   const errors: string[] = [];
   const since = new Date(now.getTime() - FAILURE_WINDOW_MS);
@@ -167,6 +211,45 @@ async function collectOperationalSnapshot(
     null,
   );
 
+  // The durable jobs (F3-22): the oldest due PENDING job, on the partial
+  // background_job_due_idx ("availableAt") WHERE status IN ('PENDING',
+  // 'PROCESSING'), a range that stops at now(). In the same statement, the
+  // jobs that must finish and keep failing (job-failing): the live ones
+  // past their regular attempts (failed at the last one and back PENDING,
+  // or running one more), on the same partial index (the live jobs are the
+  // queue's depth), and the ones FAILED in the last 24 h, a range
+  // of background_job_status_finished_at_idx.
+  const jobs = await part(
+    "background_job",
+    errors,
+    async () => {
+      const [row] = await database.$queryRaw<
+        Array<{ lag: number | null; failing: number; failed: number }>
+      >`
+        SELECT
+          (SELECT EXTRACT(EPOCH FROM (now() - MIN("availableAt")))::float
+           FROM "background_job"
+           WHERE "status" IN ('PENDING', 'PROCESSING')
+             AND "status" = 'PENDING' AND "availableAt" <= now()) AS "lag",
+          (SELECT count(*)::int FROM "background_job"
+           WHERE "status" IN ('PENDING', 'PROCESSING')
+             AND "kind"::text IN (${Prisma.join(MUST_FINISH_JOB_KINDS)})
+             AND "lastError" IS NOT NULL
+             AND ("attempts" > ${DEFAULT_MAX_ATTEMPTS}
+               OR ("status" = 'PENDING'
+                 AND "attempts" >= ${DEFAULT_MAX_ATTEMPTS}))) AS "failing",
+          (SELECT count(*)::int FROM "background_job"
+           WHERE "status" = 'FAILED'
+             AND "finished_at" > now() - interval '24 hours'
+             AND "kind"::text IN (${Prisma.join(MUST_FINISH_JOB_KINDS)})) AS "failed"
+      `;
+
+      return row ?? null;
+    },
+    null,
+  );
+  const jobEligibleLagSec = jobs?.lag ?? null;
+
   // Newest first, on the partial notification_delivery_failed_idx
   // ("updated_at", "channel") WHERE status = 'FAILED': a range on its
   // leading column that stops at the sample.
@@ -232,16 +315,24 @@ async function collectOperationalSnapshot(
             ? new Date(job.last_succeeded_at)
             : null,
           staleRunning: job.stale_running,
+          lastPartial: job.last_partial,
+          partialSince: job.partial_since ? new Date(job.partial_since) : null,
         })),
     [],
   );
 
-  const runway = await part(
-    "driver_position (partições)",
+  // Every registered table's partitions (F2-09): the runway of each, the
+  // earlier lookahead warning, and partitions past the retention that were
+  // never dropped.
+  const partitionStates = await part(
+    "partições",
     errors,
-    () => readPartitionRunway(now),
+    () => readPartitionStates(now),
     null,
   );
+  const runway = partitionStates
+    ? legacyRunway(partitionStates.driver_position)
+    : null;
 
   // Replicas gone for more than a few minutes are already left out by the
   // reader, so a deploy that replaced every replica pages nobody.
@@ -276,6 +367,173 @@ async function collectOperationalSnapshot(
     0,
   );
 
+  // Each replica's sockets against its ceiling (plano-escala F5-31), from
+  // its newest per-minute row: only the process itself knows its count and
+  // its descriptor limit. A replica gone for a few minutes drops out, and
+  // the previous image's rows (no socket_cap) are left out.
+  const sockets = await part(
+    "ops_sample (sockets)",
+    errors,
+    async () => {
+      const rows = await database.$queryRaw<
+        Array<{ replica: string; connections: number; cap: number }>
+      >`
+        SELECT DISTINCT ON ("replica")
+          "replica",
+          ("metrics" -> 'realtime' ->> 'local_connections')::int AS connections,
+          ("metrics" -> 'realtime' ->> 'socket_cap')::int AS cap
+        FROM "ops_sample"
+        WHERE "ts" >= ${new Date(now.getTime() - SOCKET_SAMPLE_WINDOW_MS)}
+          AND "role" <> 'cluster'
+          AND "metrics" -> 'realtime' ->> 'socket_cap' IS NOT NULL
+        ORDER BY "replica", "ts" DESC
+      `;
+
+      return rows.map((row) => ({
+        replica: row.replica,
+        connections: Number(row.connections ?? 0),
+        cap: Number(row.cap ?? 0),
+      }));
+    },
+    undefined,
+  );
+
+  // Each process's memory budget (plano-escala U-15), from its newest
+  // per-minute row: only the process knows its heap, its threads and its
+  // container's ceiling. Only the ones that do not fit come back; the
+  // previous image's rows (no memory_budget) and a process with no ceiling
+  // to read (ok null) are left out.
+  const memoryBudgets = await part(
+    "ops_sample (memory)",
+    errors,
+    async () => {
+      const rows = await database.$queryRaw<
+        Array<{
+          replica: string;
+          ok: string | null;
+          total_mb: number | null;
+          limit_mb: number | null;
+        }>
+      >`
+        SELECT DISTINCT ON ("replica")
+          "replica",
+          "metrics" -> 'memory_budget' ->> 'ok' AS ok,
+          ("metrics" -> 'memory_budget' ->> 'total_mb')::int AS total_mb,
+          ("metrics" -> 'memory_budget' ->> 'limit_mb')::int AS limit_mb
+        FROM "ops_sample"
+        WHERE "ts" >= ${new Date(now.getTime() - SOCKET_SAMPLE_WINDOW_MS)}
+          AND "role" <> 'cluster'
+          AND "metrics" -> 'memory_budget' IS NOT NULL
+        ORDER BY "replica", "ts" DESC
+      `;
+
+      return rows
+        .filter((row) => row.ok === "false")
+        .map((row) => ({
+          replica: row.replica,
+          totalMb: Number(row.total_mb ?? 0),
+          limitMb: Number(row.limit_mb ?? 0),
+        }));
+    },
+    undefined,
+  );
+
+  // The feed's conversions of a cursor of another epoch (F2-05), from the
+  // processes' rows of the last minutes: only the process that served the
+  // page knows it converted one.
+  const feedEpochConversions = await part(
+    "ops_sample (feed)",
+    errors,
+    async () => {
+      const [row] = await database.$queryRaw<Array<{ total: number | null }>>`
+        SELECT (sum(("metrics" -> 'feed' ->> 'epoch_conversions')::int))::int AS total
+        FROM "ops_sample"
+        WHERE "ts" >= ${new Date(now.getTime() - FEED_CONVERSION_WINDOW_MS)}
+          AND "role" <> 'cluster'
+          AND "metrics" -> 'feed' ->> 'epoch_conversions' IS NOT NULL
+      `;
+
+      return Number(row?.total ?? 0);
+    },
+    undefined,
+  );
+
+  // The providers' refusals for rate (F3-15c), from the processes' rows of
+  // the last 24 h: only the process that sent knows the provider said 429.
+  // On the ts index; the rows of a process that never heard one carry no
+  // section.
+  const providerThrottled = await part(
+    "ops_sample (provider_rate)",
+    errors,
+    async () => {
+      const [row] = await database.$queryRaw<
+        Array<{
+          whatsapp: number | null;
+          email: number | null;
+          push: number | null;
+        }>
+      >`
+        SELECT
+          (sum(("metrics" -> 'provider_rate' -> 'throttled' ->> 'whatsapp')::int))::int AS whatsapp,
+          (sum(("metrics" -> 'provider_rate' -> 'throttled' ->> 'email')::int))::int AS email,
+          (sum(("metrics" -> 'provider_rate' -> 'throttled' ->> 'push')::int))::int AS push
+        FROM "ops_sample"
+        WHERE "ts" >= ${new Date(now.getTime() - PROVIDER_THROTTLE_WINDOW_MS)}
+          AND "role" <> 'cluster'
+          AND "metrics" -> 'provider_rate' -> 'throttled' IS NOT NULL
+      `;
+
+      return {
+        whatsapp: Number(row?.whatsapp ?? 0),
+        email: Number(row?.email ?? 0),
+        push: Number(row?.push ?? 0),
+      };
+    },
+    undefined,
+  );
+
+  // The live processes (plano-escala F3-34): which queues have a consumer,
+  // which commits run, and whether a process of the other environment
+  // writes here. One row per process, on the updated_at index.
+  const processes = await part(
+    "process_heartbeat",
+    errors,
+    async () => {
+      const rows = await database.$queryRaw<
+        Array<{
+          replica: string;
+          role: string;
+          app_env: string;
+          build_commit: string | null;
+          queues: string[] | null;
+          started_at: Date;
+          realtime_source: string | null;
+          contract_epoch: number | null;
+        }>
+      >`
+        SELECT "replica", "role", "app_env", "build_commit", "queues", "started_at",
+               "realtime_source", "contract_epoch"
+        FROM "process_heartbeat"
+        WHERE "updated_at" > now() - make_interval(secs => ${LIVE_WINDOW_SECONDS})
+      `;
+
+      return {
+        appEnv: env.APP_ENV,
+        live: rows.map((row) => ({
+          replica: row.replica,
+          role: row.role,
+          appEnv: row.app_env,
+          commit: row.build_commit,
+          queues: row.queues ?? [],
+          startedAt: new Date(row.started_at),
+          realtimeSource: row.realtime_source,
+          contractEpoch: row.contract_epoch,
+        })),
+      };
+    },
+    undefined,
+  );
+
   const redisOk = await pingRedis();
 
   // The proof signing certificate (design §7.4): read from the process's own
@@ -297,12 +555,59 @@ async function collectOperationalSnapshot(
     undefined,
   );
 
+  // The geocoder's day against the plan (F2-32), only with a quota written
+  // down. The account's scopes only: a scope with a colon is a company's
+  // share of the one before it, already in its count.
+  const dailyQuota = env.LOCATIONIQ_DAILY_QUOTA;
+  const geocodingQuota =
+    dailyQuota !== undefined
+      ? await part(
+          "provider_quota_day",
+          errors,
+          async () => {
+            const [row] = await database.$queryRaw<Array<{ used: number }>>`
+              SELECT COALESCE(SUM("used"), 0)::int AS "used"
+              FROM "provider_quota_day"
+              WHERE "provider" = ${GEOCODER_PROVIDER}
+                AND "day" = ${quotaDay(now)}::date
+                AND strpos("scope", ':') = 0
+            `;
+
+            return { usedToday: Number(row?.used ?? 0), dailyQuota };
+          },
+          undefined,
+        )
+      : undefined;
+
+  // The feed's stamp against the cluster (F2-03): one probe per tenant down
+  // the feed's index, on the maintenance client (the heartbeat passes
+  // databaseBatch).
+  const feedTxid = await part(
+    "delivery_event (txid)",
+    errors,
+    () => readFeedTxidState(maintenance),
+    null,
+  );
+
+  // The cluster's epoch against the cluster (U-14): one row and two
+  // pg_control functions, on the same client.
+  const clusterEpoch = await part(
+    "cluster_epoch",
+    errors,
+    () => readClusterEpochState(maintenance),
+    null,
+  );
+
   return {
     now,
     outboxEligibleLagSec,
     deliveryEligibleLagSec,
     webhookDueLagSec,
     aiEligibleLagSec,
+    jobEligibleLagSec,
+    ...(jobs && {
+      mustFinishJobs: { failing: jobs.failing, failed: jobs.failed },
+    }),
     deliveryFailures,
     aiCredentialFailures,
     aiProviderPausedRequests,
@@ -311,10 +616,37 @@ async function collectOperationalSnapshot(
     // a runway that cannot be read is not reported twice.
     partitionRunwayOk: runway?.runway_ok ?? true,
     partitionRunwayDays: runway?.partition_runway_days ?? null,
+    ...(partitionStates && {
+      partitions: Object.entries(partitionStates).map(([table, state]) => {
+        const entry = registeredPartitions().find(
+          (each) => each.table === table,
+        );
+
+        return {
+          table,
+          lookaheadDays: state.lookahead_days,
+          runwayOk: state.runway_ok,
+          lookaheadOk: state.lookahead_ok,
+          stuck: state.stuck,
+          ...(entry?.stuckGraceDays !== undefined && {
+            stuckGraceDays: entry.stuckGraceDays,
+          }),
+          ...(entry?.dropGate && { dropGate: entry.dropGate }),
+        };
+      }),
+    }),
     stuckWorkers,
     connectionUsagePercent: usage,
     redisOk,
     proofSigning,
+    ...(geocodingQuota && { geocodingQuota }),
+    ...(feedTxid && { feedTxid }),
+    ...(clusterEpoch && { clusterEpoch }),
+    ...(sockets && { sockets }),
+    ...(memoryBudgets && { memoryBudgets }),
+    ...(processes && { processes }),
+    ...(feedEpochConversions !== undefined && { feedEpochConversions }),
+    ...(providerThrottled && { providerThrottled }),
     collectionErrors: errors,
   };
 }

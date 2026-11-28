@@ -11,6 +11,8 @@ import {
 
 import { ENDPOINT_PAUSED_REASON } from "@/shared/integration/webhook-dispatch-rules";
 import { createPrismaClient } from "@/shared/database/database-client";
+import { uuid7Sql } from "./support/uuid7-sql";
+import { Prisma } from "@prisma/client";
 
 /**
  * Releasing what an endpoint held while it was off, when somebody saves it
@@ -125,22 +127,66 @@ function heldRows() {
   });
 }
 
+/** `count` rows held for the endpoint, a day old, a millisecond apart. */
+async function holdRows(endpointId: string, count: number): Promise<void> {
+  await prisma.$executeRaw`
+    INSERT INTO "webhook_delivery" (
+      "id", "endpointId", "businessId", "topic", "payload", "signature",
+      "signed_body", "availableAt", "lastError", "created_at", "updated_at"
+    )
+    SELECT ${Prisma.raw(uuid7Sql("now() - interval '1 day' + g * interval '1 millisecond'"))}, ${endpointId}, ${CARRIER}, 'delivery.delivered',
+           '{}'::jsonb, '', '{}', now() + interval '29 days', ${ENDPOINT_PAUSED_REASON},
+           now() - interval '1 day' + g * interval '1 millisecond', now()
+    FROM generate_series(1, ${count}::int) AS g
+  `;
+}
+
+/**
+ * The statement cap of the test below, in ms: what a release of one batch's
+ * worth of rows takes on this machine right now, BATCH_HEADROOM times over,
+ * and never under the 600 ms the test used to fix.
+ *
+ * Fixed, the cap measured the machine instead of the release: a batch of
+ * 2 000 rows takes ~80 ms on an idle one, and two E2E processes plus
+ * Postgres sharing a 2-vCPU runner pushed it past 600 ms, with nothing wrong
+ * in the code. Measured, it moves with the load, and still fails a release
+ * that is ONE statement over all 40 000 rows — 20 batches' worth, four
+ * times over the cap.
+ */
+const BATCH_ROWS = 2_000;
+const BATCH_HEADROOM = 5;
+const MIN_CAP_MS = 600;
+
+async function measuredCap(): Promise<number> {
+  const probe = await switchedOffEndpoint();
+
+  await holdRows(probe, BATCH_ROWS);
+  await prisma.webhookEndpoint.update({
+    where: { id: probe },
+    data: { disabled_at: null },
+  });
+
+  const started = performance.now();
+
+  await releaseParkedWebhookDeliveries(probe);
+
+  const elapsed = performance.now() - started;
+
+  // Out of the way of the release under test (same tenant, same index).
+  await prisma.webhookDelivery.deleteMany({ where: { endpointId: probe } });
+  await prisma.webhookEndpoint.delete({ where: { id: probe } });
+
+  return Math.max(MIN_CAP_MS, Math.ceil(elapsed * BATCH_HEADROOM));
+}
+
 describe("a month of held events", () => {
   it("is released in statements that each fit the database's time limit", async () => {
+    const cap = await measuredCap();
     const endpointId = await switchedOffEndpoint();
 
     const HELD = 40_000;
 
-    await prisma.$executeRaw`
-      INSERT INTO "webhook_delivery" (
-        "id", "endpointId", "businessId", "topic", "payload", "signature",
-        "signed_body", "availableAt", "lastError", "created_at", "updated_at"
-      )
-      SELECT gen_random_uuid()::text, ${endpointId}, ${CARRIER}, 'delivery.delivered',
-             '{}'::jsonb, '', '{}', now() + interval '29 days', ${ENDPOINT_PAUSED_REASON},
-             now() - interval '1 day' + g * interval '1 millisecond', now()
-      FROM generate_series(1, ${HELD}::int) AS g
-    `;
+    await holdRows(endpointId, HELD);
 
     await prisma.webhookEndpoint.update({
       where: { id: endpointId },
@@ -148,17 +194,18 @@ describe("a month of held events", () => {
     });
 
     // Production caps every statement (statement_timeout in DATABASE_URL).
-    // Here the cap is scaled down with the backlog: one statement over all
-    // 40 000 rows takes well over it, a bounded batch well under it.
+    // Here the cap is scaled down with the backlog (measuredCap): one
+    // statement over all 40 000 rows takes well over it, a bounded batch
+    // well under it.
     const url = new URL(process.env.DATABASE_URL as string);
-    url.searchParams.set("options", "-c statement_timeout=600");
+    url.searchParams.set("options", `-c statement_timeout=${cap}`);
 
     const capped = createPrismaClient({}, { url: url.toString() });
 
     try {
       await expect(
         releaseParkedWebhookDeliveries(endpointId, capped),
-        "a liberação estourou o limite de tempo de uma instrução",
+        `a liberação estourou o limite de tempo de uma instrução (${cap} ms)`,
       ).resolves.toBe(HELD);
     } finally {
       await capped.$disconnect();

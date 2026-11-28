@@ -1,6 +1,9 @@
 import { IDashboardRepository } from "../IDashboard-repository";
 import {
   DashboardEntity,
+  DeliveriesFromRollup,
+  DeliveryCountSource,
+  DeliveryWindow,
   VehicleStatusCountResult,
   MaintenanceStatsParams,
   MaintenanceStatsResult,
@@ -73,6 +76,11 @@ class InMemoryDashboardRepository implements IDashboardRepository {
    * Written as a grouping and not as a loop of per-bucket counts: a fake that
    * answered by looping would pass even if the real query grouped by the
    * wrong column, which is the one thing worth checking here.
+   *
+   * `deliveriesFromRollup` changes nothing here: the rollup's answer is, by
+   * its contract, the live count of the same snapshot (rollupArm in
+   * dashboard-repository.ts), and the twin has no stored days that could
+   * disagree with its rows.
    */
   async countManyByPeriod(
     params: {
@@ -81,6 +89,7 @@ class InMemoryDashboardRepository implements IDashboardRepository {
       to: Date;
       granularity: PeriodGranularity;
       timeZone: string;
+      deliveriesFromRollup?: DeliveriesFromRollup;
     },
     businessId?: string,
   ): Promise<Record<string, PeriodCountBucket[]>> {
@@ -171,6 +180,7 @@ class InMemoryDashboardRepository implements IDashboardRepository {
       from: Date;
       to: Date;
       timeZone: string;
+      deliveriesFromRollup?: DeliveriesFromRollup;
     },
     businessId?: string,
   ): Promise<Record<string, MonthlyCountBucket[]>> {
@@ -185,6 +195,38 @@ class InMemoryDashboardRepository implements IDashboardRepository {
         buckets.map(({ period, count }) => ({ month: period, count })),
       ]),
     );
+  }
+
+  /** Both sources are the same grouping, for the reason above. */
+  async countDeliveryWindows(
+    params: {
+      windows: readonly DeliveryWindow[];
+      timeZone: string;
+      now: Date;
+      sources: readonly DeliveryCountSource[];
+    },
+    businessId?: string,
+  ): Promise<Array<Partial<Record<DeliveryCountSource, PeriodCountBucket[]>>>> {
+    const result: Array<
+      Partial<Record<DeliveryCountSource, PeriodCountBucket[]>>
+    > = [];
+
+    for (const window of params.windows) {
+      const { delivery = [] } = await this.countManyByPeriod(
+        { ...window, entities: ["delivery"], timeZone: params.timeZone },
+        businessId,
+      );
+      const entry: Partial<Record<DeliveryCountSource, PeriodCountBucket[]>> =
+        {};
+
+      for (const source of params.sources) {
+        entry[source] = delivery.map((bucket) => ({ ...bucket }));
+      }
+
+      result.push(entry);
+    }
+
+    return result;
   }
 
   async getCostsByPeriod(

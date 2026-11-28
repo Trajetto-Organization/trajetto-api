@@ -2,6 +2,8 @@ import { inject, injectable } from "tsyringe";
 
 import { IUserRepository } from "../../repositories/IUser-repository";
 import { IUsersTokensRepository } from "../../repositories/IUsers-tokens-repository";
+import { IDriverEnrollmentRepository } from "../../repositories/IDriver-enrollment-repository";
+import { IDriverTrustedDeviceRepository } from "../../repositories/IDriver-trusted-device-repository";
 
 import { IDriverRepository } from "@/modules/driver/repositories/IDriver-repository";
 
@@ -15,6 +17,11 @@ import { UserAssignmentRequiredError } from "../errors/user-assignment-required-
 
 import { DriverNotFoundError } from "@/modules/driver/usecases/errors/driver-not-found-error";
 import { DriverNotBelongBusinessError } from "@/modules/driver/usecases/errors/driver-not-belong-business-error";
+import { DriverHasOpenRoutesError } from "@/modules/driver/usecases/errors/driver-has-open-routes-error";
+import { totalOpenRoutes } from "@/modules/driver/driver-rules";
+
+import { UserDriverLockedError } from "../errors/user-driver-locked-error";
+import { describeUserHistory } from "../../user-history-rules";
 
 import { NotificationService } from "@/shared/services/notification-service";
 
@@ -24,6 +31,7 @@ import { ResourceNotFoundError } from "../errors/resource-not-found-error";
 import { UpdateUser, User, UserRole } from "../../dtos/user-dto";
 import { AppError } from "@/shared/errors/AppError";
 import { permissionDenied } from "@/shared/errors/access-errors";
+import { conflictFromPrisma } from "@/shared/errors/prisma-conflict";
 
 import { UserCannotBeUpdatedByHimselfError } from "../errors/user-cannot-be-updated-by-himself-error";
 import { UserProfileNotMatchBusinessError } from "../errors/user-profile-not-match-business-error";
@@ -48,6 +56,7 @@ import { describeChanges, planUserUpdate } from "./user-update-plan";
 
 import database from "@/../infra/database";
 import { emailLogoUrl } from "@/shared/providers/mail-provider/email-logo";
+import { requireMailbox } from "../../services/user-mailbox";
 
 const log = logger.child({ component: "user" });
 
@@ -78,6 +87,10 @@ class UpdateUserUseCase {
     private driver: IDriverRepository,
     @inject("UsersTokensRepository")
     private usersTokens: IUsersTokensRepository,
+    @inject("DriverTrustedDeviceRepository")
+    private trustedDevices: IDriverTrustedDeviceRepository,
+    @inject("DriverEnrollmentRepository")
+    private driverEnrollment: IDriverEnrollmentRepository,
   ) {}
 
   // The same refusal as a missing permission (decision 4.1).
@@ -186,7 +199,33 @@ class UpdateUserUseCase {
       }
     }
 
-    if (changes.email) {
+    // The login leaves its current driver (for another driver or for none).
+    // Both are checked here, before the transaction below revokes the
+    // previous driver's phones and QR code: a refusal must change nothing.
+    if (changes.driver && target.driverId) {
+      // A route that still needs the driver would wait for a login that is
+      // no longer theirs, as with a revoked one (K10).
+      const openRoutes = await this.driver.countOpenRoutes(target.driverId);
+
+      if (totalOpenRoutes(openRoutes) > 0) {
+        throw new DriverHasOpenRoutesError(openRoutes, "MOVE_LOGIN");
+      }
+
+      // Decision D-37: what the login did points at the login, not at the
+      // Driver, so handed to another driver it would mix two people's work.
+      // Without history the move goes on as before; unlinking it from the
+      // driver with no other one in its place is outside D-37 and goes on.
+      if (next.driverId) {
+        const history = describeUserHistory(
+          await this.user.countUserHistory(userId),
+        );
+
+        if (history) throw new UserDriverLockedError(history);
+      }
+    }
+
+    // A changed e-mail is always a typed one (never null).
+    if (changes.email && next.email) {
       const sameEmail = await this.user.findUserByEmail(next.email);
 
       if (sameEmail && sameEmail.id !== target.id) {
@@ -195,6 +234,10 @@ class UpdateUserUseCase {
     }
 
     const sendLink = userData.sendPasswordSetupLink === true;
+
+    // The link goes by e-mail: a driver's login without one (D2) gets a new
+    // password from the manager instead, and asking for a link is refused.
+    const linkMailbox = sendLink ? requireMailbox(next) : null;
 
     // Nothing differs and nothing was asked: no write, no audit entry, no
     // e-mail and, above all, nobody logged out.
@@ -205,8 +248,8 @@ class UpdateUserUseCase {
     // The link is stored before anything commits: when it cannot be, the
     // request fails whole and changes nothing, instead of answering
     // success for a link that does not exist (SEC-MAIL-1).
-    const resetUrl = sendLink
-      ? await this.issueResetLink(next.email, userId)
+    const resetUrl = linkMailbox
+      ? await this.issueResetLink(linkMailbox, userId)
       : null;
 
     let updated: User;
@@ -222,6 +265,15 @@ class UpdateUserUseCase {
 
         if (plan.endsSessions) {
           await this.user.endSessionsAndClearInbox(userId, tx);
+        }
+
+        // The phones and the QR code are the previous driver's (wave 2):
+        // trust is kept per login, so left in place, that driver's phone
+        // would sign in by CPF and password as the login's new driver, with
+        // no QR code. The new driver enters by a QR code of their own.
+        if (changes.driver) {
+          await this.trustedDevices.revokeAllForUser(userId, tx);
+          await this.driverEnrollment.revokeForUser(userId, tx);
         }
 
         const what = [
@@ -247,6 +299,17 @@ class UpdateUserUseCase {
         return row;
       });
     } catch (error) {
+      // An e-mail or a driver taken in between the lookups and the write: the
+      // same 409 as the lookups, never a 500.
+      const conflict = await conflictFromPrisma(error, {
+        unique: {
+          email: () => new UserAlreadyExistsError(),
+          driverId: () => new UserDriverAlreadyLinkedToUserError(),
+        },
+      });
+
+      if (conflict) throw conflict;
+
       log.error({ err: error, userId }, "user update could not be committed");
 
       throw new AppError(
@@ -276,10 +339,10 @@ class UpdateUserUseCase {
     }
 
     // The e-mail itself leaves after the answer, never inside the commit.
-    if (resetUrl) {
+    if (resetUrl && linkMailbox) {
       void this.mailPasswordSetupLink(
         resetUrl,
-        next.email,
+        linkMailbox,
         next.name,
         actor.name,
         userId,
@@ -342,13 +405,16 @@ class UpdateUserUseCase {
 
   private async mailAccountUpdated(
     before: User,
-    email: string,
+    email: string | null,
     name: string,
     emailChanged: boolean,
   ): Promise<void> {
     // The old address hears about it too: it is the one that can say "that
-    // was not me" when an account is being taken over.
-    const recipients = emailChanged ? [email, before.email] : [email];
+    // was not me" when an account is being taken over. A driver's login
+    // without an e-mail (D2) has nowhere to be told.
+    const recipients = (emailChanged ? [email, before.email] : [email]).filter(
+      (address): address is string => Boolean(address),
+    );
 
     await Promise.all(
       recipients.map((recipient) =>

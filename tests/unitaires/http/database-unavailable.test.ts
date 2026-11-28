@@ -208,6 +208,25 @@ const infrastructure: Record<string, () => Error> = {
     ),
   "v7-commit-connection-failure": () =>
     commitFailure(postgresCause("08006", "connection failure")),
+  // PgBouncer (plano-escala F4-32), always SQLSTATE 08P01 at FATAL, told
+  // apart by its exact words. It cannot log in to Postgres (a restart, a
+  // failover) and says so for server_login_retry:
+  "pgbouncer-server-login-retry": () =>
+    driverFailure(
+      "P2039",
+      postgresCause(
+        "08P01",
+        "server login has been failing, cached error: the database system is starting up (server_login_retry)",
+      ),
+    ),
+  // The server connection under the statement died (Postgres gone):
+  "pgbouncer-server-conn-crashed": () =>
+    driverFailure("P2010", postgresCause("08P01", "server conn crashed?")),
+  "pgbouncer-commit-server-conn-crashed": () =>
+    commitFailure(postgresCause("08P01", "server conn crashed?")),
+  // The old task of a rolling of PgBouncer, refusing a new login:
+  "pgbouncer-shutting-down": () =>
+    driverFailure("P2010", postgresCause("08P01", "pooler is shutting down")),
 };
 
 const notInfrastructure: Record<string, () => Error> = {
@@ -296,6 +315,21 @@ const notInfrastructure: Record<string, () => Error> = {
     Object.assign(new Error("ConnectionClosed"), {
       cause: { kind: "ConnectionClosed" },
     }),
+  // PgBouncer busy, not gone: SERVICE_BUSY's (database-error-map.ts).
+  "pgbouncer-query-wait-timeout": () =>
+    driverFailure("P2010", postgresCause("08P01", "query_wait_timeout")),
+  // Any other 08P01: a real protocol error, or a URL PgBouncer refuses.
+  "pgbouncer-other-refusal": () =>
+    driverFailure(
+      "P2010",
+      postgresCause(
+        "08P01",
+        "unsupported startup parameter in options: statement_timeout",
+      ),
+    ),
+  // PgBouncer's words on something nobody typed: untrusted.
+  "pgbouncer-words-on-a-plain-error": () =>
+    Object.assign(new Error("server conn crashed?"), { code: "08P01" }),
 };
 
 describe("isDatabaseUnavailable", () => {
@@ -439,16 +473,15 @@ describe("the global error handler", () => {
     });
   }
 
+  // The statement_timeout (57014) is not an outage, and no longer a 500
+  // either: 503 SERVICE_BUSY (plano-escala U-13, database-error-map.test.ts).
   for (const kind of [
     "bug",
-    "unique",
     "not-found",
     "plain-error",
     "raw-sql-error",
-    "raw-statement-timeout",
     "raw-undecodable-column",
     "v7-commit-write-conflict",
-    "v7-commit-unique",
   ]) {
     it(`still answers 500 without Retry-After for ${kind}`, async () => {
       const response = await call(kind);
@@ -458,6 +491,32 @@ describe("the global error handler", () => {
       expect(response.headers["retry-after"]).toBeUndefined();
     });
   }
+
+  // Batch of 14/11/2026: a unique violation nobody mapped is an answer
+  // about the data — the loser of a race — not an outage and not a bug. It
+  // used to leave as the English "Internal server error".
+  for (const kind of ["unique", "v7-unique", "v7-commit-unique"]) {
+    it(`answers 409 UNIQUE_CONFLICT, without Retry-After, for ${kind}`, async () => {
+      const response = await call(kind);
+
+      expect(response.statusCode).toBe(409);
+      expect(response.headers["x-error-code"]).toBe("UNIQUE_CONFLICT");
+      expect(response.json().code).toBe("UNIQUE_CONFLICT");
+      expect(response.json().message).toMatch(
+        /^Já existe um registro com este valor/,
+      );
+      expect(response.headers["retry-after"]).toBeUndefined();
+      expect(response.body).not.toMatch(/P2002|prisma|_key/i);
+    });
+  }
+
+  it("names the field of the index, never the other row", async () => {
+    const response = await call("v7-unique");
+
+    expect(response.json().message).toBe(
+      "Já existe um registro com este valor nesta empresa (CPF).",
+    );
+  });
 });
 
 /**

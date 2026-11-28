@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { randomUUID } from "node:crypto";
 
+import { formatEventCursorV2 } from "@/modules/integration/cursor";
 import { generateApiKey } from "@/shared/integration/api-key-rules";
 import { createPrismaClient } from "@/shared/database/database-client";
 
@@ -360,10 +361,136 @@ describe("paging by cursor", () => {
     expect(seen.length).toBeGreaterThanOrEqual(8);
   }, 60_000);
 
+  // The lists may read on the standby (plano-escala F4-42), and the page
+  // before may have come from the primary through another replica: its
+  // last row may not be on this server yet. Prisma's `cursor` answered that
+  // with an empty page and a null next_cursor, ending the walk without
+  // every row after it, of any age. By its value, the walk goes on.
+  it("goes on after a cursor whose row this server does not have", async () => {
+    // Deliveries of its own, apart from the file's fixtures by updated_since.
+    const since = new Date().toISOString();
+
+    await prisma.delivery.createMany({
+      data: Array.from({ length: 5 }, (_, index) => ({
+        recipient_name: `Réplica ${index}`,
+        code: `REP-${index}`,
+        city: "São Paulo",
+        uf: "SP",
+        street: "Rua",
+        businessId: CARRIER,
+        shipperId: SHIPPER,
+      })),
+    });
+
+    const list = `/deliveries?updated_since=${encodeURIComponent(since)}`;
+    const all = (await call(`${list}&limit=200`, readKey)).json()
+      .data as Array<{ id: string }>;
+
+    expect(all).toHaveLength(5);
+
+    const first = (await call(`${list}&limit=2`, readKey)).json();
+    const cursor = first.next_cursor as string;
+
+    expect(cursor).toBe(all[1].id);
+
+    // The cursor's row, gone from what this server sees.
+    await prisma.delivery.delete({ where: { id: cursor } });
+
+    const second = (
+      await call(`${list}&limit=2&cursor=${cursor}`, readKey)
+    ).json();
+
+    expect(second.data.map((row: { id: string }) => row.id)).toEqual([
+      all[2].id,
+      all[3].id,
+    ]);
+    expect(second.next_cursor).toBe(all[3].id);
+  });
+
   it("says the walk is over with a null cursor", async () => {
     const response = await call("/deliveries?limit=200", readKey);
 
     expect(response.json().next_cursor).toBeNull();
+  });
+});
+
+/**
+ * The cursor of /events (plano-escala F2-04): this release reads the v2
+ * form the commit-order feed of wave 10 will emit, still by the id, and
+ * keeps emitting the legacy id, so the image before it never meets a cursor
+ * it cannot read. Anything else is 400 INVALID_CURSOR: a garbage cursor
+ * used to answer an empty last page, which an integrator reads as "up to
+ * date".
+ */
+describe("the events cursor", () => {
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+  async function walk(toCursor: (next: string) => string): Promise<string[]> {
+    const seen: string[] = [];
+    let cursor: string | null = null;
+
+    for (let page = 0; page < 20; page += 1) {
+      const response = await call(
+        `/events?limit=2${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
+        readKey,
+      );
+
+      expect(response.statusCode, response.body).toBe(200);
+
+      const body = response.json();
+
+      for (const event of body.data) seen.push(event.id);
+
+      if (!body.next_cursor) break;
+
+      // Still the legacy id: v2 is only read by this release.
+      expect(body.next_cursor).toMatch(UUID);
+
+      cursor = toCursor(body.next_cursor);
+    }
+
+    return seen;
+  }
+
+  it("walks the same events with the legacy id and with a v2 cursor", async () => {
+    await prisma.deliveryEvent.createMany({
+      data: Array.from({ length: 5 }, (_, index) => ({
+        type: "NOTE" as const,
+        note: `Cursor ${index}`,
+        deliveryId: ourDelivery,
+        businessId: CARRIER,
+      })),
+    });
+
+    const legacy = await walk((next) => next);
+    const v2 = await walk((next) =>
+      formatEventCursorV2({ epoch: 1, txid: 12_345n, id: next, floorMs: 0 }),
+    );
+
+    expect(legacy.length).toBeGreaterThanOrEqual(5);
+    expect(new Set(legacy).size).toBe(legacy.length);
+    expect(v2).toEqual(legacy);
+  }, 60_000);
+
+  it("refuses a cursor it cannot read with 400 INVALID_CURSOR", async () => {
+    const id = "018f5000-0000-7000-8000-000000000001";
+
+    for (const cursor of [
+      "abc",
+      `v2.1.2.${id}`,
+      `v2.01.2.${id}.0`,
+      `v2.1.-2.${id}.0`,
+      `v3.1.2.${id}.0`,
+      `v2.1.2.${id.toUpperCase()}.0`,
+    ]) {
+      const response = await call(
+        `/events?cursor=${encodeURIComponent(cursor)}`,
+        readKey,
+      );
+
+      expect(response.statusCode, cursor).toBe(400);
+      expect(response.json().code, cursor).toBe("INVALID_CURSOR");
+    }
   });
 });
 
@@ -444,9 +571,8 @@ describe("the public documentation portal", () => {
  */
 describe("counting what a customer's system asked for", () => {
   it("counts a call, its route pattern and its outcome", async () => {
-    const { apiUsageRecorder } = await import(
-      "@/shared/integration/api-usage-recorder"
-    );
+    const { apiUsageRecorder } =
+      await import("@/shared/integration/api-usage-recorder");
 
     await call("/deliveries?limit=1", readKey);
     await call(`/deliveries/${ourDelivery}`, readKey);
@@ -480,9 +606,8 @@ describe("counting what a customer's system asked for", () => {
   });
 
   it("cannot attribute a call made with an unknown key", async () => {
-    const { apiUsageRecorder } = await import(
-      "@/shared/integration/api-usage-recorder"
-    );
+    const { apiUsageRecorder } =
+      await import("@/shared/integration/api-usage-recorder");
 
     await prisma.apiKeyUsageDaily.deleteMany({});
 
@@ -507,9 +632,8 @@ describe("counting what a customer's system asked for", () => {
   });
 
   it("does not count the open catalogue against anybody's key", async () => {
-    const { apiUsageRecorder } = await import(
-      "@/shared/integration/api-usage-recorder"
-    );
+    const { apiUsageRecorder } =
+      await import("@/shared/integration/api-usage-recorder");
 
     await prisma.apiKeyUsageDaily.deleteMany({
       where: { businessId: CARRIER },
@@ -530,9 +654,8 @@ describe("counting what a customer's system asked for", () => {
   });
 
   it("keeps one company out of another's counters", async () => {
-    const { apiUsageRecorder } = await import(
-      "@/shared/integration/api-usage-recorder"
-    );
+    const { apiUsageRecorder } =
+      await import("@/shared/integration/api-usage-recorder");
 
     await prisma.apiKeyUsageDaily.deleteMany({});
 

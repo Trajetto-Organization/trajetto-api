@@ -1,6 +1,10 @@
 # ADR 0004 — Workers no mesmo processo da API
 
-- **Status:** aceito. ADR da fase final.
+- **Status:** substituído pelo [ADR 0012](./0012-papeis-de-processo.md) em
+  18/11/2026 (plano de escala, onda 12). Era um ADR aceito da fase final, e
+  o texto abaixo fica como o registro da decisão de antes: a separação
+  deixou de esperar um gatilho medido para o código, e cada papel virou uma
+  Application da mesma imagem.
 - **Escopo:** `trajetto-api`.
 - **Origem deste arquivo:** o texto integral ficava na pasta `docs/` da raiz
   do workspace, que não é versionada e está vazia. Este arquivo foi
@@ -25,8 +29,9 @@ papéis, mas **só por gatilho medido**.
 
 ## Quando separar
 
-Os gatilhos estão em
-[`deploy.md` → Separar os workers do HTTP](../deploy.md#separar-os-workers-do-http-só-por-gatilho-medido):
+Os gatilhos ficavam na seção _Separar os workers do HTTP_ do `deploy.md`,
+que deu lugar ao guia dos papéis
+([`deploy.md` → Criar a Application de um papel](../deploy.md#criar-a-application-de-um-papel)):
 
 - espera no pool visível em `/health/metrics` (`runtime.prisma_pool`) nos
   horários de dreno;
@@ -41,8 +46,10 @@ HTTP) está na mesma seção. Testes: `tests/unitaires/lifecycle/workers-role-fl
 ## Consequências registradas
 
 - O desligamento ordenado (`src/shared/lifecycle/shutdown.ts`) para os
-  workers depois do HTTP e da fila de importações, com teto de 35 s, abaixo
-  do _Stop Grace Period_ de 40 s da Application.
+  workers depois do HTTP e da fila de importações, com teto derivado do
+  _Stop Grace Period_ do serviço (`STOP_GRACE_PERIOD_MS`,
+  `src/shared/lifecycle/shutdown-plan.ts`): 35 s com os 40 s da Application,
+  menos de 9 s sem a variável (os 10 s do Docker).
 - O pool de conexões é dividido entre HTTP e workers da mesma réplica; o
   orçamento de conexões está em
   [`arquitetura.md` → Conexão com o Postgres](../arquitetura.md#conexão-com-o-postgres).
@@ -50,5 +57,5 @@ HTTP) está na mesma seção. Testes: `tests/unitaires/lifecycle/workers-role-fl
 ## Fontes
 
 - [`arquitetura.md` → Um processo, vários papéis](../arquitetura.md#um-processo-vários-papéis).
-- [`deploy.md` → 19. Réplicas, workers e tempo real](../deploy.md#19-réplicas-workers-e-tempo-real).
+- [`deploy.md` → 19. Papéis da mesma imagem](../deploy.md#19-papéis-da-mesma-imagem).
 - [ADR 0001 → Quando reabrir a decisão](./0001-filas-e-mensageria.md#quando-reabrir-a-decisão).

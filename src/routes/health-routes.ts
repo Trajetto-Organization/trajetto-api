@@ -10,11 +10,17 @@ import {
   healthSchemas,
 } from "./documentation/health-documentation";
 
+import { clientRateLimitKey } from "@/config/rate-limit";
+import { env } from "@/env";
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
 import { verifyUserRole } from "@/modules/middlewares/verify-user-role";
 import { isDraining } from "@/shared/lifecycle/draining";
 import { buildInfo, buildInfoShape } from "@/shared/build-info";
 import { NotificationPipelineService } from "@/shared/notifications/notification-pipeline-service";
+import {
+  listFailedEvents,
+  replayFailedEvents,
+} from "@/shared/notifications/outbox-dead-letter";
 import {
   deadLetterCountSql,
   deadLetterPageSql,
@@ -23,6 +29,12 @@ import {
 import { probeDatabase } from "@/shared/health/readiness-probe";
 import { readOperationalMetrics } from "@/shared/health/operational-metrics";
 import { readProviderReadiness } from "@/shared/health/provider-readiness";
+import {
+  readRolloutStatus,
+  ROLLOUT_TOKEN_MIN_LENGTH,
+  rolloutToken,
+  rolloutTokenMatches,
+} from "@/shared/health/rollout-status";
 import { errorResponse } from "./documentation/common-responses";
 import { redactEmails } from "@/shared/logging/redact-email";
 
@@ -229,7 +241,7 @@ async function healthRoutes(app: FastifyInstance) {
         tags: ["health"],
         summary: "Sonda de vida (liveness) da aplicação",
         description:
-          "Diz apenas se o processo está de pé e consegue responder. De propósito não verifica nenhuma dependência externa: uma dependência com falha nunca deve reiniciar o container. Informa também o commit do build que responde (`version`, `commit`), que o pipeline lê para confirmar o deploy.",
+          "Diz apenas se o processo está de pé e consegue responder. De propósito não verifica nenhuma dependência externa: uma dependência com falha nunca deve reiniciar o container. Informa também o commit do build que responde (`version`, `commit`), que o pipeline lê para confirmar o deploy, e o ambiente (`environment`), que a web confere no boot para não falar com a API de outro ambiente.",
         response: {
           // The commit is a constant read at import (build-info.ts): the
           // probe still touches nothing. The pipeline polls it after a
@@ -239,7 +251,90 @@ async function healthRoutes(app: FastifyInstance) {
       },
     },
     async (_request, reply) => {
-      return reply.status(200).send({ status: "alive", ...buildInfo });
+      // APP_ENV was parsed at boot: still nothing touched. Staging and
+      // production share dokploy-network, and the web may call this API by
+      // its App Name there; the web compares this with its own APP_ENV at
+      // boot and refuses to start on a mismatch, instead of sending one
+      // environment's credentials to the other (trajetto-ui env-check.ts).
+      return reply
+        .status(200)
+        .send({ status: "alive", ...buildInfo, environment: env.APP_ENV });
+    },
+  );
+
+  /**
+   * The release step's state, for the pipeline (plano-escala U-11): a step
+   * that ended 'pending' or 'failed' makes the next deploy run the release
+   * step again, even with the same release image. Behind
+   * ROLLOUT_STATUS_TOKEN; without it, or with a wrong one, this is the 404
+   * of a route that does not exist (callNotFound: the same handler, the same
+   * body), so the route's existence is not given away. Read on the app's
+   * pool: one indexed read of a handful of rows, at most 30 a minute.
+   *
+   * The 30 a minute counts only requests that carried the token. A
+   * `config.rateLimit` would run before the handler and put the limiter's
+   * `x-ratelimit-*` headers on the 404 as well (and a 429 on the 31st probe),
+   * which a path nobody registered never has: whoever probes would learn
+   * the route is there. So the route opts out of the plugin's hook and runs
+   * its own bucket once the token matched. Probing with wrong tokens is then
+   * as unlimited here as probing any missing path, and the token is 32+
+   * random characters, compared in constant time.
+   */
+  const rolloutStatusToken = rolloutToken(env.ROLLOUT_STATUS_TOKEN);
+
+  if (env.ROLLOUT_STATUS_TOKEN && !rolloutStatusToken) {
+    app.log.warn(
+      `ROLLOUT_STATUS_TOKEN has fewer than ${ROLLOUT_TOKEN_MIN_LENGTH} characters: GET /health/rollout stays closed (404)`,
+    );
+  }
+
+  // Namespaced: no other `app.rateLimit()` bucket can share these keys.
+  const rolloutCeiling = app.rateLimit({
+    max: 30,
+    timeWindow: "1 minute",
+    keyGenerator: (request) => `health-rollout:${clientRateLimitKey(request)}`,
+  });
+
+  app.get(
+    "/health/rollout",
+    {
+      // The bucket is `rolloutCeiling`, applied after the token (above).
+      config: { rateLimit: false },
+      // No `security` entry: the bearer is the pipeline's token, not a
+      // session, and this route never answers 401 or 403 (only the 404).
+      schema: {
+        tags: ["health"],
+        summary: "Estado da etapa de release e dos processos (para o pipeline)",
+        description:
+          "O que a etapa de release deixou: os passos de `infra/sql` e `prisma/post-deploy` pendentes ou que falharam, e quando ela rodou pela última vez. O pipeline lê antes de cada deploy e roda a etapa de novo quando há um passo pendente. Traz também os processos vivos (`process_heartbeat`), contados por papel, ambiente, commit, impressão da configuração, filas, cron e sockets, sem nome de máquina, réplica ou nó: depois do deploy, o pipeline espera cada papel esperado no commit novo, toda fila com consumidor, um processo com o cron e uma impressão só. E o `trajetto.image_revision` do banco. Exige `Authorization: Bearer <ROLLOUT_STATUS_TOKEN>`; sem o token configurado, sem o cabeçalho ou com um valor errado, responde o mesmo 404 de uma rota que não existe, sem os cabeçalhos do limitador. Com o token, até 30 pedidos por minuto, sem cache.",
+        response: {
+          200: healthResponses.rolloutStatus,
+          404: errorResponse.describe(
+            "ROUTE_NOT_FOUND: sem token, token errado ou token não configurado (a mesma resposta de uma rota que não existe).",
+          ),
+          429: errorResponse.describe(
+            "RATE_LIMITED: mais de 30 pedidos com o token no último minuto. Espere o `retry-after`. Sem o token certo, a resposta é sempre o 404.",
+          ),
+        },
+      },
+    },
+    async (request, reply) => {
+      if (
+        !rolloutTokenMatches(request.headers.authorization, rolloutStatusToken)
+      ) {
+        return reply.callNotFound();
+      }
+
+      // Throws the 429 (with its headers) past the ceiling.
+      await rolloutCeiling.call(app, request, reply);
+
+      const status = await readRolloutStatus(
+        database,
+        buildInfo.commit,
+        env.APP_ENV,
+      );
+
+      return reply.header("cache-control", "no-store").status(200).send(status);
     },
   );
 
@@ -321,13 +416,19 @@ async function healthRoutes(app: FastifyInstance) {
    *   replica, a job that stopped succeeding (OBS-10, INV-07).
    * - runtime: the event loop, the threadpool and the Prisma pool of the
    *   replica that answered — what saturates first (GAP3-10, OBS-11).
+   * - the database itself (plano-escala F1-06): xid age, hit ratio, the
+   *   oldest write and the oldest snapshot of the cluster, the archiver,
+   *   pg_wal, the hot tables, the sizes, the parameters and
+   *   pg_stat_statements — what the plan's alerts and capacity readings use.
    *
    * Every query is served by an index, with statuses as SQL literals so a
    * partial index is usable under a generic plan (OBS-09; the plan test is
    * tests/E2E/health-metrics-plans.test.ts). The queue numbers are one
-   * statement and the whole read four, run one after the other so the
-   * endpoint never takes more than one slot of the pool it reports on, and
-   * served from a 10-second snapshot per replica (operational-metrics.ts).
+   * statement and the whole read four, plus the database's own three
+   * (database-metrics.ts: catalog views, no table is scanned), run one after
+   * the other so the endpoint never takes more than one slot of the pool it
+   * reports on, and served from a 10-second snapshot per replica
+   * (operational-metrics.ts).
    *
    * MASTER-only: it exposes infrastructure posture, not tenant data.
    */
@@ -341,15 +442,16 @@ async function healthRoutes(app: FastifyInstance) {
         tags: ["health"],
         summary: "Métricas operacionais (filas e uso de conexões)",
         description:
-          "Uso de conexões do Postgres em relação a max_connections, profundidade e atraso do outbox, fila do pipeline de IA, fila e resultado das notificações por canal, mensagens de WhatsApp que a Meta recusou ou recebeu mais de uma vez (pelos callbacks de status), fila de webhooks, inchaço das tabelas de fila, workers de cada réplica, crons, folga das partições de driver_position, runtime e pool do Prisma da réplica que respondeu, contratos legados do app ainda em uso, concordância da pré-checagem do aparelho com a leitura do servidor e estado do certificado de assinatura do comprovante. Orienta decisões de capacidade (PgBouncer, réplicas, broker dedicado) e o disparo de vacuum. A leitura vale por 10 s em cada réplica (`timestamp` diz quando foi feita): pedidos nesse intervalo recebem a mesma.",
+          "Uso de conexões do Postgres em relação a max_connections; o próprio banco (idade do xid do cluster, acerto do cache, a transação de escrita e o snapshot mais antigos do cluster, arquivamento do WAL, tamanho do pg_wal quando o usuário pode ler, tabelas quentes pela raiz da partição, tamanhos medidos a cada 5 min, parâmetros sem segredo e o estado do pg_stat_statements; uma parte que falha fica null e aparece em `collection_errors`); profundidade e atraso do outbox, fila do pipeline de IA, fila e resultado das notificações por canal, mensagens de WhatsApp que a Meta recusou ou recebeu mais de uma vez (pelos callbacks de status), fila de webhooks, inchaço das tabelas de fila, workers de cada réplica, crons, partições de cada tabela particionada do registro (folga à frente, presas além da retenção, dono; `driver_position` fica como apelido por um release), runtime (com a CPU por requisição) e pool do Prisma da réplica que respondeu, o Redis (latência, memória, operações por segundo, CPU, pub/sub, saída, buffers dos clientes, política e despejos; nunca endereço nem chave), contratos legados do app ainda em uso, requisições HTTP da réplica (classes de status, latência por grupo de rota e o contrato do app nas posições dos últimos 10 minutos), concordância da pré-checagem do aparelho com a leitura do servidor, a comparação dos dias fechados do dashboard com a contagem ao vivo (`DASHBOARD_ROLLUP_MODE`) e estado do certificado de assinatura do comprovante. Orienta decisões de capacidade (PgBouncer, réplicas, broker dedicado) e o disparo de vacuum. A leitura vale por 10 s em cada réplica (`timestamp` diz quando foi feita): pedidos nesse intervalo recebem a mesma.",
         response: {
           200: healthResponses.operationalMetrics,
         },
       },
     },
     async (_request, reply) => {
-      // Four statements, one after the other, served from a 10 s snapshot
-      // with one read in flight at a time (operational-metrics.ts).
+      // Four statements and the database's own three, one after the other,
+      // served from a 10 s snapshot with one read in flight at a time
+      // (operational-metrics.ts, database-metrics.ts).
       return reply.status(200).send(await readOperationalMetrics());
     },
   );
@@ -358,7 +460,9 @@ async function healthRoutes(app: FastifyInstance) {
    * Provider readiness (contract §32/§33): which providers this deployment
    * has configured and whether they answer — Resend and its domain, Meta and
    * each template's approval, Expo, R2, the OCR service and its token, the
-   * proof certificate and the heartbeat. Read-only probes, side by side: an
+   * proof certificate and the heartbeat; LocationIQ's two (the deliveries'
+   * lookups and the address search) from their state in Redis, unprobed,
+   * since every call spends a credit. Read-only probes, side by side: an
    * attempt of 3.5 s and, after a failure that may clear by itself, one more
    * inside 5 s per provider. Cached 30 s (5 s when some provider is
    * transient) and shared by the replicas (Redis, fail-open) so a refreshing
@@ -377,7 +481,7 @@ async function healthRoutes(app: FastifyInstance) {
         tags: ["health"],
         summary: "Prontidão dos provedores externos",
         description:
-          "Diz, sem expor segredos, quais provedores estão configurados e respondendo: e-mail (Resend, com o domínio do remetente), WhatsApp (Meta, com o status de cada template), push (Expo → FCM), armazenamento (R2), leitura de fotos (trajetto-ai, com o token), certificado ICP do comprovante e heartbeat do alerta externo. Lista os nomes das variáveis que faltam. As sondas são só de leitura e rodam em paralelo: cada tentativa tem até 3,5 s e, depois de uma falha que pode passar sozinha (tempo esgotado, rede, HTTP 5xx, resposta incompleta), há no máximo mais uma, dentro de 5 s por provedor; `attempts`, `transient` e `failure_kind` dizem como o veredito foi obtido. Uma recusa definitiva (chave, bucket, domínio) nunca é repetida nem atenuada. O relatório fica em cache por 30 s (5 s quando algum provedor está transitório), compartilhado entre as réplicas (`cached` diz se a resposta veio do cache); `refresh=true` sonda de novo, no máximo uma vez a cada 5 s. Só MASTER.",
+          'Diz, sem expor segredos, quais provedores estão configurados e respondendo: e-mail (Resend, com o domínio do remetente), WhatsApp (Meta, com o status de cada template), push (Expo → FCM), armazenamento (R2), leitura de fotos (trajetto-ai, com o token), localização das entregas e busca do "Fixar no mapa" (LocationIQ: sem sonda, porque cada chamada gasta um crédito do dia; o estado vem do Redis, com a pausa que uma recusa ou a cota do dia gravou, o HTTP dela e o uso do dia, e o Redis fora vira "estado não lido", nunca erro), certificado ICP do comprovante e heartbeat do alerta externo. Lista os nomes das variáveis que faltam. As sondas são só de leitura e rodam em paralelo: cada tentativa tem até 3,5 s e, depois de uma falha que pode passar sozinha (tempo esgotado, rede, HTTP 5xx, resposta incompleta), há no máximo mais uma, dentro de 5 s por provedor; `attempts`, `transient` e `failure_kind` dizem como o veredito foi obtido. Uma recusa definitiva (chave, bucket, domínio) nunca é repetida nem atenuada. O relatório fica em cache por 30 s (5 s quando algum provedor está transitório), compartilhado entre as réplicas (`cached` diz se a resposta veio do cache); `refresh=true` sonda de novo, no máximo uma vez a cada 5 s. Só MASTER.',
         querystring: healthSchemas.providersQuery,
         response: {
           200: healthResponses.providerReadiness,
@@ -385,9 +489,9 @@ async function healthRoutes(app: FastifyInstance) {
           403: errorResponse.describe(
             "AUTH_ROLE_FORBIDDEN: só o MASTER lê a infraestrutura.",
           ),
-          429: errorResponse.describe(
-            "RATE_LIMITED: muitas leituras seguidas.",
-          ),
+          // Context only: the transform adds the limiter's explanation of
+          // RATE_LIMITED (the wait, the limit) after it.
+          429: errorResponse.describe("Muitas leituras seguidas."),
         },
       },
     },
@@ -514,9 +618,12 @@ async function healthRoutes(app: FastifyInstance) {
    *
    * An event that never fanned out has no delivery rows, so it never appears
    * in /health/dead-letter; the metrics showed only a count of them. This
-   * lists which ones and why. FAILED events are few and found through the
-   * (status, availableAt) index. MASTER-only, like the rest: it spans every
-   * tenant.
+   * lists which ones and why: the FAILED events still in the queue table
+   * (30 days) and the copies moved to outbox_event_dead_letter, kept 90
+   * days from the failure (plano-escala F5-10, outbox-dead-letter.ts).
+   * Failures are few; the live ones come through the (status, availableAt)
+   * index and the copies through failedAt. MASTER-only, like the rest: it
+   * spans every tenant.
    */
   app.get(
     "/health/dead-letter/events",
@@ -528,7 +635,7 @@ async function healthRoutes(app: FastifyInstance) {
         tags: ["health"],
         summary: "Eventos do outbox que falharam (dead letter)",
         description:
-          "Lista paginada dos eventos do outbox que esgotaram as tentativas de expansão, da falha mais recente para a mais antiga. Eles nunca geraram envios, por isso /health/dead-letter não os mostra. Só MASTER: abrange todas as empresas.",
+          "Lista paginada dos eventos do outbox que esgotaram as tentativas de expansão, da falha mais recente para a mais antiga. Eles nunca geraram envios, por isso /health/dead-letter não os mostra. Junta os dois lugares em que uma falha fica: a fila do outbox, nos primeiros 30 dias (`archived: false`), e o arquivo dos eventos que falharam, até `OUTBOX_FAILED_RETENTION_DAYS` (90) dias depois da falha (`archived: true`). Os dois podem ser reprocessados por POST /health/dead-letter/events/replay; um arquivado já reprocessado sai da lista. Só MASTER: abrange todas as empresas.",
         querystring: healthSchemas.deadLetterEventsQuery,
         response: {
           200: healthResponses.deadLetterEvents,
@@ -540,35 +647,18 @@ async function healthRoutes(app: FastifyInstance) {
         typeof healthSchemas.deadLetterEventsQuery
       >;
 
-      const where = { status: "FAILED" as const };
-
-      const total = await database.domainOutboxEvent.count({ where });
-
-      const events = await database.domainOutboxEvent.findMany({
-        where,
-        orderBy: { updated_at: "desc" },
-        skip: (page - 1) * pageSize,
-        take: pageSize,
-        select: {
-          id: true,
-          topic: true,
-          businessId: true,
-          attempts: true,
-          lastError: true,
-          created_at: true,
-          updated_at: true,
-        },
-      });
+      const { rows, total } = await listFailedEvents(page, pageSize);
 
       return reply.status(200).send({
-        data: events.map((event) => ({
+        data: rows.map((event) => ({
           id: event.id,
           topic: event.topic,
           businessId: event.businessId,
           attempts: event.attempts,
           lastError: deadLetterError(event.lastError),
           created_at: event.created_at.toISOString(),
-          failedAt: event.updated_at.toISOString(),
+          failedAt: event.failedAt.toISOString(),
+          archived: event.archived,
         })),
         total,
         page,
@@ -667,7 +757,7 @@ async function healthRoutes(app: FastifyInstance) {
         tags: ["health"],
         summary: "Reprocessa eventos do outbox que falharam",
         description:
-          "Devolve os eventos FAILED indicados (de GET /health/dead-letter/events) para PENDING, com as tentativas zeradas, e acorda o pipeline para expandi-los de novo. Eventos em qualquer outro estado são ignorados, então repetir o pedido não reprocessa nada duas vezes. A expansão é idempotente: só cria os envios que o evento ainda não tinha criado. Até 100 ids por pedido e 10 pedidos por minuto por usuário. O registro durável de quem pediu é a linha de log de aviso `failed outbox events requeued by hand` (usuário, ids e quantos voltaram); o `lastError` do evento mostra quem e quando só até a próxima expansão, que o substitui numa falha e o limpa quando o evento é publicado. Só MASTER: abrange todas as empresas.",
+          "Reprocessa os eventos que falharam indicados (de GET /health/dead-letter/events) e acorda o pipeline para expandi-los de novo. Um evento ainda na fila (`archived: false`) volta para PENDING com as tentativas zeradas, e a expansão idempotente só cria os envios que ele ainda não tinha criado. Um evento arquivado (`archived: true`, guardado até 90 dias depois da falha) vira um evento NOVO, com id e chave próprios e o mesmo tópico, empresa, autor e conteúdo, que recebe de volta os envios que o original já tinha concluído (entregues ou que falharam): como no evento da fila, a expansão só cria os que ele nunca criou, e quem já recebeu a mensagem não a recebe de novo. O arquivado guarda qual evento ele virou e sai da lista. Ids em qualquer outro estado (um evento que já saiu de FAILED, um arquivado já reprocessado, um id desconhecido) são ignorados, então repetir o pedido não reprocessa nada duas vezes. `requeued` conta os dois casos. Até 100 ids por pedido e 10 pedidos por minuto por usuário. O registro durável de quem pediu é a linha de log de aviso `failed outbox events requeued by hand` (usuário, ids, quantos voltaram e o evento novo de cada arquivado, com quantos envios ele recebeu de volta); o `lastError` do evento mostra quem e quando só até a próxima expansão, que o substitui numa falha e o limpa quando o evento é publicado. Só MASTER: abrange todas as empresas.",
         body: healthSchemas.deadLetterEventsReplayBody,
         response: {
           200: healthResponses.deadLetterEventsReplay,
@@ -680,29 +770,22 @@ async function healthRoutes(app: FastifyInstance) {
         typeof healthSchemas.deadLetterEventsReplayBody
       >;
 
-      const result = await database.domainOutboxEvent.updateMany({
-        where: { id: { in: eventIds }, status: "FAILED" },
-        data: {
-          status: "PENDING",
-          attempts: 0,
-          availableAt: new Date(),
-          leaseExpiresAt: null,
-          lastError: `Reenfileirado manualmente em ${new Date().toISOString()} por ${request.user.id}`,
-        },
-      });
+      const result = await replayFailedEvents(eventIds, request.user.id);
+      const requeued = result.requeued + result.recreated.length;
 
       request.log.warn(
         {
           userId: request.user.id,
           eventIds,
-          requeued: result.count,
+          requeued,
+          recreated: result.recreated,
         },
         "failed outbox events requeued by hand",
       );
 
       NotificationPipelineService.getInstance().wake();
 
-      return reply.status(200).send({ requeued: result.count });
+      return reply.status(200).send({ requeued });
     },
   );
 }

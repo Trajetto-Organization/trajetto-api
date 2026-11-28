@@ -4,6 +4,13 @@ interface CreateUserRefreshTokenProps {
   token_hash: string;
   jti: string;
   family_id: string;
+
+  /**
+   * The phone the session is bound to (plan of 02/11/2026, D3/D4/D7): set
+   * when a driver signs in by QR code or CPF and password, and carried by
+   * every rotation of the family. Absent on web sessions.
+   */
+  device_id?: string | null;
 }
 
 interface UserRefreshTokenProps {
@@ -21,6 +28,61 @@ interface UserRefreshTokenProps {
 
   /** How many siblings this spent token minted within the grace window. */
   grace_siblings?: number;
+
+  /** The phone the session is bound to (D3/D4/D7); null on web sessions. */
+  device_id?: string | null;
+
+  /** When this token was issued: the login, or the renewal that minted it. */
+  created_at?: Date;
+}
+
+/**
+ * One phone of a driver, as the manager's list shows it (plan of 02/11/2026,
+ * D7): the live sessions bound to it, grouped.
+ */
+interface UserDeviceSession {
+  /**
+   * The phone, opaque: the SHA-256 of its id (session-service hashDeviceId),
+   * never the id itself — since wave 2 the id is what the CPF login checks
+   * the phone by, and this list is open to read-only profiles.
+   */
+  device_hash: string;
+  /** Live sessions (families) on this phone; usually one. */
+  sessions: number;
+  /** The latest renewal: the app renews while in use, every 15 minutes. */
+  last_activity_at: Date;
+  /** When the last of them lapses if the phone stays silent. */
+  expires_at: Date;
+}
+
+/**
+ * One session (refresh-token family) as the person's own "Aparelhos
+ * conectados" lists it (wave 2): what kind of client holds it and when it was
+ * used, never the phone's id.
+ */
+interface UserOwnSession {
+  /** The family id: the session's opaque id. */
+  family_id: string;
+  /** "aparelho" (bound to a phone), "app" (the mobile app by e-mail) or "navegador". */
+  kind: "aparelho" | "app" | "navegador";
+  /** When the session began (its login). */
+  created_at: Date;
+  /** The latest renewal. */
+  last_activity_at: Date;
+  /** When it lapses if left unused. */
+  expires_at: Date;
+}
+
+/**
+ * The live session a request runs in, as a password change that keeps it
+ * re-issues it (wave 2). Internal: the phone's id never leaves the API.
+ */
+interface UserSessionFamily {
+  family_id: string;
+  /** The phone a `driver_device` session is bound to; null otherwise. */
+  device_id: string | null;
+  /** The family's first row still stored (its login, inside a session's first days). */
+  first_issued_at: Date;
 }
 
 interface VerificationToken {
@@ -115,4 +177,7 @@ export {
   TwoFactor,
   RotateUserRefreshTokenProps,
   RefreshRotation,
+  UserDeviceSession,
+  UserOwnSession,
+  UserSessionFamily,
 };

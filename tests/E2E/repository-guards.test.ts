@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
+import { v7 as uuidV7 } from "uuid";
 
 import { DeliveryRepository } from "@/modules/delivery/repositories/delivery-repository";
 import { DeliveryStatusConflictError } from "@/modules/delivery/usecases/errors/delivery-errors";
@@ -393,7 +394,8 @@ describe("a refuelling the phone sent twice", () => {
 
 describe("the activity the notification pipeline records", () => {
   it("is one row however many workers record the same delivery at once", async () => {
-    const deliveryId = randomUUID();
+    // A notification_delivery id: a uuid v7, minted when the event expanded.
+    const deliveryId = uuidV7();
 
     const record = (repository: ActivityRepository) =>
       repository.createActivity({
@@ -439,6 +441,42 @@ describe("the activity the notification pipeline records", () => {
     );
 
     expect(ids.size).toBe(1);
+    expect(await prisma.activity.count({ where: { deliveryId } })).toBe(1);
+
+    // plano-escala F2-15: the row's id is the delivery's, so the primary
+    // key still makes it one row once the unique on deliveryId is gone.
+    expect([...ids]).toEqual([deliveryId]);
+  });
+
+  it("answers with the row the previous image recorded under another id", async () => {
+    const deliveryId = uuidV7();
+
+    // What the image before F2-15 wrote: a random id, the delivery beside.
+    const legacy = await prisma.activity.create({
+      data: {
+        type: "Entrega",
+        action: "update",
+        entityId: randomUUID(),
+        description: "Entrega saiu para rota",
+        status: "Atualizado",
+        performedBy: userId,
+        businessId: CARRIER,
+        deliveryId,
+      },
+    });
+
+    const recorded = await new ActivityRepository(prisma).createActivity({
+      type: "Entrega",
+      action: "update",
+      entityId: randomUUID(),
+      description: "Entrega saiu para rota",
+      status: "Atualizado",
+      performedBy: userId,
+      businessId: CARRIER,
+      deliveryId,
+    });
+
+    expect(recorded.id).toBe(legacy.id);
     expect(await prisma.activity.count({ where: { deliveryId } })).toBe(1);
   });
 });

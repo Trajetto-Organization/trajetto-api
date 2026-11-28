@@ -10,6 +10,10 @@ import {
   resolveOccurredAt,
 } from "@/shared/delivery/occurred-at";
 import { proofCaptureOf } from "@/shared/delivery/proof-capture";
+import {
+  geofencePositionAgeMs,
+  readAccuracy,
+} from "@/shared/delivery/geofence/geofence-check";
 import { clientVersionForLog } from "@/shared/http/client-version";
 import { urlForLog } from "@/shared/logging/redact-url";
 import { countLegacyContractUse } from "@/shared/http/legacy-contract-usage";
@@ -39,6 +43,8 @@ class RegisterDeliveryProofController {
       device_precheck,
       photo_taken_at,
       device_id,
+      accuracy,
+      position_recorded_at,
     } = deliveryProofSchema.parse(request.body);
 
     // Every use, so "14 days without one" can be read from the logs.
@@ -82,6 +88,13 @@ class RegisterDeliveryProofController {
           photoTakenAt: photo_taken_at,
           deviceId: device_id,
           occurredAt,
+        }),
+        // E4: the geofence's inputs (that build sends neither; a later one may).
+        accuracy: readAccuracy(accuracy),
+        positionAgeMs: geofencePositionAgeMs({
+          tappedAt: occurred_at,
+          sentAt: request.headers[CLIENT_SENT_AT_HEADER],
+          positionRecordedAt: position_recorded_at,
         }),
       });
 

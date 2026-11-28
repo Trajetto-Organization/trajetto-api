@@ -11,8 +11,9 @@ import { assertSessionEligible } from "../../services/session-eligibility";
 import {
   SessionJwtPayload,
   hashRefreshToken,
+  isSessionDevice,
   issueSessionTokenPair,
-  parseSessionClient,
+  sessionClientOfClaims,
 } from "../../services/session-service";
 import { hmacVerifyKey } from "@/shared/security/jwt-verify-key";
 
@@ -51,7 +52,14 @@ class RefreshTokenUseCase {
     private driver: IDriverRepository,
   ) {}
 
-  async execute(token: string): Promise<RefreshTokenProps> {
+  /**
+   * @param deviceId The phone asking (the app sends it on every refresh).
+   * Required by a session bound to a phone (D4), ignored by any other.
+   */
+  async execute(
+    token: string,
+    deviceId?: string | null,
+  ): Promise<RefreshTokenProps> {
     const payload = verify(
       token,
       hmacVerifyKey(auth.secret_refresh_token),
@@ -68,6 +76,29 @@ class RefreshTokenUseCase {
         "Token de atualização inválido.",
         401,
         "AUTH_REFRESH_INVALID",
+      );
+    }
+
+    const client = sessionClientOfClaims(payload.sessionClient);
+
+    /**
+     * A phone session is renewed by that phone only (plan of 02/11/2026, D4).
+     *
+     * Checked before anything touches the database, and without spending the
+     * token or ringing the reuse alarm: whoever replays a copy from another
+     * device is refused, and the driver's own phone carries on as if nothing
+     * happened. A claim without its hash is refused too — a 180-day token
+     * that works anywhere is exactly what the binding is there to prevent.
+     */
+    if (
+      client === "driver_device" &&
+      (typeof payload.deviceHash !== "string" ||
+        !isSessionDevice(payload.deviceHash, deviceId))
+    ) {
+      throw new AppError(
+        "Esta sessão foi aberta em outro aparelho. Entre novamente.",
+        401,
+        "AUTH_DEVICE_MISMATCH",
       );
     }
 
@@ -91,11 +122,13 @@ class RefreshTokenUseCase {
     // login chose. A token from before the claims is a web session, and its
     // family is counted from that token's own issue (`iat`).
     const replacement = issueSessionTokenPair(user, payload.familyId, {
-      client: parseSessionClient(payload.sessionClient),
+      client,
       familyStartedAt:
         typeof payload.familyStartedAt === "number"
           ? payload.familyStartedAt
           : payload.iat,
+      // Proven equal to the claim above: the binding moves to the next token.
+      deviceId: client === "driver_device" ? deviceId : null,
     });
     const rotation = await this.usersTokens.rotateUserRefreshToken({
       user_id: user.id,
@@ -107,6 +140,7 @@ class RefreshTokenUseCase {
         token_hash: replacement.refreshTokenHash,
         jti: replacement.refreshJti,
         family_id: replacement.familyId,
+        device_id: replacement.deviceId,
       },
       grace_ms: REFRESH_REUSE_GRACE_MS,
     });

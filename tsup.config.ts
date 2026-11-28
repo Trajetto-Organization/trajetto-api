@@ -12,12 +12,37 @@ export default defineConfig({
     // Compiled because it runs in the production image, where tsx does not
     // exist — only production dependencies are installed there.
     "wait-for-postgres": "./infra/scripts/wait-for-postgres.ts",
+    // The release step's online DDL (prisma/concurrent), before `migrate
+    // deploy`. Moved to release/ with the seeds: only the release image
+    // runs it.
+    "prebuild-online-ddl": "./infra/scripts/prebuild-online-ddl.ts",
+    // The steps right after it (infra/sql, prisma/post-deploy), with their
+    // state in release_step_state. Release image only, as above.
+    "release-steps": "./infra/scripts/release-steps.ts",
     // Run once in the production container after WEBHOOK_SECRETS_KEY is
     // set: seals the webhook credentials written before it.
     "seal-webhook-secrets": "./infra/scripts/seal-webhook-secrets.ts",
+    // Run once in the production container after the address key's
+    // migration (14/11/2026): keys the deliveries written before it and
+    // gives each door's point to its open deliveries still without one.
+    "backfill-delivery-address-key":
+      "./infra/scripts/backfill-delivery-address-key.ts",
+    // Run by hand in the production container for a legal request
+    // (plano-escala F5-16): a month of a company's history back from the
+    // archive bucket into a table of the archive_restore schema.
+    "archive-restore": "./infra/scripts/archive-restore.ts",
     // The receipt renderer's worker thread. proof-pdf-renderer.ts loads it
     // from next to server.js (build/proof-pdf-worker.js) by this name.
     "proof-pdf-worker": "./src/shared/services/proof-pdf-worker.ts",
+    // The spreadsheet reader's worker thread (plano-escala F3-23b).
+    // spreadsheet-worker.ts loads it from next to server.js
+    // (build/spreadsheet-read-worker.js) by this name.
+    "spreadsheet-read-worker":
+      "./src/modules/import/services/spreadsheet-read-worker.ts",
+    // The CPU pool's worker thread (plano-escala F3-29): the NF-e parse and
+    // the Excel export's workbook. cpu-pool.ts loads it from next to
+    // server.js (build/cpu-pool-worker.js) by this name.
+    "cpu-pool-worker": "./src/shared/cpu-pool/cpu-pool-worker.ts",
   },
   format: ["cjs"],
   target: "es2020",

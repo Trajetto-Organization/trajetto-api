@@ -3,7 +3,11 @@ import { resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { disposableDatabaseRefusal } from "../../load/lib/disposable-database";
+import {
+  assertSeedTargetEmpty,
+  disposableDatabaseRefusal,
+  seedTargetRefusal,
+} from "../../load/lib/disposable-database";
 
 const url = (hostPort: string, extra = "") =>
   `postgresql://trajetto:segredo${extra}@${hostPort}/load_test?schema=public`;
@@ -68,6 +72,9 @@ describe("every writing script of tests/load runs the guard", () => {
     "mint-browser-users.ts",
     "mint-password.ts",
     "mint-two-factor-code.ts",
+    // The queue scenes write their backlogs by SQL (plano-escala LOAD-04).
+    "drain-backlog.mjs",
+    "queue-flood.ts",
   ]) {
     it(script, () => {
       const source = readFileSync(
@@ -79,4 +86,89 @@ describe("every writing script of tests/load runs the guard", () => {
       expect(source).not.toMatch(/DATABASE_URL\?\.includes\(/);
     });
   }
+});
+
+describe("seedTargetRefusal", () => {
+  // The port says where the connection goes, not what is there: a tunnel on
+  // LOAD_PG_PORT to production's Database (same server as the disposable
+  // one in the prod-like flow) passed the port check, and the tier then
+  // dropped the hot tables' indexes and loaded millions of rows with the
+  // foreign keys unchecked. A freshly migrated database has no company;
+  // production always has.
+  it("accepts a database with no company the seed did not write", () => {
+    expect(
+      seedTargetRefusal({ database: "load_test", foreignCompanies: 0 }),
+    ).toBeNull();
+  });
+
+  it("refuses a database that already holds companies, naming it and the tunnel", () => {
+    const refusal = seedTargetRefusal({
+      database: "trajetto",
+      foreignCompanies: 3,
+    });
+
+    expect(refusal).toMatch(/"trajetto"/);
+    expect(refusal).toMatch(/3 empresas/);
+    expect(refusal).toMatch(/LOAD_PG_PORT/);
+  });
+
+  it("says the count is a floor once it reaches the cap", () => {
+    expect(
+      seedTargetRefusal({ database: "trajetto", foreignCompanies: 100 }),
+    ).toMatch(/100 ou mais empresas/);
+  });
+});
+
+describe("assertSeedTargetEmpty", () => {
+  it("counts the companies other than the seed's own, and throws on any", async () => {
+    const calls: unknown[][] = [];
+    const query =
+      (foreignCompanies: number) => async (sql: string, values: unknown[]) => {
+        calls.push(values);
+        expect(sql).toMatch(/FROM "business"/);
+        expect(sql).toMatch(/current_database\(\)/);
+        return [{ database: "load_test", foreignCompanies }];
+      };
+
+    await expect(assertSeedTargetEmpty(query(0))).resolves.toBeUndefined();
+    await expect(
+      assertSeedTargetEmpty(query(0), "own-company"),
+    ).resolves.toBeUndefined();
+    await expect(assertSeedTargetEmpty(query(1))).rejects.toThrow(
+      /já tem 1 empresa/,
+    );
+
+    expect(calls).toEqual([[null], ["own-company"], [null]]);
+  });
+});
+
+describe("the seed checks the target is empty before it writes", () => {
+  const seed = readFileSync(resolve(__dirname, "../../load/seed.ts"), "utf8");
+
+  function body(name: string): string {
+    const start = seed.indexOf(`async function ${name}(`);
+
+    expect(start).toBeGreaterThanOrEqual(0);
+
+    const next = seed.indexOf("\nasync function ", start + 1);
+
+    return seed.slice(start, next < 0 ? undefined : next);
+  }
+
+  it("in main, before the first company is written", () => {
+    const main = body("main");
+    const check = main.indexOf("assertSeedTargetEmpty(");
+
+    expect(check).toBeGreaterThanOrEqual(0);
+    expect(check).toBeLessThan(main.indexOf("seedTenant("));
+  });
+
+  it("in the tier, on its own session, before the indexes are dropped", () => {
+    const tier = body("seedTier");
+    const check = tier.indexOf("assertSeedTargetEmpty(");
+
+    expect(check).toBeGreaterThanOrEqual(0);
+    expect(check).toBeLessThan(tier.indexOf("for (const file of files)"));
+    expect(tier.slice(check, tier.indexOf(";", check))).toMatch(/businessId/);
+  });
 });

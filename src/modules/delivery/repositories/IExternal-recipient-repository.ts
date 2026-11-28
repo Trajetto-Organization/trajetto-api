@@ -4,6 +4,13 @@ import type {
 } from "../dtos/external-recipient-dto";
 
 import type { ProofDocumentSource } from "@/shared/delivery/proof-document";
+import type { Prisma } from "@prisma/client";
+
+import type {
+  CustomerContact,
+  CustomerMessageChannel,
+  MessageOptOut,
+} from "@/shared/notifications/customer-message-suppression";
 
 interface TrackingSource {
   recipient: ExternalRecipientRecord;
@@ -44,6 +51,20 @@ interface TrackingSource {
   }>;
 
   proofToken: string | null;
+
+  /**
+   * The other deliveries of the same visit — the stop's siblings on the
+   * delivery's current route (RouteStop.stop_group_key; plan of 02/11/2026,
+   * B6): one message per stop carries one link, and its page lists the rest.
+   * Same address and same recipient by construction. Optional: absent reads
+   * as none.
+   */
+  sameStop?: Array<{
+    code: string | null;
+    invoice_number: string | null;
+    status: string;
+    delivered_at: Date | string | null;
+  }>;
 }
 
 /**
@@ -55,6 +76,13 @@ interface DeliveryContactState {
   name: string;
   email: string | null;
   telephone: string | null;
+
+  /**
+   * The person asked to stop hearing about THIS delivery (its recipient
+   * row's opted_out_at). One message per stop (B6) honours a stop asked of
+   * any delivery of the stop. Optional: absent reads as not opted out.
+   */
+  optedOut?: boolean;
 }
 
 interface IExternalRecipientRepository {
@@ -71,8 +99,26 @@ interface IExternalRecipientRepository {
 
   findByToken: (token: string) => Promise<TrackingSource | null>;
 
-  /** They asked to stop hearing from us. Checked before every send. */
+  /**
+   * They asked to stop hearing from us. Checked before every send.
+   *
+   * Marks this delivery's recipient row and, in the same transaction, keeps
+   * the row's phone and e-mail as suppressed for the delivery's company
+   * (D38): every later customer message of that company to them is dropped.
+   * Idempotent (upsert by the unique key, safe across replicas); true only
+   * when this call opted the row out. A token nobody holds changes nothing.
+   */
   optOut: (token: string) => Promise<boolean>;
+
+  /**
+   * The channels whose address this company's customers asked to stop
+   * (D38), for a message about to be expanded or sent to this contact. One
+   * lookup by the unique key; never another company's rows.
+   */
+  suppressedChannels: (
+    businessId: string,
+    contact: CustomerContact,
+  ) => Promise<Set<CustomerMessageChannel>>;
 
   /**
    * The delivery's current status and contact, or null when it no longer
@@ -85,9 +131,43 @@ interface IExternalRecipientRepository {
   findDeliveryState: (
     deliveryId: string,
   ) => Promise<DeliveryContactState | null>;
+
+  /**
+   * When the delivery's current phone and e-mail stopped receiving this
+   * company's customer messages (contract C2; messageOptOutOf), or null
+   * when the delivery is not this company's. Reads only this company's
+   * suppressions.
+   */
+  messageOptOutState: (
+    businessId: string,
+    deliveryId: string,
+  ) => Promise<MessageOptOut | null>;
+
+  /**
+   * Undoes the opt-out of the delivery's recipient inside this company
+   * (contract C2), in one transaction: deletes the company's suppressions
+   * of the recipient's normalized phone and e-mail (the delivery's current
+   * contact and its recipient row's, which may predate a correction) and
+   * clears opted_out_at of every recipient row of the company with the same
+   * normalized contact, this delivery's included. `onReactivated` runs in
+   * that transaction only when something changed (the activity line).
+   * Null when the delivery is not this company's; a second call changes
+   * nothing and answers zeros.
+   */
+  reactivateCustomerMessages: (
+    businessId: string,
+    deliveryId: string,
+    onReactivated?: (tx: Prisma.TransactionClient) => Promise<void>,
+  ) => Promise<CustomerMessagesReactivation | null>;
+}
+
+interface CustomerMessagesReactivation {
+  removedSuppressions: number;
+  clearedOptOuts: number;
 }
 
 export type {
+  CustomerMessagesReactivation,
   DeliveryContactState,
   IExternalRecipientRepository,
   TrackingSource,

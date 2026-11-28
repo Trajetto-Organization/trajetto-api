@@ -5,7 +5,14 @@ import {
   routeDayLabel,
   routePlanIssues,
 } from "@/shared/route/route-plan-rules";
-import { routeCodeFromSearch } from "@/shared/route/route-rules";
+import {
+  routeCodeFromSearch,
+  vehicleUnavailableReason,
+} from "@/shared/route/route-rules";
+import {
+  assertCrewFit,
+  crewIssues,
+} from "@/modules/route/usecases/shared/route-crew";
 import { dateOnlyFromKey } from "@/shared/time/business-day";
 
 import {
@@ -722,5 +729,68 @@ describe("which CNH category drives which vehicle (decision 8.5)", () => {
 
     // A type that asks for nothing.
     expect(cnhCovers("B", null)).toBe(true);
+  });
+});
+
+describe("the sentence for a vehicle out of operation", () => {
+  it("names the plate and the state, in the words of whoever reads it", () => {
+    expect(vehicleUnavailableReason("ABC1D23", "BLOCKED", "assign")).toBe(
+      "O veículo ABC1D23 está bloqueado e não pode receber uma rota.",
+    );
+    expect(vehicleUnavailableReason("ABC1D23", "INACTIVE", "release")).toBe(
+      "O veículo ABC1D23 está inativo e não pode sair em rota. Troque o " +
+        "veículo da rota antes de liberá-la.",
+    );
+    // The driver at the truck cannot pick another one in the app.
+    expect(vehicleUnavailableReason("ABC1D23", "BLOCKED", "depart")).toBe(
+      "O veículo ABC1D23 está bloqueado e não pode sair em rota. Fale com o " +
+        "despachante.",
+    );
+  });
+});
+
+describe("who may take a route (route-crew)", () => {
+  const truck = (status: "ACTIVE" | "INACTIVE" | "BLOCKED" | "IN_ROUTE") => ({
+    status,
+    license_plate: "ABC1D23",
+  });
+
+  it("lets an active driver take an active truck, or one out on another route", () => {
+    expect(
+      crewIssues({ driver: { status: "ACTIVE" }, vehicle: truck("ACTIVE") }),
+    ).toEqual([]);
+    expect(crewIssues({ vehicle: truck("IN_ROUTE") })).toEqual([]);
+    expect(crewIssues({ driver: { status: "ACTIVE" }, vehicle: null })).toEqual(
+      [],
+    );
+  });
+
+  it("names every issue, the driver's first", () => {
+    expect(
+      crewIssues({ driver: { status: "INACTIVE" }, vehicle: truck("BLOCKED") }),
+    ).toEqual([
+      {
+        code: "ROUTE_DRIVER_INACTIVE",
+        message: "Só é possível montar uma rota para um motorista ativo.",
+      },
+      {
+        code: "ROUTE_VEHICLE_UNAVAILABLE",
+        plate: "ABC1D23",
+        status: "BLOCKED",
+        message:
+          "O veículo ABC1D23 está bloqueado e não pode receber uma rota.",
+      },
+    ]);
+  });
+
+  it("answers the panel's writes with the first issue as a 400 and its code", () => {
+    expect(() => assertCrewFit({ vehicle: truck("INACTIVE") })).toThrow(
+      expect.objectContaining({
+        statusCode: 400,
+        code: "ROUTE_VEHICLE_UNAVAILABLE",
+        message: "O veículo ABC1D23 está inativo e não pode receber uma rota.",
+      }),
+    );
+    expect(() => assertCrewFit({ driver: { status: "ACTIVE" } })).not.toThrow();
   });
 });

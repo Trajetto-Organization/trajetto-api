@@ -32,7 +32,7 @@ Idioma do produto: pt-BR.
 ## Stack
 
 Node.js 22 · TypeScript 5.7 (`strict`) · Fastify 5 · Prisma 7.10 (`@prisma/adapter-pg`) · PostgreSQL 16
-· Redis 7 (ioredis) · Socket.IO 4 · tsyringe (DI) · zod 3 · pino · Vitest 1.6
+· Redis 7 (ioredis) · Socket.IO 4 · tsyringe (DI) · zod 4 · pino · Vitest 1.6
 · Stryker 8.7 · tsup · Yarn 1 (`yarn.lock`; nunca npm) · Docker (imagem
 `node:22.21.1-alpine`) · Python 3.12 no serviço de IA.
 
@@ -64,8 +64,12 @@ tests/E2E/                    E2E contra Postgres e Redis reais
 tests/contract/               suítes de contrato de repositório (Prisma × in-memory)
 tests/ai-local/               contrato opt-in com o contêiner de IA real
 tests/load/                   harness de carga (k6 + Traefik) e seed das suítes de navegador da web/app
-.github/workflows/ci.yml      portão das branches de trabalho
-.github/workflows/deploy.yml  pipeline: staging (validação + build + deploy) → PR → main (promoção) → release
+.github/workflows/ci.yml      branches de trabalho: Changes, Secret scan, Validate (sem E2E)
+.github/workflows/validate.yml  a validação inteira (reutilizável): Validate, E2E (1/3..3/3), AI OCR, Docs; Result, o veredito que o Gate lê
+.github/workflows/staging.yml  push em staging: Changes → Secret scan + Validate → Gate → Build → Image scan → Deploy
+.github/workflows/pr.yml      PR para main: Secret scan e Staging evidence (não valida de novo)
+.github/workflows/production.yml  main: Staging evidence → Deploy (aprovação) → Release; Run workflow = rollback
+.github/actions/setup, deploy, siblings  ações compostas: o setup do Node/yarn/Prisma, o deploy de um ambiente e o checkout da web e do app ao lado (Pick the sibling branches)
 .github/scripts/dokploy-deploy.mjs  deploy de uma Application do Dokploy pela API (application.deploy) e acompanhamento
 compose.development.yaml      Postgres, Redis e (perfil ai) o serviço de IA para desenvolvimento (só dev)
 ```
@@ -85,6 +89,7 @@ yarn test                          # unitários
 npx vitest run <arquivo>           # um arquivo
 yarn test:coverage                 # unitários com o piso de cobertura do CI
 yarn test:e2e                      # E2E em duas fases (precisa de DATABASE_URL/REDIS_URL de um Postgres/Redis DESCARTÁVEL)
+yarn test:e2e:infra                # fase infra do E2E: sobe PgBouncer e standby descartáveis (Docker), roda tests/E2E/infra e apaga
 yarn prisma:migrate:dev            # cria uma migration (--create-only); revise o SQL
 yarn prisma:migrate:deploy         # aplica
 docker compose -f compose.development.yaml --profile ai up -d trajetto-ai   # IA local (~1 GiB)
@@ -163,10 +168,39 @@ depois de um rollback. Expandir/contrair sempre: nada de DROP/RENAME/tipo
 novo/`SET NOT NULL` sobre o que a produção lê sem a fase de contract (marcador
 `-- contract-phase:`), enum novo só gravado na release seguinte
 (`-- enum-expand:`), `DROP NOT NULL` idem (`-- nullable-expand:`),
-`SET lock_timeout = '5s'` em tabela quente, `CREATE INDEX IF NOT EXISTS`. O
+`SET lock_timeout = '5s'` em tabela quente, `CREATE INDEX IF NOT EXISTS` (índice
+novo em tabela quente: o mesmo índice num arquivo de `prisma/concurrent/`,
+que a etapa de release roda com CONCURRENTLY antes do `migrate deploy`). O
 guard é `tests/unitaires/lifecycle/migration-safety.test.ts`. **Nunca edite
 uma migration já aplicada em algum banco** (nem um comentário: muda o
 checksum). Detalhes: `docs/arquitetura.md` ("Migrations: expandir e contrair").
+
+## Papéis de processo (resumo de `docs/arquitetura.md`)
+
+- A imagem `trajetto-api` roda em uma Application por papel, escolhido por
+  `PROCESS_ROLE` (`src/shared/lifecycle/process-role.ts`, ADR 0012): `all`
+  (tudo num processo: o padrão e a produção de hoje), `api` (HTTP e
+  sockets), `worker` (filas e cron), `scheduler` (só o cron),
+  `worker-external` (só a raia `external`), `realtime` (só sockets) e
+  `ingest` (só `POST /route/positions`). O papel é um preset de
+  `WORKERS_ENABLED`, `CRON_ENABLED`, `WORKER_QUEUES` e `SOCKETS_ENABLED`, e
+  a variável explícita ganha dele. Sem a Application de um papel, o código
+  dele fica inerte; o dono as cria pelo guia de `docs/deploy.md`, seção 19.
+- A superfície HTTP é do papel (`src/shared/http/http-surface.ts`): os
+  papéis sem tráfego respondem só `/health*`, e fora dela vale o 404 de
+  rota inexistente. Uma rota nova só existe nos papéis `all` e `api`, a
+  menos que entre ali.
+- Cada processo reivindica no Postgres só as filas do seu `WORKER_QUEUES`;
+  quem grava numa fila que não consome manda, depois do commit, a dica de
+  despertar pelo Redis (`src/shared/wake/`). A dica pode se perder (a
+  varredura cobre) e nunca leva estado de negócio.
+- Todo processo grava a sua linha no `process_heartbeat` (papel, commit,
+  filas, cron, sockets e a impressão da configuração); o deploy espera cada
+  papel no commit novo (`ROLLOUT_ROLES_EXPECTED`), e os alertas acusam fila
+  sem consumidor e processo de outro ambiente no banco.
+- Cada papel tem o seu login do banco e `connection_limit` (as conexões
+  por papel estão em `docs/arquitetura.md`) e o teto de memória conferido
+  no boot (`MEMORY_BUDGET_MODE`).
 
 ## Testes (resumo de `docs/testes.md`)
 
@@ -195,6 +229,10 @@ checksum). Detalhes: `docs/arquitetura.md` ("Migrations: expandir e contrair").
 - E2E novo que sobe réplicas da API entra em
   `tests/E2E/support/replica-files.ts` (a fase própria do `yarn test:e2e`, um
   arquivo por vez); `quality/e2e-replica-isolation.test.ts` cobra.
+- E2E que precisa do PgBouncer ou do standby de verdade vai em `tests/E2E/infra`
+  (a fase infra, `yarn test:e2e:infra`; no CI, no job 1): começa com
+  `// @vitest-environment node`, conecta só pelo `infraUrl` e nunca pula;
+  `quality/e2e-infra-isolation.test.ts` cobra.
 - Windows: E2E em lotes de no máximo 8 arquivos (limite herdado do napi panic do
   Prisma 6; o Prisma 7 não tem engine nativo, mas lotes maiores não foram medidos).
 
@@ -202,21 +240,29 @@ checksum). Detalhes: `docs/arquitetura.md` ("Migrations: expandir e contrair").
 
 - Branches: trabalho → `staging` → PR `staging → main` → merge **com merge
   commit** (nunca squash/rebase).
-- `ci.yml` valida as branches de trabalho. `deploy.yml`: push em `staging`
-  roda a validação completa (audit, lint, typecheck, unitários com piso, E2E,
-  pytest da IA, gitleaks), constrói **uma vez** as imagens `trajetto-api`,
+- `ci.yml` valida as branches de trabalho (sem E2E). `staging.yml`: push em
+  `staging` roda a validação completa do `validate.yml` (audit, lint,
+  typecheck, unitários com piso, E2E em 3 jobs com banco molde, pytest da
+  IA) e o gitleaks, junta tudo no `Gate`; um push só de documentação roda só
+  o gitleaks e o `Docs` (Prettier e unitários), sem cancelar a validação do
+  push de código embaixo dele. Só na branch `staging`: o _Run workflow_ em
+  outra branch não roda nada. Depois do `Gate`, constrói **uma vez** as imagens `trajetto-api`,
   `trajetto-api-migrate` e `trajetto-ai` (`sha-<sha>`, SBOM, proveniência,
-  Trivy; a de migração e a da IA são reaproveitadas por `src-<hash>` quando o
-  que rodam não mudou), roda as migrations pela Application
+  Trivy; a de migração, a da IA e a `trajetto-pgbouncer` são reaproveitadas
+  por `src-<hash>` quando o que rodam não mudou), roda as migrations pela Application
   `trajetto-api-migrate` do Dokploy (só se o banco ainda não aplicou aquela
   imagem; `dokploy-release.mjs` espera a etapa terminar), move `staging` por
-  digest e faz o deploy do staging no Dokploy; PR para
-  `main` revalida e exige que o staging tenha rodado o head (ou que o head só
-  mude documentação desde um commit que rodou: `[skip ci]` só para
-  documentação é seguro); o merge em `main`
-  **promove** o mesmo digest para `stable` (as migrations antes, do mesmo jeito,
-  environment `production` com aprovação, conferência da convergência) e roda
-  o `semantic-release`. _Run workflow_ com `image_tag=sha-<sha>` = rollback.
+  digest e faz o deploy do staging no Dokploy (a ação composta
+  `.github/actions/deploy`, a mesma da produção); o PR para `main`
+  (`pr.yml`) não revalida: o _Staging evidence_ exige que o staging tenha
+  rodado o head (ou que o head só mude documentação desde um commit que
+  rodou), que o `Gate` dele esteja verde e que a `main` só traga
+  documentação; o merge em `main` (`production.yml`) **promove** o mesmo
+  digest para `stable` (as migrations antes, do mesmo jeito, environment
+  `production` com aprovação, conferência da convergência) e roda o
+  `semantic-release`. _Run workflow_ do `production.yml` com
+  `image_tag=sha-<sha>` = rollback. Os checks exigidos na `main`:
+  `Secret scan` e `Staging evidence`.
 - Sem os secrets do Dokploy, os jobs movem as tags e pulam o deploy com
   aviso.
 - Staging e produção rodam no Dokploy (Docker Swarm), sem Compose nem
@@ -239,12 +285,18 @@ checksum). Detalhes: `docs/arquitetura.md` ("Migrations: expandir e contrair").
   de ajustar o teste.
 - O deploy chama a API do Dokploy por `.github/scripts/dokploy-deploy.mjs`
   (`application.deploy` com a chave de API e o id de cada Application, na
-  ordem IA → API); a web usa o mesmo script, numa cópia
+  ordem PgBouncer (só com digest novo) → IA → papéis de fila → API →
+  papéis de borda, por
+  `.github/scripts/deploy-roles.sh`); a web usa o mesmo script, numa cópia
   idêntica (um teste da web compara as duas), e repete até 6 vezes, com
   espera crescente (20 → 160 s), um deploy que termina em erro, registrando
   o motivo que o Dokploy deu.
 - Entre repositórios: a ordem do primeiro deploy (bancos → IA → migrations →
-  API → backup do banco → web → app), a ordem de cada release (**API → web → app**) e os valores que
+  API → backup do banco → web → app), a ordem de cada release (**API → web →
+  app**; dentro da API, PgBouncer (só com digest novo) → migrate → IA →
+  papéis de fila → API → papéis de borda), as regras de compatibilidade (expandir antes e contrair só num
+  release seguinte, porque a imagem anterior serve durante o rolling e volta
+  num rollback; o app por `CLIENT_CONTRACT`) e os valores que
   precisam casar com a web e o app (`HTTP_REQUEST` = origem da web,
   `RATE_LIMIT_FORWARDER_SECRET`, `TURNSTILE_SECRET_KEY`, R2) estão em
   `docs/deploy.md`, seção "Os três repositórios juntos", igual nos três
@@ -274,10 +326,15 @@ checksum). Detalhes: `docs/arquitetura.md` ("Migrations: expandir e contrair").
 - Não coloque segredo em código, teste, fixture, log ou documentação (só nomes
   e como gerar).
 - Não introduza broker, cache no Redis nem provedor externo de IA: são
-  decisões registradas (ADRs 0001, 0002, 0010). A única exceção ao cache é
-  `src/shared/cache/snapshot-cache.ts`: fotos curtas (5–60 s), que falham
-  aberto, de leituras **da plataforma** que só o MASTER vê; nunca dado de
-  empresa.
+  decisões registradas (ADRs 0001, 0002, 0010). As exceções ao cache são
+  duas: `src/shared/cache/snapshot-cache.ts`, fotos curtas (5–60 s), que
+  falham aberto, de leituras **da plataforma** que só o MASTER vê, nunca dado
+  de empresa; e o cache da busca de endereço
+  (`src/shared/services/address-search/address-search-limits.ts`, adendo de
+  10/11/2026 do ADR 0002), por empresa, com chave HMAC, valor cifrado, até
+  48 h e falha fechada. As chaves do geocodificador saem de
+  `src/shared/delivery/geocoding/geocoding-keys.ts`, sob um prefixo só,
+  compartilhado por todas as réplicas.
 - Não exija Turnstile na API (quebraria o login do app); não ponha `TZ` no
   contêiner.
 - Não crie Compose nem template no Dokploy para staging ou produção (decisão

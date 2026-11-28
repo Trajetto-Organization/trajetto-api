@@ -21,6 +21,7 @@ import { markChecklistSkipped, markFuelSkipped } from "./ai-record-store";
 import { AIAnalysisPipelineService } from "./ai-analysis-pipeline-service";
 import { AIAnalysisRequestInput } from "./ai-types";
 import type { ReadingKind } from "./image-reader";
+import { announceWake } from "@/shared/wake/wake-bus";
 
 /**
  * - `not_covered`: every photo is of a kind the configured reader does not
@@ -116,6 +117,10 @@ class AIAnalysisService {
 
     if (outcome === "queued") {
       AIAnalysisPipelineService.getInstance().wake();
+
+      // The processes that claim the ai queue, when this one does not
+      // (the api, plano-escala F3-04).
+      announceWake("ai");
     }
 
     if (outcome === "denied") {

@@ -1,5 +1,7 @@
 ﻿import { NotificationChannel } from "@prisma/client";
 
+import type { ActorNotice } from "./notification-types";
+
 /**
  * The pipeline's decision rules, kept pure so they can be unit-tested.
  * Timings and gating live here; I/O lives in the pipeline service.
@@ -28,7 +30,12 @@ const DELIVERY_LEASE_SECONDS = 180;
 /** How many deliveries one claim takes (the batch the lease must cover). */
 const DELIVERY_BATCH_SIZE = 20;
 
-/** How many deliveries of one batch run at the same time. */
+/**
+ * How many deliveries of one batch run at the same time: the default of
+ * each lane's variable, NOTIFICATION_INTERNAL_CONCURRENCY and
+ * NOTIFICATION_EXTERNAL_CONCURRENCY (plano-escala F3-05), which the
+ * pipeline asserts against the lease when it loads.
+ */
 const DELIVERY_CONCURRENCY = 5;
 
 /**
@@ -167,6 +174,13 @@ interface RecipientChannelFlags {
   emailNotificationsEnabled: boolean;
   whatsappNotificationsEnabled: boolean;
   hasWhatsAppPhone: boolean;
+
+  /**
+   * A driver's login may have no e-mail (decision D02 of the plan of
+   * 02/11/2026): like WhatsApp without a phone, no preference conjures one,
+   * so no EMAIL row is created for them.
+   */
+  hasEmail: boolean;
 }
 
 interface RecipientLegacyToggles {
@@ -174,6 +188,7 @@ interface RecipientLegacyToggles {
   email_notifications_enabled?: boolean;
   whatsapp_notifications_enabled?: boolean;
   whatsapp_phone?: string | null;
+  email?: string | null;
 }
 
 interface CategoryPreference {
@@ -190,6 +205,12 @@ interface CategoryPreference {
  * behavior until they actually touch the new screen. A row, once saved,
  * overrides the globals for its category — except that WhatsApp still
  * requires a configured phone, which no preference can conjure.
+ *
+ * WhatsApp also requires the general card (14/11/2026, decision D-53): the
+ * card is the master key, a row only narrows it. A saved row used to
+ * override the card, so turning it off left every category saved with
+ * WhatsApp on still sending — to a number that stays stored after the
+ * card goes off, and may by then be someone else's.
  */
 function resolveRecipientChannelFlags(
   recipient: RecipientLegacyToggles,
@@ -202,10 +223,13 @@ function resolveRecipientChannelFlags(
     emailNotificationsEnabled: preference
       ? preference.email
       : (recipient.email_notifications_enabled ?? true),
-    whatsappNotificationsEnabled: preference
-      ? preference.whatsapp
-      : (recipient.whatsapp_notifications_enabled ?? false),
+    whatsappNotificationsEnabled:
+      (recipient.whatsapp_notifications_enabled ?? false) &&
+      (preference ? preference.whatsapp : true),
     hasWhatsAppPhone: Boolean(recipient.whatsapp_phone),
+    // null or "" = a driver without a mailbox. Absent = the caller did not
+    // load the column, which until D2 could only hold an address: mailable.
+    hasEmail: recipient.email === undefined || Boolean(recipient.email),
   };
 }
 
@@ -263,7 +287,11 @@ function channelsForRecipient(
     channels.push(NotificationChannel.PUSH);
   }
 
-  if (options.hasEmailContent && flags.emailNotificationsEnabled) {
+  if (
+    options.hasEmailContent &&
+    flags.emailNotificationsEnabled &&
+    flags.hasEmail
+  ) {
     channels.push(NotificationChannel.EMAIL);
   }
 
@@ -279,6 +307,27 @@ function channelsForRecipient(
 }
 
 /**
+ * Nobody is notified of what they just did (14/11/2026): the recipients a
+ * policy resolved, without the user whose action published the event, on
+ * every channel — unless the topic is one of the declared exceptions
+ * (`notifiesActor`: a security notice, or the AI's verdict on what the actor
+ * sent). An event with no actor (a sweep, a worker, an integration's key)
+ * keeps its recipients as they are.
+ *
+ * The one place the rule lives: a policy resolves who the notice is for,
+ * and this decides that the person who caused it is not among them.
+ */
+function recipientsBesidesActor<T extends { id: string }>(
+  recipients: T[],
+  actorId: string | null | undefined,
+  notifiesActor: ActorNotice | undefined,
+): T[] {
+  if (!actorId || notifiesActor) return recipients;
+
+  return recipients.filter((recipient) => recipient.id !== actorId);
+}
+
+/**
  * Spreads a retry over a window instead of firing the whole failed batch at
  * the same instant. A provider that just rate-limited us would otherwise get
  * the identical burst back 30s later, fail again, and keep the pattern —
@@ -290,6 +339,36 @@ function withRetryJitter(delayMs: number): number {
   const offset = (Math.random() * 2 - 1) * spread;
 
   return Math.max(1_000, Math.round(delayMs + offset));
+}
+
+/**
+ * How long a push row waits after Expo answered its batch with a 5xx
+ * (plano-escala U-06), or null when it should spend an attempt as any
+ * failure does.
+ *
+ * A 5xx is Expo failing the whole call before sending any of it: nothing
+ * about the messages in it. With several deliveries in one call, spending
+ * an attempt of each would let one Expo incident exhaust a whole batch of
+ * rows at once, so they go back to the queue without spending one. They
+ * still wait the retry schedule, read by the row's age instead of its
+ * attempts: the step the age is in, so an outage is retried as gently as
+ * before. Past the whole schedule (about 4 h 40), the row spends its
+ * attempts again, so a long outage still ends in FAILED, never in a row
+ * retried forever.
+ */
+function pushOutageDelayMs(
+  ageMs: number,
+  delays: readonly number[] = DELIVERY_RETRY_DELAYS_MS,
+): number | null {
+  let elapsed = 0;
+
+  for (const delay of delays) {
+    elapsed += delay;
+
+    if (ageMs < elapsed) return delay;
+  }
+
+  return null;
 }
 
 export {
@@ -309,8 +388,10 @@ export {
   OUTBOX_RETRY_DELAYS_MS,
   DELIVERY_RETRY_DELAYS_MS,
   nextRetryDelayMs,
+  pushOutageDelayMs,
   withRetryJitter,
   channelsForRecipient,
+  recipientsBesidesActor,
   resolveRecipientChannelFlags,
 };
 

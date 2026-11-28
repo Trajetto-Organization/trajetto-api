@@ -2,6 +2,7 @@ import { inject, injectable } from "tsyringe";
 
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { IDeliveryRepository } from "../../repositories/IDelivery-repository";
+import type { IExternalRecipientRepository } from "../../repositories/IExternal-recipient-repository";
 
 import { UploadService } from "@/shared/services/upload-service";
 
@@ -12,12 +13,25 @@ import {
 import { DeliveryNotFoundError } from "../errors/delivery-errors";
 
 import { callerNotFound } from "@/shared/delivery/caller-not-found";
+import { serializeMessageOptOut } from "@/shared/notifications/customer-message-suppression";
 import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
+import {
+  loadBusinessTimeZone,
+  timeZoneOfBusiness,
+  type BusinessLookup,
+} from "@/shared/time/business-time-zone";
 
 interface GetDeliveryRequest {
   userId: string;
   businessId: string;
   deliveryId: string;
+}
+
+/** What GET /delivery/get-delivery answers: the detail and its meta. */
+interface GetDeliveryAnswer {
+  data: unknown;
+  /** The company's zone the dialog prints its dates in (decision D22). */
+  meta: { timeZone: string };
 }
 
 @injectable()
@@ -29,7 +43,37 @@ class GetDeliveryUseCase {
     private delivery: IDeliveryRepository,
     @inject("UploadService")
     private uploadService: UploadService,
+    // Contract C2 (03/11/2026): the opt-out state of the recipient. Optional
+    // so callers built before it keep working; the container always
+    // provides it.
+    @inject("ExternalRecipientRepository")
+    private recipients?: Pick<
+      IExternalRecipientRepository,
+      "messageOptOutState"
+    >,
+    // The company's zone for `meta.timeZone` (`read`). Optional for the same
+    // reason; without it the zone is the platform's default.
+    @inject("BusinessRepository")
+    private business?: BusinessLookup,
   ) {}
+
+  /**
+   * The detail with the company's zone beside it, as the route detail and
+   * the tower's tabs answer theirs (decision D22): the web's detail dialog
+   * prints the opt-out dates (C2) on the company's clock, the browser's
+   * only when an older API leaves the zone out. Read after the detail, so
+   * a refused read never reaches the company row and the request holds one
+   * connection at a time.
+   */
+  async read(request: GetDeliveryRequest): Promise<GetDeliveryAnswer> {
+    const data = await this.execute(request);
+
+    const timeZone = this.business
+      ? await loadBusinessTimeZone(this.business, request.businessId)
+      : timeZoneOfBusiness(null);
+
+    return { data, meta: { timeZone } };
+  }
 
   async execute({
     userId,
@@ -130,8 +174,28 @@ class GetDeliveryUseCase {
       messages: detail.chatMessages as unknown as TimelineSources["messages"],
     });
 
-    return { ...detail, occurrences, events, timeline };
+    // Since when the recipient's phone and e-mail stopped receiving this
+    // company's customer messages (C2); null on a channel that receives.
+    const messageOptOut = serializeMessageOptOut(
+      (await this.recipients?.messageOptOutState(businessId, deliveryId)) ??
+        null,
+    );
+
+    return {
+      ...detail,
+      occurrences,
+      // The route's number fed the timeline's "Saiu para entrega (Rota N)"
+      // (F2-06); the events keep their documented shape, routeId included.
+      events: events.map((event) => {
+        const { route: _route, ...kept } = event as Record<string, unknown>;
+
+        return kept;
+      }),
+      timeline,
+      messageOptOut,
+    };
   }
 }
 
 export { GetDeliveryUseCase };
+export type { GetDeliveryAnswer, GetDeliveryRequest };

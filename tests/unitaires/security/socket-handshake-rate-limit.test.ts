@@ -4,6 +4,7 @@ import {
   HANDSHAKES_PER_ADDRESS,
   HANDSHAKES_PER_USER,
   HANDSHAKE_WINDOW_SECONDS,
+  REFUND_ATTEMPT,
   addressHandshakeKey,
   createHandshakeLimiter,
   handshakeAddress,
@@ -203,8 +204,50 @@ describe("the budgets", () => {
   });
 });
 
+describe("the refund", () => {
+  // Since plano-escala U-01 the address budget keeps only the failures: an
+  // admitted handshake gives its attempt back. The script's semantics run
+  // against a real Redis in tests/E2E/socket-handshake-window.test.ts.
+  it("sends the refund script for the key, once", async () => {
+    const calls: Array<{ script: string; key: string }> = [];
+    const limiter = createHandshakeLimiter({
+      eval: async (script: string, _keys: number, key: string) => {
+        calls.push({ script, key });
+
+        return 0;
+      },
+    } as never);
+
+    await limiter.refund("socket-handshake:ip:1.2.3.4");
+
+    expect(calls).toEqual([
+      { script: REFUND_ATTEMPT, key: "socket-handshake:ip:1.2.3.4" },
+    ]);
+  });
+
+  it("never decrements a bucket that is gone or empty", () => {
+    // A DECR on a missing key creates it at -1 with no TTL: a bucket that
+    // never expires. The script reads first and only decrements above 0.
+    expect(REFUND_ATTEMPT).toContain("if count > 0 then");
+  });
+
+  it("fails silently when Redis is unreachable", async () => {
+    const limiter = createHandshakeLimiter({
+      eval: async () => {
+        throw new Error("sem redis");
+      },
+    } as never);
+
+    await expect(limiter.refund("k")).resolves.toBeUndefined();
+  });
+});
+
 describe("the fallback limiter", () => {
   it("refuses nothing", async () => {
     expect(await unlimitedHandshakes.allow("k", 0)).toBe(true);
+  });
+
+  it("has nothing to give back", async () => {
+    await expect(unlimitedHandshakes.refund("k")).resolves.toBeUndefined();
   });
 });

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { tenantLockedShape } from "@/shared/validation/tenant-locked-field";
+import { fieldError } from "@/shared/validation/field-error";
 
 /**
  * The highest page the queue answers. Keeps `(page - 1) * pageSize` inside
@@ -48,17 +49,17 @@ const listProofAuditsSchema = z.object({
 
 const reviewProofAuditParamsSchema = z.object({
   auditId: z
-    .string({ required_error: "ID da auditoria é obrigatório!" })
+    .string(fieldError({ required: "ID da auditoria é obrigatório!" }))
     .uuid("ID da auditoria é inválido."),
   businessId: z
-    .string({ required_error: "ID da empresa é obrigatório!" })
+    .string(fieldError({ required: "ID da empresa é obrigatório!" }))
     .uuid("ID da empresa é inválido."),
 });
 
 const reviewProofAuditSchema = z.object({
   ...tenantLockedShape,
   status: z.enum(["APPROVED", "REJECTED"], {
-    errorMap: () => ({ message: "A decisão deve ser APPROVED ou REJECTED." }),
+    error: "A decisão deve ser APPROVED ou REJECTED.",
   }),
 
   /**
@@ -77,9 +78,9 @@ const reviewProofAuditSchema = z.object({
       (value) =>
         typeof value === "string" && value.trim() === "" ? undefined : value,
       z
-        .string({
-          invalid_type_error: "O motivo da rejeição deve ser um texto.",
-        })
+        .string(
+          fieldError({ invalid: "O motivo da rejeição deve ser um texto." }),
+        )
         .optional(),
     )
     .describe(

@@ -75,7 +75,10 @@ describe("reserved scopes", () => {
       "routes:read": "Ler rotas e suas paradas.",
       "deliveries:read": "Ler entregas e o histórico delas.",
       "deliveries:write":
-        "Criar entregas (POST /integration/v1/deliveries), com Idempotency-Key obrigatória. Não inclui a leitura: para consultar, conceda também deliveries:read.",
+        "Criar entregas (POST /integration/v1/deliveries, ou até 100 por chamada em POST /integration/v1/deliveries/batch), com Idempotency-Key obrigatória. Não inclui a leitura nem o cancelamento: para consultar, conceda também deliveries:read.",
+      // L9: cancelling is its own scope, never implied by the write.
+      "deliveries:cancel":
+        "Cancelar entregas pendentes ou com insucesso (POST /integration/v1/deliveries/{id}/cancel), com motivo. Não inclui criar nem ler.",
       "events:read": "Ler o feed de eventos da operação.",
       "webhooks:manage":
         "Reservado para gerir webhooks por chave: nenhum endpoint da v1 exige este escopo ainda. Hoje os webhooks são geridos pelo painel.",

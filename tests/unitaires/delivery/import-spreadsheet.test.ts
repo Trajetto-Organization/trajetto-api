@@ -414,6 +414,108 @@ describe("the route columns", () => {
     expect(record.report.rows[0].message).toContain("sem veículo");
   });
 
+  it("builds no route for an inactive driver, and keeps the deliveries with a note", async () => {
+    // Red before: a PLANNED route for a driver the Rotas screen refuses
+    // (ROUTE_DRIVER_INACTIVE); the sheet built its routes on its own.
+    context.driverRepository.drivers[0].status = "INACTIVE";
+
+    const record = await run([
+      line("Padaria Central", { route: "Zona Sul", cnh: CNH, plate: PLATE }),
+      line("Mercado Novo", { route: "Zona Sul", cnh: CNH, plate: PLATE }),
+    ]);
+
+    expect(record.imported).toBe(2);
+    expect(record.report.routes).toEqual([]);
+    expect(context.routeRepository.routes).toEqual([]);
+
+    for (const row of record.report.rows) {
+      expect(row.message).toBe(
+        `Entrega importada, mas a rota não foi criada: o motorista com CNH ${CNH} está inativo.`,
+      );
+    }
+  });
+
+  it("says the driver is inactive when the deactivation lands between the check and the write", async () => {
+    // The status re-read under the driver row's lock, in the route's own
+    // transaction (assertDriverStillActive), as the Rotas screen does.
+    context.routeRepository.drivers.push({
+      id: DRIVER,
+      name: "João Motorista",
+      status: "INACTIVE",
+      businessId: BUSINESS,
+    });
+
+    const record = await run([
+      line("Padaria Central", { route: "Zona Sul", cnh: CNH }),
+    ]);
+
+    expect(record.imported).toBe(1);
+    expect(record.report.routes).toEqual([]);
+    expect(record.report.rows[0].message).toContain(
+      `o motorista com CNH ${CNH} está inativo`,
+    );
+  });
+
+  it("builds the route without a blocked vehicle, saying which and why", async () => {
+    // Red before: the route went out with the blocked truck, and only the
+    // departure refused it, at the yard.
+    context.vehicleRepository.vehicles[0].status = "BLOCKED";
+
+    const record = await run([
+      line("Padaria Central", { route: "Zona Sul", cnh: CNH, plate: PLATE }),
+    ]);
+
+    expect(record.report.routes).toHaveLength(1);
+    expect(context.routeRepository.routes[0].vehicleId).toBeNull();
+    expect(record.report.rows[0].message).toBe(
+      `Rota criada sem veículo: o veículo ${PLATE} está bloqueado.`,
+    );
+  });
+
+  it("builds the route without an inactive vehicle too", async () => {
+    context.vehicleRepository.vehicles[0].status = "INACTIVE";
+
+    const record = await run([
+      line("Padaria Central", { route: "Zona Sul", cnh: CNH, plate: PLATE }),
+    ]);
+
+    expect(context.routeRepository.routes[0].vehicleId).toBeNull();
+    expect(record.report.rows[0].message).toBe(
+      `Rota criada sem veículo: o veículo ${PLATE} está inativo.`,
+    );
+  });
+
+  it("keeps a truck that is out on another route: only its departure waits", async () => {
+    context.vehicleRepository.vehicles[0].status = "IN_ROUTE";
+
+    const record = await run([
+      line("Padaria Central", { route: "Zona Sul", cnh: CNH, plate: PLATE }),
+    ]);
+
+    expect(context.routeRepository.routes[0].vehicleId).toBe(VEHICLE);
+    expect(record.report.rows[0].message ?? "").not.toContain("sem veículo");
+  });
+
+  it("writes the planning line on each delivery's timeline, as the Rotas screen does", async () => {
+    // Red before: a route built by the sheet left no "Adicionada à Rota N"
+    // on its documents, and the history depended on the screen.
+    await run([
+      line("Primeira", { route: "Zona Sul", cnh: CNH }),
+      line("Segunda", { route: "Zona Sul", cnh: CNH }),
+    ]);
+
+    const [route] = context.routeRepository.routes;
+
+    expect(
+      context.routeRepository.events
+        .filter((event) => event.type === "ROUTE_ADDED")
+        .map((event) => [event.routeId, event.reportedById, event.note]),
+    ).toEqual([
+      [route.id, DISPATCHER, `Adicionada à Rota ${route.code} (parada 1).`],
+      [route.id, DISPATCHER, `Adicionada à Rota ${route.code} (parada 2).`],
+    ]);
+  });
+
   it("refuses a driver from another company as if the CNH did not exist", async () => {
     context.driverRepository.drivers.push({
       id: "018f0000-0000-7000-8000-0000000000d9",
@@ -649,5 +751,150 @@ describe("an upload started in the background", () => {
 
     expect(closed).toMatchObject({ imported: 0, duplicated: 1 });
     expect(context.deliveryRepository.deliveries).toHaveLength(1);
+  });
+});
+
+/**
+ * Plan of 02/11/2026, E1: a sheet that already knows where its customers are
+ * hands the point over in "Latitude"/"Longitude". It becomes the address
+ * point (MANUAL), and the geocoder never looks at that row; a row without it
+ * stays in the geocoder's queue (no point, no source).
+ */
+describe("the address point columns", () => {
+  it("store the sheet's point as MANUAL, and leave a row without one to the geocoder", async () => {
+    const text = [
+      [
+        "Destinatário",
+        "CEP",
+        "Cidade",
+        "UF",
+        "Logradouro",
+        "Número",
+        "Lat",
+        "Long",
+      ],
+      [
+        "Padaria Central",
+        "01001000",
+        "São Paulo",
+        "SP",
+        "Sé",
+        "100",
+        "-23,5505",
+        "-46,6333",
+      ],
+      ["Mercado Novo", "01001000", "São Paulo", "SP", "Direita", "100", "", ""],
+      // The same door as the first row (14/11/2026): it takes that point,
+      // as GEOCODER (address-point-reuse.ts), and the geocoder skips it.
+      // The number makes it a door: "Sé" with none names the street.
+      ["Açougue da Sé", "01001000", "São Paulo", "SP", "Sé", "100", "", ""],
+    ]
+      .map((row) => row.map((cell) => `"${cell}"`).join(";"))
+      .join("\n");
+
+    const record = await context.importSpreadsheet.execute({
+      userId: DISPATCHER,
+      businessId: BUSINESS,
+      filename: "com-coordenadas.csv",
+      content: Buffer.from(text, "utf8").toString("base64"),
+      shipperId: SHIPPER,
+    });
+
+    expect(record.imported).toBe(3);
+
+    const byName = Object.fromEntries(
+      context.deliveryRepository.deliveries.map((row) => [
+        row.recipient_name,
+        row,
+      ]),
+    );
+
+    expect(byName["Padaria Central"]).toMatchObject({
+      latitude: -23.5505,
+      longitude: -46.6333,
+      geo_source: "MANUAL",
+    });
+    expect(byName["Mercado Novo"]).toMatchObject({
+      latitude: null,
+      longitude: null,
+      geo_source: null,
+    });
+    expect(byName["Açougue da Sé"]).toMatchObject({
+      latitude: -23.5505,
+      longitude: -46.6333,
+      geo_source: "GEOCODER",
+      geo_precision: "ADDRESS",
+    });
+  });
+});
+
+/**
+ * The "E-mail" column (recipient-email.ts): one or more addresses separated
+ * by ";" or ",", each checked like the manual create's field. A bad one never
+ * costs the delivery — it is left out of the customer notices, and the row
+ * quotes it.
+ */
+describe("the e-mail column", () => {
+  it("keeps the valid addresses, and the row says which part was left out", async () => {
+    const text = [
+      ["Destinatário", "CEP", "Cidade", "UF", "Logradouro", "E-mail"],
+      [
+        "Padaria Central",
+        "01001000",
+        "São Paulo",
+        "SP",
+        "Sé",
+        "compras@padaria.com.br; nao-e-email; financeiro@padaria.com.br",
+      ],
+      ["Mercado Novo", "01001000", "São Paulo", "SP", "Sé", "mercado@"],
+      ["Farmácia", "01001000", "São Paulo", "SP", "Sé", "farmacia@exemplo.com"],
+    ]
+      .map((row) => row.map((cell) => `"${cell}"`).join(";"))
+      .join("\n");
+
+    const record = await context.importSpreadsheet.execute({
+      userId: DISPATCHER,
+      businessId: BUSINESS,
+      filename: "com-emails.csv",
+      content: Buffer.from(text, "utf8").toString("base64"),
+      shipperId: SHIPPER,
+    });
+
+    expect(record.imported).toBe(3);
+
+    const byName = Object.fromEntries(
+      context.deliveryRepository.deliveries.map((row) => [
+        row.recipient_name,
+        row.recipient_email,
+      ]),
+    );
+
+    expect(byName).toEqual({
+      "Padaria Central": "compras@padaria.com.br;financeiro@padaria.com.br",
+      "Mercado Novo": null,
+      Farmácia: "farmacia@exemplo.com",
+    });
+
+    expect(
+      record.report.rows.map(({ line, outcome, message }) => ({
+        line,
+        outcome,
+        message,
+      })),
+    ).toEqual([
+      {
+        line: 2,
+        outcome: "imported",
+        message:
+          'O e-mail "nao-e-email" do destinatário não é válido e não será usado nos avisos ao cliente.',
+      },
+      {
+        line: 3,
+        outcome: "imported",
+        message:
+          'O e-mail "mercado@" do destinatário não é válido e não será usado nos avisos ao cliente.',
+      },
+      { line: 4, outcome: "imported", message: null },
+    ]);
   });
 });

@@ -1,6 +1,6 @@
 import { Prisma } from "@prisma/client";
 
-import database from "@/../infra/database";
+import database, { readDatabase } from "@/../infra/database";
 import {
   ActivitySummary,
   ActivitySummaryProps,
@@ -15,6 +15,15 @@ import {
 } from "../dtos/activity-dto";
 
 import { presentActivityActors } from "@/shared/activity/actor-presentation";
+import {
+  activityCountTake,
+  activityIdRange,
+  cappedActivityTotal,
+} from "@/shared/activity/activity-period";
+import {
+  activityDataVersion,
+  type ActivityDataVersion,
+} from "@/shared/activity/activity-data-version";
 
 import { IActivityRepository } from "./IActivity-repository";
 import { TENANT_VISIBLE } from "@/shared/notifications/policies/business-plan-policies";
@@ -77,6 +86,22 @@ function facetConditions(
 class ActivityRepository implements IActivityRepository {
   constructor(private prisma = database) {}
 
+  /**
+   * The heavy reads' bulkhead (plano-escala F3-17), for the activities' lists
+   * and summary (the scope they filter by is still read on the primary: it is
+   * who may see what): a pool of its own, 3 connections and 10 s a statement,
+   * so a burst of them waits among itself instead of taking the connections
+   * every other request needs. A repository built on another client (a test's)
+   * reads on that client. A getter, so a module that mocks infra/database
+   * without it only needs it when one of these reads runs.
+   * With DATABASE_REPLICA_URL, readDatabase() sends them to the standby
+   * while the replica guard vouches for it: lists only (plano-escala F4-42,
+   * tests/unitaires/database/read-routing-guard.test.ts).
+   */
+  private get read(): typeof this.prisma {
+    return this.prisma === database ? readDatabase() : this.prisma;
+  }
+
   async createActivity(
     activityData: CreateActivityProps,
     tx?: Prisma.TransactionClient,
@@ -107,38 +132,43 @@ class ActivityRepository implements IActivityRepository {
 
     /**
      * A write coming from the notification pipeline is idempotent by its
-     * delivery id.
+     * delivery id, which is also the row's own id (plano-escala F2-15).
      *
-     * The empty `update` is the point: an activity that already exists is
-     * left exactly as it was recorded the first time, timestamps included.
+     * The activity trail becomes a table partitioned by month on its id
+     * (F2-18, wave 11), and there the global unique on `deliveryId` cannot
+     * stay: the primary key becomes the anchor, so a redelivery of the same
+     * notification_delivery (a uuid v7, minted when the event expanded)
+     * writes the same id. Until then both indexes hold, and the row the
+     * previous image wrote under a random id is still found by `deliveryId`:
+     * first by id, then by deliveryId (the fallback goes after the copy
+     * window, U-10), and only then the insert.
      *
-     * It is NOT one statement, though. Prisma only turns an upsert into
-     * `INSERT ... ON CONFLICT` when `update` has something to set; with an
-     * empty one it runs a SELECT and then an INSERT, and two workers
-     * recording the same delivery at once both pass the SELECT (measured in
-     * tests/E2E/repository-guards.test.ts). The loser's P2002 on `deliveryId`
-     * means the row it wanted to write is there, so it is read and returned
-     * instead of failing the delivery into a retry.
+     * An activity that already exists is left exactly as it was recorded
+     * the first time, timestamps included. Two workers recording the same
+     * delivery at once both pass the reads (measured in
+     * tests/E2E/repository-guards.test.ts); the loser's P2002, on either
+     * index, means the row it wanted to write is there, so it is read and
+     * returned instead of failing the delivery into a retry.
      */
     if (activityData.deliveryId) {
       const deliveryId = activityData.deliveryId;
+      const recorded = () => this.findPipelineActivity(deliveryId);
+
+      const existing = await recorded();
+      if (existing) return existing;
 
       try {
-        return await this.prisma.activity.upsert({
-          where: { deliveryId },
-          create: data,
-          update: {},
+        return await this.prisma.activity.create({
+          data: { ...data, id: deliveryId },
         });
       } catch (error) {
         if (
           error instanceof Prisma.PrismaClientKnownRequestError &&
           error.code === "P2002"
         ) {
-          const existing = await this.prisma.activity.findUnique({
-            where: { deliveryId },
-          });
+          const winner = await recorded();
 
-          if (existing) return existing;
+          if (winner) return winner;
         }
 
         throw error;
@@ -148,6 +178,19 @@ class ActivityRepository implements IActivityRepository {
     const activity = await client.activity.create({ data });
 
     return activity;
+  }
+
+  /**
+   * The row the pipeline recorded for a notification_delivery: under its
+   * id (F2-15), or under the random id the previous image gave it.
+   */
+  private async findPipelineActivity(
+    deliveryId: string,
+  ): Promise<Activity | null> {
+    return (
+      (await this.prisma.activity.findUnique({ where: { id: deliveryId } })) ??
+      (await this.prisma.activity.findFirst({ where: { deliveryId } }))
+    );
   }
 
   /**
@@ -274,6 +317,12 @@ class ActivityRepository implements IActivityRepository {
       const { start } = businessDaysRange(new Date(), timeZone, periodDays);
 
       and.push({ created_at: { gte: start } });
+
+      // The same period as ids (plano-escala F2-19): with the trail
+      // partitioned by month on its id, it reads the months it is in.
+      const ids = activityIdRange(start);
+
+      if (ids) and.push({ id: ids });
     }
 
     return and.length > 0 ? { AND: and } : {};
@@ -353,31 +402,49 @@ class ActivityRepository implements IActivityRepository {
     actions,
     roles,
     order = "desc",
+    periodDays,
   }: ListRecentActivitiesProps): Promise<ListActivityProps> {
     const whereCondition = await this.buildActivityScope({
       currentUserRole,
       businessId,
       search,
       userId,
+      periodDays,
       filters: { statuses, types, actions, roles },
     });
 
-    const [activities, total] = await Promise.all([
-      this.prisma.activity.findMany({
+    // The count stops one row past ACTIVITY_COUNT_CAP (F2-19): the pager
+    // cannot go deeper, and the rest reads "10.000+".
+    const [activities, counted] = await Promise.all([
+      this.read.activity.findMany({
         skip: (page - 1) * pageSize,
         take: pageSize,
         where: whereCondition,
         include: this.includeFor(currentUserRole),
         orderBy: [{ created_at: order }, { id: order }],
       }),
-      this.prisma.activity.count({
+      // In the order of the (businessId, performedBy, visibilityLevel)
+      // index: with `take` and no order, Prisma sorts the subquery by id,
+      // which reads and sorts every row of the scope before the LIMIT.
+      // In the index's order the count is an index-only walk that stops at
+      // the cap.
+      this.read.activity.count({
         where: whereCondition,
+        take: activityCountTake(),
+        orderBy: [
+          { businessId: "asc" },
+          { performedBy: "asc" },
+          { visibilityLevel: "asc" },
+        ],
       }),
     ]);
+
+    const { total, totalCapped } = cappedActivityTotal(counted);
 
     return {
       data: presentActivityActors(activities, currentUserRole),
       total,
+      meta: { totalCapped, periodDays: periodDays ?? null },
     };
   }
 
@@ -388,7 +455,8 @@ class ActivityRepository implements IActivityRepository {
    * and column filters. A feed is different: the audit log is written to
    * constantly, so by the time someone asks for "page 2" everything has
    * shifted down and rows already seen come back as duplicates. A cursor is
-   * immune to that: it asks for what comes *after a row*, not for a position.
+   * immune to that: it asks for what comes *after a row* (after its id, in
+   * the id order), not for an offset.
    */
   async listActivitiesWithCursor({
     currentUserRole,
@@ -409,10 +477,18 @@ class ActivityRepository implements IActivityRepository {
 
     // One row past the page: its existence is the only reliable way to know
     // whether a "load more" button should be there at all.
-    const activities = await this.prisma.activity.findMany({
-      where: whereCondition,
+    //
+    // The cursor by its value (id < cursor), not Prisma's `cursor`, which
+    // looks the row up and answers nothing when it is not there. Page 1 may
+    // come from the primary and "load more" from the standby (another
+    // replica, plano-escala F4-42), which may not have replayed that row
+    // yet: the feed would end there, with every older row left out. By
+    // value, it goes on below the row, wherever the row is.
+    const activities = await this.read.activity.findMany({
+      where: cursor
+        ? { AND: [whereCondition, { id: { lt: cursor } }] }
+        : whereCondition,
       take: limit + 1,
-      ...(cursor && { cursor: { id: cursor }, skip: 1 }),
       include: this.includeFor(currentUserRole),
       // uuid v7 ids are time-ordered, so this is creation order with a unique
       // tiebreaker — two activities written in the same millisecond still have
@@ -452,12 +528,12 @@ class ActivityRepository implements IActivityRepository {
     });
 
     const [byAction, byType] = await Promise.all([
-      this.prisma.activity.groupBy({
+      this.read.activity.groupBy({
         by: ["action"],
         where: whereCondition,
         _count: { _all: true },
       }),
-      this.prisma.activity.groupBy({
+      this.read.activity.groupBy({
         by: ["type"],
         where: whereCondition,
         _count: { _all: true },
@@ -467,7 +543,7 @@ class ActivityRepository implements IActivityRepository {
     ]);
 
     // System actions (no author) are not a person working.
-    const authors = await this.prisma.activity.groupBy({
+    const authors = await this.read.activity.groupBy({
       by: ["performedBy"],
       where: { AND: [whereCondition, { performedBy: { not: null } }] },
     });
@@ -485,6 +561,22 @@ class ActivityRepository implements IActivityRepository {
       topTypeCount: byType[0]?._count._all ?? 0,
       periodDays,
     };
+  }
+
+  /**
+   * The generation of ids the trail serves, from the catalog: the copy
+   * window is what made activity a partitioned table and what re-keyed its
+   * old ids (plano-escala F2-18). One lookup of pg_class by name.
+   */
+  async dataVersion(): Promise<ActivityDataVersion> {
+    const [row] = await this.prisma.$queryRaw<Array<{ partitioned: boolean }>>`
+      SELECT coalesce(
+        (SELECT c.relkind = 'p' FROM pg_class c WHERE c.oid = to_regclass('activity')),
+        false
+      ) AS partitioned
+    `;
+
+    return activityDataVersion(row?.partitioned === true);
   }
 }
 

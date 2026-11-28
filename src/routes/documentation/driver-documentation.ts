@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { responseDateTime } from "./response-date";
 import { createDriverSchema } from "@/schemas/create-driver-schema";
 
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
@@ -30,14 +31,12 @@ const driverSchemas = {
   searchDriverCursor: cursorPaginationByBusinessSchema,
 };
 
-const isoDate = z.union([z.string(), z.date()]);
-
 const cnhFields = {
   cnh_category: z
     .enum(CNH_CATEGORIES)
     .nullable()
     .describe("Categoria da CNH; null quando não informada."),
-  cnh_expires_at: isoDate
+  cnh_expires_at: responseDateTime()
     .nullable()
     .describe(
       "Validade da CNH: data civil, sempre AAAA-MM-DDT00:00:00.000Z (leia o dia UTC); null quando não informada.",
@@ -48,7 +47,7 @@ const cnhFields = {
 const driverListItem = z.object({
   id: z.string(),
   name: z.string(),
-  birth_date: isoDate.describe(
+  birth_date: responseDateTime().describe(
     "Data de nascimento: data civil, AAAA-MM-DDT00:00:00.000Z (leia o dia UTC). Registros antigos guardam a meia-noite local, que é o mesmo dia UTC no Brasil.",
   ),
   cnh: z.string(),
@@ -72,8 +71,8 @@ const driverListItem = z.object({
   businessId: z.string(),
   branchId: z.string().nullable(),
   branch: z.object({ corporate_reason: z.string() }).nullable(),
-  created_at: isoDate,
-  updated_at: isoDate,
+  created_at: responseDateTime(),
+  updated_at: responseDateTime(),
 });
 
 /** The list's `meta.searchMeta`, as summarizeDriverList builds it. */
@@ -117,7 +116,7 @@ const driverPickerItem = z.object({
     .describe("Só para quem lê o cadastro de motoristas."),
   branchId: z.string().nullable().optional(),
   businessId: z.string().optional(),
-  created_at: isoDate.optional(),
+  created_at: responseDateTime().optional(),
 });
 
 const message = (text: string) =>
@@ -127,6 +126,14 @@ const driverResponses = {
   driverCreated: message("Motorista criado com sucesso!"),
   driverUpdated: message("Motorista atualizado com sucesso!"),
   driverDeleted: message("Motorista deletado com sucesso!"),
+  driverAnonymizeScheduled: z
+    .object({
+      message: z.string(),
+      jobId: z.string().describe("O job USER_ANONYMIZE que remove os dados."),
+    })
+    .describe(
+      "A remoção e a anonimização ficaram na fila: os dados pessoais saem em instantes.",
+    ),
 
   driverListItem,
   driverListSearchMeta,
@@ -156,7 +163,10 @@ const driverResponses = {
     "DRIVER_CPF_ALREADY_EXISTS ou DRIVER_CNH_ALREADY_EXISTS: o CPF ou a CNH já é de outro motorista DESTA empresa (são únicos por empresa; a mensagem nunca fala de outra). Na edição, também DRIVER_HAS_OPEN_ROUTES: inativar um motorista com rota planejada, liberada ou em andamento é recusado, com a contagem na mensagem.",
   ),
   deleteConflicts: errorResponse.describe(
-    "O motorista tem histórico: DRIVER_HAS_USER, DRIVER_HAS_FINES, DRIVER_HAS_FUELS, DRIVER_HAS_CHECKLISTS, DRIVER_HAS_OPERATION (entregas ou rotas) ou DRIVER_HAS_PAUSES. Inative-o em vez de excluir.",
+    "O motorista tem histórico, e a resposta é o primeiro motivo encontrado, com a quantidade: DRIVER_HAS_FINES, DRIVER_HAS_FUELS, DRIVER_HAS_CHECKLISTS, DRIVER_HAS_OPERATION (entregas, rotas, mensagens do chat ou atendimentos) ou DRIVER_HAS_PAUSES; inative-o em vez de excluir (o login dele também deixa de entrar no app). Por último, DRIVER_HAS_USER: o motorista sem histórico ainda tem um login do app, que se exclui na tela Usuários antes.",
+  ),
+  anonymizeConflicts: errorResponse.describe(
+    "DRIVER_ALREADY_ANONYMIZED: o motorista já foi removido e anonimizado. DRIVER_HAS_OPEN_ROUTES: ele tem rota planejada, liberada ou em andamento, com as contagens; conclua, cancele ou designe outro motorista antes.",
   ),
   exportErrors: errorResponse.describe(
     "NOTHING_TO_EXPORT (nenhum motorista na busca e nos filtros), BUSINESS_NOT_IDENTIFIED (MASTER sem `businessId`) ou VALIDATION_ERROR.",

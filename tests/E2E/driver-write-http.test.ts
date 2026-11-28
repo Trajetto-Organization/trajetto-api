@@ -8,12 +8,15 @@ import auth from "@/config/auth";
 import { pauseTypeId } from "./support/pause-type-seed";
 import { createPrismaClient } from "@/shared/database/database-client";
 
+import { validCpf } from "../support/valid-cpf";
+
 /**
  * Registering, editing and deleting drivers over real HTTP and Postgres:
- * the licence fields (decision 8.5), CPF and CNH unique per company with a
- * 409 that speaks of nobody else (decision 8.1), deactivation refused while
- * routes still need the driver (decision 8.3), and a delete that no longer
- * ends in a 500 on the pause table's RESTRICT key.
+ * the licence fields (decision 8.5), the CPF's check digits, CPF and CNH
+ * unique per company with a 409 that speaks of nobody else (decision 8.1),
+ * deactivation refused while routes still need the driver (decision 8.3),
+ * and a delete that no longer ends in a 500 on the pause table's RESTRICT
+ * key.
  */
 const prisma = createPrismaClient();
 
@@ -104,7 +107,8 @@ function body(overrides: Record<string, unknown> = {}) {
     name: "Joana Motorista",
     birth_date: "1990-05-10T03:00:00.000Z",
     cnh: `7${String(docSeq).padStart(10, "0")}`,
-    cpf: `8${String(docSeq).padStart(10, "0")}`,
+    // The schema checks the check digits: the counter is only the base.
+    cpf: validCpf(`8${String(docSeq).padStart(8, "0")}`),
     rg: "123456789",
     cep: "01001-000",
     city: "São Paulo",
@@ -336,6 +340,57 @@ describe("the birth date, a civil day (decision 1.3)", () => {
   });
 });
 
+describe("the CPF's check digits", () => {
+  // Only the length was checked: a mistyped CPF was stored without a word,
+  // and that driver could never sign in by CPF (the login refuses it).
+  const INVALID = "O CPF informado não é válido.";
+
+  it("refuses a wrong check digit and a repeated digit on create, storing nothing", async () => {
+    for (const cpf of ["529.982.247-24", "111.111.111-11", "00000000000"]) {
+      const response = await create(CARRIER, body({ cpf }));
+
+      expect(response.statusCode, cpf).toBe(400);
+      expect(response.json()).toMatchObject({
+        code: "VALIDATION_ERROR",
+        message: INVALID,
+      });
+      expect(
+        await prisma.driver.count({
+          where: { businessId: CARRIER, cpf: cpf.replace(/\D/g, "") },
+        }),
+      ).toBe(0);
+    }
+  });
+
+  it("stores a valid masked CPF as its 11 digits", async () => {
+    const payload = body({ cpf: "390.533.447-05" });
+
+    expect((await create(CARRIER, payload)).statusCode).toBe(201);
+    expect(
+      await prisma.driver.count({
+        where: { businessId: CARRIER, cpf: "39053344705" },
+      }),
+    ).toBe(1);
+  });
+
+  it("refuses an invalid CPF on edit, the stored one untouched", async () => {
+    const payload = body();
+    await create(CARRIER, payload);
+    const id = await createdId(CARRIER, payload);
+
+    const response = await update(id, CARRIER, {
+      birth_date: payload.birth_date,
+      cpf: "529.982.247-24",
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json().message).toBe(INVALID);
+    expect((await prisma.driver.findUniqueOrThrow({ where: { id } })).cpf).toBe(
+      payload.cpf,
+    );
+  });
+});
+
 describe("CPF and CNH unique per company (decision 8.1)", () => {
   it("lets two carriers register the same independent driver", async () => {
     const payload = body();
@@ -478,6 +533,94 @@ describe("deleting a driver", () => {
 
     expect((await remove(id, CARRIER)).statusCode).toBe(200);
     expect(await prisma.driver.findUnique({ where: { id } })).toBeNull();
+  });
+
+  /** A staff or app login, written straight to the table. */
+  async function loginRow(driverId?: string): Promise<string> {
+    const id = randomUUID();
+
+    await prisma.user.create({
+      data: {
+        id,
+        name: `Login ${id.slice(0, 4)}`,
+        email: `${id}@exemplo.com.br`,
+        password: "not-used-here",
+        role: driverId ? "BUSINESS_USER" : "BUSINESS_ADMIN",
+        businessId: CARRIER,
+        driverId: driverId ?? null,
+      },
+    });
+
+    return id;
+  }
+
+  // Batch of 14/11/2026: with the login checked first, the operator was sent
+  // to remove the login, which refused with "revoke"; only the third try
+  // said "deactivate", which also locks the login out.
+  it("with a login and a route answers DRIVER_HAS_OPERATION first, pointing at deactivation", async () => {
+    const payload = body();
+    await create(CARRIER, payload);
+    const id = await createdId(CARRIER, payload);
+
+    await loginRow(id);
+    await seedRoute(id, "COMPLETED");
+
+    const response = await remove(id, CARRIER);
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({ code: "DRIVER_HAS_OPERATION" });
+    expect(response.json().message).toContain("1 rota(s)");
+    expect(response.json().message).toContain(
+      "o login dele deixa de entrar no app",
+    );
+  });
+
+  it("with only a login answers DRIVER_HAS_USER, naming the Usuários screen", async () => {
+    const payload = body();
+    await create(CARRIER, payload);
+    const id = await createdId(CARRIER, payload);
+
+    await loginRow(id);
+
+    const response = await remove(id, CARRIER);
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({
+      code: "DRIVER_HAS_USER",
+      message:
+        "Este motorista tem um login do app. Exclua esse login na tela Usuários antes de excluir o motorista.",
+    });
+  });
+
+  // Decision D-39: the chat thread is CASCADE, so deleting a driver without
+  // a login erased the conversation and its tickets without a word.
+  it("without a login but with a conversation is refused, and the messages stay", async () => {
+    const payload = body();
+    await create(CARRIER, payload);
+    const id = await createdId(CARRIER, payload);
+
+    const sender = await loginRow();
+    const thread = await prisma.chatThread.create({
+      data: { businessId: CARRIER, driverId: id },
+    });
+
+    await prisma.chatMessage.create({
+      data: {
+        kind: "TEXT",
+        body: "Chegou bem?",
+        threadId: thread.id,
+        senderId: sender,
+      },
+    });
+
+    const response = await remove(id, CARRIER);
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({ code: "DRIVER_HAS_OPERATION" });
+    expect(response.json().message).toContain("1 mensagem(ns) no chat");
+    expect(
+      await prisma.chatMessage.count({ where: { threadId: thread.id } }),
+    ).toBe(1);
   });
 });
 

@@ -53,7 +53,7 @@ async function seedBusiness(id: string) {
   await prisma.business.create({
     data: {
       id,
-      corporate_reason: `Transportadora ${id.slice(0, 4)}`,
+      corporate_reason: `Transportadora ${id}`,
       cep: "01001000",
       city: "São Paulo",
       uf: "SP",
@@ -521,7 +521,9 @@ describe("GET /user/list-user", () => {
 });
 
 describe("GET /user/search-user-business (picker)", () => {
-  it("searches name and e-mail on the server", async () => {
+  // Every consumer is an assignment picker: the revoked Iara Financeiro is
+  // not offered as a responsible (audit of 11/2026).
+  it("searches name and e-mail on the server, without revoked logins", async () => {
     const found = await get(
       `/user/search-user-business?businessId=${A}&search=financeiro`,
       admin.token,
@@ -531,7 +533,6 @@ describe("GET /user/search-user-business (picker)", () => {
     expect(found.rows.map((row) => row.name).sort()).toEqual([
       "Carla Financeiro",
       "Diego Financeiro",
-      "Iara Financeiro",
     ]);
     expect(found.rows.every((row) => !("password" in row))).toBe(true);
   });

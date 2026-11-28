@@ -32,11 +32,7 @@ const DEPARTURE_GRACE_MS = DEPARTURE_GRACE_MINUTES * 60 * 1000;
  * - `not_planned`: no planned hour, so nothing to be late against.
  */
 type DeparturePunctuality =
-  | "on_time"
-  | "late"
-  | "waiting"
-  | "not_departed"
-  | "not_planned";
+  "on_time" | "late" | "waiting" | "not_departed" | "not_planned";
 
 /**
  * Whether one route left on time, as of `now`.
@@ -268,11 +264,7 @@ function driverDayLoads(
 const ENDED_ROUTE_VISIBLE_MS = 2 * 60 * 60 * 1000;
 
 type TowerRouteStatus =
-  | "PLANNED"
-  | "RELEASED"
-  | "IN_PROGRESS"
-  | "COMPLETED"
-  | "CANCELLED";
+  "PLANNED" | "RELEASED" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED";
 
 /**
  * - `moving`: the route runs and the phone reported in the last ten minutes;

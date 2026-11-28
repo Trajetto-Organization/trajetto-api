@@ -35,8 +35,11 @@ const whatsapp = {
   sent: [] as Array<{
     phoneNumber: string;
     referenceId?: string;
-    audience?: string;
-    message: string;
+    template: {
+      name: string;
+      parameters: string[];
+      urlButtonSuffixes?: string[];
+    };
   }>,
 };
 
@@ -128,7 +131,8 @@ beforeAll(async () => {
       businessId: BUSINESS,
       topic: "DISPATCHED",
       channel: "WHATSAPP",
-      body: "Sua entrega saiu. {{link}} Sair: {{link_descadastro}}",
+      // The WhatsApp row is the moment's switch (plan of 02/11/2026, B3).
+      body: "",
     },
   });
 
@@ -178,7 +182,9 @@ describe("a customer message the delivery has moved past", () => {
     await drain();
 
     expect(
-      whatsapp.sent.filter((sent) => sent.message.includes("Sua entrega saiu")),
+      whatsapp.sent.filter(
+        (sent) => sent.template.name === "trajetto_cliente_saiu_para_entrega",
+      ),
     ).toEqual([]);
 
     const row = await whatsAppRowOf(eventId);
@@ -197,7 +203,9 @@ describe("a customer message the delivery has moved past", () => {
     await drain();
 
     expect(
-      whatsapp.sent.filter((sent) => sent.message.includes("Sua entrega saiu")),
+      whatsapp.sent.filter(
+        (sent) => sent.template.name === "trajetto_cliente_saiu_para_entrega",
+      ),
     ).toEqual([]);
 
     const row = await whatsAppRowOf(eventId);
@@ -206,7 +214,7 @@ describe("a customer message the delivery has moved past", () => {
     expect(row.lastError).toMatch(/superada: a entrega está PENDING/);
   });
 
-  it("is still sent while it is true, under the customer template", async () => {
+  it("is still sent while it is true, under the moment's fixed template", async () => {
     const deliveryId = await seedDelivery("IN_TRANSIT");
     const eventId = await dispatch(deliveryId);
 
@@ -219,6 +227,8 @@ describe("a customer message the delivery has moved past", () => {
     const sent = whatsapp.sent.filter((entry) => entry.referenceId === row.id);
 
     expect(sent).toHaveLength(1);
-    expect(sent[0].audience).toBe("customer");
+    // Plan of 02/11/2026 (B2): never the generic trajetto_notification.
+    expect(sent[0].template.name).toBe("trajetto_cliente_saiu_para_entrega");
+    expect(sent[0].template.urlButtonSuffixes).toHaveLength(2);
   });
 });

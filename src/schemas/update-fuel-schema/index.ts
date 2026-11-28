@@ -9,6 +9,7 @@ import {
   hasSpaceAtEdges,
   isEmptyOrWhitespace,
 } from "@/shared/utils/zod-schema-helpers";
+import { fieldError } from "@/shared/validation/field-error";
 
 const updateFuelSchema = z
   .object({
@@ -25,10 +26,11 @@ const updateFuelSchema = z
         return val;
       },
       z
-        .number({
-          invalid_type_error:
-            "A quilometragem atual deve ser um número válido.",
-        })
+        .number(
+          fieldError({
+            invalid: "A quilometragem atual deve ser um número válido.",
+          }),
+        )
         .nonnegative("A quilometragem atual deve ser um valor não negativo.")
         .min(0.1, "A quilometragem atual deve ser maior que zero.")
         .max(9999999, "A quilometragem atual não pode exceder 9.999.999 km.")
@@ -44,10 +46,11 @@ const updateFuelSchema = z
         return val;
       },
       z
-        .number({
-          invalid_type_error:
-            "A quantidade de litros deve ser um número válido.",
-        })
+        .number(
+          fieldError({
+            invalid: "A quantidade de litros deve ser um número válido.",
+          }),
+        )
         .positive("A quantidade de litros deve ser um valor positivo.")
         .min(0.001, "A quantidade de litros deve ser maior que zero.")
         .max(99999.999, "A quantidade de litros não pode exceder 99.999,999 L.")
@@ -63,9 +66,11 @@ const updateFuelSchema = z
         return val;
       },
       z
-        .number({
-          invalid_type_error: "O preço por litro deve ser um número válido.",
-        })
+        .number(
+          fieldError({
+            invalid: "O preço por litro deve ser um número válido.",
+          }),
+        )
         .positive("O preço por litro deve ser um valor positivo.")
         .min(0.01, "O preço por litro deve ser no mínimo R$ 0,01")
         // Sanity cap (decision 15.9): no fuel costs more than R$ 50/L; a typed
@@ -153,9 +158,9 @@ const updateFuelSchema = z
         return val;
       },
       z
-        .number({
-          invalid_type_error: "A latitude deve ser um número válido.",
-        })
+        .number(
+          fieldError({ invalid: "A latitude deve ser um número válido." }),
+        )
         .min(-90, "A latitude deve estar entre -90 e 90.")
         .max(90, "A latitude deve estar entre -90 e 90.")
         .optional()
@@ -174,9 +179,9 @@ const updateFuelSchema = z
         return val;
       },
       z
-        .number({
-          invalid_type_error: "A longitude deve ser um número válido.",
-        })
+        .number(
+          fieldError({ invalid: "A longitude deve ser um número válido." }),
+        )
         .min(-180, "A longitude deve estar entre -180 e 180.")
         .max(180, "A longitude deve estar entre -180 e 180.")
         .optional()

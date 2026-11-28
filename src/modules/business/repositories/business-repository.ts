@@ -18,14 +18,31 @@ import {
   cityLabel,
 } from "../usecases/list-business/business-list";
 
-import database from "@/../infra/database";
+import database, { readDatabase } from "@/../infra/database";
 
 import { buildSearchOr } from "@/shared/pagination/search-or";
 import { resolveOrderBy } from "@/shared/pagination/list-query";
 import { insensitiveEquals } from "@/shared/utils/like-pattern";
+import { deleteQueueRowsOfBusiness } from "@/shared/notifications/queue-row-cleanup";
+import { forgetRequestCache } from "@/shared/http/request-context";
 
 class BusinessRepository implements IBusinessRepository {
   constructor(private prisma = database) {}
+
+  /**
+   * The heavy reads' bulkhead (plano-escala F3-17), for the MASTER's list of
+   * companies: a pool of its own, 3 connections and 10 s a statement, so a
+   * burst of them waits among itself instead of taking the connections every
+   * other request needs. A repository built on another client (a test's) reads
+   * on that client. A getter, so a module that mocks infra/database without it
+   * only needs it when one of these reads runs.
+   * With DATABASE_REPLICA_URL, readDatabase() sends them to the standby
+   * while the replica guard vouches for it: lists only (plano-escala F4-42,
+   * tests/unitaires/database/read-routing-guard.test.ts).
+   */
+  private get read(): typeof this.prisma {
+    return this.prisma === database ? readDatabase() : this.prisma;
+  }
 
   async createBusiness(
     businessData: CreateBusinessProps,
@@ -60,9 +77,9 @@ class BusinessRepository implements IBusinessRepository {
 
   /**
    * One page of companies ‖ the (is_active, uf) breakdown, then the top
-   * cities: at most two connections at a time (connection-fan-out budget).
-   * The cards and filters are derived from the breakdowns, never from the
-   * page (decision 8.8).
+   * cities ‖ the page's fleet sizes: at most two connections at a time
+   * (connection-fan-out budget). The cards and filters are derived from the
+   * breakdowns, never from the page (decision 8.8).
    */
   async listBusiness({
     page,
@@ -83,41 +100,55 @@ class BusinessRepository implements IBusinessRepository {
     };
 
     const [businessRows, grouped] = await Promise.all([
-      this.prisma.business.findMany({
+      this.read.business.findMany({
         skip: (page - 1) * pageSize,
         take: pageSize,
         where: businessListWhere(filters),
         orderBy: resolveOrderBy(BUSINESS_SORT, { sort, order }),
-        include: {
-          _count: {
-            // Active fleet only — INACTIVE vehicles free their slot.
-            select: {
-              vehicles: { where: { status: { not: "INACTIVE" } } },
-            },
-          },
-        },
       }),
-      this.prisma.business.groupBy({
+      this.read.business.groupBy({
         by: ["is_active", "uf"],
         where: businessListWhere(filters, { except: "facets" }),
         _count: { _all: true, erp_code: true },
       }),
     ]);
 
-    // By city AND state: two "São José" (SC and SP) are two places.
-    const cities = await this.prisma.business.groupBy({
-      by: ["city", "uf"],
-      where: businessListWhere(filters),
-      _count: { _all: true },
-      orderBy: [{ _count: { city: "desc" } }, { city: "asc" }, { uf: "asc" }],
-      take: TOP_PLACES,
-    });
+    const pageIds = businessRows.map((business) => business.id);
 
-    // Flatten the relation count so the API exposes registered fleet size
-    // next to the contracted limit (vehicle_limit).
-    const data = businessRows.map(({ _count, ...business }) => ({
+    const [cities, fleets] = await Promise.all([
+      // By city AND state: two "São José" (SC and SP) are two places.
+      this.read.business.groupBy({
+        by: ["city", "uf"],
+        where: businessListWhere(filters),
+        _count: { _all: true },
+        orderBy: [{ _count: { city: "desc" } }, { city: "asc" }, { uf: "asc" }],
+        take: TOP_PLACES,
+      }),
+      // The page's fleets only — active fleet, INACTIVE vehicles free their
+      // slot. Not a filtered relation `_count` on the page: Prisma writes it
+      // as a LEFT JOIN on a subselect grouped over EVERY vehicle of the
+      // platform (a sequential scan of 10.000 vehicles for a page of ten in
+      // tests/E2E/query-plans.test.ts), which grows with every carrier.
+      pageIds.length > 0
+        ? this.read.vehicle.groupBy({
+            by: ["businessId"],
+            where: {
+              businessId: { in: pageIds },
+              status: { not: "INACTIVE" },
+            },
+            _count: { _all: true },
+          })
+        : Promise.resolve([]),
+    ]);
+
+    const fleetOf = new Map(
+      fleets.map((fleet) => [fleet.businessId, fleet._count._all]),
+    );
+
+    // The registered fleet size next to the contracted limit (vehicle_limit).
+    const data = businessRows.map((business) => ({
       ...business,
-      vehicle_count: _count.vehicles,
+      vehicle_count: fleetOf.get(business.id) ?? 0,
     }));
 
     return {
@@ -191,8 +222,10 @@ class BusinessRepository implements IBusinessRepository {
     tx?: Prisma.TransactionClient,
   ): Promise<Business | null> {
     const toggle = async (transaction: Prisma.TransactionClient) => {
+      // Never a company whose purge was scheduled (F3-25): its way back is
+      // the reactivation, which also cancels the purge.
       const { count } = await transaction.business.updateMany({
-        where: { id: businessId, is_active: expectedActive },
+        where: { id: businessId, is_active: expectedActive, purge_state: null },
         data: { is_active: !expectedActive },
       });
 
@@ -203,6 +236,58 @@ class BusinessRepository implements IBusinessRepository {
 
     // The caller's transaction when it has one (the audit entry joins it).
     return tx ? toggle(tx) : this.prisma.$transaction(toggle);
+  }
+
+  async schedulePurge(
+    businessId: string,
+    purgeAfter: Date,
+    tx?: Prisma.TransactionClient,
+  ): Promise<Business | null> {
+    const client = tx ?? this.prisma;
+    const { count } = await client.business.updateMany({
+      where: { id: businessId, purge_state: null },
+      data: {
+        is_active: false,
+        deactivated_at: new Date(),
+        purge_state: "SCHEDULED",
+        purge_after: purgeAfter,
+      },
+    });
+
+    if (count === 0) return null;
+
+    return client.business.findUnique({
+      where: { id: businessId },
+    }) as Promise<Business | null>;
+  }
+
+  async cancelPurge(
+    businessId: string,
+    tx?: Prisma.TransactionClient,
+  ): Promise<Business | null> {
+    const client = tx ?? this.prisma;
+    const { count } = await client.business.updateMany({
+      where: { id: businessId, purge_state: "SCHEDULED" },
+      data: {
+        is_active: true,
+        deactivated_at: null,
+        purge_state: null,
+        purge_after: null,
+      },
+    });
+
+    if (count === 0) return null;
+
+    return client.business.findUnique({
+      where: { id: businessId },
+    }) as Promise<Business | null>;
+  }
+
+  async findScheduledPurges(from: Date, to: Date): Promise<Business[]> {
+    return this.prisma.business.findMany({
+      where: { purge_state: "SCHEDULED", purge_after: { gte: from, lt: to } },
+      orderBy: { purge_after: "asc" },
+    }) as Promise<Business[]>;
   }
 
   async updateBusiness(
@@ -220,6 +305,10 @@ class BusinessRepository implements IBusinessRepository {
       data: filteredData,
     });
 
+    // The zone this request may hold for the company (the session lookup
+    // brought it) is the old one now.
+    forgetRequestCache();
+
     return updateBusiness;
   }
 
@@ -227,13 +316,23 @@ class BusinessRepository implements IBusinessRepository {
     businessId: string,
     tx?: Prisma.TransactionClient,
   ): Promise<Business> {
-    const deleteBusiness = await (tx ?? this.prisma).business.delete({
-      where: {
-        id: businessId,
-      },
-    });
+    // Its queue rows first, in the same transaction: the cascade that takes
+    // them today leaves with wave 10 (queue-row-cleanup.ts). A delete that
+    // fails (P2025, a RESTRICT key) rolls them back with it.
+    const remove = async (client: Prisma.TransactionClient) => {
+      await deleteQueueRowsOfBusiness(client, businessId);
 
-    return deleteBusiness;
+      const removed = await client.business.delete({
+        where: { id: businessId },
+      });
+
+      // Nothing this request remembered of the company (its zone) holds.
+      forgetRequestCache();
+
+      return removed;
+    };
+
+    return tx ? remove(tx) : this.prisma.$transaction(remove);
   }
 
   async findBusinessById(businessId: string): Promise<Business | null> {

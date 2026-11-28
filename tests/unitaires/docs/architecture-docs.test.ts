@@ -672,6 +672,238 @@ describe("every ADR the code and the docs cite has its file", () => {
   );
 });
 
+describe("every document the code cites has its file", () => {
+  /**
+   * The code names a document as the place a number or a decision comes
+   * from, and a reader follows it. Four comments sent readers to
+   * docs/desempenho/carga-2026-10.md and two to banco-2026-10.md, which were
+   * never in this repository (they lived in the workspace root's docs/,
+   * which is not versioned): what they measured now lives in
+   * docs/desempenho/README.md.
+   *
+   * The design documents below are the same kind of history, older and
+   * with no copy here; they stay named as the origin of a decision, and the
+   * list only shrinks. A new citation points at a versioned document.
+   */
+  const WORKSPACE_ONLY = new Set([
+    "docs/contratos-app/ai-feedback.md",
+    "docs/contratos-app/occurrences.md",
+    "docs/contratos-app/pauses.md",
+    "docs/desenho/categorias-de-ocorrencia-e-pausas.md",
+    "docs/desenho/comprovante-modelo-validado-e-icp.md",
+    "docs/desenho/esquema-reuniao.md",
+    "docs/desenho/tickets-de-atendimento.md",
+  ]);
+
+  const CITED =
+    /(?<![\w./-])((?:trajetto-(?:api|ui|mobile)\/)?docs\/[\w./-]+?\.md)\b/g;
+
+  /** Every docs/…md path cited under src/, with the first file citing it. */
+  function citedInSource(): Map<string, string> {
+    const found = new Map<string, string>();
+    const visit = (path: string) => {
+      if (statSync(path).isDirectory()) {
+        for (const name of readdirSync(path)) visit(join(path, name));
+        return;
+      }
+
+      if (!/\.(ts|js|mjs|sql|prisma)$/.test(path)) return;
+
+      for (const match of read(path).matchAll(CITED)) {
+        if (!found.has(match[1])) found.set(match[1], relative(ROOT, path));
+      }
+    };
+
+    visit(join(ROOT, "src"));
+
+    return found;
+  }
+
+  it("cites, under src/, only documents that exist", () => {
+    const missing: string[] = [];
+
+    for (const [cited, where] of citedInSource()) {
+      if (WORKSPACE_ONLY.has(cited)) continue;
+
+      const sibling = cited.match(/^(trajetto-(?:api|ui|mobile))\/(.+)$/);
+      const root = sibling ? repoRoot(sibling[1]) : ROOT;
+
+      if (!root) continue;
+
+      if (!existsSync(join(root, sibling ? sibling[2] : cited))) {
+        missing.push(`${cited} (${where})`);
+      }
+    }
+
+    expect(missing).toEqual([]);
+  });
+
+  it("reads the citations it is meant to check, and the list only shrinks", () => {
+    const cited = citedInSource();
+
+    expect(cited.has("docs/desempenho/README.md")).toBe(true);
+    expect(cited.has("docs/operacao/jobs.md")).toBe(true);
+
+    // A document of the list no longer cited, or brought into the
+    // repository, leaves the list.
+    for (const path of WORKSPACE_ONLY) {
+      expect(cited.has(path), path).toBe(true);
+      expect(existsSync(join(ROOT, path)), path).toBe(false);
+    }
+  });
+});
+
+/**
+ * The rows of the first table under a heading (`##` or `###`), before the
+ * next heading, cells trimmed.
+ */
+function sectionTable(text: string, heading: string): string[][] {
+  const section =
+    text
+      .split(/^(?=#{2,3} )/m)
+      .find((part) => part.replace(/^#+ /, "").startsWith(heading)) ?? "";
+  const lines = section.split("\n");
+  const start = lines.findIndex((line) => line.startsWith("|"));
+
+  if (start < 0) return [];
+
+  const rows: string[][] = [];
+
+  for (const line of lines.slice(start)) {
+    if (!line.startsWith("|")) break;
+
+    const cells = line
+      .slice(1, line.endsWith("|") ? -1 : undefined)
+      .split("|")
+      .map((cell) => cell.trim());
+
+    // The header's separator row.
+    if (cells.every((cell) => /^:?-+:?$/.test(cell))) continue;
+
+    rows.push(cells);
+  }
+
+  return rows;
+}
+
+describe("the proposed SLOs (docs/slo.md)", () => {
+  /**
+   * The scale plan (section 6.3) proposes eleven SLOs and the rule of the
+   * alerts, and the owner approves docs/slo.md. An SLO without a source is a
+   * number nobody can check, and one whose source is a histogram border
+   * that does not exist reads the wrong bucket: the SQL in the doc indexes
+   * the ops_sample buckets by position, so a change of the buckets (a new
+   * ops_sample version) has to change the doc with it.
+   */
+  const SLO_DOC = "docs/slo.md";
+  const path = join(ROOT, SLO_DOC);
+  const text = existsSync(path) ? read(path) : "";
+
+  const INDICATORS = [
+    "Disponibilidade da API em 30 dias",
+    "Leituras do painel",
+    "POST `/route/positions`",
+    "Envios do motorista",
+    "Outbox elegível",
+    "Sino e push depois do fato",
+    "E-mail e WhatsApp",
+    "Webhook para endpoint saudável",
+    "Sockets de volta depois de um deploy",
+    "Feed de integração",
+    "RPO e RTO",
+  ];
+
+  const groupsSource = read(join(ROOT, "src/shared/health/route-groups.ts"));
+  const routeGroups = new Set(
+    [
+      ...(
+        groupsSource.match(/const ROUTE_GROUPS = \[([\s\S]*?)\]/)?.[1] ?? ""
+      ).matchAll(/"([a-z_]+)"/g),
+    ].map((match) => match[1]),
+  );
+  const bucketsSource = read(join(ROOT, "src/shared/health/http-metrics.ts"));
+  const buckets = (
+    bucketsSource.match(/const HTTP_LATENCY_BUCKETS_MS = \[([^\]]*)\]/)?.[1] ??
+    ""
+  )
+    .split(",")
+    .map((value) => Number(value.trim().replace(/_/g, "")))
+    .filter((value) => Number.isFinite(value) && value > 0);
+
+  it("exists, says it is a proposal and has the owner's approval line", () => {
+    expect(existsSync(path), SLO_DOC).toBe(true);
+    expect(text).toMatch(/PROPOSTO/);
+    expect(text).toMatch(/^\*\*Aprovação do dono:\*\*/m);
+  });
+
+  it("lists every SLO of the plan, each with a target and a source", () => {
+    const rows = sectionTable(text, "Os SLOs");
+    const [header, ...body] = rows;
+
+    expect(header?.slice(0, 4)).toEqual([
+      "Indicador",
+      "Alvo",
+      "Fonte",
+      "Medível hoje",
+    ]);
+    expect(body.map((row) => row[0])).toEqual(INDICATORS);
+
+    for (const [indicator, target, source, today] of body) {
+      expect(target, indicator).toMatch(/\d/);
+      expect(source, indicator).toMatch(/\w{3,}/);
+      expect(source, indicator).not.toMatch(/^[—-]$/);
+      // "não" names what brings the source, or says no item does yet.
+      expect(today, indicator).toMatch(/^(sim|não)\b/);
+      if (today.startsWith("não")) {
+        expect(today, indicator).toMatch(/[A-Z]+\d*-\d+|sem item/);
+      }
+    }
+  });
+
+  it("judges each latency SLO by a histogram border that exists, at its index", () => {
+    expect(buckets.length).toBeGreaterThan(5);
+    expect(routeGroups.has("positions")).toBe(true);
+
+    const rows = sectionTable(text, "Latência por grupo de rota").slice(1);
+
+    expect(rows.length).toBeGreaterThanOrEqual(4);
+
+    for (const [slo, groups, border] of rows) {
+      const cited = [...groups.matchAll(/`([a-z_]+)`/g)].map((m) => m[1]);
+      const ms = Number(border.match(/^(\d+) ms/)?.[1]);
+      const index = Number(border.match(/índice (\d+)/)?.[1]);
+
+      expect(cited.length, slo).toBeGreaterThan(0);
+      for (const group of cited) expect(routeGroups, slo).toContain(group);
+
+      // The count at index i is "≤ buckets[i]": above the border starts at
+      // the next index.
+      expect(buckets, slo).toContain(ms);
+      expect(index, slo).toBe(buckets.indexOf(ms) + 1);
+    }
+  });
+
+  it("states the rule of the alerts: fixed thresholds, then a two-window burn rate", () => {
+    expect(text).toMatch(/30 dias de `ops_sample`/);
+    expect(text).toMatch(/1 h e 5 min[^\n]*14,4×/);
+    expect(text).toMatch(/6 h e 30 min[^\n]*6×/);
+  });
+
+  it("cites only code and docs that exist", () => {
+    const missing: string[] = [];
+
+    for (const match of text.matchAll(
+      /`((?:src|docs|tests|prisma|infra)\/[^`\s]*)`/g,
+    )) {
+      const cited = match[1].replace(/[:#].*$/, "");
+
+      if (!existsSync(join(ROOT, cited))) missing.push(match[1]);
+    }
+
+    expect(missing).toEqual([]);
+  });
+});
+
 describe("claims the docs make about the code", () => {
   const readme = read(join(ROOT, "README.md"));
   const architecture = read(join(ROOT, MAP_DOC));
@@ -685,6 +917,77 @@ describe("claims the docs make about the code", () => {
       expect(text).not.toMatch(/Não há cache no Redis/i);
       expect(text).not.toMatch(/sem cache, sessão, lock nem fila/i);
       expect(text).not.toMatch(/não há camada de cache na API nem no Redis/i);
+    }
+  });
+
+  it("do not say no company's data is cached while the address search keeps its answers per company", () => {
+    expect(
+      existsSync(
+        join(
+          ROOT,
+          "src/shared/services/address-search/address-search-limits.ts",
+        ),
+      ),
+    ).toBe(true);
+
+    // The claims ADR 0002's addendum of 10/11/2026 made stale.
+    for (const name of [
+      "README.md",
+      MAP_DOC,
+      "docs/adr/0002-redis-descartavel.md",
+      "CLAUDE.md",
+      "AGENTS.md",
+    ]) {
+      const text = read(join(ROOT, name));
+
+      expect(text, name).not.toMatch(
+        /Nenhum\s+dado\s+de\s+empresa\s+em\s+cache/i,
+      );
+      expect(text, name).not.toMatch(
+        /Nenhum\s+dado\s+de\s+empresa\s+fica\s+em\s+cache,\s+e\s+sem\s+Redis/i,
+      );
+      expect(text, name).not.toMatch(
+        /nenhum\s+dado\s+de\s+empresa\s+fica\s+em\s+cache\s+na\s+API\s+nem\s+no\s+Redis/i,
+      );
+      expect(text, name).not.toMatch(
+        /^Nenhum\s+dado\s+de\s+empresa\s+nem\s+de\s+pessoa\s+entra\s+em\s+cache/im,
+      );
+      expect(text, name).not.toMatch(/única\s+exceção\s+ao\s+cache/i);
+    }
+  });
+
+  it("name the geocoder wherever they list what Redis keeps, and fail-closed where the code does", () => {
+    const deploy = read(join(ROOT, "docs/deploy.md"));
+    const adr = read(join(ROOT, "docs/adr/0002-redis-descartavel.md"));
+
+    // The closed lists: the Database's persistence (deploy.md §7.5 and §10),
+    // the README's stack and the component map every tour step copies.
+    const lists = [
+      [
+        "deploy.md §7.5",
+        deploy.match(/\*\*Com teto de memória\*\*[\s\S]*?um snapshot/),
+      ],
+      ["deploy.md §10", deploy.match(/\*\*Nada durável\*\*[\s\S]*?backup/)],
+      ["README.md stack", readme.match(/^\| Redis via `ioredis`.*$/m)],
+      [`${MAP_DOC} map`, architecture.match(/rd\[\("Redis 7<br\/>[^"]*"\)\]/)],
+    ] as const;
+
+    for (const [where, found] of lists) {
+      expect(found?.[0], where).toMatch(/geocod/);
+    }
+
+    // The socket ticket fails closed like the geocoder
+    // (redis-client-options.ts, "socket-ticket"), and its claims carry a
+    // businessId: the search's cache is the only company data CACHED there.
+    for (const [name, text] of [
+      [MAP_DOC, architecture],
+      ["docs/adr/0002-redis-descartavel.md", adr],
+    ] as const) {
+      expect(text, name).not.toMatch(/ao\s+contrário\s+dos\s+outros\s+usos/i);
+      expect(text, name).not.toMatch(/três\s+primeiros\s+deles\s+também/i);
+      expect(text, name).not.toMatch(
+        /único\s+dado\s+de\s+empresa\s+no\s+Redis/i,
+      );
     }
   });
 
@@ -704,6 +1007,104 @@ describe("claims the docs make about the code", () => {
   it("link the tour from the README and from the map", () => {
     expect(readme).toMatch(/\]\(\.\/docs\/arquitetura-tour\.md\)/);
     expect(architecture).toMatch(/\]\(\.\/arquitetura-tour\.md\)/);
+  });
+
+  // ADR 0004 left splitting the workers from the HTTP to a measured
+  // trigger. On 15/11/2026 the owner decided to write all the scale code
+  // now: ADR 0012 replaced it, and the roles' code ships inert until the
+  // owner creates each Application. A doc still saying the code waits for
+  // a trigger tells the next reader the roles do not exist. The broker
+  // stays trigger-only (ADR 0001): a paragraph about it may say so.
+  it("do not say the roles' code waits for a measured trigger (ADR 0012)", () => {
+    const adr = read(join(ROOT, "docs/adr/0004-workers-no-mesmo-processo.md"));
+
+    expect(existsSync(join(ROOT, "docs/adr/0012-papeis-de-processo.md"))).toBe(
+      true,
+    );
+    expect(adr).toMatch(
+      /\*\*Status:\*\* substituído pelo \[ADR 0012\]\(\.\/0012-papeis-de-processo\.md\)/,
+    );
+
+    for (const name of [
+      "README.md",
+      MAP_DOC,
+      "CLAUDE.md",
+      "AGENTS.md",
+      "docs/deploy.md",
+      "docs/adr/README.md",
+      "docs/adr/0012-papeis-de-processo.md",
+    ]) {
+      const stale = read(join(ROOT, name))
+        .split(/\n\s*\n|\n(?=\s*(?:[-*]|\d+\.)\s)|\n(?=\|)|\n(?=#)/)
+        .filter((chunk) => /só\s+por\s+gatilho/i.test(chunk))
+        .filter((chunk) => !/broker/i.test(chunk));
+
+      expect(stale, name).toEqual([]);
+    }
+  });
+});
+
+describe("the inventory of the Applications (infraestrutura.md §5.12)", () => {
+  /**
+   * The inventory is the record of what the Dokploy panel has (plano-escala
+   * X-40); the ceilings of deploy.md §19 are what the owner types into it.
+   * An Application sized there and missing here is one nobody records once
+   * it exists, and one listed here and not sized there is one nobody knows
+   * how to create.
+   */
+  const between = (text: string, start: string, end: string) => {
+    const from = text.indexOf(start);
+
+    expect(from, start).toBeGreaterThanOrEqual(0);
+
+    const to = text.indexOf(end, from + start.length);
+
+    return text.slice(from, to < 0 ? undefined : to);
+  };
+
+  /** The Applications of the table under `**<environment>**`. */
+  const applications = (text: string, environment: string) => {
+    const lines = between(text, `**${environment}**`, "\n\n**")
+      .split("\n")
+      .filter((line) => line.startsWith("|"))
+      .slice(2);
+
+    return lines
+      .map((line) => line.split("|")[1].match(/`(trajetto-[a-z-]+)`/)?.[1])
+      .sort();
+  };
+
+  const deploy = read(join(ROOT, "docs/deploy.md"));
+  const infra = read(join(ROOT, "docs/infraestrutura.md"));
+  const ceilings = () =>
+    between(deploy, "### Tetos por Application e por fase", "\n### ");
+  const inventory = () =>
+    between(infra, "### 5.12 Inventário das Applications", "\n---\n");
+
+  it.each(["Produção", "Staging"])(
+    "names in %s every Application the ceilings size, and no other",
+    (environment) => {
+      const sized = applications(ceilings(), environment);
+
+      expect(sized.length).toBeGreaterThan(10);
+      expect(sized).not.toContain(undefined);
+      expect(applications(inventory(), environment)).toEqual(sized);
+    },
+  );
+
+  it("says where the monitors run and keeps the measurements of F0-09", () => {
+    expect(infra).toMatch(/^### 4\.7 A máquina medida \(F0-09\)$/m);
+    expect(infra).toMatch(/^### 10\.4 Onde rodam os monitores$/m);
+
+    const monitors = between(
+      infra,
+      "### 10.4 Onde rodam os monitores",
+      "\n---\n",
+    );
+
+    for (const monitor of ["healthchecks.io", "Uptime Kuma", "Beszel"]) {
+      expect(monitors, monitor).toContain(monitor);
+    }
   });
 });
 

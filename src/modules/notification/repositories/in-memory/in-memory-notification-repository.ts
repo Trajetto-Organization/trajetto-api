@@ -9,9 +9,12 @@ import type {
 import type {
   INotificationRepository,
   ListNotificationsParams,
+  NotificationEntityRef,
   UpsertPreferenceInput,
 } from "../INotification-repository";
 
+import { env } from "@/env";
+import { bellIdRange } from "@/shared/notifications/bell-id-range";
 import { afterCursor, newestFirst } from "@/shared/in-memory/cursor";
 import { requireIndex } from "@/shared/in-memory/prisma-errors";
 
@@ -21,6 +24,21 @@ import { requireIndex } from "@/shared/in-memory/prisma-errors";
  * newest first with the id breaking a tie, Prisma's cursor, P2025 on a
  * missing row, one preference per (user, category).
  */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
+ * The ids the Prisma repository's reads look at (bell-id-range.ts). Every
+ * id the bell holds is a uuid; a fixture's id that is not one ("n-1") has
+ * no month, and is kept.
+ */
+function kept(row: { id: string }): boolean {
+  if (!UUID.test(row.id)) return true;
+
+  const range = bellIdRange(env.NOTIFICATION_UNREAD_RETENTION_DAYS);
+
+  return row.id >= range.gte && row.id < range.lt;
+}
+
 class InMemoryNotificationRepository implements INotificationRepository {
   public notifications: Notification[] = [];
   public preferences: NotificationPreference[] = [];
@@ -55,7 +73,10 @@ class InMemoryNotificationRepository implements INotificationRepository {
     cursor,
   }: ListNotificationsParams): Promise<CursorPaginatedNotifications> {
     const matching = this.notifications
-      .filter((row) => row.userId === userId && (includeRead || !row.read))
+      .filter(
+        (row) =>
+          row.userId === userId && (includeRead || !row.read) && kept(row),
+      )
       .sort(newestFirst);
 
     const window = afterCursor(
@@ -91,7 +112,7 @@ class InMemoryNotificationRepository implements INotificationRepository {
 
   async markAllAsRead(userId: string): Promise<number> {
     const unread = this.notifications.filter(
-      (row) => row.userId === userId && !row.read,
+      (row) => row.userId === userId && !row.read && kept(row),
     );
 
     for (const row of unread) {
@@ -100,6 +121,28 @@ class InMemoryNotificationRepository implements INotificationRepository {
     }
 
     return unread.length;
+  }
+
+  async markReadByEntity({
+    userId,
+    type,
+    entityId,
+  }: NotificationEntityRef): Promise<string[]> {
+    const unread = this.notifications.filter(
+      (row) =>
+        row.userId === userId &&
+        row.type === type &&
+        row.entityId === entityId &&
+        !row.read &&
+        kept(row),
+    );
+
+    for (const row of unread) {
+      row.read = true;
+      row.updated_at = new Date();
+    }
+
+    return unread.map((row) => row.id);
   }
 
   async deleteNotification(notificationId: string): Promise<void> {
@@ -120,7 +163,7 @@ class InMemoryNotificationRepository implements INotificationRepository {
 
   async countUnreadNotifications(userId: string): Promise<number> {
     return this.notifications.filter(
-      (row) => row.userId === userId && !row.read,
+      (row) => row.userId === userId && !row.read && kept(row),
     ).length;
   }
 

@@ -1,3 +1,5 @@
+import { settlesWithin } from "./deadline";
+
 /**
  * The order a replica goes away in, kept apart from `server.ts` so it can be
  * tested without booting the application.
@@ -7,16 +9,33 @@
  * 1. DRAIN FIRST. Readiness answered 200 until the very end, so the load
  *    balancer kept routing new requests to a replica that was about to close
  *    its listener. Readiness now answers 503 from the first instant, and the
- *    replica keeps serving for one health-check interval while Traefik takes
- *    it out of rotation.
+ *    replica keeps serving for the plan's drain (shutdown-plan.ts). Traefik
+ *    has no health check on the service (docs/deploy.md, section 5): the
+ *    Swarm takes the task out of the virtual address before the SIGTERM, and
+ *    the drain is for the requests on the keep-alive connections Traefik
+ *    still holds with it.
  * 2. REALTIME BEFORE HTTP. An upgraded websocket keeps the HTTP server open,
  *    and nothing closed them: `app.close()` waited forever with a single
  *    driver connected — which in production is always — until the watchdog
  *    killed the process mid-send. Closing the Socket.IO engine ends them with
  *    "transport close", which the clients answer by reconnecting to another
- *    replica.
- * 3. HTTP, then WORKERS. In-flight requests finish against live services.
+ *    replica. Since plano-escala U-01 most of them go before, in slices over
+ *    the drain (`spreadRealtime`): all at once, a replica's whole fleet
+ *    handshook with the replicas left over in the same second.
+ * 3. HTTP, then WORKERS. In-flight requests finish against live services,
+ *    within the plan's `httpMs`. `app.close()` waits for every one of them
+ *    and has no deadline of its own (a body may take 120 s to arrive): an
+ *    old app build sending a photo through the multipart adapter on a slow
+ *    3G link held it until the watchdog's exit(1), before the workers had
+ *    stopped — a cron run left RUNNING, the batches back to their leases.
+ *    Past the deadline the connections still open are closed (the client
+ *    sees its request fail and sends it again, as it would after the
+ *    watchdog), and the workers stop inside the grace.
  * 4. REDIS LAST. Nothing publishes after the workers stopped.
+ *
+ * With HTTP: the GPS group commit's buffer (plano-escala F5-19), written
+ * out as the listener closes, so the positions a request in flight is
+ * waiting for are committed before the process goes.
  *
  * Alongside, from the first instant: the in-process IMPORT QUEUE
  * (import-queue.ts). A deploy dropped the running spreadsheet upload and up
@@ -31,7 +50,10 @@ interface ShutdownSteps {
   /** Readiness starts answering 503. */
   markDraining: () => void;
 
-  /** How long to keep serving after readiness flips; 0 outside production. */
+  /**
+   * How long to keep serving after readiness flips (the shutdown plan's
+   * drain); 0 outside production.
+   */
   drainMs: number;
 
   /**
@@ -41,10 +63,41 @@ interface ShutdownSteps {
    */
   drainImports: () => Promise<void>;
 
+  /**
+   * Starts closing the websockets in slices over the drain (U-01); started
+   * with the drain, only when there is one. Optional: without it every
+   * socket goes at `closeRealtime`.
+   */
+  spreadRealtime?: (windowMs: number) => void;
+
   /** Ends every websocket so the HTTP server can close. */
   closeRealtime: () => void;
 
+  /**
+   * Stops accepting connections and settles once every request in flight
+   * has been answered (Fastify's close).
+   */
   closeHttp: () => Promise<void>;
+
+  /**
+   * How long the requests still in flight get once the drain is over (the
+   * plan's httpMs); past it, `cutHttp`.
+   */
+  httpMs: number;
+
+  /** Ends every HTTP connection still open, in flight or not. */
+  cutHttp: () => void;
+
+  /**
+   * Writes the flushes the GPS group commit holds (plano-escala F5-19,
+   * position-write-buffer.ts) at once, without waiting for the window, and
+   * sends every later one down the one-transaction path. Started as HTTP
+   * stops taking connections, awaited before the workers stop: a request
+   * in flight is answered only after its points are committed. Optional:
+   * without it, the window (50 ms) writes them anyway. Never rejects.
+   */
+  drainWrites?: () => Promise<void>;
+
   stopWorkers: () => Promise<void>;
   closeRedis: () => Promise<void>;
 }
@@ -61,11 +114,25 @@ async function runShutdown(
   // Not awaited yet: the running upload uses the drain window to finish.
   const imports = steps.drainImports().catch(() => undefined);
 
-  if (steps.drainMs > 0) await sleep(steps.drainMs);
+  if (steps.drainMs > 0) {
+    try {
+      steps.spreadRealtime?.(steps.drainMs);
+    } catch {
+      // Best effort: `closeRealtime` still ends every socket below.
+    }
+
+    await sleep(steps.drainMs);
+  }
 
   steps.closeRealtime();
 
-  await steps.closeHttp();
+  const closing = steps.closeHttp();
+  const writes = steps.drainWrites?.().catch(() => undefined);
+
+  if (!(await settlesWithin(closing, steps.httpMs))) steps.cutHttp();
+
+  await closing;
+  await writes;
   await imports;
   await steps.stopWorkers();
   await steps.closeRedis();

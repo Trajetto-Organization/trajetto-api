@@ -2,6 +2,7 @@ import { afterAll, describe, expect, it } from "vitest";
 
 import { Prisma } from "@prisma/client";
 
+import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -15,6 +16,7 @@ import { DriverPauseRepository } from "@/modules/driver-pause/repositories/drive
 
 import { pauseTypeId } from "./support/pause-type-seed";
 import { createPrismaClient } from "@/shared/database/database-client";
+import { hashDeviceId } from "@/modules/user/services/session-service";
 import { uniqueTargetOf } from "@/shared/errors/prisma-error-meta";
 
 /**
@@ -28,7 +30,8 @@ import { uniqueTargetOf } from "@/shared/errors/prisma-error-meta";
  * columns the PREVIOUS image still selects (expand/contract).
  *
  * Like schema-indexes.test.ts, it asserts what the migration FILES produce: the
- * environment builds a fresh database per file with `migrate deploy`.
+ * environment clones each file's database from a template that `migrate
+ * deploy` built from them (template.ts).
  */
 const prisma = createPrismaClient();
 
@@ -257,12 +260,18 @@ describe("new tables", () => {
     expect((await columnsOf(table)).size).toBeGreaterThan(0);
   });
 
-  it("dedupes a provider's retried callback", async () => {
+  it("reads a provider's retried callback by its fact, with no unique since F5-06", async () => {
+    // insertReceipts locks each fact and reads which ones the ledger holds
+    // (plano-escala F5-04): the unique left with the contraction (F5-06),
+    // its columns stayed as a plain index for that read.
     expect(
       await indexDefinition(
         "notification_provider_receipt_provider_providerMessageId_st_key",
       ),
-    ).toMatch(/UNIQUE INDEX .*\(provider, "providerMessageId", status\)/);
+    ).toBeNull();
+    expect(
+      await indexDefinition("notification_provider_receipt_fact_idx"),
+    ).toMatch(/^CREATE INDEX .*\(provider, "providerMessageId", status\)/);
   });
 });
 
@@ -356,10 +365,28 @@ describe("one point per driver per instant", () => {
 
     expect(second).toBe(0);
     expect(
-      await prisma.driverPosition.count({
+      await prisma.driverPositionLegacy.count({
         where: { driverId: "driver-resend" },
       }),
     ).toBe(1);
+  });
+
+  it("is the lean trail's primary key, so a resend is absorbed there too", async () => {
+    // plano-escala F2-10: driver_position_v2 has no surrogate id; the point
+    // IS (driverId, recorded_at).
+    const insert = `
+      INSERT INTO "driver_position_v2"
+        ("driverId", "businessId", "latitude", "longitude", "recorded_at")
+      VALUES ($1::uuid, $2::uuid, -23.5, -46.6, date_trunc('minute', now()))
+      ON CONFLICT DO NOTHING`;
+    const driverId = "018fe5a0-0000-7000-8000-0000000000d1";
+    const businessId = "018fe5a0-0000-7000-8000-0000000000b1";
+
+    await prisma.$executeRawUnsafe(insert, driverId, businessId);
+    const second = await prisma.$executeRawUnsafe(insert, driverId, businessId);
+
+    expect(second).toBe(0);
+    expect(await prisma.driverPosition.count({ where: { driverId } })).toBe(1);
   });
 });
 
@@ -498,6 +525,36 @@ const MEETING_NULLABLE_COLUMNS: Array<[string, string]> = [
   ["chat_message", "ticketId"],
 ];
 
+// ── The plan of 02/11/2026 (Fase 2), 20261102120000..20261102121100 ──
+// planejamento.md §4.1 and §7.1 commit 1: the expansions the rules of Fase 3
+// are written against.
+
+const PLAN_2026_11_NULLABLE_COLUMNS: Array<[string, string]> = [
+  // C4/F3: a checklist or a refuelling made for a route
+  ["vehicle_checklist", "routeId"],
+  ["fuel", "routeId"],
+  // F1: who answers for the vehicle (null = the admins)
+  ["vehicle", "responsibleUserId"],
+  // E4: the geofence record of an action at the customer's address
+  ["delivery_event", "distance_m"],
+  ["delivery_event", "accuracy_m"],
+  ["delivery_event", "geofence_outcome"],
+  ["delivery_occurrence", "distance_m"],
+  ["delivery_occurrence", "accuracy_m"],
+  ["delivery_occurrence", "geofence_outcome"],
+  // B6: one customer message per stop
+  ["route_stop", "stop_group_key"],
+  // K2/L8: the requirements' clock and the ERP code
+  ["occurrence_type", "code"],
+  ["occurrence_type", "requirements_changed_at"],
+  // 14/11/2026: which deliveries of a company stand at the same door, and
+  // which one a copied point came from
+  ["delivery", "address_key"],
+  ["delivery", "geo_copied_from"],
+  // Review of plano-escala F2-33: the date of a copied verdict
+  ["delivery", "geocode_verdict_at"],
+];
+
 describe("final phase: new columns", () => {
   it.each(FINAL_PHASE_NULLABLE_COLUMNS)(
     "%s.%s exists and is nullable",
@@ -534,6 +591,9 @@ describe("final phase: new columns", () => {
     const literalOf = (columnDefault: string | null | undefined): unknown => {
       if (columnDefault == null) return undefined;
 
+      // An empty array (fuel.alerts, 20261105130000), in either spelling.
+      if (/^(ARRAY\[\]|'\{\}')::/.test(columnDefault)) return [];
+
       const quoted = /^'(.*)'::/.exec(columnDefault);
       if (quoted) return quoted[1];
       if (columnDefault === "true" || columnDefault === "false") {
@@ -564,7 +624,8 @@ describe("final phase: new columns", () => {
           continue;
         }
 
-        expect(literalOf(real?.column_default), `${table}.${column}`).toBe(
+        // toEqual: an array default compares by its items.
+        expect(literalOf(real?.column_default), `${table}.${column}`).toEqual(
           value,
         );
       }
@@ -575,6 +636,7 @@ describe("final phase: new columns", () => {
     const missing = [
       ...FINAL_PHASE_NULLABLE_COLUMNS,
       ...MEETING_NULLABLE_COLUMNS,
+      ...PLAN_2026_11_NULLABLE_COLUMNS,
     ].filter(
       ([table, column]) =>
         (COLUMN_DEFAULTS_BY_TABLE as Record<string, Record<string, unknown>>)[
@@ -2684,5 +2746,1040 @@ describe("meeting: the recorded proofs become DELIVERED occurrences (prisma/back
       // No author: skipped, not invented.
       expect.objectContaining({ id: "proof-unauthored", category: null }),
     ]);
+  });
+});
+
+describe("plan of 02/11/2026: new columns and tables", () => {
+  it.each([
+    ...PLAN_2026_11_NULLABLE_COLUMNS,
+    ["refresh_token", "device_id"],
+    ["business_settings", "updatedById"],
+    ["driver_enrollment_token", "code_hash"],
+    ["driver_enrollment_token", "consumed_at"],
+    ["driver_enrollment_token", "createdById"],
+    ["driver_enrollment_token", "device_id"],
+  ] as Array<[string, string]>)(
+    "%s.%s exists and is nullable, with no default",
+    async (table, column) => {
+      expect((await columnsOf(table)).get(column)).toMatchObject({
+        is_nullable: "YES",
+        column_default: null,
+      });
+    },
+  );
+
+  it.each([
+    ["vehicle_checklist", "phase", `'STANDALONE'::"ChecklistPhase"`],
+    [
+      "business_settings",
+      "checklist_requirement",
+      `'NONE'::"ChecklistRequirement"`,
+    ],
+    [
+      "business_settings",
+      "arrival_geofence_mode",
+      `'DISABLED'::"GeofenceMode"`,
+    ],
+    ["business_settings", "arrival_geofence_radius_m", "500"],
+    ["driver_enrollment_token", "attempts", "0"],
+  ])(
+    "%s.%s is NOT NULL with the default the code reads as the default",
+    async (table, column, defaultValue) => {
+      expect((await columnsOf(table)).get(column)).toMatchObject({
+        is_nullable: "NO",
+        column_default: defaultValue,
+      });
+    },
+  );
+
+  it("has the enums the plan names, with every value", async () => {
+    const rows = await prisma.$queryRawUnsafe<
+      Array<{ type: string; value: string }>
+    >(
+      `SELECT t.typname AS type, e.enumlabel AS value
+         FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid
+        WHERE t.typname IN ('ChecklistRequirement', 'GeofenceMode', 'ChecklistPhase', 'GeofenceOutcome')
+        ORDER BY t.typname, e.enumsortorder`,
+    );
+    const valuesOf = (type: string) =>
+      rows.filter((row) => row.type === type).map((row) => row.value);
+
+    expect(valuesOf("ChecklistRequirement")).toEqual([
+      "NONE",
+      "ROUTE_START",
+      "ROUTE_END",
+      "ROUTE_START_AND_END",
+    ]);
+    expect(valuesOf("GeofenceMode")).toEqual(["DISABLED", "ALERT", "BLOCK"]);
+    expect(valuesOf("ChecklistPhase")).toEqual([
+      "STANDALONE",
+      "ROUTE_START",
+      "ROUTE_END",
+    ]);
+    expect(valuesOf("GeofenceOutcome")).toEqual([
+      "INSIDE",
+      "OUTSIDE",
+      "NOT_EVALUATED",
+    ]);
+  });
+
+  it("keeps the business settings defaults equal to the code's", async () => {
+    // A company without a row reads BUSINESS_SETTINGS_DEFAULTS; the row's
+    // first save gets the column defaults. Both must say the same.
+    const { BUSINESS_SETTINGS_DEFAULTS } =
+      await import("@/shared/business/business-settings");
+    const columns = await columnsOf("business_settings");
+
+    expect(columns.get("checklist_requirement")?.column_default).toBe(
+      `'${BUSINESS_SETTINGS_DEFAULTS.checklist_requirement}'::"ChecklistRequirement"`,
+    );
+    expect(columns.get("arrival_geofence_mode")?.column_default).toBe(
+      `'${BUSINESS_SETTINGS_DEFAULTS.arrival_geofence_mode}'::"GeofenceMode"`,
+    );
+    expect(columns.get("arrival_geofence_radius_m")?.column_default).toBe(
+      String(BUSINESS_SETTINGS_DEFAULTS.arrival_geofence_radius_m),
+    );
+  });
+
+  it("orders a company's routes newest first through an index (K14)", async () => {
+    expect(await indexDefinition("route_businessId_created_at_idx")).toMatch(
+      /ON public\.route USING btree \("businessId", created_at DESC\)/,
+    );
+    expect(
+      await indexDefinition("route_stop_routeId_stop_group_key_idx"),
+    ).toMatch(/\("routeId", stop_group_key\)/);
+  });
+
+  it("reads a company's routes by a range of days through an index (period of 09/11/2026)", async () => {
+    expect(
+      await indexDefinition("route_businessId_scheduled_date_idx"),
+    ).toMatch(/ON public\.route USING btree \("businessId", scheduled_date\)/);
+  });
+});
+
+describe("plan of 02/11/2026: the nullable expansions (D2, B3)", () => {
+  /**
+   * Release N loosens; nothing writes NULL until the next release
+   * (-- nullable-expand:). The database already takes it, so this release's
+   * reads have to — and the unique on the e-mail never counts NULLs as equal.
+   */
+  it("lets user.email be NULL, many times over, and still refuses a repeated address", async () => {
+    expect((await columnsOf("user")).get("email")?.is_nullable).toBe("YES");
+
+    const outcome = await rolledBack(async (tx) => {
+      const carrier = await seedBusiness(tx);
+      const insert = (id: string, email: string | null) =>
+        tx.$executeRawUnsafe(
+          `INSERT INTO "user" ("id", "name", "email", "password", "role", "businessId", "updated_at")
+           VALUES ($1, 'Motorista', $2, 'x', 'BUSINESS_USER', $3, now())`,
+          id,
+          email,
+          carrier,
+        );
+
+      await insert("018f3000-0000-7000-8000-00000000d201", null);
+      await insert("018f3000-0000-7000-8000-00000000d202", null);
+      await insert("018f3000-0000-7000-8000-00000000d203", "repetido@x.com.br");
+
+      const repeated = await tx
+        .$executeRawUnsafe("SAVEPOINT before_repeat")
+        .then(() =>
+          insert("018f3000-0000-7000-8000-00000000d204", "repetido@x.com.br"),
+        )
+        .then(
+          () => "accepted",
+          async () => {
+            await tx.$executeRawUnsafe("ROLLBACK TO SAVEPOINT before_repeat");
+            return "refused";
+          },
+        );
+
+      return { repeated };
+    });
+
+    expect(outcome.repeated).toBe("refused");
+  });
+
+  it("lets a WhatsApp template's body be NULL, never an e-mail's", async () => {
+    expect(
+      (await columnsOf("delivery_message_template")).get("body")?.is_nullable,
+    ).toBe("YES");
+
+    const outcome = await rolledBack(async (tx) => {
+      const carrier = await seedBusiness(tx);
+      const insert = (id: string, channel: string, body: string | null) =>
+        tx.$executeRawUnsafe(
+          `INSERT INTO "delivery_message_template" ("id", "topic", "channel", "body", "businessId", "updated_at")
+           VALUES ($1, 'DISPATCHED', $2::"NotificationChannel", $3, $4, now())`,
+          id,
+          channel,
+          body,
+          carrier,
+        );
+
+      await insert("018f3000-0000-7000-8000-00000000e301", "WHATSAPP", null);
+
+      const email = await tx
+        .$executeRawUnsafe("SAVEPOINT before_email")
+        .then(() =>
+          insert("018f3000-0000-7000-8000-00000000e302", "EMAIL", null),
+        )
+        .then(
+          () => "accepted",
+          async () => {
+            await tx.$executeRawUnsafe("ROLLBACK TO SAVEPOINT before_email");
+            return "refused";
+          },
+        );
+
+      return { email };
+    });
+
+    expect(outcome.email).toBe("refused");
+  });
+});
+
+describe("plan of 02/11/2026: rules in the database", () => {
+  it("bounds the geofence radius to 50..5,000 m", async () => {
+    const outcome = await rolledBack(async (tx) => {
+      const carrier = await seedBusiness(tx);
+      const attempt = async (radius: number) => {
+        await tx.$executeRawUnsafe("SAVEPOINT radius");
+
+        try {
+          await tx.$executeRawUnsafe(
+            `INSERT INTO "business_settings" ("id", "businessId", "arrival_geofence_radius_m", "updated_at")
+             VALUES (gen_random_uuid()::text, $1, $2, now())`,
+            carrier,
+            radius,
+          );
+          await tx.$executeRawUnsafe("ROLLBACK TO SAVEPOINT radius");
+          return "accepted";
+        } catch {
+          await tx.$executeRawUnsafe("ROLLBACK TO SAVEPOINT radius");
+          return "refused";
+        }
+      };
+
+      return {
+        below: await attempt(49),
+        floor: await attempt(50),
+        ceiling: await attempt(5000),
+        above: await attempt(5001),
+      };
+    });
+
+    expect(outcome).toEqual({
+      below: "refused",
+      floor: "accepted",
+      ceiling: "accepted",
+      above: "refused",
+    });
+  });
+
+  it("keeps one settings row per company", async () => {
+    expect(await indexDefinition("business_settings_businessId_key")).toMatch(
+      /UNIQUE INDEX .*\("businessId"\)/,
+    );
+  });
+
+  it("keeps an occurrence type's code unique per company, and a null code never collides (L8)", async () => {
+    expect(
+      await indexDefinition("occurrence_type_businessId_code_key"),
+    ).toMatch(/UNIQUE INDEX .*\("businessId", code\)/);
+  });
+
+  it("keeps one live access code per driver login, and each hash unique (D3)", async () => {
+    expect(await indexDefinition("driver_enrollment_token_userId_key")).toMatch(
+      /UNIQUE INDEX .*\("userId"\)/,
+    );
+    expect(
+      await indexDefinition("driver_enrollment_token_token_hash_key"),
+    ).toMatch(/UNIQUE INDEX .*\(token_hash\)/);
+    expect(
+      await indexDefinition("driver_enrollment_token_code_hash_key"),
+    ).toMatch(/UNIQUE INDEX .*\(code_hash\)/);
+  });
+});
+
+describe("the checklist's origin (20261105120000, 20261105120100)", () => {
+  const COLUMN = "20261105120000_vehicle_checklist_created_from";
+  const BACKFILL = "20261105120100_vehicle_checklist_created_from_backfill";
+
+  it("adds the column alone, apart from the backfill", () => {
+    // Each migration is one transaction, and the ADD COLUMN's ACCESS
+    // EXCLUSIVE lock lasts until it commits: with the backfill's read of the
+    // whole activity trail in the same one, every checklist read and write
+    // would fail with a 500 after the API's lock_timeout.
+    expect(
+      migrationStatements(COLUMN).map((statement) => statement.split(/\s/)[0]),
+    ).toEqual(["SET", "ALTER"]);
+    expect(
+      migrationStatements(BACKFILL).map(
+        (statement) => statement.split(/\s/)[0],
+      ),
+    ).toEqual(["SET", "UPDATE"]);
+  });
+
+  it("vehicle_checklist.created_from is NOT NULL, WEB_DASHBOARD by default", async () => {
+    // The previous image's INSERTs leave it out and get the default.
+    expect(
+      (await columnsOf("vehicle_checklist")).get("created_from"),
+    ).toMatchObject({
+      is_nullable: "NO",
+      column_default: `'WEB_DASHBOARD'::"RecordOrigin"`,
+    });
+  });
+
+  it("marks as the app's the checklists its trail entry or its key says came from it, and only them", async () => {
+    const backfill = statementStartingWith(BACKFILL, "UPDATE");
+
+    const outcome = await rolledBack(async (tx) => {
+      const carrier = await seedBusiness(tx);
+      const k = (name: string) => `${name}-${carrier}`;
+
+      await tx.branch.create({
+        data: {
+          id: k("branch"),
+          corporate_reason: `Filial ${carrier}`,
+          cep: "01001000",
+          city: "São Paulo",
+          uf: "SP",
+          street: "Rua",
+          address_number: "1",
+          cnpj: `cnpj-${k("branch")}`,
+          cnae: "4930202",
+          responsible_name: "Responsável",
+          telephone: "11999999999",
+          email: `${k("branch")}@exemplo.com.br`,
+          businessId: carrier,
+        },
+      });
+      await seedDriverRow(tx, carrier, k("driver"));
+      await tx.fuelType.create({
+        data: { id: k("diesel"), description: "Diesel", businessId: carrier },
+      });
+      await tx.vehicle.create({
+        data: {
+          id: k("truck"),
+          description: "Caminhão",
+          license_plate: `P-${carrier.slice(-6)}`,
+          brand: "Scania",
+          model: "R450",
+          acquisition_date: new Date("2024-01-10T00:00:00.000Z"),
+          fleet_type: "OWNED",
+          current_mileage: 1_000,
+          maintenance_interval_km: 10_000,
+          maintenance_interval_months: 6,
+          renavam: `rnv-${carrier}`,
+          manufacturing_year: new Date("2023-01-01T00:00:00.000Z"),
+          model_year: new Date("2024-01-01T00:00:00.000Z"),
+          km_per_liter: 3,
+          number_of_axles: 3,
+          status: "ACTIVE",
+          businessId: carrier,
+          fuelTypeId: k("diesel"),
+        },
+      });
+
+      const checklist = (name: string, extra: object = {}) =>
+        tx.vehicleChecklist.create({
+          data: {
+            id: k(name),
+            current_mileage: 1_000,
+            tires_condition: "good",
+            bumpers_condition: "good",
+            windshield_condition: "good",
+            mirrors_condition: "good",
+            steering_wheel_condition: "good",
+            battery_condition: "good",
+            spare_tire_condition: "good",
+            overall_condition: "approved",
+            photos: [],
+            businessId: carrier,
+            branchId: k("branch"),
+            vehicleId: k("truck"),
+            driverId: k("driver"),
+            ...extra,
+          },
+        });
+
+      const trail = (name: string, origin: string | null, action = "create") =>
+        tx.activity.create({
+          data: {
+            type: "Checklist Veicular",
+            action,
+            entityId: k(name),
+            description: `Checklist veicular criado para o veículo P-1 - Caminhão${
+              origin ? ` | Origem: ${origin}` : ""
+            }`,
+            status: "Criado",
+            businessId: carrier,
+          },
+        });
+
+      // The multipart build: its key, and a trail that says "Web" because
+      // it never sends the field.
+      const keyed = await checklist("keyed", {
+        client_submission_id: "018fec20-0000-7000-8000-0000000000f1",
+      });
+      await trail("keyed", "Web");
+
+      // A build that sent MOBILE_APP: the trail says so.
+      await checklist("trail-app");
+      await trail("trail-app", "Aplicativo");
+
+      // The web's form: no key, the trail says "Web".
+      await checklist("web");
+      await trail("web", "Web");
+
+      // From before the trail named an origin, with no key: unknowable.
+      await checklist("old");
+      await trail("old", null);
+
+      // Only the creation's entry counts.
+      await checklist("edited");
+      await trail("edited", "Web");
+      await trail("edited", "Aplicativo", "update");
+
+      const first = await tx.$executeRawUnsafe(backfill);
+      // Idempotent: nothing left to mark.
+      const second = await tx.$executeRawUnsafe(backfill);
+
+      const rows = await tx.vehicleChecklist.findMany({
+        where: { businessId: carrier },
+        select: { id: true, created_from: true, updated_at: true },
+      });
+      const byName = (name: string) => rows.find((row) => row.id === k(name));
+
+      return {
+        first,
+        second,
+        origins: Object.fromEntries(
+          ["keyed", "trail-app", "web", "old", "edited"].map((name) => [
+            name,
+            byName(name)?.created_from,
+          ]),
+        ),
+        keyedUpdatedAtKept:
+          byName("keyed")?.updated_at.getTime() === keyed.updated_at.getTime(),
+      };
+    });
+
+    expect(outcome.first).toBe(2);
+    expect(outcome.second).toBe(0);
+    expect(outcome.origins).toEqual({
+      keyed: "MOBILE_APP",
+      "trail-app": "MOBILE_APP",
+      web: "WEB_DASHBOARD",
+      old: "WEB_DASHBOARD",
+      edited: "WEB_DASHBOARD",
+    });
+    // How the row was always made, not an edit.
+    expect(outcome.keyedUpdatedAtKept).toBe(true);
+  });
+});
+
+describe("the refuelling's alerts (20261105130000)", () => {
+  const MIGRATION = "20261105130000_fuel_recent_refuel_alert";
+
+  it("creates the enum idempotently, then adds the columns under lock_timeout", () => {
+    // One table, catalog-only: the type in a DO block that skips
+    // duplicate_object (it can be created by hand first), the columns with
+    // IF NOT EXISTS.
+    expect(
+      migrationStatements(MIGRATION).map(
+        (statement) => statement.split(/\s/)[0],
+      ),
+    ).toEqual(["DO", "SET", "ALTER"]);
+  });
+
+  it("fuel.alerts is NOT NULL and empty by default; the other two are nullable", async () => {
+    const columns = await columnsOf("fuel");
+
+    // The previous image's INSERTs leave all three out.
+    expect(columns.get("alerts")).toMatchObject({
+      is_nullable: "NO",
+      data_type: "ARRAY",
+    });
+    expect(columns.get("alerts")?.column_default).toMatch(
+      /^(ARRAY\[\]|'\{\}')::"FuelAlert"\[\]$/,
+    );
+    expect(columns.get("recent_refuel_reason")).toMatchObject({
+      is_nullable: "YES",
+      column_default: null,
+      data_type: "character varying",
+    });
+    expect(columns.get("recent_refuel_previous_at")).toMatchObject({
+      is_nullable: "YES",
+      column_default: null,
+    });
+
+    const values = await prisma.$queryRawUnsafe<Array<{ value: string }>>(
+      `SELECT unnest(enum_range(NULL::"FuelAlert"))::text AS value`,
+    );
+
+    expect(values.map((row) => row.value)).toEqual(["RECENT_REFUEL"]);
+  });
+
+  it("runs again over itself without failing (the by-hand recipe)", async () => {
+    await rolledBack(async (tx) => {
+      for (const statement of migrationStatements(MIGRATION)) {
+        await tx.$executeRawUnsafe(statement);
+      }
+    });
+  });
+});
+
+describe("the trusted phones and the manager-set password (20261106120000..0200)", () => {
+  const FLAG = "20261106120000_user_must_change_password";
+  const TABLE = "20261106120100_driver_trusted_device";
+  const BACKFILL = "20261106120200_driver_trusted_device_backfill";
+
+  // The SHA-256 the API digests a device id with (session-service
+  // hashDeviceId), over the id as the API stores it (normalized).
+  const digest = (deviceId: string) =>
+    createHash("sha256").update(deviceId).digest("hex");
+
+  it("adds the flag alone, the table apart, and the backfill in its own transaction", () => {
+    // "user" is read by every request: its ACCESS EXCLUSIVE lock is held for
+    // the catalog change only. The foreign key's lock on "user" is released
+    // before the backfill reads anything.
+    expect(
+      migrationStatements(FLAG).map((statement) => statement.split(/\s/)[0]),
+    ).toEqual(["SET", "ALTER"]);
+    expect(
+      migrationStatements(BACKFILL).map(
+        (statement) => statement.split(/\s/)[0],
+      ),
+    ).toEqual(["SET", "INSERT"]);
+  });
+
+  it("user.must_change_password is NOT NULL, false by default", async () => {
+    // The previous image's INSERTs leave it out.
+    expect((await columnsOf("user")).get("must_change_password")).toMatchObject(
+      { is_nullable: "NO", column_default: "false" },
+    );
+  });
+
+  it("driver_trusted_device keeps one row per login and phone, by hash, with a closed source", async () => {
+    const columns = await columnsOf("driver_trusted_device");
+
+    expect([...columns.keys()].sort()).toEqual(
+      [
+        "created_at",
+        "device_hash",
+        "id",
+        "last_login_at",
+        "source",
+        "userId",
+      ].sort(),
+    );
+    expect(
+      await indexDefinition("driver_trusted_device_userId_device_hash_key"),
+    ).toMatch(/UNIQUE INDEX .* \("userId", device_hash\)/);
+    expect(await indexDefinition("driver_trusted_device_userId_idx")).toMatch(
+      /\("userId"\)/,
+    );
+
+    const refused = await rolledBack(async (tx) => {
+      const carrier = await seedBusiness(tx);
+      await seedUserRow(tx, carrier, `login-${carrier}`);
+
+      return tx
+        .$executeRawUnsafe(
+          `INSERT INTO "driver_trusted_device" ("id", "userId", "device_hash", "source")
+           VALUES ('t-1', $1, 'hash', 'outro')`,
+          `login-${carrier}`,
+        )
+        .then(() => null)
+        .catch((error: unknown) => String(error));
+    });
+
+    expect(refused).toMatch(/driver_trusted_device_source_chk/);
+  });
+
+  it("trusts the phones of live phone-bound sessions and of consumed QR codes, once each, and only them", async () => {
+    const backfill = statementStartingWith(BACKFILL, "INSERT");
+
+    const outcome = await rolledBack(async (tx) => {
+      const carrier = await seedBusiness(tx);
+      const k = (name: string) => `${name}-${carrier}`;
+
+      for (const name of ["ana", "bia", "caio"]) {
+        await seedDriverRow(tx, carrier, k(`driver-${name}`));
+        await seedUserRow(tx, carrier, k(name), k(`driver-${name}`));
+      }
+
+      const session = (
+        user: string,
+        deviceId: string | null,
+        state: "live" | "revoked" | "expired",
+        createdAt = "2026-11-05T10:00:00.000Z",
+      ) =>
+        tx.$executeRawUnsafe(
+          `INSERT INTO "refresh_token" ("id", "token_hash", "jti", "family_id", "expires_in",
+             "revoked_at", "userId", "device_id", "created_at")
+           VALUES (gen_random_uuid()::text, gen_random_uuid()::text, gen_random_uuid()::text,
+             gen_random_uuid()::text, $1::timestamp, $2::timestamp, $3, $4, $5::timestamp)`,
+          state === "expired"
+            ? "2020-01-01T00:00:00.000Z"
+            : "2099-01-01T00:00:00.000Z",
+          state === "revoked" ? "2026-11-05T11:00:00.000Z" : null,
+          k(user),
+          deviceId,
+          createdAt,
+        );
+
+      // Ana: a live phone session, the same phone again in a raced renewal,
+      // and the QR code she read on it — one phone, one row.
+      await session("ana", "23be03c084165505", "live");
+      await session(
+        "ana",
+        "23be03c084165505",
+        "live",
+        "2026-11-05T12:00:00.000Z",
+      );
+      await tx.$executeRawUnsafe(
+        `INSERT INTO "driver_enrollment_token" ("id", "userId", "businessId", "token_hash",
+           "expires_at", "consumed_at", "device_id")
+         VALUES (gen_random_uuid()::text, $1, $2, gen_random_uuid()::text,
+           '2026-11-04T10:10:00.000Z', '2026-11-04T10:01:00.000Z', '23be03c084165505')`,
+        k("ana"),
+        carrier,
+      );
+      // A web session (no phone): nothing to trust.
+      await session("ana", null, "live");
+
+      // Bia: only a consumed QR code, on another phone.
+      await tx.$executeRawUnsafe(
+        `INSERT INTO "driver_enrollment_token" ("id", "userId", "businessId", "token_hash",
+           "expires_at", "consumed_at", "device_id")
+         VALUES (gen_random_uuid()::text, $1, $2, gen_random_uuid()::text,
+           '2026-11-04T10:10:00.000Z', '2026-11-04T10:02:00.000Z', '9f1c03c084160000')`,
+        k("bia"),
+        carrier,
+      );
+
+      // Caio: a revoked and an expired phone session, and a QR code still on
+      // a screen (not consumed): none of them trusted.
+      await session("caio", "aaaaaaaaaaaaaaaa", "revoked");
+      await session("caio", "bbbbbbbbbbbbbbbb", "expired");
+      await tx.$executeRawUnsafe(
+        `INSERT INTO "driver_enrollment_token" ("id", "userId", "businessId", "token_hash",
+           "expires_at")
+         VALUES (gen_random_uuid()::text, $1, $2, gen_random_uuid()::text,
+           '2099-01-01T00:00:00.000Z')`,
+        k("caio"),
+        carrier,
+      );
+
+      const first = await tx.$executeRawUnsafe(backfill);
+      // Idempotent: a retried migration adds nothing.
+      const second = await tx.$executeRawUnsafe(backfill);
+
+      const rows = await tx.$queryRawUnsafe<
+        Array<{
+          userId: string;
+          device_hash: string;
+          source: string;
+          last_login_at: Date;
+        }>
+      >(
+        `SELECT "userId", "device_hash", "source", "last_login_at"
+           FROM "driver_trusted_device" WHERE "userId" = ANY($1::text[])
+          ORDER BY "userId"`,
+        [k("ana"), k("bia"), k("caio")],
+      );
+
+      return { first, second, rows, ana: k("ana"), bia: k("bia") };
+    });
+
+    expect(outcome.first).toBe(2);
+    expect(outcome.second).toBe(0);
+    expect(outcome.rows).toEqual([
+      {
+        userId: outcome.ana,
+        device_hash: digest("23be03c084165505"),
+        source: "backfill",
+        // The latest of the renewals and the QR.
+        last_login_at: new Date("2026-11-05T12:00:00.000Z"),
+      },
+      {
+        userId: outcome.bia,
+        device_hash: digest("9f1c03c084160000"),
+        source: "backfill",
+        last_login_at: new Date("2026-11-04T10:02:00.000Z"),
+      },
+    ]);
+    // The hash is the one a CPF login with that deviceId looks for.
+    expect(outcome.rows[0].device_hash).toBe(hashDeviceId("23be03c084165505"));
+  });
+
+  /**
+   * The previous image's "Revogar este aparelho" (D7) ended the phone's
+   * sessions and left the consumed QR code as it was, still naming that
+   * phone; its audit entry names no phone. A disconnection of the login
+   * after the code was read keeps the code's phone out — a revoked phone is
+   * never trusted again — while one before it (a new code read since) does
+   * not. The login's phones still in use come in by their sessions.
+   */
+  it("leaves out the QR code's phone once the manager disconnected a phone of that login after it", async () => {
+    const backfill = statementStartingWith(BACKFILL, "INSERT");
+
+    const outcome = await rolledBack(async (tx) => {
+      const carrier = await seedBusiness(tx);
+      const k = (name: string) => `${name}-${carrier}`;
+
+      for (const name of ["dani", "edu"]) {
+        await seedDriverRow(tx, carrier, k(`driver-${name}`));
+        await seedUserRow(tx, carrier, k(name), k(`driver-${name}`));
+      }
+
+      const consumedQr = (user: string, deviceId: string) =>
+        tx.$executeRawUnsafe(
+          `INSERT INTO "driver_enrollment_token" ("id", "userId", "businessId", "token_hash",
+             "expires_at", "consumed_at", "device_id")
+           VALUES (gen_random_uuid()::text, $1, $2, gen_random_uuid()::text,
+             '2026-11-04T10:10:00.000Z', '2026-11-04T10:01:00.000Z', $3)`,
+          k(user),
+          carrier,
+          deviceId,
+        );
+      const disconnected = (user: string, at: string) =>
+        tx.$executeRawUnsafe(
+          `INSERT INTO "activity" ("id", "type", "action", "entityId", "description", "status",
+             "businessId", "created_at", "updated_at")
+           VALUES (gen_random_uuid()::text, 'Usuário', 'update', $1,
+             'Aparelho do motorista Fulano desconectado pelo gestor', 'Atualizado',
+             $2, $3::timestamp, $3::timestamp)`,
+          k(user),
+          carrier,
+          at,
+        );
+
+      // Dani: the phone that read the code was disconnected afterwards.
+      await consumedQr("dani", "cccccccccccccccc");
+      await disconnected("dani", "2026-11-04T15:00:00.000Z");
+
+      // Edu: a phone disconnected before he read the code on a new one.
+      await consumedQr("edu", "dddddddddddddddd");
+      await disconnected("edu", "2026-11-03T09:00:00.000Z");
+
+      await tx.$executeRawUnsafe(backfill);
+
+      return {
+        rows: await tx.$queryRawUnsafe<
+          Array<{ userId: string; device_hash: string }>
+        >(
+          `SELECT "userId", "device_hash"
+             FROM "driver_trusted_device" WHERE "userId" = ANY($1::text[])`,
+          [k("dani"), k("edu")],
+        ),
+        edu: k("edu"),
+      };
+    });
+
+    expect(outcome.rows).toEqual([
+      { userId: outcome.edu, device_hash: digest("dddddddddddddddd") },
+    ]);
+  });
+});
+
+describe("the service order's automatic card without its amount (20261109120000)", () => {
+  const MIGRATION = "20261109120000_kanban_service_order_card_without_amount";
+
+  it("is one UPDATE under a lock timeout", () => {
+    expect(
+      migrationStatements(MIGRATION).map(
+        (statement) => statement.split(/\s/)[0],
+      ),
+    ).toEqual(["SET", "UPDATE"]);
+  });
+
+  it("drops the amount line of the cards the API wrote, and nothing else", async () => {
+    const strip = statementStartingWith(MIGRATION, "UPDATE");
+
+    const outcome = await rolledBack(async (tx) => {
+      const carrier = await seedBusiness(tx);
+      const k = (name: string) => `${name}-${carrier}`;
+
+      await tx.$executeRawUnsafe(
+        `INSERT INTO "kanban_column" ("id", "title", "color", "position", "businessId", "updated_at")
+         VALUES ($1, 'A fazer', '#e2e8f0', 0, $2, now())`,
+        k("column"),
+        carrier,
+      );
+
+      let position = 0;
+
+      const card = (name: string, title: string, description: string) => {
+        position += 1;
+
+        return tx.$executeRawUnsafe(
+          `INSERT INTO "kanban_card" ("id", "title", "description", "priority", "due_date",
+             "position", "columnId", "updated_at")
+           VALUES ($1, $2, $3, 'Média', now(), $4, $5, '2026-11-01 12:00:00'::timestamp)`,
+          k(name),
+          title,
+          description,
+          position,
+          k("column"),
+        );
+      };
+
+      // What the previous image wrote: four lines, the amount second.
+      await card(
+        "written",
+        "Manutenção ABC1D23",
+        "Veículo: ABC1D23\nValor: R$ 1.850,00\nResponsável: Atribuído\nTipo: Externo",
+      );
+      // An order without a plate or a responsible.
+      await card(
+        "bare",
+        `Manutenção ${k("order")}`,
+        "Veículo: N/A\nValor: R$ 0,00\nResponsável: Não atribuído\nTipo: Interno",
+      );
+      // The office added a note below the API's lines: the note stays.
+      await card(
+        "noted",
+        "Manutenção DEF4G56",
+        "Veículo: DEF4G56\nValor: R$ 12.500,00\nResponsável: Atribuído\nTipo: Externo\n\nLevar à oficina na segunda",
+      );
+      // The office rewrote the text: left as it is.
+      await card(
+        "rewritten",
+        "Manutenção HIJ7K89",
+        "Trocar os pneus\nValor: R$ 900,00",
+      );
+      // Not a service order's card.
+      await card(
+        "manual",
+        "Revisar contrato",
+        "Veículo: ABC1D23\nValor: R$ 10,00",
+      );
+      // Already written without the amount.
+      await card(
+        "current",
+        "Manutenção ABC1D23",
+        "Veículo: ABC1D23\nResponsável: Atribuído\nTipo: Externo",
+      );
+
+      const first = await tx.$executeRawUnsafe(strip);
+      // Idempotent: what is left no longer matches.
+      const second = await tx.$executeRawUnsafe(strip);
+
+      const rows = await tx.$queryRawUnsafe<
+        Array<{ id: string; description: string; untouched: boolean }>
+      >(
+        `SELECT "id", "description",
+                ("updated_at" = '2026-11-01 12:00:00'::timestamp) AS "untouched"
+           FROM "kanban_card" WHERE "columnId" = $1`,
+        k("column"),
+      );
+
+      return {
+        first,
+        second,
+        cards: Object.fromEntries(
+          rows.map((row) => [row.id.replace(`-${carrier}`, ""), row]),
+        ),
+      };
+    });
+
+    expect(outcome.first).toBe(3);
+    expect(outcome.second).toBe(0);
+
+    const description = (name: string) => outcome.cards[name]?.description;
+
+    expect(description("written")).toBe(
+      "Veículo: ABC1D23\nResponsável: Atribuído\nTipo: Externo",
+    );
+    expect(description("bare")).toBe(
+      "Veículo: N/A\nResponsável: Não atribuído\nTipo: Interno",
+    );
+    expect(description("noted")).toBe(
+      "Veículo: DEF4G56\nResponsável: Atribuído\nTipo: Externo\n\nLevar à oficina na segunda",
+    );
+    expect(description("rewritten")).toBe("Trocar os pneus\nValor: R$ 900,00");
+    expect(description("manual")).toBe("Veículo: ABC1D23\nValor: R$ 10,00");
+    expect(description("current")).toBe(
+      "Veículo: ABC1D23\nResponsável: Atribuído\nTipo: Externo",
+    );
+
+    // Nobody edited a card: updated_at stays where it was.
+    expect(Object.values(outcome.cards).map((card) => card.untouched)).toEqual(
+      Array(6).fill(true),
+    );
+  });
+});
+
+describe("the API key on a delivery's trail (20261110120000)", () => {
+  const MIGRATION = "20261110120000_delivery_event_api_key";
+
+  it("adds the column, then its partial index, then the foreign key, under lock_timeout", () => {
+    const statements = migrationStatements(MIGRATION);
+
+    expect(statements.map((statement) => statement.split(/\s/)[0])).toEqual([
+      "SET",
+      "ALTER",
+      "CREATE",
+      "ALTER",
+    ]);
+
+    // One hot table. Every existing row is null, so the key is added NOT
+    // VALID: validating it would read the whole table under SHARE ROW
+    // EXCLUSIVE, the index notwithstanding (a column with no statistics).
+    expect(statements[3]).toMatch(/\bNOT VALID;?$/);
+  });
+
+  it("delivery_event.apiKeyId is nullable, with no default", async () => {
+    // The previous image's INSERTs leave it out; its SELECTs never name it.
+    expect((await columnsOf("delivery_event")).get("apiKeyId")).toMatchObject({
+      is_nullable: "YES",
+      column_default: null,
+    });
+  });
+
+  it("lets the key go, never the event, when a key is removed", async () => {
+    const [foreignKey] = await prisma.$queryRaw<Array<{ definition: string }>>`
+      SELECT pg_get_constraintdef(oid) AS definition
+        FROM pg_constraint
+       WHERE conname = 'delivery_event_apiKeyId_fkey'
+    `;
+
+    expect(foreignKey?.definition).toMatch(
+      /^FOREIGN KEY \("apiKeyId"\) REFERENCES (public\.)?api_key\(id\)/,
+    );
+    expect(foreignKey?.definition).toContain("ON DELETE SET NULL");
+  });
+});
+
+describe("the e-mail opt-outs per address (20261110130000)", () => {
+  const MIGRATION = "20261110130000_customer_message_suppression_email_entries";
+
+  it("is one INSERT under a lock timeout", () => {
+    expect(
+      migrationStatements(MIGRATION).map(
+        (statement) => statement.split(/\s/)[0],
+      ),
+    ).toEqual(["SET", "INSERT"]);
+  });
+
+  it("keeps each address of a list's opt-out once, with the first opt-out's date, and nothing else", async () => {
+    const backfill = statementStartingWith(MIGRATION, "INSERT");
+
+    const outcome = await rolledBack(async (tx) => {
+      const carrier = await seedBusiness(tx);
+      const other = await seedBusiness(tx);
+
+      const row = (
+        businessId: string,
+        channel: "EMAIL" | "WHATSAPP",
+        address: string,
+        at: string,
+      ) =>
+        tx.$executeRawUnsafe(
+          `INSERT INTO "customer_message_suppression"
+             ("id", "businessId", "channel", "address", "source_delivery_id", "created_at")
+           VALUES (gen_random_uuid()::text, $1, $2::"CustomerMessageChannel", $3, 'clicked', $4::timestamp)`,
+          businessId,
+          channel,
+          address,
+          at,
+        );
+
+      // What the previous image wrote: the whole field, trimmed and
+      // lower-cased, spaces, blanks and mistakes included.
+      await row(
+        carrier,
+        "EMAIL",
+        "compras@mercado.com.br; financeiro@mercado.com.br",
+        "2026-11-04 10:00:00",
+      );
+      await row(
+        carrier,
+        "EMAIL",
+        "financeiro@mercado.com.br;lixo;\tvendas@mercado.com.br ;",
+        "2026-11-05 10:00:00",
+      );
+      // A list pasted from a mail client.
+      await row(
+        carrier,
+        "EMAIL",
+        "ana@loja.com.br, bia@loja.com.br",
+        "2026-11-05 11:00:00",
+      );
+      // One address: already its own key.
+      await row(
+        carrier,
+        "EMAIL",
+        "joana@padaria.com.br",
+        "2026-11-05 12:00:00",
+      );
+      // The phone is one line already.
+      await row(carrier, "WHATSAPP", "5511991234567", "2026-11-05 13:00:00");
+      // Another company keeps its own rows.
+      await row(
+        other,
+        "EMAIL",
+        "compras@mercado.com.br;x@y.com.br",
+        "2026-11-06 10:00:00",
+      );
+
+      const first = await tx.$executeRawUnsafe(backfill);
+      // Idempotent: a second run (docs/deploy.md) adds nothing.
+      const second = await tx.$executeRawUnsafe(backfill);
+
+      const rows = await tx.$queryRawUnsafe<
+        Array<{ company: string; address: string; at: string; source: string }>
+      >(
+        `SELECT CASE WHEN "businessId" = $1 THEN 'carrier' ELSE 'other' END AS "company",
+                "address",
+                to_char("created_at", 'YYYY-MM-DD HH24:MI') AS "at",
+                "source_delivery_id" AS "source"
+           FROM "customer_message_suppression"
+          WHERE "businessId" IN ($1, $2) AND "channel" = 'EMAIL'
+          ORDER BY 1, "address" COLLATE "C"`,
+        carrier,
+        other,
+      );
+
+      return { first, second, rows };
+    });
+
+    expect(outcome.first).toBe(7);
+    expect(outcome.second).toBe(0);
+
+    expect(outcome.rows).toEqual(
+      [
+        ["carrier", "ana@loja.com.br", "2026-11-05 11:00"],
+        ["carrier", "ana@loja.com.br, bia@loja.com.br", "2026-11-05 11:00"],
+        ["carrier", "bia@loja.com.br", "2026-11-05 11:00"],
+        ["carrier", "compras@mercado.com.br", "2026-11-04 10:00"],
+        [
+          "carrier",
+          "compras@mercado.com.br; financeiro@mercado.com.br",
+          "2026-11-04 10:00",
+        ],
+        // In two lists: the earlier opt-out's date.
+        ["carrier", "financeiro@mercado.com.br", "2026-11-04 10:00"],
+        [
+          "carrier",
+          "financeiro@mercado.com.br;lixo;\tvendas@mercado.com.br ;",
+          "2026-11-05 10:00",
+        ],
+        ["carrier", "joana@padaria.com.br", "2026-11-05 12:00"],
+        ["carrier", "vendas@mercado.com.br", "2026-11-05 10:00"],
+        ["other", "compras@mercado.com.br", "2026-11-06 10:00"],
+        ["other", "compras@mercado.com.br;x@y.com.br", "2026-11-06 10:00"],
+        ["other", "x@y.com.br", "2026-11-06 10:00"],
+      ].map(([company, address, at]) => ({
+        company,
+        address,
+        at,
+        source: "clicked",
+      })),
+    );
   });
 });

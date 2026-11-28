@@ -183,25 +183,21 @@ describe("what a company may still write", () => {
   });
 });
 
-describe("the WhatsApp opt-out", () => {
-  it("does not count a link hidden inside a comment", async () => {
-    // The old check was `body.includes("{{link_descadastro}}")`, which a
-    // comment satisfies while the customer receives no way out at all.
-    await expect(
-      save({
-        channel: "WHATSAPP",
-        body: "{{!-- {{link_descadastro}} --}} Saiu: {{link}}",
-      }),
-    ).rejects.toMatchObject({ code: "MISSING_OPT_OUT_LINK" });
-  });
-
-  it("counts the link however it is spaced", async () => {
+/**
+ * Plan of 02/11/2026, B3: WhatsApp goes out as Meta's fixed template, with
+ * the "Parar de receber" button built in. The text the previous web still
+ * sends there is not the company's message any more — it is neither parsed
+ * nor kept, so nothing in it can be refused.
+ */
+describe("the text sent on WhatsApp", () => {
+  it("is not parsed, so a construct the e-mail refuses saves the switch", async () => {
     await save({
       channel: "WHATSAPP",
-      body: "Saiu: {{link}} — parar: {{ link_descadastro }}",
+      body: "{{> parcial}} {{#if nota}}x{{/if}} sem link de saída",
     });
 
     expect(templates.templates).toHaveLength(1);
+    expect(templates.templates[0].body).toBe("");
   });
 });
 

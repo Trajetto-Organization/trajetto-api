@@ -1,4 +1,5 @@
 import type { DeliveryStatus } from "@/shared/delivery/delivery-rules";
+import type { OutOfOperationStatus } from "@/shared/vehicle/vehicle-rules";
 
 /**
  * Route state machine, kept pure so it can be unit-tested.
@@ -12,11 +13,7 @@ import type { DeliveryStatus } from "@/shared/delivery/delivery-rules";
  */
 
 type RouteStatus =
-  | "PLANNED"
-  | "RELEASED"
-  | "IN_PROGRESS"
-  | "COMPLETED"
-  | "CANCELLED";
+  "PLANNED" | "RELEASED" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED";
 
 /**
  * A stop carries its own outcome rather than reading the delivery's, because
@@ -26,11 +23,7 @@ type RouteStatus =
  * support desk needs in order to answer "what happened to invoice X".
  */
 type RouteStopStatus =
-  | "PENDING"
-  | "ARRIVED"
-  | "COMPLETED"
-  | "FAILED"
-  | "CANCELLED";
+  "PENDING" | "ARRIVED" | "COMPLETED" | "FAILED" | "CANCELLED";
 
 const ROUTE_STATUS_LABELS: Record<RouteStatus, string> = {
   PLANNED: "Planejada",
@@ -165,6 +158,50 @@ function canReleaseRoute(candidate: ReleaseCandidate): TransitionVerdict {
 }
 
 /**
+ * The state of a vehicle out of operation, in the sentences that name it:
+ * the refusals below and the spreadsheet's per-row note.
+ */
+const OUT_OF_OPERATION_LABELS: Record<OutOfOperationStatus, string> = {
+  BLOCKED: "bloqueado",
+  INACTIVE: "inativo",
+};
+
+/**
+ * Who reads the refusal, and so what it tells them to do: the dispatcher
+ * planning (`assign`) or releasing (`release`) the route, or the driver at
+ * the truck (`depart`), who cannot pick another vehicle in the app.
+ */
+type VehicleUnavailableAct = "assign" | "release" | "depart";
+
+/**
+ * The one sentence for a vehicle out of operation, for every route write
+ * that refuses one (create, edit, release, departure): the plate and the
+ * state, so the reader knows which truck and why. It used to say "inativo
+ * ou bloqueado" without the plate, and the release did not ask at all.
+ */
+function vehicleUnavailableReason(
+  plate: string,
+  status: OutOfOperationStatus,
+  act: VehicleUnavailableAct,
+): string {
+  const state = `O veículo ${plate} está ${OUT_OF_OPERATION_LABELS[status]}`;
+
+  switch (act) {
+    case "assign":
+      return `${state} e não pode receber uma rota.`;
+
+    case "release":
+      return (
+        `${state} e não pode sair em rota. ` +
+        "Troque o veículo da rota antes de liberá-la."
+      );
+
+    case "depart":
+      return `${state} e não pode sair em rota. Fale com o despachante.`;
+  }
+}
+
+/**
  * Whether a released route can be pulled back for editing.
  *
  * Only while nothing has happened. Once a single stop has been worked, the
@@ -196,6 +233,42 @@ function isRouteFinished(stopStatuses: RouteStopStatus[]): boolean {
   if (stopStatuses.length === 0) return false;
 
   return !stopStatuses.some(isStopOpen);
+}
+
+/**
+ * What a finished route closes as, or null while it is not finished.
+ *
+ * Concluída once any stop reached an outcome (delivered or failed). A route
+ * whose every stop was called off was never worked: "Concluída" claimed a
+ * route nobody ran, so it closes as Cancelada (K8, decision D32), with
+ * ROUTE_ALL_STOPS_CANCELLED_REASON as its reason.
+ */
+function routeClosingStatus(
+  stopStatuses: RouteStopStatus[],
+): Extract<RouteStatus, "COMPLETED" | "CANCELLED"> | null {
+  if (!isRouteFinished(stopStatuses)) return null;
+
+  return stopStatuses.every((status) => status === "CANCELLED")
+    ? "CANCELLED"
+    : "COMPLETED";
+}
+
+/** The cancellation reason of a route that closed with nothing worked (D32). */
+const ROUTE_ALL_STOPS_CANCELLED_REASON = "Todas as paradas canceladas";
+
+/**
+ * The timeline line of a delivery a cancelled route handed back (K8): why it
+ * is Pendente again, in the dispatcher's own words.
+ */
+function routeCancelledNote(route: {
+  code: number;
+  cancellation_reason?: string | null;
+}): string {
+  const reason = route.cancellation_reason?.trim();
+
+  return reason
+    ? `Rota ${route.code} cancelada: ${reason}`
+    : `Rota ${route.code} cancelada.`;
 }
 
 /**
@@ -415,6 +488,8 @@ function routeCompletedAt({
 
 export {
   OPEN_STOP_STATUSES,
+  OUT_OF_OPERATION_LABELS,
+  ROUTE_ALL_STOPS_CANCELLED_REASON,
   ROUTE_STATUS_LABELS,
   ROUTE_STOP_STATUS_LABELS,
   ROUTE_STOP_TRANSITIONS,
@@ -431,9 +506,12 @@ export {
   nextSequence,
   resequence,
   routeCodeFromSearch,
+  routeCancelledNote,
+  routeClosingStatus,
   routeCompletedAt,
   routeProgress,
   stopOutcomeForDelivery,
+  vehicleUnavailableReason,
 };
 
 export type {
@@ -443,4 +521,5 @@ export type {
   RouteStatus,
   RouteStopStatus,
   TransitionVerdict,
+  VehicleUnavailableAct,
 };

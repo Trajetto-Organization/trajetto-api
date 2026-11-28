@@ -14,6 +14,9 @@ const SECRET_ENV_KEYS = [
   "PROOF_SIGNING_PFX_PASSWORD",
   "REVERSE_GEOCODER_KEY",
   "PROOF_MAP_TILE_URL",
+  // The app's base map (wave 5): the same kind of key-bearing tile URL.
+  "MAP_TILE_URL",
+  "MAP_TILE_URL_DARK",
 ] as const;
 
 function capture(): { lines: string[]; sink: Writable } {

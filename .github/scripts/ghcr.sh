@@ -1,12 +1,21 @@
 #!/usr/bin/env bash
 #
-# Reads and moves tags in GHCR for deploy.yml, telling "this tag does not
+# Reads and moves tags in GHCR for the CI, telling "this tag does not
 # exist" apart from "GHCR did not answer".
 #
 #   ghcr.sh digest <ref>             the manifest digest of <ref> on stdout,
 #                                    or nothing when the tag does not exist
 #   ghcr.sh tag <new-ref> <source>   points <new-ref> at <source>,
 #                                    registry-side (nothing is pulled)
+#   ghcr.sh labels <ref> <name>...   the image's labels with those names,
+#                                    joined by `|` in that order (an absent
+#                                    label is empty), or nothing when the
+#                                    tag does not exist (plano-escala
+#                                    F3-31c: the realtime's deploy reads
+#                                    the source and epoch it runs)
+#   ghcr.sh login                    logs Docker in to ghcr.io as GHCR_USER
+#                                    with GHCR_TOKEN (through stdin, never
+#                                    the command line)
 #
 # Every query used to be `imagetools inspect ... 2>/dev/null || true`: a 5xx,
 # a timeout or a missing login read as "no such tag". The AI was rebuilt for
@@ -19,7 +28,11 @@
 # persists, the script fails with an ::error:: that says GHCR is the problem.
 #
 # Moving a tag is idempotent (the same digest under the same name), so a
-# failed `tag` is retried the same way.
+# failed `tag` is retried the same way, and so is a failed `login`. A login
+# that never succeeds ends with a ::warning::, not an ::error::: it is for
+# the jobs that can go on without GHCR (the AI pytest tests instead of
+# skipping, the audit base falls back to the previous push), which say what
+# they did instead; a job that needs GHCR uses docker/login-action.
 #
 # Only the answer goes to stdout (callers read it with $(...)); every message
 # goes to stderr, where the runner reads workflow commands too.
@@ -29,7 +42,7 @@ ATTEMPTS=${GHCR_ATTEMPTS:-5}
 PAUSE=${GHCR_RETRY_SECONDS:-5}
 
 usage() {
-  echo "uso: ghcr.sh digest <ref> | ghcr.sh tag <nova-ref> <origem>" >&2
+  echo "uso: ghcr.sh digest <ref> | ghcr.sh tag <nova-ref> <origem> | ghcr.sh labels <ref> <nome>... | ghcr.sh login" >&2
   exit 2
 }
 
@@ -85,6 +98,26 @@ case "$command" in
     source=$3
     action="apontar ${target} para ${source}"
     ;;
+  labels)
+    [ $# -ge 3 ] || usage
+    ref=$2
+    shift 2
+    # One Go template for every name: `index` of a label the image does not
+    # carry (or of an image with no labels) is empty, never an error.
+    template=""
+    for name in "$@"; do
+      case "$name" in
+        *[!A-Za-z0-9._-]* | "") usage ;;
+      esac
+      template="${template:+${template}|}{{index .Image.Config.Labels \"${name}\"}}"
+    done
+    action="ler os labels de ${ref}"
+    ;;
+  login)
+    [ $# -eq 1 ] || usage
+    : "${GHCR_USER:?GHCR_USER ausente}" "${GHCR_TOKEN:?GHCR_TOKEN ausente}"
+    action="entrar no ghcr.io"
+    ;;
   *) usage ;;
 esac
 
@@ -105,6 +138,17 @@ for ((attempt = 1; attempt <= ATTEMPTS; attempt++)); do
       # The tag does not exist: an answer, not a failure.
       exit 0
     fi
+  elif [ "$command" = labels ]; then
+    if out=$(docker buildx imagetools inspect "$ref" --format "$template" 2> "$err"); then
+      printf '%s\n' "$(printf '%s' "$out" | tr -d '\r' | sed -n 1p)"
+      exit 0
+    elif absent "$err"; then
+      exit 0
+    fi
+  elif [ "$command" = login ]; then
+    if printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_USER" --password-stdin > /dev/null 2> "$err"; then
+      exit 0
+    fi
   else
     if docker buildx imagetools create --tag "$target" "$source" > /dev/null 2> "$err"; then
       exit 0
@@ -121,6 +165,11 @@ for ((attempt = 1; attempt <= ATTEMPTS; attempt++)); do
     wait_for=$((wait_for * 2))
   fi
 done
+
+if [ "$command" = login ]; then
+  echo "::warning::GHCR indisponível: não deu para ${action} depois de ${ATTEMPTS} tentativas. Último erro: $(reason "$err"). Não é um problema do código; o job segue sem o GHCR." >&2
+  exit 1
+fi
 
 echo "::error::GHCR indisponível: não deu para ${action} depois de ${ATTEMPTS} tentativas. Último erro: $(reason "$err"). Não é um problema do código; nada foi decidido com base nessa leitura." >&2
 exit 1

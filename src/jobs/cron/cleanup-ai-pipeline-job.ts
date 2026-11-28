@@ -2,8 +2,9 @@ import { Prisma } from "@prisma/client";
 
 import { CronJobDefinition } from "@/shared/services/cron-scheduler-service";
 import { logger } from "@/shared/logging/logger";
+import { throwIfPartial } from "@/shared/errors/partial-run-error";
 
-import { deleteInBatches, PURGE_RUN_BUDGET_MS } from "./batch-delete";
+import { deleteInBatches, purgeDeadline } from "./batch-delete";
 
 const log = logger.child({ component: "cron", job: "cleanup-ai-pipeline" });
 
@@ -47,7 +48,7 @@ const cleanupAIPipelineJob: CronJobDefinition = {
   schedule: "45 3 * * *",
 
   async handler() {
-    const deadline = Date.now() + PURGE_RUN_BUDGET_MS;
+    const deadline = purgeDeadline();
 
     const terminalBefore = new Date(
       Date.now() - TERMINAL_REQUEST_RETENTION_DAYS * DAY_MS,
@@ -66,11 +67,8 @@ const cleanupAIPipelineJob: CronJobDefinition = {
 
     log.info({ deleted: requests.deleted }, "finished AI analyses purged");
 
-    if (requests.stoppedEarly) {
-      log.warn(
-        "AI analysis purge stopped at the run's cap or deadline; the rest waits for the next window",
-      );
-    }
+    // Rows still due: FAILED "[partial]", for the catch-up's partial window.
+    throwIfPartial({ ai_analysis_request: requests });
   },
 };
 

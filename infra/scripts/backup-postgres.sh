@@ -27,7 +27,9 @@
 # POSTGRES_SERVICE=<appName of the PostgreSQL database> finds its task; with
 # neither, the development container (trajetto-database).
 #
-# The position trail (driver_position and its daily partitions) is the bulk of
+# The position trail (driver_position_v2 since plano-escala F2-10, and the
+# legacy driver_position until it is dropped, each with its daily
+# partitions) is the bulk of
 # the database at fleet scale, and a dump that always carries it grows to
 # hours — one snapshot holding back vacuum on every hot table the whole time:
 #   BACKUP_EXCLUDE_TRAIL=true  keep the trail's schema, leave its rows out
@@ -52,12 +54,20 @@ if [ "${BACKUP_EXCLUDE_TRAIL:-false}" = "true" ] && [ "${BACKUP_TRAIL_ONLY:-fals
 fi
 
 if [ "${BACKUP_EXCLUDE_TRAIL:-false}" = "true" ]; then
-  SCOPE=(--exclude-table-data-and-children=public.driver_position)
-  echo "Mode: everything except the trail's rows (driver_position)."
+  SCOPE=(
+    --exclude-table-data-and-children=public.driver_position
+    --exclude-table-data-and-children=public.driver_position_v2
+  )
+  echo "Mode: everything except the trail's rows (driver_position, driver_position_v2)."
 elif [ "${BACKUP_TRAIL_ONLY:-false}" = "true" ]; then
-  SCOPE=(--table-and-children=public.driver_position)
+  # Without --strict-names, a pattern that matches no table (a database from
+  # before one of them) is not an error while the other matches.
+  SCOPE=(
+    --table-and-children=public.driver_position
+    --table-and-children=public.driver_position_v2
+  )
   KIND="-trail"
-  echo "Mode: the trail only (driver_position)."
+  echo "Mode: the trail only (driver_position, driver_position_v2)."
 else
   echo "Mode: full dump."
 fi

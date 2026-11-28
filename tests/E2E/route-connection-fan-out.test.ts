@@ -21,9 +21,8 @@ import { createPrismaClient } from "@/shared/database/database-client";
 const pool = vi.hoisted(() => ({ inFlight: 0, peak: 0, total: 0 }));
 
 vi.mock("@/../infra/database", async () => {
-  const { createPrismaClient } = await import(
-    "@/shared/database/database-client"
-  );
+  const { createPrismaClient } =
+    await import("@/shared/database/database-client");
 
   const counted = createPrismaClient().$extends({
     query: {
@@ -48,6 +47,7 @@ import database from "@/../infra/database";
 
 import { RouteRepository } from "@/modules/route/repositories/route-repository";
 import { UserRepository } from "@/modules/user/repositories/user-repository";
+import { BusinessRepository } from "@/modules/business/repositories/business-repository";
 
 import { AssignmentPreviewUseCase } from "@/modules/route/usecases/assignment-preview/assignment-preview-usecase";
 import { ListRoutesUseCase } from "@/modules/route/usecases/list-routes/list-routes-usecase";
@@ -328,6 +328,7 @@ describe("the routes board", () => {
     const list = new ListRoutesUseCase(
       new RouteRepository(),
       new UserRepository(),
+      new BusinessRepository(),
     );
 
     const { peak, result } = await peakOf(() =>

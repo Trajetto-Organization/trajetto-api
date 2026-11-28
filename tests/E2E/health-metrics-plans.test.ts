@@ -19,6 +19,8 @@ import {
   whatsappMultiSendSinceSql,
 } from "@/shared/health/metrics-queries";
 import { createPrismaClient } from "@/shared/database/database-client";
+import { uuid7Sql } from "./support/uuid7-sql";
+import { withParentNames } from "./support/partition-plan";
 
 /**
  * What /health/metrics and /health/dead-letter cost at volume (OBS-09, PG-18).
@@ -100,7 +102,9 @@ async function genericPlan(query: Prisma.Sql): Promise<PlanNode> {
 
     const document = row["QUERY PLAN"] as Array<{ Plan: PlanNode }>;
 
-    return document[0].Plan;
+    // The queues are partitioned since F5-09: each partition read as its
+    // parent, each partition index as the parent's.
+    return withParentNames(tx, document[0].Plan);
   });
 }
 
@@ -135,7 +139,7 @@ beforeAll(async () => {
       ("id", "eventKey", "topic", "aggregateType", "aggregateId", "payload",
        "status", "availableAt", "processedAt", "created_at", "updated_at")
     SELECT
-      gen_random_uuid()::text, 'plans-' || g, 'metrics.plans', 'plans', g::text, '{}'::jsonb,
+      ${uuid7Sql("now() - (g * interval '432 seconds')")}, 'plans-' || g, 'metrics.plans', 'plans', g::text, '{}'::jsonb,
       'PUBLISHED', now() - (g * interval '432 seconds'), now() - (g * interval '432 seconds'),
       now() - (g * interval '432 seconds'), now() - (g * interval '432 seconds')
     FROM generate_series(1, ${EVENTS}) AS g
@@ -146,7 +150,7 @@ beforeAll(async () => {
       ("id", "outboxEventId", "userId", "channel", "status", "attempts",
        "availableAt", "created_at", "updated_at")
     SELECT
-      gen_random_uuid()::text, e."id", '${USER}', c.channel::"NotificationChannel",
+      ${uuid7Sql('e."created_at"')}, e."id", '${USER}', c.channel::"NotificationChannel",
       (CASE
         WHEN random() < 0.03 THEN 'FAILED'
         WHEN random() < 0.02 THEN 'PENDING'
@@ -165,7 +169,7 @@ beforeAll(async () => {
     INSERT INTO "notification_provider_receipt"
       ("id", "deliveryId", "provider", "providerMessageId", "status", "occurredAt", "created_at")
     SELECT
-      gen_random_uuid()::text, d."id", 'meta', 'wamid.' || d."id" || '.' || w.n, s.status,
+      ${uuid7Sql('d."created_at"')}, d."id", 'meta', 'wamid.' || d."id" || '.' || w.n, s.status,
       d."created_at", d."created_at"
     FROM "notification_delivery" d
     CROSS JOIN (VALUES ('sent'), ('delivered'), ('read')) AS s(status)
@@ -177,7 +181,7 @@ beforeAll(async () => {
     INSERT INTO "notification_provider_receipt"
       ("id", "deliveryId", "provider", "providerMessageId", "status", "occurredAt", "created_at")
     SELECT
-      gen_random_uuid()::text, d."id", 'expo', 'ticket.' || d."id", 'ok', d."created_at", d."created_at"
+      ${uuid7Sql('d."created_at"')}, d."id", 'expo', 'ticket.' || d."id", 'ok', d."created_at", d."created_at"
     FROM "notification_delivery" d
     WHERE d."channel" = 'PUSH'
   `);

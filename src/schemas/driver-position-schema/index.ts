@@ -1,6 +1,10 @@
 import { z } from "zod";
 
 import { MAX_PINGS_PER_BATCH } from "@/shared/route/driver-position-rules";
+import { listPeriodFields, refineListPeriod } from "@/shared/time/list-period";
+
+import { ROUTE_PERIOD_DESCRIPTION } from "@/schemas/route-schema";
+import { fieldError } from "@/shared/validation/field-error";
 
 /**
  * What the app flushes.
@@ -25,7 +29,9 @@ const pingSchema = z.object({
   battery: z.number().nullable().optional(),
 
   recorded_at: z
-    .string({ required_error: "Cada ponto precisa da hora em que foi medido." })
+    .string(
+      fieldError({ required: "Cada ponto precisa da hora em que foi medido." }),
+    )
     .datetime({ message: "A hora do ponto deve ser uma data ISO 8601." }),
 });
 
@@ -45,6 +51,27 @@ const controlTowerSchema = z.object({
     .uuid("ID da empresa é inválido.")
     .optional()
     .describe("Só o MASTER envia; ausente, a empresa do usuário."),
+});
+
+/**
+ * GET /route/live (wave 4): the company as the tower receives it, and the
+ * cursor of the next page. No page size: the cap is the server's (500).
+ */
+const liveRoutesSchema = z.object({
+  businessId: z
+    .string()
+    .uuid("ID da empresa é inválido.")
+    .optional()
+    .describe("Só o MASTER envia; ausente, a empresa do usuário."),
+
+  cursor: z
+    .string()
+    .min(1, "Cursor inválido.")
+    .max(512, "Cursor inválido.")
+    .optional()
+    .describe(
+      "O `meta.nextCursor` da resposta anterior: a página seguinte começa depois da última rota vista (em andamento primeiro, depois liberadas, cada grupo por código), sem repetir nem pular.",
+    ),
 });
 
 const driverTrailParamSchema = z.object({
@@ -81,42 +108,61 @@ const driverTrailQuerySchema = z.object({
  */
 const MONITORING_PAGE_SIZE_MAX = 50;
 
-const routeMonitoringSchema = z.object({
-  businessId: z
-    .string()
-    .uuid("ID da empresa é inválido.")
-    .optional()
-    .describe("Só o MASTER envia; ausente, a empresa do usuário."),
+const routeMonitoringSchema = z
+  .object({
+    businessId: z
+      .string()
+      .uuid("ID da empresa é inválido.")
+      .optional()
+      .describe("Só o MASTER envia; ausente, a empresa do usuário."),
 
-  day: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/, "A data deve estar no formato AAAA-MM-DD.")
-    .optional()
-    .describe(
-      "O dia da operação (AAAA-MM-DD), no fuso da empresa; ausente, hoje — e aí entram também as rotas ainda em andamento de dias anteriores.",
+    day: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/, "A data deve estar no formato AAAA-MM-DD.")
+      .optional()
+      .describe(
+        "O dia da operação (AAAA-MM-DD), no fuso da empresa; ausente, hoje — e aí entram também as rotas ainda em andamento de dias anteriores.",
+      ),
+
+    page: z.coerce
+      .number(fieldError({ invalid: "A página deve ser um número." }))
+      .int("A página deve ser um número inteiro.")
+      .min(1, "A página começa em 1.")
+      .max(10_000, "Página fora do intervalo.")
+      .default(1)
+      .describe("A página, a partir de 1."),
+
+    pageSize: z.coerce
+      .number(
+        fieldError({ invalid: "O tamanho da página deve ser um número." }),
+      )
+      .int("O tamanho da página deve ser um número inteiro.")
+      .min(1, "O tamanho da página deve ser ao menos 1.")
+      .max(
+        MONITORING_PAGE_SIZE_MAX,
+        `O tamanho da página deve ser no máximo ${MONITORING_PAGE_SIZE_MAX}.`,
+      )
+      .default(20)
+      .describe(
+        "Rotas por página (padrão 20, no máximo 50): cada uma traz todas as paradas.",
+      ),
+
+    // The board's period (plan of 09/11/2026), the routes list's own rule.
+    ...listPeriodFields(
+      `${ROUTE_PERIOD_DESCRIPTION} Com today, o quadro é o mesmo de sem período. Não vale junto com day.`,
     ),
-
-  page: z.coerce
-    .number({ invalid_type_error: "A página deve ser um número." })
-    .int("A página deve ser um número inteiro.")
-    .min(1, "A página começa em 1.")
-    .max(10_000, "Página fora do intervalo.")
-    .default(1)
-    .describe("A página, a partir de 1."),
-
-  pageSize: z.coerce
-    .number({ invalid_type_error: "O tamanho da página deve ser um número." })
-    .int("O tamanho da página deve ser um número inteiro.")
-    .min(1, "O tamanho da página deve ser ao menos 1.")
-    .max(
-      MONITORING_PAGE_SIZE_MAX,
-      `O tamanho da página deve ser no máximo ${MONITORING_PAGE_SIZE_MAX}.`,
-    )
-    .default(20)
-    .describe(
-      "Rotas por página (padrão 20, no máximo 50): cada uma traz todas as paradas.",
-    ),
-});
+  })
+  .superRefine(refineListPeriod())
+  .superRefine(({ day, period }, ctx) => {
+    // One question at a time: the legacy day, or a period.
+    if (day !== undefined && period !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["day"],
+        message: "Envie day ou period, não os dois.",
+      });
+    }
+  });
 
 /** The board by driver: one company's day, no paging (one row per driver). */
 const driverMonitoringSchema = z.object({
@@ -141,6 +187,7 @@ export {
   driverMonitoringSchema,
   driverTrailParamSchema,
   driverTrailQuerySchema,
+  liveRoutesSchema,
   recordDriverPositionsSchema,
   routeMonitoringSchema,
 };

@@ -8,7 +8,6 @@ import {
   WEBHOOK_MAX_ATTEMPTS,
   WEBHOOK_RETRY_DELAYS_MS,
   assertWebhookLeaseInvariant,
-  inFairPool,
   isOutsideReplayWindow,
   isWebhookSuccess,
   parkedUntil,
@@ -56,49 +55,24 @@ describe("isWebhookSuccess", () => {
 
 describe("assertWebhookLeaseInvariant", () => {
   it("refuses a worst case equal to the lease, with the numbers", () => {
-    expect(() => assertWebhookLeaseInvariant(4, 1, 10_000, 40, 1, 1)).toThrow(
-      "Webhook lease invariant violated: a batch of 4 at concurrency 1 can take 40000ms, which does not fit in the 40s lease. Raise the lease or lower the batch.",
+    // 4 rounds of the claim, plus the call of a claim before it (F3-07).
+    expect(() => assertWebhookLeaseInvariant(4, 1, 10_000, 50, 1, 1)).toThrow(
+      "Webhook lease invariant violated: a batch of 4 at concurrency 1 can take 50000ms, which does not fit in the 50s lease. Raise the lease or lower the batch.",
     );
     expect(() =>
-      assertWebhookLeaseInvariant(4, 1, 10_000, 41, 1, 1),
+      assertWebhookLeaseInvariant(4, 1, 10_000, 51, 1, 1),
     ).not.toThrow();
   });
 
   it("bounds one endpoint's share by the batch it is in", () => {
-    // 2 rows, at most 10 of one endpoint, 1 call at a time: 2 rounds, not 10.
+    // 2 rows, at most 10 of one endpoint, 1 call at a time: 2 rounds, not
+    // 10, plus the one before.
     expect(() =>
-      assertWebhookLeaseInvariant(2, 5, 10_000, 21, 10, 1),
+      assertWebhookLeaseInvariant(2, 5, 10_000, 31, 10, 1),
     ).not.toThrow();
-  });
-});
-
-describe("inFairPool", () => {
-  it("resolves at once with nothing to do", async () => {
-    let ran = 0;
-    await inFairPool(
-      [],
-      { concurrency: 2, perKey: 1, keyOf: () => "k" },
-      async () => void (ran += 1),
+    expect(() => assertWebhookLeaseInvariant(2, 5, 10_000, 30, 10, 1)).toThrow(
+      /lease invariant/,
     );
-
-    expect(ran).toBe(0);
-  });
-
-  it("waits for the last call before resolving", async () => {
-    const finished: string[] = [];
-
-    await inFairPool(
-      ["a", "b"],
-      { concurrency: 2, perKey: 2, keyOf: () => "k" },
-      async (item) => {
-        await new Promise((resolve) =>
-          setTimeout(resolve, item === "a" ? 5 : 30),
-        );
-        finished.push(item);
-      },
-    );
-
-    expect(finished).toEqual(["a", "b"]);
   });
 });
 

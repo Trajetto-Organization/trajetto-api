@@ -32,6 +32,8 @@ let pipeline: import("@/shared/notifications/notification-pipeline-service").Not
 
 const BUSINESS = "018fc000-0000-7000-8000-0000000004b1";
 const RECIPIENT = "018fc000-0000-7000-8000-0000000004c1";
+/** Who registered the bill: never told of their own act (actor-notice.test.ts). */
+const ACTOR = "018fc000-0000-7000-8000-0000000004c2";
 const MASTER = "018fc000-0000-7000-8000-0000000004c9";
 
 let masterToken = "";
@@ -51,7 +53,14 @@ const whatsapp = {
   }),
 };
 
-async function publish(topic = "account-payable.created"): Promise<string> {
+/**
+ * A bill registered by ACTOR for RECIPIENT. `actorId` RECIPIENT is the bill
+ * one registers for oneself, which tells nobody.
+ */
+async function publish(
+  topic = "account-payable.created",
+  actorId: string = ACTOR,
+): Promise<string> {
   const event = await prisma.domainOutboxEvent.create({
     data: {
       eventKey: `${topic}:${randomUUID()}`,
@@ -59,7 +68,7 @@ async function publish(topic = "account-payable.created"): Promise<string> {
       aggregateType: "account-payable",
       aggregateId: randomUUID(),
       businessId: BUSINESS,
-      actorId: RECIPIENT,
+      actorId,
       payload: {
         accountPayableId: randomUUID(),
         businessId: BUSINESS,
@@ -108,6 +117,17 @@ beforeAll(async () => {
       businessId: BUSINESS,
       whatsapp_phone: "5511999990000",
       whatsapp_notifications_enabled: true,
+    },
+  });
+
+  await prisma.user.create({
+    data: {
+      id: ACTOR,
+      name: "Pessoa do Escritório",
+      email: `escritorio-${randomUUID()}@exemplo.com.br`,
+      password: "nao-usado",
+      role: "BUSINESS_USER",
+      businessId: BUSINESS,
     },
   });
 
@@ -165,9 +185,8 @@ beforeAll(async () => {
     },
   });
 
-  const pipelineModule = await import(
-    "@/shared/notifications/notification-pipeline-service"
-  );
+  const pipelineModule =
+    await import("@/shared/notifications/notification-pipeline-service");
 
   pipeline = pipelineModule.NotificationPipelineService.getInstance();
 }, 120_000);
@@ -183,7 +202,7 @@ beforeEach(async () => {
   await prisma.domainOutboxEvent.deleteMany({});
   await prisma.user.update({
     where: { id: RECIPIENT },
-    data: { access_revoked: false },
+    data: { access_revoked: false, whatsapp_notifications_enabled: true },
   });
 
   vi.restoreAllMocks();
@@ -192,10 +211,15 @@ beforeEach(async () => {
 afterAll(async () => {
   await prisma.notificationDelivery.deleteMany({});
   await prisma.domainOutboxEvent.deleteMany({});
-  await prisma.notification.deleteMany({ where: { userId: RECIPIENT } });
+  await prisma.notification.deleteMany({
+    where: { userId: { in: [RECIPIENT, ACTOR, MASTER] } },
+  });
   await prisma.activity.deleteMany({ where: { businessId: BUSINESS } });
+  await prisma.activity.deleteMany({ where: { performedBy: MASTER } });
   await prisma.refreshToken.deleteMany({ where: { userId: MASTER } });
-  await prisma.user.deleteMany({ where: { id: { in: [RECIPIENT, MASTER] } } });
+  await prisma.user.deleteMany({
+    where: { id: { in: [RECIPIENT, ACTOR, MASTER] } },
+  });
   await prisma.business.deleteMany({ where: { id: BUSINESS } });
 
   await app?.close();
@@ -230,6 +254,148 @@ describe("an event, end to end", () => {
     // The delivery id travels as the provider's idempotency key.
     const emailRow = rows.find((row) => row.channel === "EMAIL")!;
     expect(mail.sent[0].referenceId).toBe(emailRow.id);
+
+    // The bell and the trail are each one person's: the bill's responsible
+    // is told, the one who registered it has the activity.
+    expect(
+      rows.map((row) => `${row.channel}:${row.userId === ACTOR}`).sort(),
+    ).toEqual([
+      "ACTIVITY:true",
+      "EMAIL:false",
+      "IN_APP:false",
+      "WHATSAPP:false",
+    ]);
+  });
+});
+
+/**
+ * plano-escala F3-09: every row an event expands into carries the event's
+ * company, the key the fair claim of the lanes (F3-10) takes them by. A row
+ * without it would sit in the "no company" bucket and lose its turn to
+ * every company that has one.
+ */
+describe("the rows an event expands into", () => {
+  it("each carry the event's company", async () => {
+    const eventId = await publish();
+
+    await pipeline.runOutboxCycle();
+
+    const rows = await deliveriesOf(eventId);
+
+    expect(rows.length).toBeGreaterThan(0);
+    expect(new Set(rows.map((row) => row.business_id))).toEqual(
+      new Set([BUSINESS]),
+    );
+
+    await drain();
+  });
+});
+
+/**
+ * Nobody is notified of what they just did (14/11/2026): a bill one
+ * registers for oneself rang one's own bell (and its realtime toast right
+ * after the form's "success"), e-mail and WhatsApp. The trail entry stays.
+ */
+describe("the event's own actor", () => {
+  it("is told nothing, on any channel, and keeps the activity", async () => {
+    const bells = () =>
+      prisma.notification.count({ where: { userId: RECIPIENT } });
+    const bellsBefore = await bells();
+
+    const eventId = await publish("account-payable.created", RECIPIENT);
+
+    await drain();
+
+    const rows = await deliveriesOf(eventId);
+
+    expect(rows.map((row) => `${row.channel}:${row.status}`)).toEqual([
+      "ACTIVITY:DELIVERED",
+    ]);
+    expect(rows[0].userId).toBe(RECIPIENT);
+
+    expect(mail.sent).toHaveLength(0);
+    expect(whatsapp.sent).toHaveLength(0);
+    expect(await bells()).toBe(bellsBefore);
+  });
+
+  it("still gets the record of a MASTER account they created (D-49)", async () => {
+    const created = randomUUID();
+
+    const event = await prisma.domainOutboxEvent.create({
+      data: {
+        eventKey: `master-user.created:${created}`,
+        topic: "master-user.created",
+        aggregateType: "master-user",
+        aggregateId: created,
+        actorId: MASTER,
+        payload: {
+          masterUserId: created,
+          masterName: "Pessoa Master Nova",
+          masterEmail: "master.nova@exemplo.com.br",
+          actorUserId: MASTER,
+        },
+      },
+    });
+
+    await drain();
+
+    const rows = await deliveriesOf(event.id);
+
+    expect(rows.map((row) => `${row.channel}:${row.status}`).sort()).toEqual([
+      "ACTIVITY:DELIVERED",
+      "EMAIL:DELIVERED",
+      "IN_APP:DELIVERED",
+    ]);
+    expect(rows.every((row) => row.userId === MASTER)).toBe(true);
+    expect(mail.sent).toHaveLength(1);
+  });
+
+  /**
+   * RECIPIENT is the company's only admin and registered the fuelling, so
+   * they asked for the reading and are the event's actor. The reading ends
+   * in the background, often with the tab closed, and the live
+   * `aiVerification` frame is stored nowhere: left out, a suspected fraud
+   * was told to nobody.
+   */
+  it("still gets the AI's alert on the reading they asked for, as the only admin", async () => {
+    const bells = () =>
+      prisma.notification.count({
+        where: { userId: RECIPIENT, type: "ai-verification" },
+      });
+    const bellsBefore = await bells();
+    const fuelId = randomUUID();
+
+    const event = await prisma.domainOutboxEvent.create({
+      data: {
+        eventKey: `ai-verification.issue:${randomUUID()}`,
+        topic: "ai-verification.issue",
+        aggregateType: "fuel",
+        aggregateId: fuelId,
+        businessId: BUSINESS,
+        actorId: RECIPIENT,
+        payload: {
+          recordType: "fuel",
+          recordId: fuelId,
+          businessId: BUSINESS,
+          vehiclePlate: "ABC1D23",
+          vehicleDescription: null,
+          overallStatus: "fraud",
+          details: null,
+        },
+      },
+    });
+
+    await drain();
+
+    const rows = await deliveriesOf(event.id);
+
+    expect(
+      rows
+        .filter((row) => row.userId === RECIPIENT)
+        .map((row) => `${row.channel}:${row.status}`),
+    ).toEqual(expect.arrayContaining(["EMAIL:DELIVERED", "IN_APP:DELIVERED"]));
+    expect(mail.sent).toHaveLength(1);
+    expect(await bells()).toBe(bellsBefore + 1);
   });
 });
 
@@ -486,7 +652,18 @@ describe("a row whose process died on its last attempt", () => {
       },
     });
 
+    // The claim leaves it alone: nothing is sent, and it is not taken.
     await pipeline.runDeliveryCycle("external");
+
+    const untouched = (await deliveriesOf(eventId)).find(
+      (row) => row.channel === "EMAIL",
+    )!;
+
+    expect(`${untouched.status}:${untouched.attempts}`).toBe("PROCESSING:7");
+
+    // The minute's sweep closes it, off the claim's path (plano-escala
+    // F3-08).
+    expect(await pipeline.closeExhausted()).toBeGreaterThanOrEqual(1);
 
     const email = (await deliveriesOf(eventId)).find(
       (row) => row.channel === "EMAIL",
@@ -495,6 +672,39 @@ describe("a row whose process died on its last attempt", () => {
     expect(email.status).toBe("FAILED");
     expect(email.lastError).toMatch(/interrompido/);
     expect(mail.sent).toHaveLength(0);
+  });
+
+  it("closes an event whose expansion died on its last attempt, and leaves a live lease alone", async () => {
+    const exhausted = await publish();
+    const live = await publish();
+
+    await prisma.domainOutboxEvent.update({
+      where: { id: exhausted },
+      data: {
+        status: "PROCESSING",
+        attempts: 5,
+        leaseExpiresAt: new Date(Date.now() - 60_000),
+      },
+    });
+    await prisma.domainOutboxEvent.update({
+      where: { id: live },
+      data: {
+        status: "PROCESSING",
+        attempts: 5,
+        leaseExpiresAt: new Date(Date.now() + 60_000),
+      },
+    });
+
+    await pipeline.closeExhausted();
+
+    const [closed, inFlight] = await Promise.all([
+      prisma.domainOutboxEvent.findUniqueOrThrow({ where: { id: exhausted } }),
+      prisma.domainOutboxEvent.findUniqueOrThrow({ where: { id: live } }),
+    ]);
+
+    expect(closed.status).toBe("FAILED");
+    expect(closed.lastError).toMatch(/interrompido/);
+    expect(inFlight.status).toBe("PROCESSING");
   });
 });
 
@@ -566,6 +776,63 @@ describe("a recipient whose access was revoked", () => {
     expect(external.every((row) => row.status === "FAILED")).toBe(true);
     expect(mail.sent).toHaveLength(0);
     expect(whatsapp.sent).toHaveLength(0);
+  });
+});
+
+/**
+ * The general WhatsApp card is the master key (decision D-53, 14/11/2026).
+ * A row queued while the card was on used to go out after the person turned
+ * it off: the send checked only that a number was stored, and the number
+ * stays stored after the card goes off — it may be someone else's by then.
+ */
+describe("a recipient who turned WhatsApp off after the row was queued", () => {
+  it("is not messaged, and the row fails for good with the reason", async () => {
+    // "Fanned out, switched off, THEN delivered": hold every wake and let a
+    // cycle already in flight finish, so only this test claims the rows.
+    vi.spyOn(pipeline, "wake").mockImplementation(() => undefined);
+
+    await vi.waitFor(
+      () =>
+        expect((pipeline as unknown as { isBusy(): boolean }).isBusy()).toBe(
+          false,
+        ),
+      { timeout: 15_000, interval: 50 },
+    );
+
+    const eventId = await publish();
+
+    // Fanned out with the card on: the WhatsApp row is queued.
+    await pipeline.runOutboxCycle();
+
+    expect(
+      (await deliveriesOf(eventId)).find((row) => row.channel === "WHATSAPP")
+        ?.status,
+    ).toBe("PENDING");
+
+    await prisma.user.update({
+      where: { id: RECIPIENT },
+      data: { whatsapp_notifications_enabled: false },
+    });
+
+    await pipeline.runDeliveryCycle("internal");
+    await pipeline.runDeliveryCycle("external");
+
+    const rows = await deliveriesOf(eventId);
+    const byChannel = new Map(rows.map((row) => [row.channel, row]));
+    const whatsAppRow = byChannel.get("WHATSAPP")!;
+
+    // Failed on its first attempt and not rescheduled: non-retryable.
+    expect(whatsAppRow).toMatchObject({ status: "FAILED", attempts: 1 });
+    expect(whatsAppRow.lastError).toContain("Recipient turned WhatsApp off");
+    expect(
+      whatsapp.sent.filter((message) =>
+        JSON.stringify(message).includes(whatsAppRow.id),
+      ),
+    ).toEqual([]);
+
+    // Only WhatsApp: the bell and the e-mail of the same event went out.
+    expect(byChannel.get("IN_APP")?.status).toBe("DELIVERED");
+    expect(byChannel.get("EMAIL")?.status).toBe("DELIVERED");
   });
 });
 
@@ -889,7 +1156,8 @@ describe("a tower request decided while its messages wait (decision 6.3)", () =>
         aggregateType: "delivery",
         aggregateId: randomUUID(),
         businessId: BUSINESS,
-        actorId: RECIPIENT,
+        // The driver who reported it, not the operator told.
+        actorId: ACTOR,
         payload: {
           occurrenceId,
           deliveryId: randomUUID(),

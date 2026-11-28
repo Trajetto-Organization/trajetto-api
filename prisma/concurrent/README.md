@@ -1,0 +1,169 @@
+# prisma/concurrent
+
+DDL que não pode travar uma tabela quente, rodado pela etapa de release
+**antes** do `prisma migrate deploy` (plano de escala, F2-01 e decisão D20)
+e de novo logo depois dele, para o que a própria release acabou de criar.
+Quem roda é `infra/scripts/prebuild-online-ddl.ts` (na imagem
+`trajetto-api-migrate`, como `build/prebuild-online-ddl.js`); a regra está em
+`infra/scripts/online-ddl.ts`.
+
+## Quando usar
+
+Índice novo (ou removido) numa tabela quente, a lista `HOT_TABLES` de
+`src/shared/health/metrics-queries.ts`. Um `CREATE INDEX` comum segura um
+lock SHARE na tabela durante todo o build e toda escrita espera; o Prisma
+roda cada migration numa transação, onde o `CREATE INDEX CONCURRENTLY` não
+roda. Então:
+
+1. Um arquivo aqui, `<timestamp>_<nome>.sql`, constrói o índice com
+   `CREATE INDEX CONCURRENTLY IF NOT EXISTS`.
+2. A migration do mesmo índice mantém `CREATE INDEX IF NOT EXISTS` com o
+   mesmo nome: na produção vira no-op (o índice já existe); num banco novo
+   (o molde do E2E, o `yarn dev`) ela o constrói com a tabela vazia.
+3. `tests/unitaires/lifecycle/migration-prebuild.test.ts` reprova uma
+   migration nova que cria índice numa tabela quente sem o arquivo daqui, e
+   um arquivo daqui sem a migration correspondente.
+
+### Coluna e índice na mesma release
+
+O passo roda **duas vezes**: antes do `prisma migrate deploy` e logo
+depois dele. Um arquivo cujas tabelas ou colunas ainda não existem é pulado
+na primeira passada e aplicado na segunda, quando a migration já as criou.
+É o caso de uma coluna nova e do índice dela na mesma release (o plano de
+escala sai inteiro num push só): antes das migrations a coluna não existe.
+
+Nesse caso a migration **não pode** construir o índice com a tabela cheia,
+porque ela roda antes da segunda passada e seguraria as escritas durante o
+build. Ela o constrói só com a tabela vazia (um banco novo: o molde do E2E,
+o `yarn dev`, o banco sombra do Prisma), e com linhas quem constrói é a
+segunda passada, com CONCURRENTLY, antes de a API nova subir:
+
+```sql
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM "delivery_event" LIMIT 1) THEN
+    CREATE INDEX IF NOT EXISTS "delivery_event_feed_idx" ON "delivery_event" ("businessId", (COALESCE("txid", 0)), "id");
+  END IF;
+END $$;
+```
+
+O arquivo daqui declara `-- requires-column` de toda coluna que o índice
+lê e que uma migration acrescenta com `ADD COLUMN`; sem isso a primeira
+passada tentaria o CIC numa coluna que ainda não existe e a etapa falharia.
+O `migration-prebuild.test.ts` cobra as duas coisas: a declaração e o bloco
+acima na migration (para qualquer coluna acrescentada com `ADD COLUMN`,
+porque o repositório não sabe o que já está em produção; para uma coluna
+antiga o bloco é um no-op). Com `PREBUILD_ONLINE_DDL=off`, um índice assim
+fica faltando até a etapa rodar de novo com o passo ligado.
+
+## O que pode entrar
+
+Só estes comandos (a lista permitida), um por `;`:
+
+```sql
+CREATE [UNIQUE] INDEX CONCURRENTLY IF NOT EXISTS <nome> ON <tabela> ...;
+DROP INDEX CONCURRENTLY IF EXISTS <nome>;
+ALTER TABLE <tabela> ALTER COLUMN <coluna> SET STATISTICS <n>;
+ALTER TABLE <tabela> SET (...);   -- ou RESET (...)
+CREATE STATISTICS IF NOT EXISTS <nome> ... FROM <tabela>;
+```
+
+E, no topo, toda tabela que o arquivo toca:
+
+```sql
+-- requires-table: delivery_event
+-- requires-column: delivery_event.txid
+```
+
+Sem `DO $$`, sem `ON ONLY`, sem schema no nome. Um subcomando por
+`ALTER TABLE`, e nada entre parênteses dentro da lista de parâmetros: um
+`SET (...)` encadeado a outro subcomando (um `ALTER COLUMN ... TYPE`, um
+`ADD COLUMN ... CHECK`) reescreveria a tabela sob lock exclusivo e é
+recusado. DDL com pré-condição (uma troca de tabela, um `OWNER TO`) vai em
+`prisma/post-deploy`, depois das migrations.
+
+## Um índice que sai
+
+Um índice que ninguém lê custa toda escrita da tabela. O `index_usage` do
+`/health/metrics` (bloco `database`, plano de escala F2-23) lista cada
+índice das tabelas quentes com as leituras e a última leitura, e marca em
+`unused` o candidato: nem chave primária, nem unique, nem índice de chave
+estrangeira (`foreign_key`), e sem leitura há 30 dias. O `unused` não
+prova que o índice sobra: a janela conta do zeramento das estatísticas,
+não da criação do índice, e um caminho que roda menos que uma vez por
+mês lê zero nela. O corte é uma contração, por índice:
+
+1. Na produção, com pelo menos 30 dias de `pg_stat_statements` e sem
+   zerar as estatísticas no meio, anote do `index_usage` o índice
+   (`scans`, `last_scan_at`, `stats_reset_at`) em dois dias a 30 dias um
+   do outro. O `scans` igual nas duas e o `last_scan_at` mais velho que a
+   primeira (ou vazio) é o registro.
+2. Confira no código que nada o pede, e descarte o candidato em qualquer
+   um destes casos:
+   - um `@@index` do `schema.prisma` que uma consulta usa num plano
+     fixado (`tests/E2E/query-plans.test.ts` e os registros de índices),
+     ou um `@@unique` de um `upsert` (estes nunca são candidatos);
+   - as colunas dele são as de uma relação (`@relation(fields: ...)`) da
+     tabela, mesmo que o `foreign_key` não o marque (uma relação sem a
+     restrição no banco): a remoção do pai, com `onDelete: Cascade` ou
+     não, varre a tabela quente sem ele;
+   - um job raro o lê: o expurgo de empresa
+     (`src/shared/jobs/tenant-offboard/purge-plan.ts`, as colunas de cada
+     passo), a anonimização de usuário
+     (`src/shared/jobs/user-anonymize`), os arquivos da trilha e do
+     histórico, e qualquer job mensal ou trimestral: 30 dias sem leitura
+     não dizem nada de quem roda menos que isso;
+   - ele veio de uma migration de menos de 30 dias antes da primeira
+     leitura, ou serve uma funcionalidade ainda desligada por variável de
+     ambiente: zero leitura aí é só o que se espera.
+3. Uma branch própria, como as contrações da onda 20
+   ([as branches das contrações](../../docs/deploy.md#as-branches-das-contrações)):
+   um arquivo aqui com
+   `DROP INDEX CONCURRENTLY IF EXISTS <nome>;`, a migration que tira o
+   mesmo índice só num banco sem empresa (o bloco `DO $$` de
+   `20261118110000_drop_route_stop_status_delivery_idx`, com
+   `-- contract-phase:`), o `@@index` fora do `schema.prisma` e as duas
+   leituras no corpo do commit. Um índice por release: se o plano de
+   alguma consulta piorar, a volta é um índice só.
+4. Depois do push, confira no `index_usage` que ele saiu e, no
+   `pg_stat_statements`, que nenhuma consulta das tabelas dele ficou mais
+   lenta.
+
+## Como roda
+
+- Cada espera de lock tem `lock_timeout` (`PREBUILD_LOCK_TIMEOUT_MS`, 3 s) e
+  é repetida (`PREBUILD_LOCK_RETRIES`, 20 vezes): o CIC atrás de uma
+  transação longa sai da fila em vez de segurar as escritas que entram
+  atrás dele.
+- Um índice que ficou inválido (um CIC que caiu no meio) é removido com
+  `DROP INDEX CONCURRENTLY` e refeito.
+- Quando o passo desiste de um índice (uma duplicata num `UNIQUE`, um lock
+  que não veio em nenhuma tentativa), ele remove o que o CIC deixou antes
+  de sair com erro: a release falhou, a versão anterior segue servindo, e
+  um `UNIQUE` inválido continuaria recusando as duplicatas que ela grava.
+  Numa tabela particionada, um `UNIQUE` que falha numa partição sai
+  inteiro (o pai e as partições já anexadas); um índice comum fica, e a
+  próxima execução continua de onde parou. Se nem a remoção conseguir o
+  lock, o log diz o `DROP` a rodar à mão.
+- Tabela particionada: o passo cria o índice no pai com `ON ONLY`, faz um
+  CIC em cada partição e as anexa (`ALTER INDEX ... ATTACH PARTITION`); o
+  índice do pai fica válido com a última.
+- No fim, nenhum índice que o passo administra pode estar inválido; outros
+  inválidos aparecem como aviso no log.
+- Um `ALTER TABLE` (alvo de estatística, parâmetro de armazenamento) ou um
+  `CREATE STATISTICS` que já está no catálogo (`pg_attribute`, `reloptions`,
+  `pg_statistic_ext`) não roda de novo: cada um pega SHARE UPDATE EXCLUSIVE,
+  a trava de todo vacuum e ANALYZE, e um vacuum antiwraparound não cede a
+  vez. Repetido a cada release, ele faria a etapa esperar atrás do vacuum e
+  falhar quando as tentativas acabassem. Um parâmetro que não é
+  `chave = valor` simples roda sempre.
+- A segunda execução não faz nada. Um banco sem `_prisma_migrations` (novo)
+  pula a primeira passada inteira; na segunda, as migrations já criaram
+  tudo com as tabelas vazias, e ela não faz nada.
+- Depois das migrations, um arquivo cujas tabelas ou colunas continuam
+  faltando vira aviso no log (nenhuma migration as cria: arquivo velho).
+- `PREBUILD_ONLINE_DDL=off` na Application `trajetto-api-migrate` desliga o
+  passo, só em emergência.
+
+Um CIC longo segura o `xmin` do cluster enquanto roda (o feed atrasa, não
+pula): o índice de uma tabela grande sai numa release de madrugada.

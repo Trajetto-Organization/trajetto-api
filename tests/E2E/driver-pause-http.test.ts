@@ -941,4 +941,42 @@ describe("the office report", () => {
       "PAUSE_TOO_LONG",
     );
   });
+
+  // Plan of 02/11/2026, J4 (D26/D54): a route forgotten "Em andamento" is
+  // served with its own alert, filterable like any other, and the driving
+  // alert of that workday comes marked as an unreliable estimate.
+  it("serves a route left open with ROUTE_LEFT_OPEN, filterable, and the driving estimate marked unreliable", async () => {
+    const driver = await newDriver(CARRIER, "Caio Esquecido");
+    const dayBefore = shiftDateKey(yesterday, -1);
+    const [year, month, day] = dayBefore.split("-").map(Number);
+
+    await prisma.route.create({
+      data: {
+        code: 902,
+        status: "IN_PROGRESS",
+        scheduled_date: new Date(`${dayBefore}T00:00:00.000Z`),
+        started_at: zonedWallTimeToUtc(ZONE, year, month, day, 14, 57),
+        businessId: CARRIER,
+        driverId: driver.id,
+      },
+    });
+
+    const response = await get(
+      reportPath(
+        CARRIER,
+        `from=${dayBefore}&to=${dayBefore}&driverId=${driver.id}&flag=ROUTE_LEFT_OPEN`,
+      ),
+      tokens.reader,
+    );
+
+    expect(response.statusCode, response.body).toBe(200);
+
+    const [row] = response.json().data;
+    const byCode = Object.fromEntries(
+      row.flags.map((flag: { code: string }) => [flag.code, flag]),
+    );
+
+    expect(byCode.ROUTE_LEFT_OPEN.message).toContain("Rota aberta há");
+    expect(byCode.DRIVING_REST_SHORT.unreliable).toBe(true);
+  });
 });

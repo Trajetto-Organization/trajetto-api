@@ -25,6 +25,7 @@ import { UserProfileAccessNotFoundError } from "../errors/user-profile-access-no
 
 import { AppError } from "@/shared/errors/AppError";
 import { permissionDenied } from "@/shared/errors/access-errors";
+import { conflictFromPrisma } from "@/shared/errors/prisma-conflict";
 import { CreateUserProps, User, UserRole } from "../../dtos/user-dto";
 
 import { ResourceNotFoundError } from "../errors/resource-not-found-error";
@@ -43,6 +44,10 @@ import {
   unusablePassword,
 } from "../../services/password-setup-link";
 import { emailLogoUrl } from "@/shared/providers/mail-provider/email-logo";
+import {
+  DRIVER_ONLY_PASSWORD_MESSAGE,
+  isDriverLogin,
+} from "@/schemas/create-user-schema";
 
 const log = logger.child({ component: "user" });
 
@@ -86,55 +91,34 @@ class CreateUserUseCase {
     userCreated: User,
     performedById: string,
     businessId: string,
+    managerSetPassword: boolean,
   ): Promise<void> {
     try {
-      const token = uuidV4();
-      const expires = new Date(new Date().getTime() + 3600 * 1000); // 1 hour
+      // A driver's login without an e-mail (decision D02, plan of
+      // 02/11/2026) has no mailbox to send the link to: it signs in by QR
+      // code or by the password the manager set. Neither does one whose
+      // password the manager set (D2): there is nothing left to set or
+      // confirm, and a second e-mail is what kept drivers from signing in.
+      const mailbox = userCreated.email;
 
-      // The link carries the local token: the row only holds its hash.
-      await this.usersTokens.createEmailVerificationToken({
-        email: userCreated.email,
-        token,
-        expires,
-      });
+      if (mailbox && !managerSetPassword) {
+        await this.sendCredentialEmails(userCreated, mailbox);
+      }
 
-      const setupUrl = await issuePasswordSetupLink(
-        this.usersTokens,
-        userCreated.email,
-        NEW_ACCOUNT_LINK_TTL_MS,
-      );
-
-      await Promise.all([
-        sendTransactionalMail({
-          email: userCreated.email,
-          name: userCreated.name,
-          subject: "Verificação de e-mail",
-          templateName: "email-verification.hbs",
-          moduleName: "user",
-          additionalVariablesProperties: {
-            url: `${this.http_request}/new-verification?token=${token}`,
-            logo: emailLogoUrl(),
-          },
-        }),
-        sendTransactionalMail({
-          email: userCreated.email,
-          name: userCreated.name,
-          subject: "Conta criada com sucesso",
-          templateName: "user-created-successfully.hbs",
-          moduleName: "user",
-          additionalVariablesProperties: {
-            email: userCreated.email,
-            url: setupUrl,
-            logo: emailLogoUrl(),
-          },
-        }),
-      ]);
+      // Who set the password is the activity's author (decision D04: the
+      // manager knows it, so it is on record). The password itself never
+      // goes in.
+      const detail = managerSetPassword
+        ? "Senha inicial definida pelo gestor"
+        : mailbox
+          ? `E-mail não verificado: ${mailbox}`
+          : "Sem e-mail";
 
       this.notificationService.createActivityIfEnabled({
         type: "Usuário",
         action: "create",
         entityId: userCreated.id,
-        description: `Usuário ${userCreated.name} criado | E-mail não verificado: ${userCreated.email}`,
+        description: `Usuário ${userCreated.name} criado | ${detail}`,
         status: userCreated.email_verified ? "Ativo" : "Pendente",
         performedBy: performedById,
         businessId,
@@ -147,6 +131,53 @@ class CreateUserUseCase {
     }
   }
 
+  private async sendCredentialEmails(
+    userCreated: User,
+    mailbox: string,
+  ): Promise<void> {
+    const token = uuidV4();
+    const expires = new Date(new Date().getTime() + 3600 * 1000); // 1 hour
+
+    // The link carries the local token: the row only holds its hash.
+    await this.usersTokens.createEmailVerificationToken({
+      email: mailbox,
+      token,
+      expires,
+    });
+
+    const setupUrl = await issuePasswordSetupLink(
+      this.usersTokens,
+      mailbox,
+      NEW_ACCOUNT_LINK_TTL_MS,
+    );
+
+    await Promise.all([
+      sendTransactionalMail({
+        email: mailbox,
+        name: userCreated.name,
+        subject: "Verificação de e-mail",
+        templateName: "email-verification.hbs",
+        moduleName: "user",
+        additionalVariablesProperties: {
+          url: `${this.http_request}/new-verification?token=${token}`,
+          logo: emailLogoUrl(),
+        },
+      }),
+      sendTransactionalMail({
+        email: mailbox,
+        name: userCreated.name,
+        subject: "Conta criada com sucesso",
+        templateName: "user-created-successfully.hbs",
+        moduleName: "user",
+        additionalVariablesProperties: {
+          email: mailbox,
+          url: setupUrl,
+          logo: emailLogoUrl(),
+        },
+      }),
+    ]);
+  }
+
   async execute(
     {
       email,
@@ -155,9 +186,28 @@ class CreateUserUseCase {
       businessId,
       profileAccessId,
       driverId,
+      password,
     }: CreateUserProps,
     id: string,
   ): Promise<User> {
+    // Only a driver's login takes a password from the manager (D2; decision
+    // D04). The schema refuses it first; this holds for any other caller.
+    if (password !== undefined && !isDriverLogin({ role, driverId })) {
+      throw new AppError(
+        DRIVER_ONLY_PASSWORD_MESSAGE,
+        400,
+        "USER_PASSWORD_DRIVER_ONLY",
+      );
+    }
+
+    // Only a driver's login may have no e-mail (decision D02): it signs in by
+    // CPF and password or by QR code. Same rule as the schema's.
+    const mailbox = email ?? null;
+
+    if (mailbox === null && !isDriverLogin({ role, driverId })) {
+      throw new AppError("O e-mail é obrigatório.", 400, "USER_EMAIL_REQUIRED");
+    }
+
     const findUser = await this.user.findUserById(id);
 
     if (!findUser) {
@@ -231,11 +281,16 @@ class CreateUserUseCase {
       }
     }
 
-    // Nobody knows it: the person sets theirs through the e-mailed link.
-    const hashedPassword = await hashSecret(unusablePassword(), 10);
-    const userAlreadyExists = await this.user.findUserByEmail(email);
-
-    if (userAlreadyExists) {
+    // Nobody knows it: the person sets theirs through the e-mailed link —
+    // unless the manager set a driver's (D2).
+    const managerSetPassword = password !== undefined;
+    const hashedPassword = await hashSecret(
+      managerSetPassword ? password : unusablePassword(),
+      10,
+    );
+    // No address, nothing to collide with: the unique index lets many NULLs
+    // coexist.
+    if (mailbox !== null && (await this.user.findUserByEmail(mailbox))) {
       throw new UserAlreadyExistsError();
     }
 
@@ -254,13 +309,20 @@ class CreateUserUseCase {
 
     try {
       const userCreated = await this.user.createUser({
-        email,
+        email: mailbox,
         password: hashedPassword,
         name,
         role,
         businessId,
         profileAccessId: cleanProfileAccessId,
         driverId: cleanDriverId,
+        // No e-mail goes out to confirm it, so the address the manager typed
+        // stands as confirmed (D2): the driver signs in at once. Without an
+        // address there is nothing to confirm.
+        email_verified: managerSetPassword && mailbox ? new Date() : null,
+        // The manager knows it (wave 2): the driver creates their own at the
+        // first sign-in.
+        must_change_password: managerSetPassword,
       });
 
       // A driver now has an app login: the chat pickers' "com o app" split
@@ -268,13 +330,29 @@ class CreateUserUseCase {
       if (cleanDriverId) announceDriverLoginChange(businessId);
 
       // Process notifications asynchronously without blocking the main flow
-      void this.processNotifications(userCreated, id, businessId);
+      void this.processNotifications(
+        userCreated,
+        id,
+        businessId,
+        managerSetPassword,
+      );
 
       return userCreated;
     } catch (error) {
-      throw new AppError(
-        "Houve um erro ao tentar criar o usuário! Por favor, tente novamente.",
-        500,
+      // Two requests with the same e-mail, or for the same driver, both
+      // passed the lookups above: the loser meets the index and hears the
+      // same 409 the lookup would have given, never a 500.
+      throw (
+        (await conflictFromPrisma(error, {
+          unique: {
+            email: () => new UserAlreadyExistsError(),
+            driverId: () => new UserDriverAlreadyLinkedToUserError(),
+          },
+        })) ??
+        new AppError(
+          "Houve um erro ao tentar criar o usuário! Por favor, tente novamente.",
+          500,
+        )
       );
     }
   }

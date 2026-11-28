@@ -3,12 +3,12 @@
 <p align="center">
   <img alt="Node.js 22" src="https://img.shields.io/badge/Node.js-22-5FA04E?style=for-the-badge&logo=nodedotjs&logoColor=white" />
   <img alt="TypeScript 5.7" src="https://img.shields.io/badge/TypeScript-5.7-3178C6?style=for-the-badge&logo=typescript&logoColor=white" />
-  <img alt="Fastify 5.2" src="https://img.shields.io/badge/Fastify-5.2-000000?style=for-the-badge&logo=fastify&logoColor=white" />
+  <img alt="Fastify 5.12" src="https://img.shields.io/badge/Fastify-5.12-000000?style=for-the-badge&logo=fastify&logoColor=white" />
   <img alt="Prisma 7.10" src="https://img.shields.io/badge/Prisma-7.10-2D3748?style=for-the-badge&logo=prisma&logoColor=white" />
   <img alt="PostgreSQL 16" src="https://img.shields.io/badge/PostgreSQL-16-4169E1?style=for-the-badge&logo=postgresql&logoColor=white" />
   <img alt="Redis 7" src="https://img.shields.io/badge/Redis-7-FF4438?style=for-the-badge&logo=redis&logoColor=white" />
   <img alt="Socket.IO 4.8" src="https://img.shields.io/badge/Socket.IO-4.8-010101?style=for-the-badge&logo=socketdotio&logoColor=white" />
-  <img alt="Zod 3.25" src="https://img.shields.io/badge/Zod-3.25-3E67B1?style=for-the-badge&logo=zod&logoColor=white" />
+  <img alt="Zod 4.6" src="https://img.shields.io/badge/Zod-4.6-3E67B1?style=for-the-badge&logo=zod&logoColor=white" />
   <img alt="Vitest 1.6" src="https://img.shields.io/badge/Vitest-1.6-6E9F18?style=for-the-badge&logo=vitest&logoColor=white" />
   <img alt="Python 3.12" src="https://img.shields.io/badge/Python-3.12-3776AB?style=for-the-badge&logo=python&logoColor=white" />
   <img alt="ONNX Runtime 1.30" src="https://img.shields.io/badge/ONNX_Runtime-1.30-005CED?style=for-the-badge&logo=onnx&logoColor=white" />
@@ -93,12 +93,15 @@ ou desabilitam o que a API vai recusar.
 | Documento                                                          | Para quê                                                                                                                                                                                                                                                                   |
 | ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [`docs/arquitetura.md`](./docs/arquitetura.md)                     | o mapa navegável da plataforma, a estrutura do código, a anatomia de um módulo e como criar uma feature, processos, filas, tempo real, IA, comprovante, regras de migration, compatibilidade com o app, unicidade por empresa, o resumo dos ADRs                           |
-| [`docs/arquitetura-tour.md`](./docs/arquitetura-tour.md)           | o tour pela arquitetura, passo a passo: o mesmo mapa em onze passos (requisição, sessão, tenant, arquivos, filas, notificações, tempo real, IA, importações, deploy e saúde), com ◀ Anterior · Índice · Próximo ▶                                                        |
+| [`docs/arquitetura-tour.md`](./docs/arquitetura-tour.md)           | o tour pela arquitetura, passo a passo: o mesmo mapa em onze passos (requisição, sessão, tenant, arquivos, filas, notificações, tempo real, IA, importações, deploy e saúde), com ◀ Anterior · Índice · Próximo ▶                                                          |
 | [`docs/adr/`](./docs/adr/README.md)                                | as decisões de arquitetura (ADRs), uma por arquivo, com o índice                                                                                                                                                                                                           |
 | [`docs/deploy.md`](./docs/deploy.md)                               | o caminho até a produção: branches, workflows, GHCR, Dokploy do zero (cada Application e Database, clique a clique, staging e produção), IA, Postgres e Redis, borda, migrations, rollback, backup e restore, alertas, cadeia de suprimentos, checklist do primeiro deploy |
 | [`docs/infraestrutura.md`](./docs/infraestrutura.md)               | o mapa de tudo o que existe fora do código e foi configurado à mão (Contabo, Dokploy, Cloudflare, GitHub, Expo, Resend, R2): cada painel, as decisões e o porquê, o inventário de tokens e credenciais, o histórico, os procedimentos e as pendências                      |
 | [`docs/variaveis-de-ambiente.md`](./docs/variaveis-de-ambiente.md) | cada variável: para que serve, obrigatoriedade, segredo, formato, valor em dev/staging/produção e onde mora                                                                                                                                                                |
 | [`docs/testes.md`](./docs/testes.md)                               | as suítes, como rodar, o que cada uma prova, cobertura, mutação e as regras para escrever testes                                                                                                                                                                           |
+| [`docs/operacao/jobs.md`](./docs/operacao/jobs.md)                 | o mapa de horários (UTC): os crons do código, o backup e o PITR do Dokploy, o ensaio e as janelas de carga, conferido por teste                                                                                                                                            |
+| [`docs/desempenho/`](./docs/desempenho/README.md)                  | os relatórios de portão de capacidade, no formato do `TEMPLATE.md`, e o portão aprovado da régua de rampa                                                                                                                                                                  |
+| [`docs/slo.md`](./docs/slo.md)                                     | os SLOs propostos (indicador, alvo e fonte de cada um), como medir cada um no `ops_sample` e nas filas, e a regra dos alertas                                                                                                                                              |
 | [`CLAUDE.md`](./CLAUDE.md) / [`AGENTS.md`](./AGENTS.md)            | o guia de trabalho para agentes de código (e um bom resumo para quem chega)                                                                                                                                                                                                |
 | [`infra/traefik/README.md`](./infra/traefik/README.md)             | a configuração estática do Traefik do Dokploy                                                                                                                                                                                                                              |
 | [`tests/load/README.md`](./tests/load/README.md)                   | o harness de carga e o que ele mediu                                                                                                                                                                                                                                       |
@@ -134,9 +137,11 @@ Para avançar por ele em ordem, um assunto por vez, use o
 - **Postgres é a fila**: outbox transacional e filas em tabelas com
   `FOR UPDATE SKIP LOCKED` e lease; não há broker.
 - **Redis é descartável**: rate limit, o pub/sub do Socket.IO entre réplicas,
-  os tickets de socket de 30 s, o intervalo de 60 s do "esqueci minha senha" e
-  fotos curtas (5–60 s) das leituras da plataforma que só o MASTER vê. Nenhum
-  dado de empresa fica em cache, e sem Redis a API segue funcionando.
+  os tickets de socket de 30 s, o intervalo de 60 s do "esqueci minha senha",
+  fotos curtas (5–60 s) das leituras da plataforma que só o MASTER vê e as
+  chaves do geocodificador (`geocoding:*`). O único dado de empresa em cache é
+  o da busca de endereço, por empresa, com chave HMAC e valor cifrado, e sem
+  Redis a API segue funcionando (a busca responde 503).
 - **IA local**: o serviço `trajetto-ai` (RapidOCR em CPU) só transcreve; a API
   decide. Nenhum provedor externo.
 - **Arquivos** nunca passam pela API: o cliente envia ao R2 por URL
@@ -151,23 +156,23 @@ Versões fixadas no `package.json` (sem `^`) e no `yarn.lock`.
 | ---------------------------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
 | Node.js                                                          | 22 (imagem `node:22.21.1-alpine`, fixada por digest) | runtime da API, dos workers e dos crons                                                                                   |
 | TypeScript                                                       | 5.7.2 (`strict`)                                     | tipos de ponta a ponta, do schema zod ao repositório                                                                      |
-| Fastify + `fastify-type-provider-zod`                            | 5.2.0 / 4.0.2                                        | HTTP rápido com schema por rota; o mesmo schema valida a entrada e gera o OpenAPI (`@fastify/swagger` 9.4.2)              |
+| Fastify + `fastify-type-provider-zod`                            | 5.12.7 / 7.0.0                                       | HTTP rápido com schema por rota; o mesmo schema valida a entrada e gera o OpenAPI (`@fastify/swagger` 9.9.2)              |
 | Prisma (`prisma`, `@prisma/client`, `@prisma/adapter-pg` + `pg`) | 7.10.1 (`pg` 8.23.1)                                 | acesso tipado ao Postgres pelo driver `pg` e migrations SQL versionadas (expandir/contrair)                               |
 | PostgreSQL                                                       | 16                                                   | dados de todas as empresas **e** as filas (outbox, notificações, webhooks, IA) e os leases dos crons                      |
-| Redis via `ioredis`                                              | 7 / 5.10.1                                           | rate limit, pub/sub do Socket.IO, tickets de socket, intervalo do "esqueci minha senha", fotos do MASTER; descartável     |
-| Socket.IO + `@socket.io/redis-adapter`                           | 4.8.3 / 8.3.0                                        | tempo real para a web e o app, entre réplicas                                                                             |
-| tsyringe                                                         | 4.8.0                                                | injeção de dependência: o usecase recebe o repositório pela interface, e o teste troca pelo gêmeo in-memory               |
-| zod                                                              | 3.25.1                                               | validação de entrada (`src/schemas/`) e do ambiente no boot (`src/schemas/env-schema/`)                                   |
+| Redis via `ioredis`                                              | 7 / 5.10.1                                           | rate limit, pub/sub e tickets do Socket.IO, "esqueci minha senha", fotos do MASTER, geocodificador e busca; descartável   |
+| Socket.IO + `@socket.io/redis-adapter`                           | 4.8.4 / 8.3.0                                        | tempo real para a web e o app, entre réplicas                                                                             |
+| tsyringe                                                         | 4.10.0                                               | injeção de dependência: o usecase recebe o repositório pela interface, e o teste troca pelo gêmeo in-memory               |
+| zod                                                              | 4.6.7                                                | validação de entrada (`src/schemas/`) e do ambiente no boot (`src/schemas/env-schema/`)                                   |
 | pino                                                             | 9.14.0                                               | log JSON, uma linha por requisição, com censura de segredos                                                               |
-| `@aws-sdk/client-s3` + `s3-request-presigner`                    | 3.1107.0                                             | Cloudflare R2 (API S3): URLs pré-assinadas de PUT e GET e conferência com `HeadObject`                                    |
-| nodemailer + handlebars                                          | 6.9.16 / 4.7.10                                      | e-mail pelo SMTP da Resend (em desenvolvimento, conta de teste Ethereal) e os templates                                   |
-| pdfkit + `@signpdf/*` + node-forge + qrcode                      | 0.15.1 / 3.3.0 / 1.4.0 / 1.5.4                       | PDF do comprovante, assinatura PAdES com o A1 e o QR de conferência                                                       |
-| exceljs, fast-xml-parser                                         | 4.4.0 / 5.11.0                                       | importação de planilha e de XML de NF-e; exportação CSV/Excel                                                             |
-| node-cron                                                        | 4.2.1                                                | agenda dos crons (a exclusão mútua entre réplicas é um lease no Postgres)                                                 |
-| undici                                                           | 7.29.0                                               | cliente HTTP dos webhooks dos clientes                                                                                    |
-| bcrypt, jsonwebtoken                                             | 6.0.0 / 9.0.2                                        | senhas e tokens de acesso e refresh                                                                                       |
-| Vitest + supertest, Stryker                                      | 1.6.0 + 7.0.0, 8.7.1                                 | testes unitários, E2E HTTP e mutação                                                                                      |
-| tsup, tsx                                                        | 8.3.5, 4.19.2                                        | build da imagem e execução em desenvolvimento                                                                             |
+| `@aws-sdk/client-s3` + `s3-request-presigner`                    | 3.1161.0                                             | Cloudflare R2 (API S3): URLs pré-assinadas de PUT e GET e conferência com `HeadObject`                                    |
+| nodemailer + handlebars                                          | 10.3.1 / 4.7.10                                      | e-mail pelo SMTP da Resend (em desenvolvimento, conta de teste Ethereal) e os templates                                   |
+| pdfkit + `@signpdf/*` + node-forge + qrcode                      | 0.20.2 / 3.3.0 / 1.4.2 / 1.5.4                       | PDF do comprovante, assinatura PAdES com o A1 e o QR de conferência                                                       |
+| exceljs, fast-xml-parser                                         | 4.4.0 / 5.11.2                                       | importação de planilha e de XML de NF-e; exportação CSV/Excel                                                             |
+| node-cron                                                        | 4.6.0                                                | agenda dos crons (a exclusão mútua entre réplicas é um lease no Postgres)                                                 |
+| undici                                                           | 7.30.1                                               | cliente HTTP dos webhooks dos clientes                                                                                    |
+| bcrypt, jsonwebtoken                                             | 6.0.0 / 9.0.3                                        | senhas e tokens de acesso e refresh                                                                                       |
+| Vitest + supertest, Stryker                                      | 1.6.1 + 7.3.1, 8.7.1                                 | testes unitários, E2E HTTP e mutação                                                                                      |
+| tsup, tsx                                                        | 8.3.5, 4.23.15                                       | build da imagem e execução em desenvolvimento                                                                             |
 | Python (serviço `trajetto-ai`)                                   | 3.12 (`python:3.12-slim`)                            | RapidOCR 3.9.2 sobre ONNX Runtime 1.30.0, em CPU; servidor HTTP da biblioteca padrão; dependências com `--require-hashes` |
 | Yarn                                                             | 1 (`yarn.lock`)                                      | gerenciador de pacotes; nunca npm                                                                                         |
 
@@ -285,20 +290,20 @@ roda como a Application de mesmo nome, com a URL sem tetos na própria
 Os grupos principais (só nomes; os valores de exemplo do `.env.example` são
 fictícios):
 
-| Grupo               | Variáveis                                                                                                                                              |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| processo            | `NODE_ENV`, `APP_ENV` (`development`, `staging` ou `production`), `PORT`, `LOG_LEVEL`, `WORKERS_ENABLED`                                               |
-| banco               | `DATABASE_URL`, `MIGRATION_DATABASE_URL` (a etapa de release), `POSTGRES_*` (só desenvolvimento), `ALLOW_EMPTY_DATABASE_BOOTSTRAP`                     |
-| Redis e tempo real  | `REDIS_URL`, `SOCKET_ADAPTER_KEY`, `SOCKET_REVALIDATE_MS`                                                                                              |
-| URLs e sessão       | `HTTP_REQUEST` (origem da **web**: CORS, Socket.IO e links), `API_HTTP_REQUEST` (URL pública da própria API), `JWT_SECRET`, `JWT_SECRET_REFRESH_TOKEN` |
-| usuário master      | `MASTER_USER_EMAIL`, `MASTER_USER_INITIAL_PASSWORD`                                                                                                    |
-| borda e anti-bot    | `RATE_LIMIT_TRUSTED_PROXY`, `RATE_LIMIT_EDGE_SECRET`, `RATE_LIMIT_FORWARDER_SECRET` (o mesmo da web), `TURNSTILE_SECRET_KEY`                           |
-| arquivos            | `UPLOAD_STORAGE_TYPE` (`local` ou `r2`), `UPLOAD_LOCAL_PATH`, `UPLOAD_SIGNED_URL_TTL_SECONDS`, `UPLOAD_ORPHAN_GC`, `R2_*`                              |
-| e-mail e WhatsApp   | `RESEND_*`, `META_WHATSAPP_*`                                                                                                                          |
-| IA local            | `AI_PROVIDER` (`local` ou `none`), `AI_LOCAL_URL`, `AI_LOCAL_TOKEN` (= `AI_TOKEN` da `trajetto-ai`), `AI_LOCAL_TIMEOUT_MS`, `AI_LOCAL_MAX_CONCURRENCY` |
-| comprovante         | `PROOF_*`, `REVERSE_GEOCODER_*`                                                                                                                        |
-| app, docs, webhooks | `MIN_MOBILE_CONTRACT`, `MOBILE_STORE_URL`, `DOCS_USER`, `DOCS_PASSWORD`, `WEBHOOK_SECRETS_KEY`, `ACTIVITY_RETENTION_DAYS`                              |
-| monitoramento       | `HEALTHCHECK_PING_URL`, `HEALTHCHECK_FAIL_URL`                                                                                                         |
+| Grupo               | Variáveis                                                                                                                                                           |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| processo            | `NODE_ENV`, `APP_ENV` (`development`, `staging` ou `production`), `PORT`, `LOG_LEVEL`, `PROCESS_ROLE` (o papel), `WORKERS_ENABLED`, `CRON_ENABLED`, `WORKER_QUEUES` |
+| banco               | `DATABASE_URL`, `MIGRATION_DATABASE_URL` (a etapa de release), `POSTGRES_*` (só desenvolvimento), `ALLOW_EMPTY_DATABASE_BOOTSTRAP`                                  |
+| Redis e tempo real  | `REDIS_URL`, `SOCKET_ADAPTER_KEY`, `SOCKET_REVALIDATE_MS`                                                                                                           |
+| URLs e sessão       | `HTTP_REQUEST` (origem da **web**: CORS, Socket.IO e links), `API_HTTP_REQUEST` (URL pública da própria API), `JWT_SECRET`, `JWT_SECRET_REFRESH_TOKEN`              |
+| usuário master      | `MASTER_USER_EMAIL`, `MASTER_USER_INITIAL_PASSWORD`                                                                                                                 |
+| borda e anti-bot    | `RATE_LIMIT_TRUSTED_PROXY`, `RATE_LIMIT_EDGE_SECRET`, `RATE_LIMIT_FORWARDER_SECRET` (o mesmo da web), `TURNSTILE_SECRET_KEY`                                        |
+| arquivos            | `UPLOAD_STORAGE_TYPE` (`local` ou `r2`), `UPLOAD_LOCAL_PATH`, `UPLOAD_SIGNED_URL_TTL_SECONDS`, `UPLOAD_ORPHAN_GC`, `R2_*`                                           |
+| e-mail e WhatsApp   | `RESEND_*`, `META_WHATSAPP_*`                                                                                                                                       |
+| IA local            | `AI_PROVIDER` (`local` ou `none`), `AI_LOCAL_URL`, `AI_LOCAL_TOKEN` (= `AI_TOKEN` da `trajetto-ai`), `AI_LOCAL_TIMEOUT_MS`, `AI_LOCAL_MAX_CONCURRENCY`              |
+| comprovante         | `PROOF_*`, `REVERSE_GEOCODER_*`                                                                                                                                     |
+| app, docs, webhooks | `MIN_MOBILE_CONTRACT`, `MOBILE_STORE_URL`, `DOCS_USER`, `DOCS_PASSWORD`, `WEBHOOK_SECRETS_KEY`, `ACTIVITY_RETENTION_DAYS`                                           |
+| monitoramento       | `HEALTHCHECK_PING_URL`, `HEALTHCHECK_FAIL_URL`                                                                                                                      |
 
 Obrigatórias sempre: `DATABASE_URL`, `REDIS_URL`, `HTTP_REQUEST`, `JWT_SECRET`,
 `JWT_SECRET_REFRESH_TOKEN`, `MASTER_USER_EMAIL`, `MASTER_USER_INITIAL_PASSWORD`.
@@ -331,6 +336,7 @@ Todos conferidos no `package.json`.
 | `yarn seed`                                | cria o usuário master                                                                                               |
 | `yarn seed:infringement`                   | importa os códigos de infração do RENAINF                                                                           |
 | `yarn webhooks:seal`                       | cifra os segredos de webhook já gravados com `WEBHOOK_SECRETS_KEY`                                                  |
+| `yarn docs:whatsapp`                       | gera `docs/whatsapp-modelos.md` a partir dos modelos de WhatsApp do código                                          |
 | `yarn test`                                | testes unitários (`tests/unitaires`)                                                                                |
 | `yarn test:watch`                          | unitários em modo watch                                                                                             |
 | `yarn test:e2e`                            | testes E2E contra Postgres e Redis reais (`tests/E2E`), em duas fases (as réplicas por último)                      |
@@ -380,17 +386,17 @@ módulos e prefixos: [`docs/arquitetura.md`](./docs/arquitetura.md#papéis-permi
 
 Só o que existe no código:
 
-| Integração                  | Para quê                                                   | Onde                                                                    |
-| --------------------------- | ---------------------------------------------------------- | ----------------------------------------------------------------------- |
-| Cloudflare R2               | fotos, assinaturas e PDFs, por URL pré-assinada            | `src/shared/services/upload-service.ts`, rotas `/uploads`               |
-| Resend                      | e-mail (SMTP) e recibos de entrega (`/webhooks/resend`)    | `src/shared/providers/mail-provider/`                                   |
-| Meta WhatsApp Cloud API     | notificações e mensagens ao cliente final por template     | `src/shared/providers/whatsapp-provider/`, `/webhooks/whatsapp`         |
-| Expo Push API (→ FCM)       | push no app Android                                        | `src/shared/notifications/push-provider.ts`, cron `check-push-receipts` |
-| `trajetto-ai`               | leitura de canhoto e odômetro (OCR local)                  | `src/shared/ai/`, `infra/ai-ocr/`                                       |
-| Cloudflare Turnstile        | captcha do formulário público de orçamento                 | `src/shared/security/turnstile.ts`                                      |
-| Webhooks dos clientes       | eventos `delivery.*`, `occurrence.*`, `proof.*`, `route.*` | `src/shared/integration/webhook-dispatch-service.ts`                    |
-| Monitor externo (heartbeat) | dead man's switch a cada minuto                            | `src/jobs/cron/ops-heartbeat-job.ts`                                    |
-| tiles e geocodificação      | mapa e endereço no PDF do comprovante (opcionais)          | `PROOF_MAP_TILE_URL`, `REVERSE_GEOCODER_URL`                            |
+| Integração                  | Para quê                                                                                                                                                                | Onde                                                                                                              |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| Cloudflare R2               | fotos, assinaturas e PDFs, por URL pré-assinada                                                                                                                         | `src/shared/services/upload-service.ts`, rotas `/uploads`                                                         |
+| Resend                      | e-mail (SMTP) e recibos de entrega (`/webhooks/resend`)                                                                                                                 | `src/shared/providers/mail-provider/`                                                                             |
+| Meta WhatsApp Cloud API     | notificações (17 modelos) e mensagens ao cliente final (4 modelos com botões), cada uma pelo seu modelo aprovado ([docs/whatsapp-modelos.md](docs/whatsapp-modelos.md)) | `src/shared/notifications/whatsapp-templates.ts`, `src/shared/providers/whatsapp-provider/`, `/webhooks/whatsapp` |
+| Expo Push API (→ FCM)       | push no app Android                                                                                                                                                     | `src/shared/notifications/push-provider.ts`, cron `check-push-receipts`                                           |
+| `trajetto-ai`               | leitura de canhoto e odômetro (OCR local)                                                                                                                               | `src/shared/ai/`, `infra/ai-ocr/`                                                                                 |
+| Cloudflare Turnstile        | captcha do formulário público de orçamento                                                                                                                              | `src/shared/security/turnstile.ts`                                                                                |
+| Webhooks dos clientes       | eventos `delivery.*`, `occurrence.*`, `proof.*`, `route.*`; o `ping` do botão Enviar teste (fora do catálogo, só para o endpoint escolhido)                             | `src/shared/integration/webhook-dispatch-service.ts`                                                              |
+| Monitor externo (heartbeat) | dead man's switch a cada minuto                                                                                                                                         | `src/jobs/cron/ops-heartbeat-job.ts`                                                                              |
+| tiles e geocodificação      | mapa e endereço no PDF do comprovante; ponto do endereço das entregas para a geocerca (job `geocode-deliveries`) (opcionais)                                            | `PROOF_MAP_TILE_URL`, `REVERSE_GEOCODER_URL`                                                                      |
 
 Cada uma aparece em `GET /health/providers` (só MASTER) sem enviar nada.
 
@@ -402,8 +408,11 @@ Cada uma aparece em `GET /health/providers` (só MASTER) sem enviar nada.
   semântica, rota com guards e schema OpenAPI completo, registro em
   `src/shared/index.ts` e `src/routes/routes.ts`. Passo a passo em
   [`docs/arquitetura.md`](./docs/arquitetura.md#anatomia-de-um-módulo-e-como-criar-uma-feature).
-- **Validação**: zod na entrada (mensagens em pt-BR); o mesmo schema vira o
-  OpenAPI. A web e o app espelham esses schemas.
+- **Validação**: zod 4 na entrada (mensagens em pt-BR; `fieldError` para
+  "obrigatório" e "tipo errado"); toda lista com `.max()` antes de qualquer
+  refinamento; o mesmo schema vira o OpenAPI. A web e o app espelham esses
+  schemas. Regras em
+  [`docs/arquitetura.md`](./docs/arquitetura.md#regras-transversais).
 - **Erros**: `AppError` e as classes de `usecases/errors/`, sempre com `code`
   estável e mensagem em pt-BR. Unicidade é 409 com `code` e a mensagem "nesta
   empresa" (trate o P2002 do índice). Banco indisponível vira 503 com
@@ -414,11 +423,14 @@ Cada uma aparece em `GET /health/providers` (só MASTER) sem enviar nada.
   foi gravado.
 - **Idempotência**: escritas do app e da API pública aceitam
   `Idempotency-Key` ou `client_submission_id`.
-- **Cache**: nenhum dado de empresa fica em cache na API nem no Redis. A
-  única exceção são as fotos de 5–60 s das leituras da plataforma que só o
-  MASTER vê (`src/shared/cache/snapshot-cache.ts`,
-  [ADR 0002](./docs/adr/0002-redis-descartavel.md)). As listagens do painel
-  são NDJSON com offset e uma linha final `meta`; os seletores usam cursor.
+- **Cache**: nenhum dado de empresa fica em cache na memória da API. Há dois
+  caches ([ADR 0002](./docs/adr/0002-redis-descartavel.md)): as fotos de
+  5–60 s das leituras da plataforma que só o MASTER vê
+  (`src/shared/cache/snapshot-cache.ts`) e, só no Redis, as respostas da busca
+  de endereço (`src/shared/services/address-search/address-search-limits.ts`,
+  adendo de 10/11/2026), por empresa, com chave HMAC, valor cifrado e até
+  48 h. As listagens do painel são NDJSON com offset e uma linha final `meta`;
+  os seletores usam cursor.
 - **Uploads**: o cliente pede `POST /uploads/presign/:businessId` (ou
   `/uploads/avatar/presign`), envia o arquivo por PUT direto ao R2 e manda só a
   chave; a API confere dono, tamanho e existência. Em desenvolvimento,
@@ -488,7 +500,7 @@ npx tsx --inspect-brk src/server.ts
 npx vitest run tests/unitaires/<arquivo>.test.ts --inspect-brk --no-file-parallelism
 ```
 
-- O `tsx` 4.19.2 repassa `--inspect` ao processo que roda o servidor.
+- O `tsx` 4.23.15 repassa `--inspect` ao processo que roda o servidor.
   **Não** use `NODE_OPTIONS=--inspect`: o processo do próprio `tsx` pega a
   porta antes, e o servidor sobe sem inspetor ("address already in use").
   Nem `yarn dev:server --inspect`: o Yarn põe a flag depois de
@@ -568,18 +580,22 @@ requisição e de resposta, incluindo 400/401/403/404/409/429.
 ## Build, imagem e deploy
 
 ```
-branch de trabalho ─push─▶ ci.yml (lint, typecheck, unitários + cobertura, audit, gitleaks, IA)
-staging ─push─▶ deploy.yml: validação completa (+ E2E) ─▶ build ÚNICO das 3 imagens (GHCR sha-<sha>:
-                            API, migração e IA; migração e IA reaproveitadas se o que rodam não mudou)
-                            ─▶ migrations, se o banco não aplicou essa imagem (Application trajetto-api-migrate)
-                            ─▶ tag `staging` por digest ─▶ Dokploy staging (IA, se mudou → API)
-                            ─▶ a liveness pública responde o commit novo ─▶ marcador staged-<sha>
-PR staging → main ─▶ a mesma validação + "o staging rodou o head do PR?" (staged-<sha>;
-                     um head só de documentação usa o de um ancestral que rodou)
-merge em main ─▶ promoção (sem build): migrations (se preciso) ─▶ tag `stable` por digest ─▶ Dokploy produção (IA → API)
-                 ─▶ convergência ─▶ release        [aprovação do environment production]
-Run workflow na main ─▶ a mesma promoção com uma tag antiga (rollback)
-Run workflow na staging ─▶ o caminho de staging de novo (force_ai_build reconstrói a IA)
+branch de trabalho ─push─▶ ci.yml: Changes ─▶ Secret scan + Validate (validate.yml, sem E2E)
+staging ─push─▶ staging.yml: Changes ─▶ Secret scan + Validate (lint, tsc, unitários + piso, E2E em 3 jobs, IA)
+                            ─▶ Gate ─▶ Build: as 3 imagens UMA vez (GHCR sha-<sha>: API, migração e IA;
+                               migração e IA reaproveitadas se o que rodam não mudou) ─▶ Image scan
+                            ─▶ Deploy: migrations, se o banco não aplicou essa imagem (Application trajetto-api-migrate)
+                               ─▶ tag `staging` por digest ─▶ Dokploy staging (IA, se mudou → API)
+                               ─▶ a liveness pública responde o commit novo ─▶ marcador staged-<sha>
+                 (push só de documentação: Secret scan e Docs, sem build e sem cancelar o run de código)
+PR staging → main ─▶ pr.yml: Secret scan + Staging evidence (staged-<sha>, Gate verde, a main só traz
+                     documentação; um head só de documentação usa o de um ancestral que rodou,
+                     e o Gate do próprio head também precisa estar verde)
+merge em main ─▶ production.yml: Staging evidence ─▶ Deploy [aprovação do environment production]:
+                 migrations (se preciso) ─▶ Dokploy produção (IA → API), `stable` por digest ─▶ convergência ─▶ Release
+Run workflow do Production na main ─▶ a mesma promoção com uma tag antiga (rollback)
+Run workflow do Staging na staging ─▶ o caminho de staging de novo (force_ai_build testa e reconstrói a IA;
+                                     em outra branch, inclusive a main que o formulário traz, nada roda)
 ```
 
 - **Imagens**: `Dockerfile` (multi-stage sobre `node:22.21.1-alpine`, fixada
@@ -696,10 +712,13 @@ versão do cliente, sem segredo e sem URL assinada.
   é a fila; broker só por gatilho medido em `/health/metrics`.
 - **Redis descartável** ([ADR 0002](./docs/adr/0002-redis-descartavel.md)):
   sem sessão, lock nem fila nele; cache só das fotos curtas de plataforma do
-  MASTER.
-- **Workers no mesmo processo**
-  ([ADR 0004](./docs/adr/0004-workers-no-mesmo-processo.md)), separáveis com a
-  mesma imagem (`WORKERS_ENABLED=false`) só por gatilho medido.
+  MASTER e das respostas da busca de endereço (por empresa, chave HMAC, valor
+  cifrado, falha fechada).
+- **Papéis de processo**
+  ([ADR 0012](./docs/adr/0012-papeis-de-processo.md), no lugar do 0004): a
+  mesma imagem roda numa Application por papel (`PROCESS_ROLE`: `api`,
+  `worker`, `scheduler`…); sem a Application de um papel, o processo faz
+  tudo, como antes.
 - **Tempo real _at-most-once_**
   ([ADR 0007](./docs/adr/0007-tempo-real-at-most-once.md)): a verdade está no
   banco.

@@ -29,6 +29,7 @@ import {
   sendOccurrenceAuthorizationToBusiness,
   sendOccurrenceDecisionToDriver,
 } from "@/websocket";
+import { withoutCreationLine } from "../../support/status-trail";
 
 /**
  * Decisions 6.2 and 6.3 on the in-memory twins: the report of a type that
@@ -316,7 +317,7 @@ describe("a driver's report of a type that asks the tower", () => {
     );
 
     // On the trail and the feed (TWR-6), linked to the occurrence.
-    expect(context.deliveries.events).toMatchObject([
+    expect(withoutCreationLine(context.deliveries.events)).toMatchObject([
       { type: "OCCURRENCE", occurrenceId: result.id, actor: "DRIVER_APP" },
     ]);
 
@@ -839,6 +840,142 @@ describe("the queue and the escalation", () => {
     expect(foreign.total).toBe(0);
   });
 
+  // Wave 4: the app polls the list every 30 s; signing every photo of the
+  // queue on each poll is the web's queue's cost, not the phone's.
+  it("in the app's summary, signs nothing and leaves the form out", async () => {
+    const context = makeContext();
+    const deliveryId = await seedDelivery(context);
+    const typeId = await seedTowerType(context);
+
+    const request = await context.report.execute({
+      userId: DRIVER_USER,
+      businessId: BUSINESS,
+      deliveryId,
+      occurrenceTypeId: typeId,
+      form_answers: ANSWERS,
+      photos: ["delivery/a.jpg", "delivery/b.jpg"],
+      description: "Portão trancado",
+    });
+
+    const summary = await context.list.execute({
+      userId: OPERATOR,
+      view: "summary",
+    });
+
+    expect(summary).toMatchObject({ view: "summary", total: 1 });
+    expect(summary.data[0]).toMatchObject({
+      id: request.id,
+      deliveryId,
+      description: "Portão trancado",
+      photos_count: 2,
+      has_receipt_photo: false,
+      has_signature: false,
+      reportedBy: { id: DRIVER_USER, name: "João Motorista" },
+      delivery: { id: deliveryId, recipient_name: "Cliente Autorização" },
+    });
+
+    // Field by field: nothing signed, no form, no answers, no place.
+    expect(Object.keys(summary.data[0]).sort()).toEqual(
+      [
+        "id",
+        "deliveryId",
+        "occurrenceTypeId",
+        "occurrenceType",
+        "category",
+        "description",
+        "photos_count",
+        "has_receipt_photo",
+        "has_signature",
+        "reportedBy",
+        "occurred_at",
+        "created_at",
+        "escalated_at",
+        "escalates_at",
+        "delivery",
+      ].sort(),
+    );
+    expect(JSON.stringify(summary)).not.toContain("https://signed/");
+
+    // The web's queue is what it was, and now names its view.
+    const full = await context.list.execute({ userId: OPERATOR });
+
+    expect(full.view).toBe("full");
+    expect(full.data[0].photos).toEqual([
+      "https://signed/delivery/a.jpg",
+      "https://signed/delivery/b.jpg",
+    ]);
+    expect(full.data[0].answers).toHaveLength(2);
+  });
+
+  // Wave 4: the detail a push opens reads one request, not the queue.
+  it("narrows to one request while it waits, and to nothing once decided or foreign", async () => {
+    const context = makeContext();
+    const deliveryId = await seedDelivery(context);
+    const typeId = await seedTowerType(context);
+
+    const first = await context.report.execute({
+      userId: DRIVER_USER,
+      businessId: BUSINESS,
+      deliveryId,
+      occurrenceTypeId: typeId,
+      form_answers: ANSWERS,
+    });
+    const second = await context.report.execute({
+      userId: DRIVER_USER,
+      businessId: BUSINESS,
+      deliveryId,
+      occurrenceTypeId: typeId,
+      form_answers: ANSWERS,
+    });
+
+    const one = await context.list.execute({
+      userId: OPERATOR,
+      occurrenceId: second.id,
+    });
+
+    expect(one.total).toBe(1);
+    expect(one.data.map((row) => row.id)).toEqual([second.id]);
+    expect(one.data[0].answers).toHaveLength(2);
+
+    // Another company's operator: the same empty answer as a missing id.
+    const foreign = await context.list.execute({
+      userId: FOREIGN_ADMIN,
+      occurrenceId: second.id,
+    });
+
+    expect(foreign).toMatchObject({ data: [], total: 0 });
+
+    await context.decide.execute({
+      userId: OPERATOR,
+      businessId: BUSINESS,
+      occurrenceId: first.id,
+      decision: "DENIED",
+      note: "Volte amanhã",
+    });
+
+    const decided = await context.list.execute({
+      userId: SECOND_OPERATOR,
+      occurrenceId: first.id,
+      view: "summary",
+    });
+
+    expect(decided).toMatchObject({ view: "summary", data: [], total: 0 });
+
+    // The decision says who decided, for "Já decidido por <nome>".
+    await expect(
+      context.decide.execute({
+        userId: SECOND_OPERATOR,
+        businessId: BUSINESS,
+        occurrenceId: first.id,
+        decision: "APPROVED",
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: "OCCURRENCE_ALREADY_DECIDED",
+      decision: { status: "DENIED", authorizedBy: { name: "Olga Torre" } },
+    });
+  });
+
   it("escalates a request after ten minutes, once", async () => {
     const context = makeContext();
     const deliveryId = await seedDelivery(context);
@@ -1073,7 +1210,7 @@ describe("who files a request, and when its attempt is over (review r1)", () => 
       form_answers: ANSWERS,
     });
 
-    expect(context.deliveries.events[0]).toMatchObject({
+    expect(withoutCreationLine(context.deliveries.events)[0]).toMatchObject({
       type: "OCCURRENCE",
       routeId: ROUTE_A,
     });
@@ -1101,8 +1238,143 @@ describe("who files a request, and when its attempt is over (review r1)", () => 
     expect(context.deliveries.deliveries[0].status).toBe("IN_TRANSIT");
     expect(context.webhooks.topics()).toEqual([]);
     expect(
-      context.deliveries.events.some((event) => event.type === "STATUS_CHANGE"),
+      withoutCreationLine(context.deliveries.events).some(
+        (event) => event.type === "STATUS_CHANGE",
+      ),
     ).toBe(false);
+  });
+
+  // Wave 4: the badge on a row of GET /route/live is the queue's own count,
+  // split by the route of the open stop each live request is tied to.
+  it("counts the live requests of each route, as the queue shows them", async () => {
+    const context = makeContext();
+    const typeId = await seedTowerType(context);
+
+    const onA = await seedDelivery(context);
+    const movedAway = await seedDelivery(context);
+    const unrouted = await seedDelivery(context);
+
+    const longAgo = new Date(Date.now() - 60 * 60_000);
+
+    onStop(context, onA, ROUTE_A, longAgo);
+    const leaving = onStop(context, movedAway, ROUTE_A, longAgo);
+
+    for (const deliveryId of [onA, onA, movedAway, unrouted]) {
+      await context.report.execute({
+        userId: DRIVER_USER,
+        businessId: BUSINESS,
+        deliveryId,
+        occurrenceTypeId: typeId,
+        form_answers: ANSWERS,
+      });
+    }
+
+    // One delivery leaves route A for route B: its request is over, so it
+    // counts nowhere (the queue drops it too).
+    leaving.status = "CANCELLED";
+    onStop(context, movedAway, ROUTE_B, new Date(Date.now() + 60_000));
+
+    const counts = await context.authorizations.countPendingByRoute(BUSINESS, [
+      ROUTE_A,
+      ROUTE_B,
+    ]);
+
+    expect([...counts]).toEqual([[ROUTE_A, 2]]);
+
+    // The request on a delivery outside any route is in the queue, on no row.
+    expect((await context.list.execute({ userId: OPERATOR })).total).toBe(3);
+
+    // Only the routes asked for, only the company's, nothing for no route.
+    expect([
+      ...(await context.authorizations.countPendingByRoute(BUSINESS, [
+        ROUTE_B,
+      ])),
+    ]).toEqual([]);
+    expect([
+      ...(await context.authorizations.countPendingByRoute(OTHER_BUSINESS, [
+        ROUTE_A,
+      ])),
+    ]).toEqual([]);
+    expect(
+      (await context.authorizations.countPendingByRoute(BUSINESS, [])).size,
+    ).toBe(0);
+  });
+
+  it("after Reentregar, the new stop's card does not show the previous attempt's answer", async () => {
+    // Red before: the card read the driver's newest request for the
+    // delivery, whatever attempt it belonged to, so the new stop of a
+    // redelivery showed "Autorizado…" from the APPROVED report that left
+    // it FAILED. Only a request made for the open stop counts now.
+    const context = makeContext();
+    const deliveryId = await seedDelivery(context);
+    const typeId = await seedTowerType(context);
+
+    const previous = await context.report.execute({
+      userId: DRIVER_USER,
+      businessId: BUSINESS,
+      deliveryId,
+      occurrenceTypeId: typeId,
+      form_answers: ANSWERS,
+      form_version: 1,
+    });
+
+    await context.decide.execute({
+      userId: OPERATOR,
+      businessId: BUSINESS,
+      occurrenceId: previous.id,
+      decision: "APPROVED",
+    });
+
+    expect(context.deliveries.deliveries[0].status).toBe("FAILED");
+
+    // The previous attempt was an hour ago; "Reentregar" put the delivery
+    // back on the street with a new open stop half an hour ago.
+    context.deliveries.occurrences.find(
+      (occurrence) => occurrence.id === previous.id,
+    )!.created_at = new Date(Date.now() - 60 * 60_000);
+
+    context.deliveries.deliveries[0].status = "IN_TRANSIT";
+    context.deliveries.routeStops.push({
+      routeId: "018f5000-0000-7000-8000-0000000000e2",
+      deliveryId,
+      status: "PENDING",
+      routeStatus: "IN_PROGRESS",
+      created_at: new Date(Date.now() - 30 * 60_000),
+    });
+
+    const cardOf = async () =>
+      (
+        (await context.deliveries.listDriverDeliveries(
+          BUSINESS,
+          DRIVER_ID,
+        )) as Array<{
+          id: string;
+          authorization_request: {
+            occurrenceId: string;
+            status: string;
+          } | null;
+        }>
+      ).find((card) => card.id === deliveryId);
+
+    const card = await cardOf();
+
+    expect(card).toBeDefined();
+    expect(card?.authorization_request).toBeNull();
+
+    // What the driver asks on this attempt is shown.
+    const current = await context.report.execute({
+      userId: DRIVER_USER,
+      businessId: BUSINESS,
+      deliveryId,
+      occurrenceTypeId: typeId,
+      form_answers: ANSWERS,
+      form_version: 1,
+    });
+
+    expect((await cardOf())?.authorization_request).toMatchObject({
+      occurrenceId: current.id,
+      status: "PENDING",
+    });
   });
 
   it("the driver's card shows only their own request, not the one of who held it before", async () => {

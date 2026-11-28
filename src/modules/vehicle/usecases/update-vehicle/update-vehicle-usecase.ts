@@ -41,12 +41,17 @@ import { VehicleCurrentMileageCanNotBeUpdatedError } from "../errors/vehicle-cur
 import { translateVehicleStatus } from "@/shared/utils/format-values";
 import {
   canReactivateVehicle,
+  isVehicleLimitEnforced,
   occupiesFleetSlot,
 } from "@/shared/entitlements/entitlement-rules";
 
 import { AppError } from "@/shared/errors/AppError";
 
-import { decideVehicleStatusChange } from "@/shared/vehicle/vehicle-status-change";
+import {
+  decideVehicleStatusChange,
+  statusChangeNotice,
+  type OpenRouteCounts,
+} from "@/shared/vehicle/vehicle-status-change";
 import { vehicleUniqueFieldOf } from "@/shared/vehicle/vehicle-conflicts";
 import {
   isModelYearCoherent,
@@ -55,8 +60,19 @@ import {
 } from "@/shared/vehicle/vehicle-years";
 import { logger } from "@/shared/logging/logger";
 import { sendCatalogChangedEvent } from "@/websocket";
+import { assertResponsibleUser } from "../vehicle-responsible";
 
 const log = logger.child({ component: "vehicle" });
+
+interface UpdateVehicleResult {
+  vehicle: Vehicle;
+
+  /**
+   * What the answer says instead of "atualizado", when the status change
+   * touches the vehicle's routes (statusChangeNotice); null otherwise.
+   */
+  notice: string | null;
+}
 
 @injectable()
 class UpdateVehicleUseCase {
@@ -84,7 +100,7 @@ class UpdateVehicleUseCase {
     vehicleId: string,
     businessId: string,
     userId: string,
-  ): Promise<Vehicle> {
+  ): Promise<UpdateVehicleResult> {
     const findUser = await this.user.findUserById(userId);
 
     if (!findUser) {
@@ -132,14 +148,20 @@ class UpdateVehicleUseCase {
 
     // The status against the routes that use the vehicle (decision 8.3).
     // Counted only when the status really changes: an echo costs nothing.
+    const requestedStatus = changes.status;
+    let openRoutes: OpenRouteCounts | null = null;
+    let fromRunningRoute = false;
+
     if (changes.status !== undefined && changes.status !== findVehicle.status) {
+      openRoutes = await this.vehicle.countOpenRoutesForVehicle(
+        vehicleId,
+        businessId,
+      );
+
       const verdict = decideVehicleStatusChange({
         current: findVehicle.status,
         requested: changes.status,
-        openRoutes: await this.vehicle.countOpenRoutesForVehicle(
-          vehicleId,
-          businessId,
-        ),
+        openRoutes,
       });
 
       if (verdict.kind === "refused") {
@@ -148,6 +170,15 @@ class UpdateVehicleUseCase {
           verdict.code === "VEHICLE_STATUS_DERIVED" ? 400 : 409,
           verdict.code,
         );
+      }
+
+      // What the rule decided is what is written: unblocking a truck on the
+      // road writes "Em rota", not the ACTIVE the form sent — derived again
+      // in the write itself, under the running route's lock, since the
+      // route may end between the count above and the write.
+      if (verdict.kind === "allowed") {
+        changes.status = verdict.status;
+        fromRunningRoute = "fromRunningRoute" in verdict;
       }
     } else {
       // An older client resends the stored status (IN_ROUTE included) with
@@ -274,12 +305,31 @@ class UpdateVehicleUseCase {
       }
     }
 
+    // F1: only a person the edit actually changes to is checked; null hands
+    // the vehicle back to the admins, absent keeps who it is.
+    if (changes.responsibleUserId !== findVehicle.responsibleUserId) {
+      await assertResponsibleUser(
+        this.user,
+        changes.responsibleUserId,
+        businessId,
+      );
+    }
+
     // Reactivating an INACTIVE vehicle re-occupies a contracted slot, so it
     // passes the same locked count as a new registration (FLEET-VEH-7).
-    const isReactivation =
-      changes.status !== undefined &&
-      !occupiesFleetSlot(findVehicle.status) &&
-      occupiesFleetSlot(changes.status);
+    // Every status that takes a slot goes through it, and the repository
+    // decides there, under the company's lock, whether the vehicle already
+    // holds one (M8): `findVehicle` is older, and an inactivation plus a new
+    // registration in between turned an unblocking into an uncounted
+    // reactivation. The unblocking on the road passes through it as well
+    // (IN_ROUTE and BLOCKED both hold a slot, so it is never refused, but
+    // the row is read as it is under the lock).
+    const takesSlot =
+      changes.status !== undefined && occupiesFleetSlot(changes.status);
+
+    const statusFromRunningRoute = fromRunningRoute
+      ? { businessId }
+      : undefined;
 
     const limit = findBusiness.vehicle_limit ?? 0;
 
@@ -287,16 +337,22 @@ class UpdateVehicleUseCase {
     let activeCount = 0;
 
     try {
-      if (isReactivation && limit > 0) {
+      if (takesSlot && isVehicleLimitEnforced(limit)) {
         ({ vehicle: updatedVehicle, activeCount } =
           await this.vehicle.updateVehicleWithinLimit(
-            { vehicleData: withVehicleDates(changes), vehicleId, businessId },
+            {
+              vehicleData: withVehicleDates(changes),
+              vehicleId,
+              businessId,
+              statusFromRunningRoute,
+            },
             { max: limit },
           ));
       } else {
         updatedVehicle = await this.vehicle.updateVehicle({
           vehicleData: withVehicleDates(changes),
           vehicleId,
+          statusFromRunningRoute,
         });
       }
     } catch (error) {
@@ -335,8 +391,19 @@ class UpdateVehicleUseCase {
       businessId,
     });
 
-    return updatedVehicle;
+    return {
+      vehicle: updatedVehicle,
+      notice:
+        requestedStatus && openRoutes
+          ? statusChangeNotice({
+              requested: requestedStatus,
+              written: updatedVehicle.status,
+              openRoutes,
+            })
+          : null,
+    };
   }
 }
 
 export { UpdateVehicleUseCase };
+export type { UpdateVehicleResult };

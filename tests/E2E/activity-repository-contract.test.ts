@@ -56,7 +56,7 @@ beforeAll(async () => {
       businessId: person.businessId,
       driverId: null,
       name: user.name,
-      email: user.email,
+      email: user.email!,
     });
   }
 

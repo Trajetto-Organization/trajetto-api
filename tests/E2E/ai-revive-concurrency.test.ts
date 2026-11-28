@@ -10,6 +10,10 @@ import {
   fakeImageLoader,
 } from "@/shared/ai/testing/fake-image-reader";
 import { quotaPeriodFor } from "@/shared/ai/ai-period";
+import {
+  getOrCreateCurrentPeriod,
+  reserveUnits,
+} from "@/shared/ai/ai-quota-service";
 import { computeIdempotencyKey } from "@/shared/ai/ai-rules";
 import { createPrismaClient } from "@/shared/database/database-client";
 
@@ -249,5 +253,83 @@ describe("reviving last month's failed analysis", () => {
     });
 
     expect(old.reservedUnits).toBe(0);
+  });
+});
+
+/**
+ * Two replicas spending the same company's quota at once (plan M7, S18).
+ *
+ * Each replica has its own connection pool; the only thing they share is
+ * Postgres, so the lock on the AIUsagePeriod row is the whole guarantee.
+ * Here two separate clients reserve at the same moment as new requests come
+ * in through the application's own client: the photos granted add up to the
+ * limit, never past it.
+ */
+describe("two replicas spending one company's quota at once", () => {
+  it("never grant past the limit", async () => {
+    const LIMIT = 3;
+    const businessId = await seedBusiness(LIMIT);
+
+    const replicaA = createPrismaClient();
+    const replicaB = createPrismaClient();
+
+    // One unit per attempt, on its own transaction, as requestAnalysis does.
+    const reserveOn = (replica: typeof replicaA) =>
+      replica.$transaction(async (tx) => {
+        const period = await getOrCreateCurrentPeriod(tx as never, businessId);
+
+        return reserveUnits(tx as never, period.id, businessId, 1);
+      });
+
+    const newRequest = () => {
+      const input = {
+        type: "FUEL_ODOMETER" as const,
+        recordId: randomUUID(),
+        businessId,
+        requestedById: randomUUID(),
+        input: { odometerPhotoPath: "odometro.jpg", reportedMileage: 1234 },
+      };
+
+      return service.createRequest(
+        input,
+        computeIdempotencyKey(input.type, input.recordId, input.input),
+        1,
+      );
+    };
+
+    try {
+      const [onA, onB, requests] = await Promise.all([
+        Promise.all(Array.from({ length: 4 }, () => reserveOn(replicaA))),
+        Promise.all(Array.from({ length: 4 }, () => reserveOn(replicaB))),
+        Promise.all(Array.from({ length: 4 }, () => newRequest())),
+      ]);
+
+      const granted =
+        [...onA, ...onB].reduce((sum, units) => sum + units, 0) +
+        requests.filter((outcome) => outcome === "queued").length;
+
+      expect(granted).toBe(LIMIT);
+
+      // Every refused request was recorded as such, not left half-made.
+      expect(
+        requests.every(
+          (outcome) => outcome === "queued" || outcome === "denied",
+        ),
+      ).toBe(true);
+
+      const period = await prisma.aIUsagePeriod.findUniqueOrThrow({
+        where: {
+          businessId_periodStart: {
+            businessId,
+            periodStart: periodStartFor(new Date()),
+          },
+        },
+      });
+
+      expect(period.reservedUnits + period.consumedUnits).toBe(LIMIT);
+    } finally {
+      await replicaA.$disconnect();
+      await replicaB.$disconnect();
+    }
   });
 });

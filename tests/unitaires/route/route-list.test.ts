@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { InMemoryRouteRepository } from "@/modules/route/repositories/in-memory/in-memory-route-repository";
 import {
   catalogFacetOptions,
+  exactRouteSearch,
   routeListWhere,
   summarizeRouteList,
 } from "@/modules/route/usecases/list-routes/route-list";
@@ -447,6 +448,107 @@ describe("the board's pure rules", () => {
     });
 
     expect(JSON.stringify(where)).not.toContain('"code"');
+  });
+
+  // Plan of 09/11/2026: the period is not a facet. Every count keeps it, the
+  // tenant stays on top, and the running routes join only a period that
+  // reaches today.
+  it("keeps the period in every variant of the where", () => {
+    const period = {
+      from: "2026-11-02",
+      to: "2026-11-08",
+      includesRunning: true,
+      includesOverdue: false,
+    };
+
+    for (const except of [
+      undefined,
+      "status",
+      "driverId",
+      "vehicleId",
+    ] as const) {
+      const where = routeListWhere(
+        { businessId: CARRIER, period, statuses: ["PLANNED"] },
+        { except },
+      );
+
+      expect(where.businessId).toBe(CARRIER);
+      expect(where.AND).toContainEqual({
+        OR: [
+          {
+            scheduled_date: {
+              gte: new Date("2026-11-02T00:00:00.000Z"),
+              lte: new Date("2026-11-08T00:00:00.000Z"),
+            },
+          },
+          { status: "IN_PROGRESS" },
+        ],
+      });
+    }
+
+    expect(
+      routeListWhere({
+        businessId: CARRIER,
+        period: { ...period, includesRunning: false },
+      }).AND,
+    ).toEqual([
+      {
+        scheduled_date: {
+          gte: new Date("2026-11-02T00:00:00.000Z"),
+          lte: new Date("2026-11-08T00:00:00.000Z"),
+        },
+      },
+    ]);
+  });
+
+  // The list's other unfinished route: one of a day before the period that
+  // never left. An arm of its own, of route (businessId, status, ...).
+  it("brings the routes of an earlier day that never left into a period that reaches today", () => {
+    const where = routeListWhere({
+      businessId: CARRIER,
+      period: {
+        from: "2026-11-08",
+        to: "2026-11-08",
+        includesRunning: true,
+        includesOverdue: true,
+      },
+    });
+
+    expect(where.businessId).toBe(CARRIER);
+    expect(where.AND).toEqual([
+      {
+        OR: [
+          {
+            scheduled_date: {
+              gte: new Date("2026-11-08T00:00:00.000Z"),
+              lte: new Date("2026-11-08T00:00:00.000Z"),
+            },
+          },
+          { status: "IN_PROGRESS" },
+          {
+            status: { in: ["PLANNED", "RELEASED"] },
+            scheduled_date: { lt: new Date("2026-11-08T00:00:00.000Z") },
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("reads a whole id or a number as one route, and nothing else", () => {
+    const id = "018fe200-0000-7000-8000-0000000009a4";
+
+    expect(exactRouteSearch(` ${id.toUpperCase()} `)).toEqual({ id });
+    expect(exactRouteSearch("Rota 12")).toEqual({ code: 12 });
+    expect(exactRouteSearch("#7")).toEqual({ code: 7 });
+
+    // A set of routes, not one: the period holds.
+    expect(exactRouteSearch(id.slice(-12))).toBeNull();
+    expect(exactRouteSearch("CD Norte")).toBeNull();
+    expect(
+      exactRouteSearch("35240912345678000190550010000012341000012345"),
+    ).toBeNull();
+    expect(exactRouteSearch("")).toBeNull();
+    expect(exactRouteSearch(undefined)).toBeNull();
   });
 
   it("totals only the statuses the filter keeps and fills the zeros", () => {

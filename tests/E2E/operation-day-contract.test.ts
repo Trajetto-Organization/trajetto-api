@@ -13,6 +13,10 @@ import type {
   OperationDay,
 } from "@/modules/route/repositories/IOperation-day-repository";
 import { operationDay } from "@/shared/route/operation-day-rules";
+import {
+  routeDaysOfOperationDay,
+  type RoutePeriodDays,
+} from "@/shared/route/route-period";
 import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
@@ -32,6 +36,18 @@ const OTHER = "018fa000-0000-7000-8000-00000000000b";
 
 const id = (suffix: string) =>
   `018fa000-0000-7000-8000-${suffix.padStart(12, "0")}`;
+
+/**
+ * An event's id as the app mints it: a uuid v7 of the instant it is
+ * written. The tower bounds the day's events by their ids as well as by
+ * created_at (plano-escala F2-17, history-id-range.ts), which holds for
+ * every id minted at the insert; a fixed id from another year would not.
+ */
+const eventId = (key: string, createdAt: Date) => {
+  const hex = createdAt.getTime().toString(16).padStart(12, "0");
+
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-7000-8000-${`e${key}`.padStart(12, "0")}`;
+};
 
 const D1 = id("d1");
 const D2 = id("d2");
@@ -117,7 +133,7 @@ function scenario(): OperationRows {
     deliveryKey: string,
     overrides: Partial<OperationRows["events"][number]>,
   ): OperationRows["events"][number] => ({
-    id: id(`e${key}`),
+    id: eventId(key, overrides.created_at ?? at("2026-09-17T12:00:00.000Z")),
     businessId: CARRIER,
     deliveryId: DELIVERY(deliveryKey),
     routeId: null,
@@ -315,6 +331,24 @@ function scenario(): OperationRows {
         created_at: at("2026-09-17T15:00:00.000Z"),
       }),
     ],
+    // The live list's last points (wave 4): Ana's in this company, and
+    // Xavier's in the other one.
+    lastPositions: [
+      {
+        driverId: D1,
+        businessId: CARRIER,
+        latitude: -9.97,
+        longitude: -67.81,
+        recorded_at: at("2026-09-17T19:30:00.000Z"),
+      },
+      {
+        driverId: DX,
+        businessId: OTHER,
+        latitude: -23.55,
+        longitude: -46.63,
+        recorded_at: at("2026-09-17T19:40:00.000Z"),
+      },
+    ],
     occurrences: [
       {
         id: id("0b1"),
@@ -491,6 +525,10 @@ async function seedPostgres(rows: OperationRows): Promise<void> {
         reportedById: REPORTER,
       },
     });
+  }
+
+  for (const position of rows.lastPositions ?? []) {
+    await prisma.driverLastPosition.create({ data: { ...position } });
   }
 
   for (const event of rows.events) {
@@ -770,6 +808,59 @@ describe("the routes the tower reasons about", () => {
   });
 });
 
+describe("the routes left open (H3)", () => {
+  // What GET /delivery/operation-summary inherited from routes left open,
+  // read without the tower's whole day: the running routes that left
+  // before the instant, and their open stops (PENDING or ARRIVED).
+  const byDeparture = (
+    rows: Array<{ started_at: Date | null; open: number }>,
+  ) =>
+    [...rows].sort(
+      (a, b) => (a.started_at?.getTime() ?? 0) - (b.started_at?.getTime() ?? 0),
+    );
+
+  it.each(both())(
+    "%s counts the open stops of the running routes that left before the instant",
+    async (_name, repository) => {
+      // São Paulo's midnight of the 17th: only yesterday's route 102.
+      expect(
+        await repository.listRoutesLeftOpen(
+          CARRIER,
+          at("2026-09-17T03:00:00.000Z"),
+        ),
+      ).toEqual([{ started_at: at("2026-09-16T20:00:00.000Z"), open: 1 }]);
+
+      // Later in the day, today's route 101 too (its one PENDING stop).
+      expect(
+        byDeparture(
+          await repository.listRoutesLeftOpen(
+            CARRIER,
+            at("2026-09-17T13:00:00.000Z"),
+          ),
+        ),
+      ).toEqual([
+        { started_at: at("2026-09-16T20:00:00.000Z"), open: 1 },
+        { started_at: at("2026-09-17T12:05:00.000Z"), open: 1 },
+      ]);
+
+      expect(
+        await repository.listRoutesLeftOpen(
+          CARRIER,
+          at("2026-09-16T00:00:00.000Z"),
+        ),
+      ).toEqual([]);
+
+      // Another company's running route is never read.
+      expect(
+        await repository.listRoutesLeftOpen(
+          OTHER,
+          at("2026-09-18T00:00:00.000Z"),
+        ),
+      ).toEqual([]);
+    },
+  );
+});
+
 describe("the feed of the day", () => {
   it.each(both())(
     "%s lists occurrences and route moves next to the delivery events",
@@ -806,7 +897,11 @@ describe("the feed of the day", () => {
       // Blocking, but waiting for a manager: the same line from the event
       // as from the row, and not red (decision 6.3).
       expect(
-        feed.find((entry) => entry.id === `delivery_event:${id("e7")}`),
+        feed.find(
+          (entry) =>
+            entry.id ===
+            `delivery_event:${eventId("7", at("2026-09-17T15:00:00.000Z"))}`,
+        ),
       ).toMatchObject({
         source: "delivery_event",
         detail: "Cliente ausente",
@@ -856,12 +951,15 @@ describe("the feed of the day", () => {
 });
 
 describe("the monitoring board by route", () => {
+  // The board of the day: the day's routes and the ones still running.
+  const TODAY = routeDaysOfOperationDay({ ...DAY, isToday: true });
+
   it.each(both())(
     "%s orders running, released, then finished",
     async (_name, repository) => {
       const { total, routes } = await repository.listMonitoringRoutes(
         CARRIER,
-        { ...DAY, isToday: true },
+        TODAY,
         { skip: 0, take: 20 },
       );
 
@@ -882,7 +980,7 @@ describe("the monitoring board by route", () => {
     async (_name, repository) => {
       const { total, routes } = await repository.listMonitoringRoutes(
         CARRIER,
-        { ...DAY, isToday: true },
+        TODAY,
         { skip: 40, take: 20 },
       );
 
@@ -895,8 +993,176 @@ describe("the monitoring board by route", () => {
     const page = { skip: 1, take: 2 };
 
     const [fromDatabase, fromTwin] = await Promise.all([
-      database.listMonitoringRoutes(CARRIER, { ...DAY, isToday: true }, page),
-      twin.listMonitoringRoutes(CARRIER, { ...DAY, isToday: true }, page),
+      database.listMonitoringRoutes(CARRIER, TODAY, page),
+      twin.listMonitoringRoutes(CARRIER, TODAY, page),
+    ]);
+
+    expect(fromDatabase).toEqual(fromTwin);
+  });
+
+  /**
+   * The board's period (plan of 09/11/2026): the routes of several days,
+   * and the running ones when the days reach today — the latest day first
+   * inside each group, the rest as on one day.
+   */
+  const PERIOD: RoutePeriodDays = {
+    from: "2026-09-16",
+    to: "2026-09-18",
+    includesRunning: true,
+  };
+
+  it.each(both())(
+    "%s reads a period of days, the latest day first in each group",
+    async (_name, repository) => {
+      const { total, routes } = await repository.listMonitoringRoutes(
+        CARRIER,
+        PERIOD,
+        { skip: 0, take: 20 },
+      );
+
+      // Running (17th, then the 16th), released, tomorrow's two planned by
+      // code, then the completed one; never the cancelled route nor the
+      // other company's running one.
+      expect(routes.map((route) => route.code)).toEqual([
+        101, 102, 106, 105, 108, 103,
+      ]);
+      expect(total).toBe(6);
+    },
+  );
+
+  it.each(both())(
+    "%s reads a day of the past without the routes running today",
+    async (_name, repository) => {
+      const { total, routes } = await repository.listMonitoringRoutes(
+        CARRIER,
+        { from: "2026-09-15", to: "2026-09-16", includesRunning: false },
+        { skip: 0, take: 20 },
+      );
+
+      // The 16th's route is still running, and it is of the 16th: it stays.
+      // The 17th's running one is not.
+      expect(routes.map((route) => route.code)).toEqual([102]);
+      expect(total).toBe(1);
+    },
+  );
+
+  it("gives the same answer from both over a period, past the first page too", async () => {
+    for (const page of [
+      { skip: 0, take: 4 },
+      { skip: 4, take: 4 },
+      { skip: 40, take: 4 },
+    ]) {
+      const [fromDatabase, fromTwin] = await Promise.all([
+        database.listMonitoringRoutes(CARRIER, PERIOD, page),
+        twin.listMonitoringRoutes(CARRIER, PERIOD, page),
+      ]);
+
+      expect(fromDatabase).toEqual(fromTwin);
+    }
+  });
+});
+
+describe("the live routes (wave 4, GET /route/live)", () => {
+  it.each(both())(
+    "%s lists the running routes of any day, then the day's released ones",
+    async (_name, repository) => {
+      const routes = await repository.listLiveRoutes(CARRIER, {
+        date: DAY.date,
+        take: 10,
+      });
+
+      expect(
+        routes.map((route) => [route.code, route.status, route.driverName]),
+      ).toEqual([
+        [101, "IN_PROGRESS", "Ana"],
+        // Yesterday's, still on the street.
+        [102, "IN_PROGRESS", "Bruno"],
+        [106, "RELEASED", "Bruno"],
+      ]);
+
+      expect(routes[0]).toMatchObject({
+        id: R(1),
+        name: "Rota 1",
+        scheduled_date: "2026-09-17",
+        vehiclePlate: "ACR1B23",
+        stopsTotal: 5,
+        stopsResolved: 4,
+        lastPosition: {
+          latitude: -9.97,
+          longitude: -67.81,
+          recorded_at: at("2026-09-17T19:30:00.000Z"),
+        },
+      });
+      expect(routes[0].started_at?.toISOString()).toBe(
+        "2026-09-17T12:05:00.000Z",
+      );
+
+      expect(routes[1]).toMatchObject({
+        scheduled_date: "2026-09-16",
+        vehiclePlate: null,
+        stopsTotal: 3,
+        stopsResolved: 2,
+        lastPosition: null,
+      });
+      expect(routes[2]).toMatchObject({
+        started_at: null,
+        stopsTotal: 2,
+        stopsResolved: 0,
+      });
+    },
+  );
+
+  it.each(both())(
+    "%s pages by the key and the cap, inside the company",
+    async (_name, repository) => {
+      const first = await repository.listLiveRoutes(CARRIER, {
+        date: DAY.date,
+        take: 1,
+      });
+      const rest = await repository.listLiveRoutes(CARRIER, {
+        date: DAY.date,
+        take: 10,
+        after: { rank: 0, code: 101 },
+      });
+      const released = await repository.listLiveRoutes(CARRIER, {
+        date: DAY.date,
+        take: 10,
+        after: { rank: 0, code: 999 },
+      });
+
+      expect(first.map((route) => route.code)).toEqual([101]);
+      expect(rest.map((route) => route.code)).toEqual([102, 106]);
+      expect(released.map((route) => route.code)).toEqual([106]);
+
+      // The other company's running route and Xavier's point never show.
+      const other = await repository.listLiveRoutes(OTHER, {
+        date: DAY.date,
+        take: 10,
+      });
+
+      expect(other.map((route) => route.code)).toEqual([107]);
+      expect(other[0].lastPosition?.latitude).toBe(-23.55);
+    },
+  );
+
+  it.each(both())(
+    "%s leaves out the released routes of another day",
+    async (_name, repository) => {
+      const tomorrow = await repository.listLiveRoutes(CARRIER, {
+        date: "2026-09-18",
+        take: 10,
+      });
+
+      expect(tomorrow.map((route) => route.code)).toEqual([101, 102]);
+    },
+  );
+
+  it("gives the same answer from both", async () => {
+    const query = { date: DAY.date, take: 10 };
+
+    const [fromDatabase, fromTwin] = await Promise.all([
+      database.listLiveRoutes(CARRIER, query),
+      twin.listLiveRoutes(CARRIER, query),
     ]);
 
     expect(fromDatabase).toEqual(fromTwin);

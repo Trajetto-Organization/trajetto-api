@@ -3,8 +3,20 @@ import database from "@/../infra/database";
 import { randomBytes } from "node:crypto";
 
 import { PUBLIC_AUTHORIZATION_STATUSES } from "@/shared/delivery/public-occurrence";
+import type { Prisma } from "@prisma/client";
+
+import {
+  messageOptOutOf,
+  sharesSuppressionAddress,
+  suppressionAddresses,
+  uniqueSuppressionAddresses,
+  type CustomerContact,
+  type CustomerMessageChannel,
+  type MessageOptOut,
+} from "@/shared/notifications/customer-message-suppression";
 
 import type {
+  CustomerMessagesReactivation,
   DeliveryContactState,
   IExternalRecipientRepository,
   TrackingSource,
@@ -116,6 +128,40 @@ class ExternalRecipientRepository implements IExternalRecipientRepository {
 
     const { delivery, ...recipient } = found;
 
+    // The visit's other NF-e (B6): the siblings of the delivery's current
+    // stop, on that route, of this same company.
+    const stop = await this.prisma.routeStop.findFirst({
+      where: {
+        deliveryId: delivery.id,
+        stop_group_key: { not: null },
+        route: { businessId: found.businessId },
+      },
+      orderBy: { created_at: "desc" },
+      select: { routeId: true, stop_group_key: true },
+    });
+
+    const siblings = stop
+      ? await this.prisma.routeStop.findMany({
+          where: {
+            routeId: stop.routeId,
+            stop_group_key: stop.stop_group_key,
+            deliveryId: { not: delivery.id },
+            delivery: { businessId: found.businessId },
+          },
+          orderBy: { sequence: "asc" },
+          select: {
+            delivery: {
+              select: {
+                code: true,
+                invoice_number: true,
+                status: true,
+                delivered_at: true,
+              },
+            },
+          },
+        })
+      : [];
+
     return {
       recipient: recipient as unknown as ExternalRecipientRecord,
 
@@ -149,18 +195,72 @@ class ExternalRecipientRepository implements IExternalRecipientRepository {
       })),
 
       proofToken: delivery.proofDocument?.verification_token ?? null,
+
+      sameStop: siblings.map((sibling) => sibling.delivery),
     };
   }
 
   async optOut(token: string): Promise<boolean> {
-    // updateMany, so a token nobody holds is a no-op instead of a throw — and
-    // so the answer is the same whether the token was real.
-    const { count } = await this.prisma.externalRecipient.updateMany({
-      where: { access_token: token, opted_out_at: null },
-      data: { opted_out_at: new Date() },
+    return this.prisma.$transaction(async (tx) => {
+      // The row's businessId is the delivery's company: copied when the row
+      // is created, and no record ever moves company (decision 16.100).
+      const recipient = await tx.externalRecipient.findUnique({
+        where: { access_token: token },
+        select: {
+          id: true,
+          businessId: true,
+          deliveryId: true,
+          email: true,
+          telephone: true,
+        },
+      });
+
+      // A token nobody holds is a no-op, and the controller's answer is the
+      // same whether the token was real.
+      if (!recipient) return false;
+
+      const { count } = await tx.externalRecipient.updateMany({
+        where: { id: recipient.id, opted_out_at: null },
+        data: { opted_out_at: new Date() },
+      });
+
+      // D38: the phone and the e-mail, for every delivery of this company.
+      // Written even on a second click (a row opted out before this table
+      // existed gets its suppression now). ON CONFLICT DO NOTHING on the
+      // unique key: a repeat, or two replicas racing, inserts nothing.
+      const addresses = suppressionAddresses(recipient);
+
+      if (addresses.length > 0) {
+        await tx.customerMessageSuppression.createMany({
+          data: addresses.map(({ channel, address }) => ({
+            businessId: recipient.businessId,
+            channel,
+            address,
+            source_delivery_id: recipient.deliveryId,
+          })),
+          skipDuplicates: true,
+        });
+      }
+
+      return count > 0;
+    });
+  }
+
+  async suppressedChannels(
+    businessId: string,
+    contact: CustomerContact,
+  ): Promise<Set<CustomerMessageChannel>> {
+    const addresses = suppressionAddresses(contact);
+
+    if (addresses.length === 0) return new Set();
+
+    // Served by the (businessId, channel, address) unique index.
+    const rows = await this.prisma.customerMessageSuppression.findMany({
+      where: { businessId, OR: addresses },
+      select: { channel: true },
     });
 
-    return count > 0;
+    return new Set(rows.map((row) => row.channel));
   }
 
   async findDeliveryState(
@@ -173,6 +273,7 @@ class ExternalRecipientRepository implements IExternalRecipientRepository {
         recipient_name: true,
         recipient_email: true,
         recipient_telephone: true,
+        externalRecipient: { select: { opted_out_at: true } },
       },
     });
 
@@ -183,7 +284,118 @@ class ExternalRecipientRepository implements IExternalRecipientRepository {
       name: delivery.recipient_name,
       email: delivery.recipient_email,
       telephone: delivery.recipient_telephone,
+      optedOut: Boolean(delivery.externalRecipient?.opted_out_at),
     };
+  }
+
+  async messageOptOutState(
+    businessId: string,
+    deliveryId: string,
+  ): Promise<MessageOptOut | null> {
+    // Scoped by company: another company's delivery reads as absent.
+    const delivery = await this.prisma.delivery.findFirst({
+      where: { id: deliveryId, businessId },
+      select: {
+        recipient_telephone: true,
+        recipient_email: true,
+        externalRecipient: { select: { opted_out_at: true } },
+      },
+    });
+
+    if (!delivery) return null;
+
+    const contact = {
+      telephone: delivery.recipient_telephone,
+      email: delivery.recipient_email,
+    };
+    const addresses = suppressionAddresses(contact);
+
+    // Served by the (businessId, channel, address) unique index.
+    const suppressions = addresses.length
+      ? await this.prisma.customerMessageSuppression.findMany({
+          where: { businessId, OR: addresses },
+          select: { channel: true, address: true, created_at: true },
+        })
+      : [];
+
+    return messageOptOutOf(
+      contact,
+      suppressions,
+      delivery.externalRecipient?.opted_out_at ?? null,
+    );
+  }
+
+  async reactivateCustomerMessages(
+    businessId: string,
+    deliveryId: string,
+    onReactivated?: (tx: Prisma.TransactionClient) => Promise<void>,
+  ): Promise<CustomerMessagesReactivation | null> {
+    return this.prisma.$transaction(async (tx) => {
+      const delivery = await tx.delivery.findFirst({
+        where: { id: deliveryId, businessId },
+        select: {
+          recipient_telephone: true,
+          recipient_email: true,
+          externalRecipient: { select: { telephone: true, email: true } },
+        },
+      });
+
+      if (!delivery) return null;
+
+      // The contact messages go to now, and the one the recipient row kept
+      // when the link was sent (a corrected phone leaves the old one there).
+      const addresses = uniqueSuppressionAddresses([
+        ...suppressionAddresses({
+          telephone: delivery.recipient_telephone,
+          email: delivery.recipient_email,
+        }),
+        ...(delivery.externalRecipient
+          ? suppressionAddresses(delivery.externalRecipient)
+          : []),
+      ]);
+
+      const removedSuppressions = addresses.length
+        ? (
+            await tx.customerMessageSuppression.deleteMany({
+              where: { businessId, OR: addresses },
+            })
+          ).count
+        : 0;
+
+      // The company's opted-out rows, compared under the normalized key
+      // (the rows keep the contact as typed). Opt-outs are rare and the read
+      // stays inside one company, by its (businessId, created_at) index; it
+      // runs only when somebody presses "Reativar".
+      const optedOut = await tx.externalRecipient.findMany({
+        where: { businessId, opted_out_at: { not: null } },
+        select: { id: true, deliveryId: true, telephone: true, email: true },
+      });
+
+      const ids = optedOut
+        .filter(
+          (row) =>
+            row.deliveryId === deliveryId ||
+            sharesSuppressionAddress(row, addresses),
+        )
+        .map((row) => row.id);
+
+      const clearedOptOuts = ids.length
+        ? (
+            await tx.externalRecipient.updateMany({
+              where: {
+                businessId,
+                id: { in: ids },
+                opted_out_at: { not: null },
+              },
+              data: { opted_out_at: null },
+            })
+          ).count
+        : 0;
+
+      if (removedSuppressions + clearedOptOuts > 0) await onReactivated?.(tx);
+
+      return { removedSuppressions, clearedOptOuts };
+    });
   }
 }
 

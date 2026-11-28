@@ -40,6 +40,11 @@ const ACTIVITY_STATUS_CATALOG = [
   { value: "Ativo", module: "CORE", aliases: ["ACTIVE"] },
   { value: "Inativo", module: "CORE", aliases: ["INACTIVE"] },
   { value: "Bloqueado", module: "CORE", aliases: ["BLOCKED"] },
+  // A company's scheduled purge and a person's removal (LGPD): the request,
+  // then the job that erased the personal data.
+  { value: "Exclusão agendada", module: "CORE" },
+  { value: "Anonimização pedida", module: "CORE" },
+  { value: "Anonimizado", module: "CORE" },
   // Deliveries and routes.
   {
     value: "Em rota",
@@ -80,6 +85,8 @@ interface ActivityTypeEntry {
 const ACTIVITY_TYPE_CATALOG = [
   { value: "Empresa", module: "CORE" },
   { value: "Plano", module: "CORE" },
+  // Plan of 02/11/2026 (M1): the company's own settings.
+  { value: "Configurações da empresa", module: "CORE" },
   { value: "Filial", module: "CORE" },
   { value: "Usuário", module: "CORE" },
   { value: "Perfil de acesso", module: "CORE" },

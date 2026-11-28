@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { sign } from "jsonwebtoken";
 
 import auth from "@/config/auth";
+import { env } from "@/env";
 
 import {
   businessDateKey,
@@ -395,6 +396,12 @@ beforeAll(async () => {
   readerToken = await tokenFor(READER);
   mechanicToken = await tokenFor(MECHANIC);
 
+  // Each test rewrites the company's day and reads the tower again at
+  // once: this file proves the tower's query, so every read computes
+  // (TOWER_SNAPSHOT_TTL_MS=0). The snapshot of F4-11 has its own proof,
+  // tests/E2E/control-tower-snapshot-http.test.ts.
+  env.TOWER_SNAPSHOT_TTL_MS = 0;
+
   ({ app } = await import("@/http"));
   await app.ready();
 }, 120_000);
@@ -487,8 +494,9 @@ describe("the partitioned table", () => {
 
     const today = new Date().toISOString().slice(0, 10).replace(/-/g, "");
 
+    // The lean trail's partition (plano-escala F2-10): where a flush lands.
     const rows = await prisma.$queryRawUnsafe<Array<{ total: bigint }>>(
-      `SELECT count(*)::bigint AS total FROM "driver_position_${today}"`,
+      `SELECT count(*)::bigint AS total FROM "driver_position_v2_${today}"`,
     );
 
     expect(Number(rows[0].total)).toBe(3);
@@ -592,13 +600,11 @@ describe("what a phone sends and what survives", () => {
       where: { businessId: CARRIER },
     });
 
+    // Twenty minutes ago, as the phone said: not the arrival, which the
+    // lean trail (plano-escala F2-10) does not even keep.
     expect(
       Math.abs(stored.recorded_at.getTime() - recordedAt.getTime()),
     ).toBeLessThan(1000);
-
-    expect(stored.created_at.getTime()).toBeGreaterThan(
-      stored.recorded_at.getTime(),
-    );
   });
 });
 
@@ -855,10 +861,12 @@ describe("keeping the partitions ahead of the trucks", () => {
   }
 
   it("creates the week ahead, so a missed night costs nothing", async () => {
-    const { driverPositionPartitionsJob, PARTITION_LOOKAHEAD_DAYS } =
-      await import("@/jobs/cron/driver-position-partitions-job");
+    const { partitionMaintenanceJob } =
+      await import("@/jobs/cron/partition-maintenance-job");
+    const PARTITION_LOOKAHEAD_DAYS =
+      env.DRIVER_POSITION_PARTITION_LOOKAHEAD_DAYS;
 
-    await driverPositionPartitionsJob.handler();
+    await partitionMaintenanceJob.handler();
 
     const partitions = await attachedPartitions();
 
@@ -870,20 +878,20 @@ describe("keeping the partitions ahead of the trucks", () => {
   });
 
   it("runs twice without complaining", async () => {
-    const { driverPositionPartitionsJob } = await import(
-      "@/jobs/cron/driver-position-partitions-job"
-    );
+    const { partitionMaintenanceJob } =
+      await import("@/jobs/cron/partition-maintenance-job");
 
     // Two replicas run this at the same second. The race between "does it
     // exist" and "create it" is exactly the kind that only shows up in
     // production.
-    await driverPositionPartitionsJob.handler();
-    await expect(driverPositionPartitionsJob.handler()).resolves.not.toThrow();
+    await partitionMaintenanceJob.handler();
+    await expect(partitionMaintenanceJob.handler()).resolves.not.toThrow();
   });
 
   it("drops a day past the retention, and only that day", async () => {
-    const { driverPositionPartitionsJob, PARTITION_RETENTION_DAYS } =
-      await import("@/jobs/cron/driver-position-partitions-job");
+    const { partitionMaintenanceJob } =
+      await import("@/jobs/cron/partition-maintenance-job");
+    const PARTITION_RETENTION_DAYS = env.DRIVER_POSITION_RETENTION_DAYS;
 
     const stale = nameFor(-(PARTITION_RETENTION_DAYS + 5));
     const staleDay = new Date();
@@ -901,7 +909,7 @@ describe("keeping the partitions ahead of the trucks", () => {
 
     expect(await attachedPartitions()).toContain(stale);
 
-    await driverPositionPartitionsJob.handler();
+    await partitionMaintenanceJob.handler();
 
     const after = await attachedPartitions();
 
@@ -1044,9 +1052,13 @@ describe("the trail's day is the company's day", () => {
    * created a week ahead, so a day's partition exists before its points).
    */
   async function ensurePartitionsFor(points: Date[]): Promise<void> {
-    const { partitionName } = await import(
-      "@/jobs/cron/driver-position-partitions-job"
-    );
+    const { partitionName, registeredPartitions } =
+      await import("@/shared/database/partitions");
+    // The lean trail (plano-escala F2-10): where the points are written and
+    // where the seeds below put them.
+    const trail = registeredPartitions().find(
+      (entry) => entry.table === "driver_position_v2",
+    )!;
     const days = new Set(
       points.map((point) => point.toISOString().slice(0, 10)),
     );
@@ -1056,7 +1068,7 @@ describe("the trail's day is the company's day", () => {
       const to = new Date(from.getTime() + 24 * 60 * 60 * 1000);
 
       await prisma.$executeRawUnsafe(
-        `CREATE TABLE IF NOT EXISTS "${partitionName(from)}" PARTITION OF "driver_position"
+        `CREATE TABLE IF NOT EXISTS "${partitionName(trail, from)}" PARTITION OF "driver_position_v2"
            FOR VALUES FROM ('${from.toISOString()}') TO ('${to.toISOString()}')`,
       );
     }
@@ -1108,11 +1120,10 @@ describe("the trail's day is the company's day", () => {
 
   it("reads an explicit day in the company's zone", async () => {
     // Yesterday, so its partitions exist: the job keeps the day before.
-    const { driverPositionPartitionsJob } = await import(
-      "@/jobs/cron/driver-position-partitions-job"
-    );
+    const { partitionMaintenanceJob } =
+      await import("@/jobs/cron/partition-maintenance-job");
 
-    await driverPositionPartitionsJob.handler();
+    await partitionMaintenanceJob.handler();
 
     const yesterday = businessDateKey(
       new Date(Date.now() - 24 * 60 * 60 * 1000),
@@ -1134,11 +1145,10 @@ describe("the trail's day is the company's day", () => {
     // Rio Branco (UTC-5): its day is [05:00Z, 05:00Z of the next day). A
     // window in the server's zone — UTC in the container, São Paulo on a
     // laptop — loses the late evening, whichever of the two runs this.
-    const { driverPositionPartitionsJob } = await import(
-      "@/jobs/cron/driver-position-partitions-job"
-    );
+    const { partitionMaintenanceJob } =
+      await import("@/jobs/cron/partition-maintenance-job");
 
-    await driverPositionPartitionsJob.handler();
+    await partitionMaintenanceJob.handler();
 
     const RIO_BRANCO = "America/Rio_Branco";
     const today = businessDateKey(new Date(), RIO_BRANCO);
@@ -1512,6 +1522,10 @@ describe("the feed says what happened today (TWR-6/TWR-7)", () => {
         occurrenceTypeId: absent.id,
         reportedById: DRIVER_USER,
         occurred_at: earlierToday(0.9),
+        // E5: recorded outside the company's radius.
+        geofence_outcome: "OUTSIDE",
+        distance_m: 1500,
+        accuracy_m: 30,
       },
     });
 
@@ -1557,6 +1571,21 @@ describe("the feed says what happened today (TWR-6/TWR-7)", () => {
       detail: absent.name,
       failure: true,
       recipientName: "Cliente recusou",
+      // E5: the feed's "Fora do raio" flag survives the response schema.
+      geofence_outcome: "OUTSIDE",
+      distance_m: 1500,
+      accuracy_m: 30,
+    });
+
+    expect(
+      events.find(
+        (event: { type: string; routeId: string | null }) =>
+          event.type === "ROUTE_STARTED" && event.routeId === routeId,
+      ),
+    ).toMatchObject({
+      geofence_outcome: null,
+      distance_m: null,
+      accuracy_m: null,
     });
 
     const types = events.map(
@@ -1668,12 +1697,20 @@ describe("who may read the operation", () => {
     }
   });
 
-  it("refuses a driver token on the monitoring boards", async () => {
-    for (const url of ["/route/monitoring", "/route/monitoring/drivers"]) {
+  // Plan of 02/11/2026, H5 (defence in depth): the guard itself refuses the
+  // driver token (allowDriver:false), before any use case runs — the app's
+  // delivery_manage grant is for the driver's own work, never these boards.
+  it("refuses a driver token on the tower, the trail and the monitoring boards at the guard", async () => {
+    for (const url of [
+      "/route/control-tower",
+      `/route/driver-trail/${DRIVER}`,
+      "/route/monitoring",
+      "/route/monitoring/drivers",
+    ]) {
       const response = await get(url, driverToken);
 
       expect(response.statusCode, url).toBe(403);
-      expect(response.json().code, url).toBe("DRIVER_CANNOT_VIEW_PANELS");
+      expect(response.json().code, url).toBe("PERMISSION_DENIED");
     }
   });
 

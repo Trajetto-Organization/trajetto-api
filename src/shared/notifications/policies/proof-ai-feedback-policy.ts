@@ -7,6 +7,7 @@ import {
   RenderedInApp,
   RenderedPush,
 } from "../notification-types";
+import { PUSH_TTL_SECONDS } from "../push-validity";
 
 /**
  * The driver hears that the receipt they sent looks wrong (decision 6.9).
@@ -85,6 +86,10 @@ const proofAIFeedbackPolicy: NotificationPolicyEntry<DeliveryProofAIFlaggedPaylo
     mandatory: true,
     suppressEmail: true,
 
+    // The event's actor is the driver who sent the receipt (the reading's
+    // requester), and the notice is the AI's verdict on it, for them.
+    notifiesActor: "verdict",
+
     async resolveRecipients(payload, deps) {
       const driver = await deps.userRepository.findUserById(
         payload.driverUserId,
@@ -98,6 +103,7 @@ const proofAIFeedbackPolicy: NotificationPolicyEntry<DeliveryProofAIFlaggedPaylo
 
     renderInApp: renderProofFeedbackInApp,
     renderPush: renderProofFeedbackPush,
+    pushTtlSeconds: PUSH_TTL_SECONDS.proofFeedback,
   };
 
 export {

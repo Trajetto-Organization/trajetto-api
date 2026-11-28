@@ -3,6 +3,8 @@ import { join, relative, resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { PROCESS_ROLES } from "@/shared/lifecycle/process-role";
+
 /**
  * The repository's own documentation stays one set, and stays reachable.
  *
@@ -17,7 +19,15 @@ import { describe, expect, it } from "vitest";
  * two in step. infraestrutura.md (29/10/2026) is the fifth topic: the map of
  * everything configured by hand outside the code (Contabo, Dokploy,
  * Cloudflare, GitHub, Expo), the only record of it, since there is no
- * infrastructure as code. The ADRs live in docs/adr/, one file per decision.
+ * infrastructure as code. whatsapp-modelos.md (03/11/2026, plan item B7) is
+ * not a topic either: it is generated from the WhatsApp template registries
+ * by `yarn docs:whatsapp` — the exact copy the owner pastes into Meta —,
+ * whatsapp-templates-doc.test.ts fails when it drifts from them, and
+ * whatsapp-templates.test.ts holds the registry to Meta's rules. slo.md
+ * (15/11/2026, scale plan item X-45) is not a topic either: the proposed
+ * SLOs, where each one is measured and the rule of the alerts, which the
+ * owner approves; architecture-docs.test.ts holds every SLO to a source.
+ * The ADRs live in docs/adr/, one file per decision.
  */
 const ROOT = resolve(__dirname, "..", "..", "..");
 const read = (path: string) =>
@@ -28,8 +38,10 @@ const DOCS = [
   "docs/arquitetura-tour.md",
   "docs/deploy.md",
   "docs/infraestrutura.md",
+  "docs/slo.md",
   "docs/testes.md",
   "docs/variaveis-de-ambiente.md",
+  "docs/whatsapp-modelos.md",
 ];
 
 const RETIRED = /docs\/(?:runbook-[\w-]+|decisao-uniques-multi-tenant)\.md/;
@@ -101,5 +113,25 @@ describe("the agent guides", () => {
     expect(read("CLAUDE.md").split("\n")[0]).toMatch(/^# CLAUDE\.md/);
     expect(read("AGENTS.md").split("\n")[0]).toMatch(/^# AGENTS\.md/);
     expect(body("CLAUDE.md")).toBe(body("AGENTS.md"));
+  });
+
+  // The roles (plano-escala X-38): a fresh agent session reads the guide
+  // first, and a role it never heard of is a route added where the role
+  // cannot serve it, or a queue claimed in the wrong process.
+  it("summarise every process role the code knows, as docs/arquitetura.md does", () => {
+    const summary = read("CLAUDE.md")
+      .split("\n## ")
+      .find((part) => part.startsWith("Papéis de processo"));
+    const table = read("docs/arquitetura.md")
+      .split("\n### ")
+      .find((part) => part.startsWith("Os papéis\n"));
+
+    expect(summary).toBeDefined();
+    expect(table).toBeDefined();
+
+    for (const role of PROCESS_ROLES) {
+      expect(summary, role).toContain(`\`${role}\``);
+      expect(table, role).toMatch(new RegExp(`^\\| \`${role}\``, "m"));
+    }
   });
 });

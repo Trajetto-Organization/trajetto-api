@@ -144,6 +144,21 @@ class BranchRepository implements IBranchRepository {
   }
 
   /**
+   * Two rows at most: a second active branch already means "no single
+   * answer", whatever the company's size. Served by the
+   * (businessId, created_at) index.
+   */
+  async findSoleActiveBranchId(businessId: string): Promise<string | null> {
+    const active = await this.prisma.branch.findMany({
+      where: { businessId, is_active: true },
+      select: { id: true },
+      take: 2,
+    });
+
+    return active.length === 1 ? active[0].id : null;
+  }
+
+  /**
    * Inside ONE company. The ERP code is the customer's own numbering ("001",
    * "MATRIZ"), unique per company since 20260924090400_tenant_scoped_uniques;
    * looked up globally, the first carrier to type "001" blocked every other.

@@ -6,6 +6,7 @@ import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-r
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 
 import { AppError } from "@/shared/errors/AppError";
+import { conflictFromPrisma } from "@/shared/errors/prisma-conflict";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { BusinessNotFoundError } from "@/modules/business/usecases/errors/business-not-found-error";
@@ -64,17 +65,9 @@ class DeleteFuelTypeUseCase {
       throw new FuelTypeNotFoundError();
     }
 
-    // Counted, not loaded: the old guard read every refueling of the fuel
-    // (thousands) to take `.length`.
-    const usage = await this.fuelType.countFuelTypeUsage(fuelTypeId);
+    const refusal = await this.usageRefusal(fuelTypeId);
 
-    if (usage.vehicles > 0) {
-      throw new FuelTypeHasAssociatedVehiclesError(usage.vehicles);
-    }
-
-    if (usage.fuels > 0) {
-      throw new FuelTypeHasAssociatedFuelError(usage.fuels);
-    }
+    if (refusal) throw refusal;
 
     try {
       const fuelTypeDeleted = await this.fuelType.deleteFuelType(fuelTypeId);
@@ -95,11 +88,37 @@ class DeleteFuelTypeUseCase {
 
       return fuelTypeDeleted;
     } catch (error) {
-      throw new AppError(
-        "Houve um erro ao tentar deletar o tipo de combustível! Por favor, tente novamente.",
-        500,
+      // A vehicle or a refueling written between the count and the delete
+      // met the foreign key: counted again, the same 409 as the count.
+      throw (
+        (await conflictFromPrisma(error, {
+          inUse: () => this.usageRefusal(fuelTypeId),
+        })) ??
+        new AppError(
+          "Houve um erro ao tentar deletar o tipo de combustível! Por favor, tente novamente.",
+          500,
+        )
       );
     }
+  }
+
+  /**
+   * What keeps the fuel type from being deleted, or null. Counted, not
+   * loaded: the old guard read every refueling of the fuel (thousands) to
+   * take `.length`.
+   */
+  private async usageRefusal(fuelTypeId: string): Promise<Error | null> {
+    const usage = await this.fuelType.countFuelTypeUsage(fuelTypeId);
+
+    if (usage.vehicles > 0) {
+      return new FuelTypeHasAssociatedVehiclesError(usage.vehicles);
+    }
+
+    if (usage.fuels > 0) {
+      return new FuelTypeHasAssociatedFuelError(usage.fuels);
+    }
+
+    return null;
   }
 }
 

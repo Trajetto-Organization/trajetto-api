@@ -120,9 +120,7 @@ const createQuoteSchema = z.object({
       ),
   ),
   fleet_size: z.enum(["1-5", "6-15", "16-30", "31-50", "51-100", "101+"], {
-    errorMap: () => ({
-      message: "Por favor, selecione o tamanho da sua frota",
-    }),
+    error: "Por favor, selecione o tamanho da sua frota",
   }),
   // A form post sends every line break as CRLF. Read as one "\n" (what the
   // web action sends). The multiline rule (decision 5.5): a line break is not

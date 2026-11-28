@@ -10,19 +10,43 @@ import {
 
 import {
   OPEN_STOP_STATUSES,
+  ROUTE_ALL_STOPS_CANCELLED_REASON,
   nextSequence,
   resequence,
+  routeCancelledNote,
+  routeClosingStatus,
   routeCompletedAt,
   type RouteStopStatus,
 } from "@/shared/route/route-rules";
 import { resolveTimeZone } from "@/shared/time/business-day";
+import { storedBusinessZone } from "@/shared/time/business-time-zone";
+import { utcInstant } from "@/shared/database/utc-instant";
+import type { DeliveryStatus } from "@/shared/delivery/delivery-rules";
+import { deliveryStatusTrailEnabled } from "@/shared/delivery/status-trail";
+import { routeClosedWithPendingNote } from "@/shared/route/route-left-open";
+import { assignStopGroupKeys } from "@/shared/delivery/stop-group";
+import { deliveryAddressKey } from "@/shared/delivery/address-key";
+import { pickReusablePoint } from "@/shared/delivery/geocoding/address-point-reuse";
+import {
+  followSource,
+  lockSourceAndCopies,
+  sourcePinOf,
+  writePointToDoor,
+} from "@/shared/delivery/geocoding/address-point-propagation";
 import { isModuleEnabled } from "@/shared/entitlements/entitlement-rules";
+import { routeMovesVehicle } from "@/shared/vehicle/route-vehicle";
 
 import {
+  ROUTE_PERIOD_SORT,
   ROUTE_SORT,
   catalogFacetOptions,
+  exactRouteSearch,
+  routeListPeriodSpan,
+  routeListUnfinishedWhere,
   routeListWhere,
+  stopCountsOf,
   summarizeRouteList,
+  type RouteListFilters,
 } from "../usecases/list-routes/route-list";
 
 import {
@@ -43,8 +67,11 @@ import {
 import {
   UNROUTED_DELIVERY_SELECT,
   UNROUTED_FACET_LIMIT,
+  UNROUTED_ORDER,
+  encodeUnroutedCursor,
   orderShipperFacet,
   unroutedDeliveriesWhere,
+  unroutedKeysetAfter,
   type UnroutedDeliveriesPage,
   type UnroutedDeliveriesQuery,
   type UnroutedDeliveryRow,
@@ -57,10 +84,13 @@ import type {
   AssignmentPreview,
   AssignmentPreviewProps,
   AssignmentRouteRef,
+  CloseWithPendingProps,
   CreateRouteProps,
+  LeftOpenRoute,
+  ListRoutesPage,
   ListRoutesProps,
-  ListRoutesResult,
   LockedRoute,
+  LostStop,
   OpenStopRoute,
   DetachResult,
   PinnedLocation,
@@ -70,16 +100,46 @@ import type {
   PlanStopsRemoved,
   PlanWriteOptions,
   Route,
+  RouteListRow,
   RouteStop,
   RouteStopWithDelivery,
   RouteTransition,
+  RouteWindow,
   RouteWithStops,
   UpdateRouteProps,
   VisitedPoint,
+  StopGeofenceFlag,
 } from "../dtos/route-dto";
 
 import type { RouteStatus } from "@/shared/route/route-rules";
-import { uniqueTargetOf } from "@/shared/errors/prisma-error-meta";
+import {
+  isSerializationFailure,
+  sqlStateOf,
+  uniqueTargetOf,
+} from "@/shared/errors/prisma-error-meta";
+import { logger } from "@/shared/logging/logger";
+
+const log = logger.child({ component: "route", action: "pin" });
+
+/**
+ * How many times a pin's transaction runs before a deadlock reaches the
+ * dispatcher: the budget of the serializable loops of the fuel and
+ * checklist repositories (three attempts), so a deadlock that keeps coming
+ * back still ends.
+ */
+const PIN_ATTEMPTS = 3;
+
+/**
+ * The pause before a pin runs again, 10 to 49 ms at random. Postgres only
+ * picks a victim after deadlock_timeout (1 s), so the winner already holds
+ * every lock it needs and the retry simply queues behind it; the spread
+ * keeps two pins that lost the same cycle from coming back in lockstep.
+ */
+function pinRetryPause(): Promise<void> {
+  const pauseMs = 10 + Math.floor(Math.random() * 40);
+
+  return new Promise((resolve) => setTimeout(resolve, pauseMs));
+}
 
 /**
  * Everything a panel or the app needs about a route, in one read. Stops come
@@ -123,6 +183,19 @@ const routeInclude = {
           latitude: true,
           longitude: true,
           geo_source: true,
+
+          // The geocoder's level and bookkeeping (plan of 02/11/2026, E1),
+          // for the stop without a point: get-route turns the bookkeeping
+          // and the row's last write into `address_lookup` (looking it up /
+          // not located) and answers none of the four. Every payload built
+          // from these stops picks its fields by name (deliveryEventPayload,
+          // toPublicRoute, the customer notice), and every response schema
+          // strips the rest.
+          geo_precision: true,
+          geocode_status: true,
+          geocode_attempts: true,
+          geocode_attempted_at: true,
+          updated_at: true,
         },
       },
     },
@@ -130,18 +203,21 @@ const routeInclude = {
 } as const;
 
 /**
- * routeInclude, attached to a page of routes read without it: the driver and
- * the vehicle for the keys present, the stops of the page's routes and their
- * deliveries for the stops present. As an include, Prisma 7 queried the
- * deliveries of a page without stops and all four under an empty page
- * (shared/database/related-rows.ts). Same shape and stop order as the include.
+ * What a routes-board row carries besides the route (plan of 02/11/2026,
+ * K14): its driver and vehicle, and its stops COUNTED by status with one
+ * groupBy(routeId, status) over the page's routes — never the stops' rows
+ * with their deliveries, which made a page of twenty routes read up to four
+ * thousand deliveries. The detail keeps routeInclude. Explicit reads and not
+ * an include: as an include, Prisma 7 queried the related tables of an empty
+ * page too (shared/database/related-rows.ts).
+ *
+ * `stops` is the one-release bridge for the web still in the field, which
+ * counts the statuses itself: id and status only, no delivery. The N+1 patch
+ * (_n1/api-k14-route-list-without-stops.patch) drops it and its read.
  */
-async function withRouteInclude<
+async function withListRowParts<
   Row extends { id: string; driverId: string | null; vehicleId: string | null },
->(
-  client: Pick<PrismaClient, "driver" | "vehicle" | "routeStop" | "delivery">,
-  rows: Row[],
-) {
+>(client: Pick<PrismaClient, "driver" | "vehicle" | "routeStop">, rows: Row[]) {
   const [drivers, vehicles] = await Promise.all([
     rowsByKey(
       rows.map((row) => row.driverId),
@@ -161,37 +237,69 @@ async function withRouteInclude<
     ),
   ]);
 
-  const stops = rows.length
-    ? await client.routeStop.findMany({
-        where: { routeId: { in: rows.map((row) => row.id) } },
-        orderBy: routeInclude.stops.orderBy,
+  const routeIds = rows.map((row) => row.id);
+
+  // By route_stop's routeId index, the page's routes only.
+  const counted = routeIds.length
+    ? await client.routeStop.groupBy({
+        by: ["routeId", "status"],
+        where: { routeId: { in: routeIds } },
+        _count: { _all: true },
       })
     : [];
 
-  const deliveries = await rowsByKey(
-    stops.map((stop) => stop.deliveryId),
-    (ids) =>
-      client.delivery.findMany({
-        where: { id: { in: ids } },
-        select: routeInclude.stops.include.delivery.select,
-      }),
-  );
+  const bridge = routeIds.length
+    ? await client.routeStop.findMany({
+        where: { routeId: { in: routeIds } },
+        orderBy: routeInclude.stops.orderBy,
+        select: { id: true, routeId: true, status: true },
+      })
+    : [];
 
-  const stopsByRoute = groupedBy(stops, (stop) => stop.routeId);
+  const countsByRoute = groupedBy(counted, (group) => group.routeId);
+  const bridgeByRoute = groupedBy(bridge, (stop) => stop.routeId);
 
   return rows.map((row) => ({
     ...row,
     driver: relatedTo(drivers, row.driverId),
     vehicle: relatedTo(vehicles, row.vehicleId),
-    stops: (stopsByRoute.get(row.id) ?? []).map((stop) => ({
-      ...stop,
-      delivery: relatedTo(deliveries, stop.deliveryId),
+    stopCounts: stopCountsOf(
+      (countsByRoute.get(row.id) ?? []).map((group) => ({
+        status: group.status as RouteStopStatus,
+        count: group._count._all,
+      })),
+    ),
+    stops: (bridgeByRoute.get(row.id) ?? []).map((stop) => ({
+      id: stop.id,
+      status: stop.status as RouteStopStatus,
     })),
   }));
 }
 
 /** A route may only be edited while it has not been executed. */
 const EDITABLE_STATUSES: RouteStatus[] = ["PLANNED", "RELEASED"];
+
+/**
+ * Where a stop may still be appended (K12, decision D30): a running route
+ * too, at the end of its order — the load goes on the street at once, like
+ * the rest of the route did at the departure. Removing, reordering and
+ * editing the route stay EDITABLE_STATUSES only.
+ */
+const APPENDABLE_STATUSES: RouteStatus[] = [
+  ...EDITABLE_STATUSES,
+  "IN_PROGRESS",
+];
+
+/**
+ * The routes "Fixar no mapa" reaches (D23): a running route too. The point
+ * is what the driver's geofence and navigation read, and a route on the
+ * street is when a dispatcher finds out an address had no point, or a wrong
+ * one. Only a planned or released plan moves a version (EDITABLE_STATUSES):
+ * on a running route a pin moves no stop and changes no order, so its
+ * driver is told quietly to read the day again, with no "rota alterada"
+ * (set-delivery-location-usecase).
+ */
+const PINNABLE_STATUSES: RouteStatus[] = APPENDABLE_STATUSES;
 
 /**
  * "The" running route of a driver, when there could be two: the oldest day,
@@ -314,6 +422,11 @@ class RouteRepository implements IRouteRepository {
         include: routeInclude,
       });
 
+      // Which stops are one visit (B6), committed with the stops.
+      if (data.deliveryIds.length > 0) {
+        await assignStopGroupKeys(tx, created.id);
+      }
+
       // The route is PLANNED, so the deliveries are not on the road yet —
       // but the panel has to show who they are destined for, and driverId is
       // the column every existing screen reads. Mirroring starts here.
@@ -354,7 +467,7 @@ class RouteRepository implements IRouteRepository {
       }
 
       if (isDeliveryOnRoute(target)) {
-        throw new DeliveryAlreadyOnRouteError(data.deliveryIds.length);
+        throw new DeliveryAlreadyOnRouteError(data.deliveryIds);
       }
 
       throw new RouteCodeTakenError();
@@ -383,7 +496,7 @@ class RouteRepository implements IRouteRepository {
       }
 
       if (isDeliveryOnRoute(target)) {
-        throw new DeliveryAlreadyOnRouteError(data.deliveryIds.length);
+        throw new DeliveryAlreadyOnRouteError(data.deliveryIds);
       }
 
       // Two dispatchers took the same code. One retry, then let it surface.
@@ -676,6 +789,22 @@ class RouteRepository implements IRouteRepository {
     return found as unknown as RouteWithStops | null;
   }
 
+  async findRouteWindow(
+    routeId: string,
+    businessId: string,
+  ): Promise<RouteWindow | null> {
+    // The route row alone, by primary key and inside the tenant (G9).
+    return this.prisma.route.findFirst({
+      where: { id: routeId, businessId },
+      select: {
+        id: true,
+        driverId: true,
+        started_at: true,
+        completed_at: true,
+      },
+    });
+  }
+
   async findDriverRoute(
     businessId: string,
     driverId: string,
@@ -739,13 +868,19 @@ class RouteRepository implements IRouteRepository {
     });
   }
 
+  // Once per request, and none on the caller's own company: the session
+  // lookup brought its zone (storedBusinessZone).
   async businessTimeZone(businessId: string): Promise<string> {
-    const business = await this.prisma.business.findUnique({
-      where: { id: businessId },
-      select: { timezone: true },
+    const zone = await storedBusinessZone(businessId, async () => {
+      const business = await this.prisma.business.findUnique({
+        where: { id: businessId },
+        select: { timezone: true },
+      });
+
+      return business?.timezone ?? null;
     });
 
-    return resolveTimeZone(business?.timezone);
+    return resolveTimeZone(zone);
   }
 
   async assignmentContext(businessId: string): Promise<AssignmentContext> {
@@ -807,6 +942,23 @@ class RouteRepository implements IRouteRepository {
     // The lock is only worth anything inside the departure's own
     // transaction; without one it is taken and released around the read.
     return tx ? run(tx) : this.prisma.$transaction(run);
+  }
+
+  async findRunningRouteOfVehicle(
+    vehicleId: string,
+    businessId: string,
+    excludeRouteId: string,
+  ): Promise<{ code: number; driverId: string } | null> {
+    // At most one row by route_active_vehicle_idx, so no order is needed.
+    return this.prisma.route.findFirst({
+      where: {
+        businessId,
+        vehicleId,
+        status: "IN_PROGRESS",
+        id: { not: excludeRouteId },
+      },
+      select: { code: true, driverId: true },
+    });
   }
 
   async assignmentPreview({
@@ -1037,8 +1189,54 @@ class RouteRepository implements IRouteRepository {
     pageSize,
     sort,
     order,
-    ...filters
-  }: ListRoutesProps): Promise<ListRoutesResult> {
+    ...asked
+  }: ListRoutesProps): Promise<ListRoutesPage> {
+    // A search that names one route exactly (its whole id or its number)
+    // finds it on any day, as in Entregas: one probe of the primary key or
+    // of (businessId, code), in the caller's scope, before anything else.
+    const exact = asked.period ? exactRouteSearch(asked.search) : null;
+
+    const named =
+      exact &&
+      (await this.prisma.route.findFirst({
+        where: {
+          businessId: asked.businessId,
+          ...(asked.scopeDriverId && { driverId: asked.scopeDriverId }),
+          ...exact,
+        },
+        select: { id: true },
+      }));
+
+    const asFiltered: RouteListFilters = named
+      ? { ...asked, period: undefined }
+      : asked;
+
+    // How far the period's forgotten routes reach, by the status index, so
+    // every read below stays inside those days (routeListUnfinishedWhere).
+    // A route that changes status between the two reads shows on the next
+    // refresh, as with any other write.
+    const unfinished = routeListUnfinishedWhere(asFiltered);
+
+    const reach =
+      unfinished &&
+      (await this.prisma.route.aggregate({
+        where: unfinished,
+        _min: { scheduled_date: true },
+        _max: { scheduled_date: true },
+      }));
+
+    const filters: RouteListFilters =
+      asFiltered.period && reach
+        ? {
+            ...asFiltered,
+            periodSpan: routeListPeriodSpan(
+              asFiltered.period,
+              reach._min.scheduled_date,
+              reach._max.scheduled_date,
+            ),
+          }
+        : asFiltered;
+
     // The page and the status counts side by side (the two connections a
     // screen may hold). The counts replace a count(*): the pager total and
     // the cards both come out of them, without skip/take — they describe the
@@ -1046,7 +1244,13 @@ class RouteRepository implements IRouteRepository {
     const [rows, byStatus] = await Promise.all([
       this.prisma.route.findMany({
         where: routeListWhere(filters),
-        orderBy: resolveOrderBy(ROUTE_SORT, { sort, order }),
+        // With a period, by the route's day unless asked otherwise: the
+        // range then leads route (businessId, scheduled_date), and a past
+        // range costs its own rows, not the routes created after it.
+        orderBy: resolveOrderBy(
+          filters.period ? ROUTE_PERIOD_SORT : ROUTE_SORT,
+          { sort, order },
+        ),
         skip: (page - 1) * pageSize,
         take: pageSize,
       }),
@@ -1057,7 +1261,7 @@ class RouteRepository implements IRouteRepository {
       }),
     ]);
 
-    const data = await withRouteInclude(this.prisma, rows);
+    const data = await withListRowParts(this.prisma, rows);
 
     // The catalog facets after, one query at a time: each counted without
     // its own facet, and named from the company's own rows only.
@@ -1132,9 +1336,10 @@ class RouteRepository implements IRouteRepository {
     );
 
     return {
-      data: data as unknown as RouteWithStops[],
+      data: data as unknown as RouteListRow[],
       total,
       meta: searchMeta,
+      periodApplied: Boolean(filters.period),
     };
   }
 
@@ -1185,7 +1390,11 @@ class RouteRepository implements IRouteRepository {
         where: { id: routeId },
       });
 
-      await this.mirrorOntoDeliveries(client, route as unknown as Route);
+      await this.mirrorOntoDeliveries(
+        client,
+        route as unknown as Route,
+        transition.actorId,
+      );
       await this.syncVehicleStatus(client, route as unknown as Route);
 
       return route as unknown as Route;
@@ -1216,6 +1425,104 @@ class RouteRepository implements IRouteRepository {
     }
   }
 
+  async closeWithPending(
+    routeId: string,
+    businessId: string,
+    { reason, actorId, at }: CloseWithPendingProps,
+    tx?: Prisma.TransactionClient,
+  ): Promise<{ route: Route; cancelledStops: number }> {
+    const run = async (client: Prisma.TransactionClient) => {
+      // The status in the where, as every transition: the row lock this
+      // takes is the route's (lock order route → delivery → occurrence), and
+      // a proof settling the last stop at the same instant either commits
+      // first (then this finds the route COMPLETED and refuses) or waits.
+      const moved = await client.route.updateMany({
+        where: { id: routeId, businessId, status: "IN_PROGRESS" },
+        data: {
+          status: "COMPLETED",
+          completed_at: at,
+          closure_reason: reason,
+          // The plan the driver follows changed: its stops were called off.
+          plan_version: { increment: 1 },
+        },
+      });
+
+      if (moved.count === 0) throw new RouteStatusConflictError();
+
+      const route = (await client.route.findUniqueOrThrow({
+        where: { id: routeId },
+      })) as unknown as Route;
+
+      const cancelledStops = await client.routeStop.count({
+        where: { routeId, status: { in: OPEN_STOP_STATUSES } },
+      });
+
+      // Open stops CANCELLED, their IN_TRANSIT deliveries back to PENDING
+      // with the line saying why, the crew's shadow cleared: the same
+      // release a cancellation does, on a route that ends COMPLETED.
+      await this.mirrorOntoDeliveries(client, route, actorId);
+      await this.syncVehicleStatus(client, route);
+
+      return { route, cancelledStops };
+    };
+
+    return tx ? run(tx) : this.prisma.$transaction(run);
+  }
+
+  async listUnalertedRunningRoutes(limit: number): Promise<LeftOpenRoute[]> {
+    // Every company's running routes the sweep has not warned about, oldest
+    // departure first, through route_active_vehicle_idx (status =
+    // 'IN_PROGRESS'): a fleet's worth of rows, never the route history.
+    const rows = await this.prisma.$queryRaw<
+      Array<Omit<LeftOpenRoute, "timeZone"> & { timeZone: string | null }>
+    >(Prisma.sql`
+      SELECT
+        r."id", r."code", r."name", r."businessId", r."driverId",
+        r."started_at", d."name" AS "driverName", b."timezone" AS "timeZone"
+      FROM "route" r
+      JOIN "business" b ON b."id" = r."businessId"
+      LEFT JOIN "driver" d ON d."id" = r."driverId"
+      WHERE r."status" = 'IN_PROGRESS'
+        AND r."left_open_alerted_at" IS NULL
+        AND r."started_at" IS NOT NULL
+      ORDER BY r."started_at" ASC, r."id" ASC
+      LIMIT ${limit}
+    `);
+
+    return rows.map((row) => ({
+      ...row,
+      timeZone: resolveTimeZone(row.timeZone),
+    }));
+  }
+
+  async claimLeftOpenAlerts(
+    routeIds: string[],
+    at: Date,
+    tx: Prisma.TransactionClient,
+  ): Promise<string[]> {
+    if (routeIds.length === 0) return [];
+
+    // One statement: the still-running, still-unwarned rows among these,
+    // skipping any another sweep holds, stamped under the same condition.
+    // A second replica gets the others or none, so each route is warned
+    // exactly once.
+    const claimed = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      UPDATE "route"
+         SET "left_open_alerted_at" = ${at}
+       WHERE "id" IN (
+               SELECT "id" FROM "route"
+                WHERE "id" IN (${Prisma.join(routeIds)})
+                  AND "status" = 'IN_PROGRESS'
+                  AND "left_open_alerted_at" IS NULL
+                FOR UPDATE SKIP LOCKED
+             )
+         AND "left_open_alerted_at" IS NULL
+      RETURNING "id"
+    `);
+
+    return claimed.map((row) => row.id).sort();
+  }
+
   /**
    * Keeps the deliveries of a route's open stops equal to the route.
    *
@@ -1234,6 +1541,8 @@ class RouteRepository implements IRouteRepository {
   private async mirrorOntoDeliveries(
     tx: Prisma.TransactionClient | typeof database,
     route: Route,
+    /** Who moved the route, for the timeline lines a cancellation writes. */
+    actorId?: string | null,
   ): Promise<void> {
     const ending = route.status === "COMPLETED" || route.status === "CANCELLED";
 
@@ -1245,6 +1554,31 @@ class RouteRepository implements IRouteRepository {
     ).map((stop) => stop.deliveryId);
 
     if (openDeliveryIds.length === 0) return;
+
+    // Each delivery the cancellation hands back says why on its timeline,
+    // in the same commit (K8): the status used to go back to Pendente with
+    // no line at all, and support could not tell why. A route closed with
+    // pending stops (K11) hands its open deliveries back the same way.
+    const closedWithPending =
+      route.status === "COMPLETED" && Boolean(route.closure_reason);
+
+    if (route.status === "CANCELLED" || closedWithPending) {
+      await this.recordPlanEvents(
+        tx as Prisma.TransactionClient,
+        openDeliveryIds.map((deliveryId) => ({
+          deliveryId,
+          note: closedWithPending
+            ? routeClosedWithPendingNote(route)
+            : routeCancelledNote(route),
+        })),
+        {
+          type: "ROUTE_REMOVED",
+          routeId: route.id,
+          businessId: route.businessId,
+          actorId,
+        },
+      );
+    }
 
     if (ending) {
       // Cancelling the route cancels its open stops, which is what frees the
@@ -1258,13 +1592,9 @@ class RouteRepository implements IRouteRepository {
       // pool it came from. Only IN_TRANSIT moves: a delivery the dispatcher
       // had already cancelled stays cancelled, and one still PENDING never
       // left.
-      await tx.delivery.updateMany({
-        where: {
-          id: { in: openDeliveryIds },
-          businessId: route.businessId,
-          status: "IN_TRANSIT",
-        },
-        data: { status: "PENDING" },
+      await this.moveDeliveryStatus(tx, route, openDeliveryIds, {
+        from: "IN_TRANSIT",
+        to: "PENDING",
       });
 
       await tx.delivery.updateMany({
@@ -1290,15 +1620,65 @@ class RouteRepository implements IRouteRepository {
     // the filter is what makes a re-run of the departure a no-op rather than
     // a load dragged back onto the street.
     if (route.status === "IN_PROGRESS") {
-      await tx.delivery.updateMany({
-        where: {
-          id: { in: openDeliveryIds },
-          businessId: route.businessId,
-          status: "PENDING",
-        },
-        data: { status: "IN_TRANSIT" },
+      await this.moveDeliveryStatus(tx, route, openDeliveryIds, {
+        from: "PENDING",
+        to: "IN_TRANSIT",
       });
     }
+  }
+
+  /**
+   * A status the route moves for its deliveries, with its line on each trail
+   * (plano-escala F2-06): `UPDATE … RETURNING id`, then one SYSTEM
+   * STATUS_CHANGE per row that moved, in one insert, in the same commit.
+   *
+   * The departure was an updateMany that only said how many moved, so the
+   * load went "Em rota" with no line: the trail's last status disagreed with
+   * the row, and the integration feed never said `delivery.in_transit`. Only
+   * the rows the UPDATE matched get a line — one already resolved, or
+   * cancelled while its stop waited, did not move and says nothing.
+   *
+   * Raw because RETURNING is: the status filter in the `where` keeps it the
+   * conditional write it was, and the tenant is said again.
+   */
+  private async moveDeliveryStatus(
+    tx: Prisma.TransactionClient | typeof database,
+    route: Pick<Route, "id" | "businessId">,
+    deliveryIds: string[],
+    { from, to }: { from: DeliveryStatus; to: DeliveryStatus },
+  ): Promise<string[]> {
+    if (deliveryIds.length === 0) return [];
+
+    const moved = await tx.$queryRaw<Array<{ id: string }>>`
+      UPDATE "delivery"
+         SET "status" = ${to}::"DeliveryStatus",
+             "updated_at" = ${utcInstant(new Date())}
+       WHERE "id" IN (${Prisma.join(deliveryIds)})
+         AND "businessId" = ${route.businessId}
+         AND "status" = ${from}::"DeliveryStatus"
+      RETURNING "id"
+    `;
+
+    if (moved.length === 0) return [];
+
+    // The lines only with DELIVERY_STATUS_TRAIL_ENABLED: the image before
+    // this one reads a SYSTEM line as a person's change (status-trail.ts).
+    // The status moves, and the departure's webhooks go, either way.
+    if (deliveryStatusTrailEnabled()) {
+      await tx.deliveryEvent.createMany({
+        data: moved.map(({ id }) => ({
+          type: "STATUS_CHANGE" as const,
+          deliveryId: id,
+          businessId: route.businessId,
+          routeId: route.id,
+          status_from: from,
+          status_to: to,
+          actor: "SYSTEM" as const,
+        })),
+      });
+    }
+
+    return moved.map(({ id }) => id);
   }
 
   /**
@@ -1315,12 +1695,17 @@ class RouteRepository implements IRouteRepository {
    * vehicle blocked by an administrator WHILE it was on the road (theft, a
    * crash) stays blocked when the route ends instead of being quietly
    * reopened for service.
+   *
+   * Which states move the truck at all is routeMovesVehicle, the same rule
+   * the use cases announce the vehicle catalogue by after their commit
+   * (announceRouteVehicle): the web's vehicle lists kept the old badge for
+   * two minutes because this write told nobody (audit of 25/11/2026).
    */
   private async syncVehicleStatus(
     tx: Prisma.TransactionClient | typeof database,
     route: Route,
   ): Promise<void> {
-    if (!route.vehicleId) return;
+    if (!route.vehicleId || !routeMovesVehicle(route)) return;
 
     if (route.status === "IN_PROGRESS") {
       await tx.vehicle.updateMany({
@@ -1373,6 +1758,11 @@ class RouteRepository implements IRouteRepository {
     tx: Prisma.TransactionClient,
     routeId: string,
     businessId: string,
+    /**
+     * What the write accepts; addStops and the pin widen it
+     * (APPENDABLE_STATUSES, PINNABLE_STATUSES).
+     */
+    statuses: RouteStatus[] = EDITABLE_STATUSES,
   ): Promise<LockedRoute | null> {
     const rows = await tx.$queryRaw<
       Array<{
@@ -1391,7 +1781,7 @@ class RouteRepository implements IRouteRepository {
 
     const route = rows[0];
 
-    if (!route || !EDITABLE_STATUSES.includes(route.status)) return null;
+    if (!route || !statuses.includes(route.status)) return null;
 
     return {
       status: route.status,
@@ -1545,9 +1935,15 @@ class RouteRepository implements IRouteRepository {
       tx: Prisma.TransactionClient,
     ): Promise<PlanStopsAdded> => {
       // Locked, not merely read: see lockEditableRoute. A departure
-      // committing in between is what the lock waits for, and what the
-      // status re-read after it then refuses.
-      const route = await this.lockEditableRoute(tx, routeId, businessId);
+      // committing in between is what the lock waits for; the status read
+      // after it decides how the new stops join (K12): a running route puts
+      // them on the street below, a finished one refuses.
+      const route = await this.lockEditableRoute(
+        tx,
+        routeId,
+        businessId,
+        APPENDABLE_STATUSES,
+      );
 
       if (!route) throw new RouteStatusConflictError();
 
@@ -1588,9 +1984,16 @@ class RouteRepository implements IRouteRepository {
         data: rows,
       })) as unknown as RouteStop[];
 
+      // Which stops are one visit (B6), committed with the stops.
+      await assignStopGroupKeys(tx, routeId, deliveryIds);
+
       // PENDING in the `where`, for the reason createRoute gives: a
       // delivery cancelled after the use case checked it must not become an
       // open stop. A short count rolls the whole batch back.
+      //
+      // On a running route the load leaves now, in this commit, as the
+      // route's own load did at the departure (mirrorOntoDeliveries): a
+      // PENDING delivery on a running route is refused at arrival and proof.
       const mirrored = await tx.delivery.updateMany({
         where: { id: { in: deliveryIds }, businessId, status: "PENDING" },
         data: { driverId: route.driverId, vehicleId: route.vehicleId },
@@ -1598,6 +2001,17 @@ class RouteRepository implements IRouteRepository {
 
       if (mirrored.count !== new Set(deliveryIds).size) {
         throw new DeliveryNoLongerRoutableError();
+      }
+
+      // The status apart, so each one that left gets its line (F2-06). The
+      // rows are this transaction's since the write above: all of them move.
+      if (route.status === "IN_PROGRESS") {
+        await this.moveDeliveryStatus(
+          tx,
+          { id: routeId, businessId },
+          deliveryIds,
+          { from: "PENDING", to: "IN_TRANSIT" },
+        );
       }
 
       const planVersion = await this.bumpPlanVersion(tx, routeId);
@@ -1624,7 +2038,7 @@ class RouteRepository implements IRouteRepository {
       return outerTx ? await run(outerTx) : await this.prisma.$transaction(run);
     } catch (error) {
       if (isDeliveryOnRoute(violatedIndex(error))) {
-        throw new DeliveryAlreadyOnRouteError(deliveryIds.length);
+        throw new DeliveryAlreadyOnRouteError(deliveryIds);
       }
 
       throw error;
@@ -1792,38 +2206,74 @@ class RouteRepository implements IRouteRepository {
     });
   }
 
+  /**
+   * The pin's transaction, run again from the top when Postgres aborts it
+   * as a deadlock victim (40P01) or a serialization failure
+   * (isSerializationFailure), up to PIN_ATTEMPTS. The pin locks the route,
+   * then the delivery and its copies together in id order
+   * (lockSourceAndCopies), the order of a route write's updateMany by id
+   * IN (...), so the two queue. A writer that takes the same rows in
+   * separate statements against id order can still close a cycle with it;
+   * when Postgres picks the pin as the victim, the retry runs it again (the
+   * other side answers its own error). Postgres rolls the victim back
+   * whole, and every attempt reads the delivery's previous point again
+   * under its own lock, so a retry moves the copies the point they hold at
+   * that moment (tests/E2E/route-pin-deadlock.test.ts).
+   */
   async pinDeliveryLocation(
     deliveryId: string,
     businessId: string,
     point: { latitude: number; longitude: number } | null,
   ): Promise<PinnedLocation | null> {
-    return this.prisma.$transaction(async (tx) => {
+    const run = async (
+      tx: Prisma.TransactionClient,
+    ): Promise<PinnedLocation | null> => {
       // The route first, then the delivery: the order every route write
       // takes (route → stops → deliveries). Opposite orders deadlocked.
       const holder = await tx.routeStop.findFirst({
         where: {
           deliveryId,
           status: { in: OPEN_STOP_STATUSES },
-          route: { businessId, status: { in: EDITABLE_STATUSES } },
+          route: { businessId, status: { in: PINNABLE_STATUSES } },
         },
         select: { routeId: true },
       });
 
       const route = holder
-        ? await this.lockEditableRoute(tx, holder.routeId, businessId)
+        ? await this.lockEditableRoute(
+            tx,
+            holder.routeId,
+            businessId,
+            PINNABLE_STATUSES,
+          )
         : null;
 
-      const delivery = await tx.delivery.findFirst({
-        where: { id: deliveryId, businessId },
-        select: { status: true },
-      });
+      // Locked before it is read, with the copies it handed out, in id
+      // order (lockSourceAndCopies: a route write's order, so the two
+      // queue instead of crossing). The point it holds now is what its
+      // copies hold, and a second pin of the same delivery waits here and
+      // then reads this one's point — never two pins moving the copies
+      // from the same old point to two new ones. A copy written at the
+      // same instant locks this row FOR SHARE first (lockLender): it
+      // waits, or is seen.
+      const delivery = await lockSourceAndCopies(tx, businessId, deliveryId);
 
       if (!delivery) return null;
 
       if (delivery.status === "DELIVERED" || delivery.status === "CANCELLED") {
-        return { locked: true, delivery: null, route: null };
+        return {
+          locked: true,
+          delivery: null,
+          route: null,
+          runningRoute: null,
+          followed: [],
+        };
       }
 
+      const now = new Date();
+
+      // A pin is the delivery's own point: it is its own root from now on
+      // (geo_copied_from cleared), whether it had a copy or none.
       const updated = await tx.delivery.update({
         where: { id: deliveryId },
         data: point
@@ -1831,13 +2281,15 @@ class RouteRepository implements IRouteRepository {
               latitude: point.latitude,
               longitude: point.longitude,
               geo_source: "MANUAL",
-              geo_updated_at: new Date(),
+              geo_updated_at: now,
+              geo_copied_from: null,
             }
           : {
               latitude: null,
               longitude: null,
               geo_source: null,
-              geo_updated_at: new Date(),
+              geo_updated_at: now,
+              geo_copied_from: null,
             },
         select: {
           id: true,
@@ -1848,10 +2300,22 @@ class RouteRepository implements IRouteRepository {
         },
       });
 
+      // The copies this delivery handed out follow it, in this commit: a
+      // corrected pin moves them, a cleared one clears them (followSource).
+      const pin = sourcePinOf(
+        { id: deliveryId, businessId, ...delivery },
+        point,
+        now,
+      );
+      const followed = pin ? await followSource(tx, pin) : [];
+
       // The point is part of the plan the driver follows on a released
-      // route, so the plan moves a version (decision 14.7, §4.11).
+      // route, so the plan moves a version (decision 14.7, §4.11). A running
+      // route keeps its version (D23): the pin moves no stop.
       const planVersion =
-        route && holder ? await this.bumpPlanVersion(tx, holder.routeId) : null;
+        route && holder && EDITABLE_STATUSES.includes(route.status)
+          ? await this.bumpPlanVersion(tx, holder.routeId)
+          : null;
 
       return {
         locked: false,
@@ -1866,8 +2330,69 @@ class RouteRepository implements IRouteRepository {
                 planVersion,
               }
             : null,
+        runningRoute:
+          route && holder && route.status === "IN_PROGRESS"
+            ? { routeId: holder.routeId, driverId: route.driverId }
+            : null,
+        followed,
       };
+    };
+
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return await this.prisma.$transaction(run);
+      } catch (error) {
+        if (!isSerializationFailure(error) || attempt >= PIN_ATTEMPTS) {
+          throw error;
+        }
+
+        log.warn(
+          { deliveryId, businessId, attempt, sqlState: sqlStateOf(error) },
+          "pin transaction aborted by a concurrent write; running it again",
+        );
+
+        await pinRetryPause();
+      }
+    }
+  }
+
+  async propagateAddressPoint(
+    deliveryId: string,
+    businessId: string,
+  ): Promise<string[]> {
+    const pinned = await this.prisma.delivery.findFirst({
+      where: { id: deliveryId, businessId },
+      select: {
+        street: true,
+        address_number: true,
+        neighborhood: true,
+        city: true,
+        uf: true,
+        address_key: true,
+        latitude: true,
+        longitude: true,
+        geo_source: true,
+        geo_precision: true,
+        geo_updated_at: true,
+      },
     });
+
+    // A row from before the key still gives its point: the key comes from
+    // its address, the same function the create writes it with.
+    const addressKey = pinned
+      ? (pinned.address_key ?? deliveryAddressKey(pinned))
+      : null;
+    const point = pinned
+      ? pickReusablePoint([{ ...pinned, root: deliveryId }], new Date())
+      : null;
+
+    if (!addressKey || !point) return [];
+
+    return writePointToDoor(
+      this.prisma,
+      { businessId, addressKey, exceptId: deliveryId },
+      point,
+    );
   }
 
   async findOpenStopRoutes(
@@ -1905,7 +2430,11 @@ class RouteRepository implements IRouteRepository {
   ): Promise<VisitedPoint[]> {
     // The GPS the app captured at the door: arrival and proof, on THIS
     // route, of this company. Evidence, drawn next to the planned point.
-    const events = await this.prisma.deliveryEvent.findMany({
+    //
+    // The NEWEST first under the cap, then put back in order (plan of
+    // 02/11/2026, G9): ascending with `take` kept the start of the day and
+    // dropped the last proofs, the ones the dispatcher is looking for.
+    const newest = await this.prisma.deliveryEvent.findMany({
       where: {
         routeId,
         businessId,
@@ -1913,7 +2442,7 @@ class RouteRepository implements IRouteRepository {
         latitude: { not: null },
         longitude: { not: null },
       },
-      orderBy: [{ created_at: "asc" }, { id: "asc" }],
+      orderBy: [{ created_at: "desc" }, { id: "desc" }],
       select: {
         deliveryId: true,
         type: true,
@@ -1921,17 +2450,70 @@ class RouteRepository implements IRouteRepository {
         longitude: true,
         occurred_at: true,
         created_at: true,
+        // E5: the stop card's "Fora do raio" flag.
+        geofence_outcome: true,
+        distance_m: true,
+        accuracy_m: true,
       },
       take: 2 * ROUTE_MAX_STOPS,
     });
 
-    return events.map((event) => ({
+    return newest.reverse().map((event) => ({
       deliveryId: event.deliveryId,
       type: event.type as VisitedPoint["type"],
       latitude: event.latitude as number,
       longitude: event.longitude as number,
       recordedAt: event.occurred_at ?? event.created_at,
+      geofence_outcome: event.geofence_outcome,
+      distance_m: event.distance_m,
+      accuracy_m: event.accuracy_m,
     }));
+  }
+
+  async listStopGeofence(
+    routeId: string,
+    businessId: string,
+  ): Promise<StopGeofenceFlag[]> {
+    // The records outside the radius at the door, on THIS route, of this
+    // company — the occurrence too: it always passes, flagged, and is not a
+    // map point (E5). Newest first; the first per delivery is its flag.
+    // By delivery_event (routeId), like the map's points, and capped like
+    // them: a stop flags with one record.
+    const outside = await this.prisma.deliveryEvent.findMany({
+      where: {
+        routeId,
+        businessId,
+        type: { in: ["ARRIVAL", "PROOF", "OCCURRENCE"] },
+        geofence_outcome: "OUTSIDE",
+      },
+      orderBy: [{ created_at: "desc" }, { id: "desc" }],
+      select: {
+        deliveryId: true,
+        type: true,
+        distance_m: true,
+        accuracy_m: true,
+        occurred_at: true,
+        created_at: true,
+      },
+      take: 3 * ROUTE_MAX_STOPS,
+    });
+
+    const flagged = new Map<string, StopGeofenceFlag>();
+
+    for (const event of outside) {
+      if (flagged.has(event.deliveryId)) continue;
+
+      flagged.set(event.deliveryId, {
+        deliveryId: event.deliveryId,
+        type: event.type as StopGeofenceFlag["type"],
+        geofence_outcome: "OUTSIDE",
+        distance_m: event.distance_m,
+        accuracy_m: event.accuracy_m,
+        recordedAt: event.occurred_at ?? event.created_at,
+      });
+    }
+
+    return [...flagged.values()];
   }
 
   async listUnroutedDeliveries(
@@ -1942,21 +2524,49 @@ class RouteRepository implements IRouteRepository {
 
     const where = facetWhere(null);
 
+    // One row past the page says whether there is a next one. With a cursor
+    // (G9) the page starts after the last row seen, whatever colleagues
+    // routed meanwhile; without one, the offset the web in the field sends.
+    const readPage = () =>
+      this.prisma.delivery.findMany({
+        where: props.after
+          ? { AND: [where, unroutedKeysetAfter(props.after)] }
+          : where,
+        orderBy: [...UNROUTED_ORDER],
+        skip: props.after ? 0 : (props.page - 1) * props.pageSize,
+        take: props.pageSize + 1,
+        select: { ...UNROUTED_DELIVERY_SELECT, created_at: true },
+      });
+
+    const pageOf = (read: Awaited<ReturnType<typeof readPage>>) => {
+      const kept = read.slice(0, props.pageSize);
+      const last = kept[kept.length - 1];
+
+      return {
+        data: kept.map(
+          ({ created_at: _createdAt, ...row }) =>
+            row as unknown as UnroutedDeliveryRow,
+        ),
+        nextCursor:
+          read.length > props.pageSize && last
+            ? encodeUnroutedCursor({
+                scheduled_date: last.scheduled_date,
+                created_at: last.created_at,
+                id: last.id,
+              })
+            : null,
+      };
+    };
+
+    // A later page skips the five counts: the picker keeps the first
+    // page's total and filter options.
+    if (props.after) return pageOf(await readPage());
+
     // The page and its count side by side, the four facets after them one
     // at a time: at most two of the replica's ten connections (the budget of
     // tests/E2E/connection-fan-out.test.ts). It took six at once.
     const [rows, total] = await Promise.all([
-      this.prisma.delivery.findMany({
-        where,
-        orderBy: [
-          { scheduled_date: { sort: "asc", nulls: "last" } },
-          { created_at: "asc" },
-          { id: "asc" },
-        ],
-        skip: (props.page - 1) * props.pageSize,
-        take: props.pageSize,
-        select: UNROUTED_DELIVERY_SELECT,
-      }),
+      readPage(),
       this.prisma.delivery.count({ where }),
     ]);
 
@@ -2012,7 +2622,7 @@ class RouteRepository implements IRouteRepository {
     );
 
     return {
-      data: rows as unknown as UnroutedDeliveryRow[],
+      ...pageOf(rows),
       total,
       facets: {
         city: cities.map((row) => ({
@@ -2142,6 +2752,42 @@ class RouteRepository implements IRouteRepository {
     `;
 
     return rows[0]?.id ?? null;
+  }
+
+  async findLostStop(
+    deliveryId: string,
+    driverId: string,
+    businessId: string,
+  ): Promise<LostStop | null> {
+    // The tenant and the driver ride on the route: a crafted delivery id of
+    // another company, or another driver's route, finds nothing.
+    const stop = await this.prisma.routeStop.findFirst({
+      where: {
+        deliveryId,
+        status: { in: ["CANCELLED", "FAILED"] },
+        route: { businessId, driverId },
+      },
+      orderBy: [{ updated_at: "desc" }, { id: "desc" }],
+      select: {
+        routeId: true,
+        status: true,
+        completed_at: true,
+        updated_at: true,
+        route: { select: { code: true, status: true, vehicleId: true } },
+      },
+    });
+
+    if (!stop) return null;
+
+    return {
+      routeId: stop.routeId,
+      routeCode: stop.route.code,
+      routeStatus: stop.route.status as RouteStatus,
+      vehicleId: stop.route.vehicleId,
+      stopStatus: stop.status as LostStop["stopStatus"],
+      // A failure records its instant; a cancellation, when the row moved.
+      lostAt: stop.completed_at ?? stop.updated_at,
+    };
   }
 
   private async settleWithin(
@@ -2356,22 +3002,38 @@ class RouteRepository implements IRouteRepository {
     businessId: string,
     closingAt?: Date,
   ): Promise<Route | null> {
-    const stillOpen = await client.routeStop.count({
-      where: { routeId, status: { in: OPEN_STOP_STATUSES } },
-    });
+    // One row per status the route's stops hold (five at most).
+    const statuses = (
+      await client.routeStop.groupBy({
+        by: ["status"],
+        where: { routeId },
+      })
+    ).map((row) => row.status as RouteStopStatus);
 
-    if (stillOpen > 0) return null;
+    // Concluída, or Cancelada when nothing on it was worked (K8, D32).
+    const closingStatus = routeClosingStatus(statuses);
 
-    const completedAt = await this.completionTime(
-      client,
-      routeId,
-      businessId,
-      closingAt,
-    );
+    if (!closingStatus) return null;
 
+    // A cancelled route has no completed_at (as a cancellation by hand),
+    // only its reason.
     const closed = await client.route.updateMany({
       where: { id: routeId, businessId, status: "IN_PROGRESS" },
-      data: { status: "COMPLETED", completed_at: completedAt },
+      data:
+        closingStatus === "CANCELLED"
+          ? {
+              status: "CANCELLED",
+              cancellation_reason: ROUTE_ALL_STOPS_CANCELLED_REASON,
+            }
+          : {
+              status: "COMPLETED",
+              completed_at: await this.completionTime(
+                client,
+                routeId,
+                businessId,
+                closingAt,
+              ),
+            },
     });
 
     // Idempotent: a resend finds the route already closed and answers null

@@ -11,6 +11,16 @@ import {
   RenderedInApp,
   RenderedPush,
 } from "../notification-types";
+import { PUSH_TTL_SECONDS } from "../push-validity";
+import type { RenderedWhatsApp } from "../whatsapp-templates";
+import {
+  answersLine as answersWithin,
+  oneLine,
+  requesterLabel,
+} from "../whatsapp-parameters";
+
+import { DELIVERY_STATUS_LABELS } from "@/shared/delivery/delivery-rules";
+import { logger } from "@/shared/logging/logger";
 
 import type { User } from "@/modules/user/dtos/user-dto";
 import type { IOccurrenceAuthorizationRepository } from "@/modules/delivery/repositories/IOccurrence-authorization-repository";
@@ -36,6 +46,11 @@ import type { IOccurrenceAuthorizationRepository } from "@/modules/delivery/repo
 
 const TOWER_PATH = "/dashboard/control-tower";
 
+const log = logger.child({ component: "delivery-occurrence-policy" });
+
+/** The WhatsApp's answers line: shorter than the in-app's 280 (B1). */
+const WHATSAPP_ANSWERS_MAX = 200;
+
 /**
  * Why a notice about a request is no longer worth fanning out, or null. A
  * request decided, superseded, or whose attempt ended (authorization-liveness)
@@ -47,8 +62,7 @@ async function authorizationNoLongerWaiting(
   deps: PolicyDeps,
 ): Promise<string | null> {
   const repository = deps.occurrenceAuthorizationRepository as
-    | IOccurrenceAuthorizationRepository
-    | undefined;
+    IOccurrenceAuthorizationRepository | undefined;
 
   // Without the lookup there is nothing to say it stopped waiting.
   if (!repository) return null;
@@ -68,11 +82,25 @@ function isDeliveryRequest(payload: { category?: string }): boolean {
   return payload.category === "DELIVERED";
 }
 
-/** "Motorista" when a driver asked; otherwise who filed it from the panel. */
-function reporterLabel(
-  payload: DeliveryOccurrenceAuthorizationRequestedPayload,
-): string {
-  return payload.fromDriver === false ? "Registrado por" : "Motorista";
+/**
+ * What tells the app a notice is a request it can answer (wave 4).
+ *
+ * The notice's `type` stays the generic "delivery" and its `entityId` the
+ * delivery: the web, the builds already in the field and `read-by-entity`
+ * read them that way. The push adds what the decision endpoint needs, the
+ * occurrence id (`POST /delivery/occurrence-authorization/:occurrenceId/
+ * business/:businessId`; the company is the push's own `businessId`). The
+ * inbox row has no free-form column, so the row keeps today's behaviour.
+ */
+const OCCURRENCE_AUTHORIZATION_KIND = "occurrence-authorization";
+
+function authorizationPushData(payload: {
+  occurrenceId: string;
+}): Record<string, string> {
+  return {
+    kind: OCCURRENCE_AUTHORIZATION_KIND,
+    occurrenceId: payload.occurrenceId,
+  };
 }
 
 function renderDeliveryOccurrenceInApp(
@@ -90,20 +118,39 @@ function renderDeliveryOccurrenceInApp(
   };
 }
 
+/**
+ * trajetto_entrega_insucesso (B1). Its fixed text says "Insucesso": the
+ * topic is published only when a blocking occurrence moved the delivery to
+ * FAILED (occurrence-effect.ts). Anything else reaching here would make the
+ * approved text false, so it is not sent — and logged, because it means a
+ * publisher broke that rule.
+ */
 function renderDeliveryOccurrenceWhatsApp(
   payload: DeliveryOccurrenceReportedPayload,
-): string {
-  return [
-    `🚚 *Entrega com insucesso!*`,
-    `Destinatário: *${payload.recipientName}*`,
-    `Ocorrência: *${payload.occurrenceTypeName}*`,
-    payload.description && `Relato: *${payload.description}*`,
-    `Registrada por: *${payload.reporterName}*`,
-    payload.photosCount > 0 && `Fotos anexadas: *${payload.photosCount}*`,
-    `Status atual: *${payload.deliveryStatusAfter}*`,
-  ]
-    .filter(Boolean)
-    .join("\n");
+): RenderedWhatsApp | null {
+  if (payload.deliveryStatusAfter !== DELIVERY_STATUS_LABELS.FAILED) {
+    log.error(
+      {
+        deliveryId: payload.deliveryId,
+        businessId: payload.businessId,
+        deliveryStatusAfter: payload.deliveryStatusAfter,
+      },
+      "delivery-occurrence.reported without an insucesso: whatsapp skipped",
+    );
+
+    return null;
+  }
+
+  return {
+    template: "trajetto_entrega_insucesso",
+    parameters: [
+      payload.recipientName,
+      payload.occurrenceTypeName,
+      payload.reporterName,
+      oneLine(payload.description),
+      payload.photosCount > 0 ? String(payload.photosCount) : null,
+    ],
+  };
 }
 
 /** "Rótulo: valor; Rótulo: valor", capped: a notice is not the report. */
@@ -136,25 +183,29 @@ function renderAuthorizationRequestedInApp(
       (answers ? ` ${answers}` : ""),
     link: `${ctx.baseUrl}${TOWER_PATH}`,
     entityId: payload.deliveryId,
+    pushData: authorizationPushData(payload),
   };
 }
 
+/**
+ * trajetto_autorizacao_entrega for a request to prove the delivery (decision
+ * 14.3), trajetto_autorizacao_ocorrencia for the rest (B1).
+ */
 function renderAuthorizationRequestedWhatsApp(
   payload: DeliveryOccurrenceAuthorizationRequestedPayload,
-): string {
-  return [
-    isDeliveryRequest(payload)
-      ? `⏳ *Entrega aguardando autorização*`
-      : `⏳ *Ocorrência aguardando autorização*`,
-    `Destinatário: *${payload.recipientName}*`,
-    `${isDeliveryRequest(payload) ? "Tipo de entrega" : "Ocorrência"}: *${payload.occurrenceTypeName}*`,
-    ...payload.answers.map(({ label, value }) => `${label}: *${value}*`),
-    payload.description && `Relato: *${payload.description}*`,
-    `${reporterLabel(payload)}: *${payload.reporterName}*`,
-    `Responda pela torre de controle.`,
-  ]
-    .filter(Boolean)
-    .join("\n");
+): RenderedWhatsApp {
+  return {
+    template: isDeliveryRequest(payload)
+      ? "trajetto_autorizacao_entrega"
+      : "trajetto_autorizacao_ocorrencia",
+    parameters: [
+      payload.recipientName,
+      payload.occurrenceTypeName,
+      requesterLabel(payload),
+      answersWithin(payload.answers, WHATSAPP_ANSWERS_MAX),
+      oneLine(payload.description),
+    ],
+  };
 }
 
 function renderAuthorizationEscalatedInApp(
@@ -170,24 +221,27 @@ function renderAuthorizationEscalatedInApp(
       `${payload.recipientName}. Ninguém decidiu ainda.`,
     link: `${ctx.baseUrl}${TOWER_PATH}`,
     entityId: payload.deliveryId,
+    // The administrators are asked to decide the same request.
+    pushData: authorizationPushData(payload),
   };
 }
 
+/**
+ * trajetto_autorizacao_sem_resposta (B1). A panel request has nobody
+ * standing at the address, so only a driver's says they are waiting.
+ */
 function renderAuthorizationEscalatedWhatsApp(
   payload: DeliveryOccurrenceAuthorizationEscalatedPayload,
-): string {
-  // A panel request has nobody standing at the address.
-  const fromDriver = payload.fromDriver !== false;
-
-  return [
-    `🚨 *Autorização sem resposta há ${payload.waitingMinutes} min*`,
-    `Destinatário: *${payload.recipientName}*`,
-    `Ocorrência: *${payload.occurrenceTypeName}*`,
-    `${reporterLabel(payload)}: *${payload.reporterName}*`,
-    fromDriver
-      ? `O motorista está parado aguardando. Decida pela torre de controle.`
-      : `A entrega aguarda a decisão. Decida pela torre de controle.`,
-  ].join("\n");
+): RenderedWhatsApp {
+  return {
+    template: "trajetto_autorizacao_sem_resposta",
+    parameters: [
+      payload.recipientName,
+      String(payload.waitingMinutes),
+      payload.occurrenceTypeName,
+      requesterLabel(payload, { waiting: true }),
+    ],
+  };
 }
 
 function renderAuthorizationDecidedPush(
@@ -324,9 +378,11 @@ const deliveryOccurrenceAuthorizationDecidedPolicy: NotificationPolicyEntry<Deli
     },
 
     renderPush: renderAuthorizationDecidedPush,
+    pushTtlSeconds: PUSH_TTL_SECONDS.towerDecision,
   };
 
 export {
+  OCCURRENCE_AUTHORIZATION_KIND,
   deliveryOccurrenceAuthorizationDecidedPolicy,
   deliveryOccurrenceAuthorizationEscalatedPolicy,
   deliveryOccurrenceAuthorizationRequestedPolicy,

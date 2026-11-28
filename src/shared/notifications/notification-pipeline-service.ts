@@ -5,6 +5,7 @@ import { container } from "tsyringe";
 
 import database from "@/../infra/database";
 import { env } from "@/env";
+import { claimFloors } from "@/shared/database/claim-floors";
 
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { IWhatsAppProvider } from "@/shared/providers/whatsapp-provider/IWhatsApp-provider";
@@ -13,18 +14,69 @@ import { sendNotificationToUser } from "@/websocket";
 import { withoutRequestContext } from "@/shared/http/request-context";
 import { logger } from "@/shared/logging/logger";
 import { workerHeartbeat } from "@/shared/health/worker-heartbeat";
+import { consumesQueue } from "@/shared/lifecycle/process-role";
+import { announceWake } from "@/shared/wake/wake-bus";
+import { ContinuousPool } from "@/shared/queue/continuous-pool";
+import {
+  channelsOf,
+  providerCaps,
+  providerOfChannel,
+  type Provider,
+} from "./provider-caps";
+import { OutboxService } from "./outbox-service";
+import {
+  countProviderThrottle,
+  providerRateBucket,
+  throttlePauseMs,
+} from "./provider-rate-bucket";
+import {
+  whatsAppDailyQuota,
+  type WhatsAppQuotaVerdict,
+} from "./whatsapp-daily-quota";
+import { shiftDateKey } from "@/shared/time/business-day";
+import {
+  EXHAUSTED_CLOSE_INTERVAL_MS,
+  closeExhaustedInBatches,
+  exhaustedCloseSql,
+} from "@/shared/queue/exhausted-close";
+import {
+  columnOf,
+  fairClaimSql,
+  nextFairCursor,
+  type FairQueue,
+} from "@/shared/queue/fair-claim";
 
 import { IMailProvider } from "@/shared/providers/mail-provider/IMail-provider";
 import { MailDeliveryError } from "@/shared/providers/mail-provider/errors/mail-delivery-error";
 import { InvalidMessageTemplateError } from "@/shared/delivery/message-template";
+import { readRecipientEmails } from "@/shared/delivery/recipient-email";
+import type { IExternalRecipientRepository } from "@/modules/delivery/repositories/IExternal-recipient-repository";
+import { SUPPRESSED_ADDRESS_REASON } from "./customer-message-suppression";
 
+import { deliveryIdFor } from "./delivery-id";
 import { getNotificationPolicy } from "./notification-policy";
-import { sendExpoPushMessages } from "./push-provider";
+import {
+  sendExpoPushBatch,
+  sendExpoPushMessages,
+  type PushBatchOutcome,
+  type PushCallError,
+  type PushRequest,
+  type PushSendResult,
+} from "./push-provider";
+import { PushBatchGate } from "./push-batch-gate";
+import { PushGroupTurn } from "./push-group-turn";
+import { inAppPushData, withPushOwner } from "./push-data";
+import {
+  WhatsAppTemplateMismatchError,
+  prepareInternalWhatsApp,
+} from "./whatsapp-templates";
 import { recordExpoTickets } from "./provider-receipts";
 import {
   formatDeliveryError,
   providerDetailOf,
+  recipientGoneError,
   suppressedChannels,
+  throttledProviderOf,
   type ProviderErrorDetail,
 } from "./delivery-diagnostics";
 import {
@@ -36,7 +88,6 @@ import {
 
 import {
   DELIVERY_BATCH_SIZE,
-  DELIVERY_CONCURRENCY,
   DELIVERY_LANES,
   DELIVERY_LEASE_SECONDS,
   DELIVERY_MAX_ATTEMPTS,
@@ -50,11 +101,18 @@ import {
   assertDeliveryLeaseInvariant,
   channelsForRecipient,
   honourRetryAfter,
+  laneOf,
   nextRetryDelayMs,
+  pushOutageDelayMs,
+  recipientsBesidesActor,
   resolveRecipientChannelFlags,
   withRetryJitter,
   type DeliveryLane,
 } from "./pipeline-rules";
+import {
+  assertWithVariable,
+  type QueueConcurrencyVariable,
+} from "@/shared/lifecycle/queue-config";
 import {
   recordAcceptedOutcome,
   recordDeadline,
@@ -67,14 +125,279 @@ import { emailLogoUrl } from "@/shared/providers/mail-provider/email-logo";
  * exists for what a wake can't cover — scheduled retries, leases orphaned by
  * a dead replica, and events published by another replica — so it can be
  * slow, keeping idle instances (and dev query logs) quiet. A dedicated worker
- * replica (WORKERS_ENABLED) is woken by nobody and polls faster.
+ * (PROCESS_ROLE=worker) is woken by nobody in its own process and polls
+ * faster: its preset sets 2 s.
  */
 const SWEEP_INTERVAL_MS = env.PIPELINE_SWEEP_INTERVAL_MS;
 
+/**
+ * The events one outbox claim takes when nothing it claimed still waits
+ * (the pool's prefetch, plano-escala F3-06). Each event renews its own
+ * lease right before its expansion, so the ones claimed ahead of a slot
+ * wait without risk.
+ */
 const OUTBOX_BATCH_SIZE = 10;
+
+/**
+ * Events expanded at the same time (plano-escala F3-05):
+ * OUTBOX_EXPANSION_CONCURRENCY, 1 by default — one after the other, as
+ * before. Each event renews its own lease right before its expansion, so no
+ * lease invariant depends on it; several at once only bring the queue
+ * forward, the overlap several replicas already had. Never two events of
+ * one aggregate at once in a process (the pool's perKey): the order the
+ * facts happened in is the order their notices are written in.
+ */
+const OUTBOX_EXPANSION_CONCURRENCY = env.OUTBOX_EXPANSION_CONCURRENCY;
+
+/**
+ * The events one claim takes in OUTBOX_EXPANSION_MODE=batch (plano-escala
+ * F5-33): they are expanded together, with one preference query and one
+ * push-device query for all of them, one INSERT of their deliveries and
+ * one fenced PUBLISHED mark. 50 keeps the transaction short: a claim of 50
+ * events of four rows each writes 200 rows.
+ */
+const OUTBOX_EXPANSION_BATCH_SIZE = 50;
+
+/**
+ * The most delivery rows one batch transaction writes. A broadcast event
+ * (every admin of a large company, on four channels) writes hundreds; past
+ * this the batch's events are written in several transactions, never one
+ * event split across two.
+ */
+const OUTBOX_EXPANSION_BATCH_MAX_ROWS = 2_000;
+
+/**
+ * The outbox's claim: the due events, PENDING ones and PROCESSING ones whose
+ * lease ran out, oldest due first, under a lease of their own. `floor` is
+ * the partitioned queue's claim floor (queue-claim-floor.ts, plano-escala
+ * F5-13), or nothing: on the claim and on the UPDATE, so both prune the
+ * days that hold nothing in flight. Exported for the plan tests, which
+ * measure this very statement.
+ *
+ * By due time since F3-11, as the lanes since 20260924091000: the claim
+ * writes the lease end into availableAt as well as leaseExpiresAt, so one
+ * range on domain_outbox_event_due_idx ("availableAt", partial on the
+ * claimable statuses) covers both halves of the queue and stops at now().
+ * It ordered by created_at under an OR, and the events waiting out a retry
+ * sat at the head of the index, read by every claim. The explicit lease
+ * check stays for the events an older image claimed without moving
+ * availableAt (the rolling deploy, a rollback): they must not be taken
+ * while their lease lives. domain_outbox_event_claim_idx (created_at),
+ * which that image still reads, leaves in the contraction of wave 20.
+ */
+function outboxClaimSql(
+  floor: Prisma.Sql,
+  limit: number = OUTBOX_BATCH_SIZE,
+): Prisma.Sql {
+  return Prisma.sql`
+      UPDATE "domain_outbox_event" SET
+        "status" = 'PROCESSING',
+        "leaseExpiresAt" = now() + make_interval(secs => ${OUTBOX_LEASE_SECONDS}),
+        "availableAt" = now() + make_interval(secs => ${OUTBOX_LEASE_SECONDS}),
+        "attempts" = "attempts" + 1
+      WHERE "id" IN (
+        SELECT "id" FROM "domain_outbox_event"
+        WHERE "status" IN ('PENDING', 'PROCESSING')
+          AND "availableAt" <= now()
+          AND ("status" = 'PENDING'
+            OR ("leaseExpiresAt" < now()
+                AND "attempts" < ${OUTBOX_MAX_ATTEMPTS}))${floor}
+        ORDER BY "availableAt"
+        LIMIT ${limit}
+        FOR UPDATE SKIP LOCKED
+      )${floor}
+      RETURNING "id", "topic", "payload", "businessId", "actorId", "attempts", "created_at", "correlationId",
+                "aggregateType", "aggregateId"
+    `;
+}
+
+/**
+ * One delivery lane's claim (claimDeliveries says why it is shaped so),
+ * with the claim floor as in outboxClaimSql. availableAt and
+ * leaseExpiresAt get the same expression in the same statement, so they
+ * are equal: now() does not move within a statement.
+ */
+function deliveryClaimSql(
+  lane: DeliveryLane,
+  floor: Prisma.Sql,
+  limit: number = DELIVERY_BATCH_SIZE,
+  notChannels: readonly string[] = [],
+): Prisma.Sql {
+  // Literals, not parameters: with bound values the planner cannot prove a
+  // partial index predicate in a generic plan and falls back to a scan.
+  // Safe to inline — the list is DELIVERY_LANES, constants of this module,
+  // never input.
+  const channels = Prisma.raw(
+    DELIVERY_LANES[lane].map((channel) => `'${channel}'`).join(", "),
+  );
+
+  return Prisma.sql`
+      UPDATE "notification_delivery" SET
+        "status" = 'PROCESSING',
+        "leaseExpiresAt" = now() + make_interval(secs => ${DELIVERY_LEASE_SECONDS}),
+        "availableAt" = now() + make_interval(secs => ${DELIVERY_LEASE_SECONDS}),
+        "attempts" = "attempts" + 1
+      WHERE "id" IN (
+        SELECT "id" FROM "notification_delivery"
+        WHERE "channel" IN (${channels})
+          AND "status" IN ('PENDING', 'PROCESSING')
+          AND "availableAt" <= now()
+          AND ("status" = 'PENDING'
+            OR ("leaseExpiresAt" < now()
+                AND "attempts" < ${DELIVERY_MAX_ATTEMPTS}))${floor}${notChannelsSql(null, notChannels)}
+        ORDER BY "availableAt"
+        LIMIT ${limit}
+        FOR UPDATE SKIP LOCKED
+      )${floor}
+      RETURNING "id", "outboxEventId", "userId", "externalRecipientId", "channel", "attempts"
+    `;
+}
+
+/**
+ * The channels a lane's claim leaves out (plano-escala F3-15a): those of a
+ * provider at this process's part of its global cap. A filter on the rows
+ * the index range already returns; the lane's channel list, from which the
+ * partial index is proved, stays as it is.
+ */
+function notChannelsSql(
+  alias: string | null,
+  notChannels: readonly string[],
+): Prisma.Sql {
+  return notChannels.length > 0
+    ? Prisma.sql` AND NOT (${columnOf(alias, "channel")}::text = ANY(${[...notChannels]}::text[]))`
+    : Prisma.empty;
+}
+
+/**
+ * A delivery lane as the fair claim walks it (plano-escala F3-10;
+ * shared/queue/fair-claim.ts): the lane's rows by company, through the
+ * index notification_delivery_business_<lane>_idx (business_id,
+ * availableAt) with the lane's claim predicate (F3-09), and the same SET,
+ * due rule and RETURNING as deliveryClaimSql.
+ */
+function laneFairQueue(
+  lane: DeliveryLane,
+  notChannels: readonly string[] = [],
+): FairQueue {
+  // Literals, as in deliveryClaimSql: the partial index is proved from them.
+  const channels = Prisma.raw(
+    DELIVERY_LANES[lane].map((channel) => `'${channel}'`).join(", "),
+  );
+
+  return {
+    table: "notification_delivery",
+    tenant: "business_id",
+    dueAt: "availableAt",
+    indexed: (alias) =>
+      Prisma.sql`${columnOf(alias, "status")} IN ('PENDING', 'PROCESSING') AND ${columnOf(alias, "channel")} IN (${channels})`,
+    due: (alias) =>
+      Prisma.sql`${columnOf(alias, "availableAt")} <= now() AND (${columnOf(alias, "status")} = 'PENDING' OR (${columnOf(alias, "leaseExpiresAt")} < now() AND ${columnOf(alias, "attempts")} < ${DELIVERY_MAX_ATTEMPTS}::int))${notChannelsSql(alias, notChannels)}`,
+    set: Prisma.sql`
+        "status" = 'PROCESSING',
+        "leaseExpiresAt" = now() + make_interval(secs => ${DELIVERY_LEASE_SECONDS}),
+        "availableAt" = now() + make_interval(secs => ${DELIVERY_LEASE_SECONDS}),
+        "attempts" = "attempts" + 1`,
+    returning: `"id", "outboxEventId", "userId", "externalRecipientId", "channel", "attempts"`,
+  };
+}
+
+/**
+ * The outbox as the fair claim walks it (plano-escala F3-11): the events by
+ * company, through domain_outbox_event_fair_idx ("businessId",
+ * "availableAt") with the claim's statuses, and the same SET, due rule and
+ * RETURNING as outboxClaimSql. NULL is the platform's own events.
+ */
+const OUTBOX_FAIR_QUEUE: FairQueue = {
+  table: "domain_outbox_event",
+  tenant: "businessId",
+  dueAt: "availableAt",
+  indexed: (alias) =>
+    Prisma.sql`${columnOf(alias, "status")} IN ('PENDING', 'PROCESSING')`,
+  due: (alias) =>
+    Prisma.sql`${columnOf(alias, "availableAt")} <= now() AND (${columnOf(alias, "status")} = 'PENDING' OR (${columnOf(alias, "leaseExpiresAt")} < now() AND ${columnOf(alias, "attempts")} < ${OUTBOX_MAX_ATTEMPTS}::int))`,
+  set: Prisma.sql`
+      "status" = 'PROCESSING',
+      "leaseExpiresAt" = now() + make_interval(secs => ${OUTBOX_LEASE_SECONDS}),
+      "availableAt" = now() + make_interval(secs => ${OUTBOX_LEASE_SECONDS}),
+      "attempts" = "attempts" + 1`,
+  returning: `"id", "topic", "payload", "businessId", "actorId", "attempts", "created_at", "correlationId", "aggregateType", "aggregateId"`,
+};
+
+/**
+ * The outbox's fair claim, company by company from `cursor` (see
+ * claimEvents). Exported for the plan tests, which measure this very
+ * statement.
+ */
+function outboxFairClaimSql(input: {
+  cursor: string;
+  limit: number;
+  rowsPerTenant: number;
+  maxTenants: number;
+  floor: Prisma.Sql;
+  rowFloor: Prisma.Sql;
+}): Prisma.Sql {
+  return fairClaimSql(OUTBOX_FAIR_QUEUE, input);
+}
+
+/**
+ * One delivery lane's fair claim, company by company from `cursor` (see
+ * claimDeliveries). Exported for the plan tests, which measure this very
+ * statement.
+ */
+function deliveryFairClaimSql(
+  lane: DeliveryLane,
+  input: {
+    cursor: string;
+    limit: number;
+    rowsPerTenant: number;
+    maxTenants: number;
+    floor: Prisma.Sql;
+    rowFloor: Prisma.Sql;
+    notChannels?: readonly string[];
+  },
+): Prisma.Sql {
+  const { notChannels, ...claim } = input;
+
+  return fairClaimSql(laneFairQueue(lane, notChannels), claim);
+}
+
+/**
+ * How long shutdown() waits, at most, for the rows in flight. The shutdown
+ * plan's workers deadline can only shorten it (shared/lifecycle/
+ * shutdown-plan.ts).
+ */
+const PIPELINE_SHUTDOWN_WAIT_MS = 10_000;
 
 /** Entries of the "channels suppressed" debug line; the total is logged too. */
 const SUPPRESSED_LOG_LIMIT = 50;
+
+/**
+ * How long the push rows of a group wait for the slowest of them before
+ * their call goes without it (plano-escala U-06; push-batch-gate.ts). The
+ * rows of a group reach the send within milliseconds of each other (a few
+ * reads each); two seconds plus Expo's own 10 s timeout stay under the
+ * 15 s per-delivery backstop, so a group never makes a row overrun it.
+ */
+const PUSH_BATCH_GATE_WAIT_MS = 2_000;
+
+/**
+ * The push lane's other channels: what the claim of a push group leaves out,
+ * so it takes only push rows (the lane's index and predicate stay the
+ * lane's; notChannelsSql filters the rows it returns).
+ */
+const PUSH_LANE: DeliveryLane = laneOf(NotificationChannel.PUSH);
+
+const PUSH_LANE_OTHER_CHANNELS: readonly string[] = DELIVERY_LANES[
+  PUSH_LANE
+].filter((channel) => channel !== NotificationChannel.PUSH);
+
+/**
+ * Push deliveries per call to Expo (PUSH_BATCH_SIZE); 1 is one call per
+ * delivery, the path of before. Read at every row, so a test can switch it.
+ */
+function pushBatchSize(): number {
+  return env.PUSH_BATCH_SIZE;
+}
 
 /**
  * Structured lines, one per delivery outcome, each carrying the ids that
@@ -83,10 +406,44 @@ const SUPPRESSED_LOG_LIMIT = 50;
  */
 const log = logger.child({ component: "notification-pipeline" });
 
-// Fails at import time if batch/concurrency/timeout ever outgrow the lease.
-// Silently breaking this invariant means a second replica reclaiming rows
-// that are still being sent - a duplicate WhatsApp, not a slow one.
-assertDeliveryLeaseInvariant(DELIVERY_BATCH_SIZE);
+/**
+ * Deliveries in flight per lane (plano-escala F3-05), each lane with its
+ * variable: 5 and 5 by default, the DELIVERY_CONCURRENCY of before. A
+ * worker-external that only waits on the providers can take more e-mail at
+ * once without the bell's lane following it.
+ */
+const LANE_CONCURRENCY_VARIABLE: Record<
+  DeliveryLane,
+  QueueConcurrencyVariable
+> = {
+  internal: "NOTIFICATION_INTERNAL_CONCURRENCY",
+  external: "NOTIFICATION_EXTERNAL_CONCURRENCY",
+};
+
+const LANE_CONCURRENCY: Record<DeliveryLane, number> = {
+  internal: env.NOTIFICATION_INTERNAL_CONCURRENCY,
+  external: env.NOTIFICATION_EXTERNAL_CONCURRENCY,
+};
+
+// Fails at import time if batch/concurrency/timeout ever outgrow the lease,
+// now with each lane's value from the environment: the boot stops on a
+// concurrency too low for the batch. Silently breaking this invariant means
+// a second replica reclaiming rows that are still being sent - a duplicate
+// WhatsApp, not a slow one.
+//
+// The lanes run as a continuous pool since F3-06 and claim only for a free
+// slot, so a row's worst case is one timeout, well inside this bound: the
+// check is kept as the barrier's, which the pool can only beat, because the
+// image of before reads the same Environment during a rolling deploy and
+// after a rollback, and refuses a value below it.
+for (const lane of Object.keys(LANE_CONCURRENCY) as DeliveryLane[]) {
+  assertWithVariable(
+    LANE_CONCURRENCY_VARIABLE[lane],
+    LANE_CONCURRENCY[lane],
+    () =>
+      assertDeliveryLeaseInvariant(DELIVERY_BATCH_SIZE, LANE_CONCURRENCY[lane]),
+  );
+}
 
 /**
  * A user's channels that leave the product: the ones a policy's
@@ -115,16 +472,103 @@ interface ClaimedEvent {
   attempts: number;
   created_at: Date;
   correlationId: string | null;
+
+  /** The fact's aggregate: one of its events expands at a time (perKey). */
+  aggregateType?: string;
+  aggregateId?: string;
 }
 
 /**
- * The user lookups of the batch in flight, keyed by user id.
+ * The outbox pool's key: the event's aggregate, or the event itself when the
+ * claim did not say (a row of a test double).
+ */
+function aggregateKeyOf(event: ClaimedEvent): string {
+  return event.aggregateType && event.aggregateId
+    ? `${event.aggregateType}:${event.aggregateId}`
+    : `event:${event.id}`;
+}
+
+/**
+ * The PUBLISHED mark of a batch's events (plano-escala F5-33), fenced per
+ * event as `fenced()` fences one: only the events still PROCESSING under
+ * the attempt this worker claimed. An event another replica took over
+ * meanwhile keeps its new owner's state. The database clock, as the claim;
+ * updated_at by hand, which the client sets on every other update.
+ * Exported for the batch test.
+ */
+function outboxPublishedBatchSql(
+  events: ReadonlyArray<Pick<ClaimedEvent, "id" | "attempts">>,
+): Prisma.Sql {
+  const claimed = Prisma.join(
+    events.map(
+      (event) => Prisma.sql`(${event.id}::text, ${event.attempts}::int)`,
+    ),
+  );
+
+  return Prisma.sql`
+      UPDATE "domain_outbox_event" AS e SET
+        "status" = 'PUBLISHED',
+        "processedAt" = now(),
+        "leaseExpiresAt" = NULL,
+        "lastError" = NULL,
+        "updated_at" = now()
+      FROM (VALUES ${claimed}) AS claimed("id", "attempts")
+      WHERE e."id" = claimed."id"
+        AND e."status" = 'PROCESSING'
+        AND e."attempts" = claimed."attempts"
+    `;
+}
+
+/**
+ * Events in the order their facts happened: the order their deliveries are
+ * written in, whichever order the claim returned them in.
+ */
+function byCreation(a: ClaimedEvent, b: ClaimedEvent): number {
+  const at =
+    new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+
+  if (at !== 0) return at;
+
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+
+/**
+ * Consecutive groups of a batch's expanded events whose rows fit
+ * OUTBOX_EXPANSION_BATCH_MAX_ROWS together; an event over the cap alone
+ * makes a group, as its own expansion always did.
+ */
+function chunkByRows<T extends { rows: readonly unknown[] }>(
+  expanded: readonly T[],
+  maxRows: number = OUTBOX_EXPANSION_BATCH_MAX_ROWS,
+): T[][] {
+  const chunks: T[][] = [];
+  let current: T[] = [];
+  let rows = 0;
+
+  for (const each of expanded) {
+    if (current.length > 0 && rows + each.rows.length > maxRows) {
+      chunks.push(current);
+      current = [];
+      rows = 0;
+    }
+
+    current.push(each);
+    rows += each.rows.length;
+  }
+
+  if (current.length > 0) chunks.push(current);
+
+  return chunks;
+}
+
+/**
+ * The user lookups of one claim's rows, keyed by user id.
  *
  * One event fans out to the same person across in-app, e-mail, WhatsApp and
  * push - four deliveries that used to cost four multi-join user queries.
  * Promises are cached, not values, so concurrent workers share one in-flight
- * lookup instead of racing three more. One map per batch, carried by the
- * batch's rows: the two lanes run at the same time and must not share one.
+ * lookup instead of racing three more. One map per claim, carried by the
+ * claim's rows: the two lanes run at the same time and must not share one.
  */
 type RecipientCache = Map<string, Promise<RecipientUser>>;
 
@@ -146,7 +590,7 @@ interface ClaimedDelivery {
 
   recipientCache?: RecipientCache;
 
-  /** Its event, set with the batch: what its log lines are found by. */
+  /** Its event, set with the claim: what it renders and is logged by. */
   event?: ClaimedEventRow;
 
   /**
@@ -154,6 +598,28 @@ interface ClaimedDelivery {
    * granted ends no earlier than this plus DELIVERY_LEASE_SECONDS.
    */
   claimStartedAtMs?: number;
+
+  /**
+   * The company's business day this attempt took a unit of its daily
+   * WhatsApp quota from (F3-15b), until the unit is given back.
+   */
+  whatsAppQuotaDay?: string;
+
+  /**
+   * The claim that brought the row came back with all it asked for: more
+   * rows are likely due behind it. Only a push row claimed so gathers a
+   * group (U-06); a quiet lane spends no extra claim on a lone push.
+   */
+  claimedInFull?: boolean;
+
+  /** The push group this row sends with (U-06); absent: a call of its own. */
+  pushGate?: PushBatchGate;
+
+  /**
+   * The group's database turn (U-06, push-group-turn.ts): the row lets it
+   * go while it waits on the group's call, and takes it back to settle.
+   */
+  pushTurn?: PushGroupTurn;
 }
 
 /** The slice of an outbox row a delivery needs to render itself. */
@@ -175,6 +641,42 @@ type RecipientUser = NonNullable<
 >;
 
 /**
+ * An event's recipients, resolved by its policy: what both expansion modes
+ * turn into delivery rows (plano-escala F5-33).
+ */
+interface EventExpansion {
+  event: ClaimedEvent;
+  policy: AnyPolicy;
+  payload: AnyPayload;
+  recipients: Awaited<ReturnType<AnyPolicy["resolveRecipients"]>>;
+  externals: NonNullable<
+    Awaited<ReturnType<NonNullable<AnyPolicy["resolveExternalRecipients"]>>>
+  >;
+  actorLeftOut: boolean;
+}
+
+/** A user's choices for one category, as the expansion reads them. */
+type PreferenceRow = Prisma.NotificationPreferenceGetPayload<object>;
+
+/** A delivery row before its id and company, as the expansion decides it. */
+type DeliveryRow = Prisma.NotificationDeliveryCreateManyInput;
+
+/** What an expansion left out and why (OBS-08). */
+interface SuppressedChannel {
+  userId?: string;
+  externalRecipientId?: string;
+  channel: NotificationChannel;
+  reason: string;
+}
+
+/** The rows of one expanded event, ready to be written. */
+interface ExpandedEvent {
+  expansion: EventExpansion;
+  rows: DeliveryRow[];
+  suppressed: SuppressedChannel[];
+}
+
+/**
  * A failure that retrying can never fix (recipient deleted, no policy). A
  * provider's refusal carries its codes in `detail`, which recordDeliveryFailure
  * writes into lastError (OBS-08).
@@ -185,6 +687,18 @@ class NonRetryableDeliveryError extends Error {
     readonly detail?: ProviderErrorDetail,
   ) {
     super(message);
+  }
+}
+
+/**
+ * Whoever the row addressed was deleted (plano-escala F5-05, D54): closed
+ * FAILED as `recipient_gone`, before any provider is called. The cascade
+ * of today never leaves such a row; without the foreign keys (F5-06) one
+ * written while the deletion ran can outlive it.
+ */
+class RecipientGoneError extends NonRetryableDeliveryError {
+  constructor(what: string) {
+    super(recipientGoneError(what));
   }
 }
 
@@ -202,8 +716,26 @@ class RetryableDeliveryError extends Error {
 /**
  * Not this build's to handle: a topic or channel it does not know yet. The row
  * goes back untouched — no attempt spent — for a newer replica to take.
+ * Also a message past its company's daily WhatsApp quota (plano-escala
+ * F3-15b), which waits `until` the company's next business day; `waiting`
+ * is what lastError says it waits for.
  */
-class DeferredDeliveryError extends Error {}
+class DeferredDeliveryError extends Error {
+  constructor(
+    message: string,
+    readonly until?: Date,
+    readonly waiting: string = "aguardando uma versão que conheça o tópico",
+  ) {
+    super(message);
+  }
+}
+
+/**
+ * How the lastError of a message the company's WhatsApp quota holds starts
+ * (plano-escala F3-15b): heldReleaseAt finds the messages already held by
+ * it. No `%` nor `_` in it: it goes into a LIKE as it is.
+ */
+const WHATSAPP_QUOTA_HELD = "Cota diária de WhatsApp da empresa atingida";
 
 /**
  * The pipeline stopped WAITING on a send; the send itself is still in flight
@@ -240,6 +772,10 @@ class NotificationPipelineService {
   private outboxTimer: NodeJS.Timeout | null = null;
   private deliveryTimers: NodeJS.Timeout[] = [];
 
+  /** The minute's close of the exhausted rows (closeExhausted, F3-08). */
+  private exhaustedTimer: NodeJS.Timeout | null = null;
+  private closingExhausted: Promise<number> | null = null;
+
   private outboxRunning = false;
   private deliveryRunning: Record<DeliveryLane, boolean> = {
     internal: false,
@@ -247,8 +783,7 @@ class NotificationPipelineService {
   };
 
   /**
-   * The cycle in flight per queue, and whether somebody asked for another
-   * look while it ran.
+   * The cycle in flight per queue.
    *
    * A wake, a sweep tick or a test that found a cycle running used to get
    * `return` and nothing else. When it came after that cycle's LAST claim,
@@ -256,27 +791,76 @@ class NotificationPipelineService {
    * production — although a cycle was right there; and a test that drove
    * the pipeline by hand checked the provider before the send went out
    * (route-stop-on-the-way, red under load). A caller now joins the cycle in
-   * flight and marks it to run once more when it ends: one extra pass for
-   * however many callers arrived, never one per caller.
+   * flight and asks its pool to look again (`rescan`): one claim for however
+   * many callers arrived, never one per caller, and the cycle does not end
+   * before that claim ran.
    */
   private outboxCycle: Promise<boolean> | null = null;
-  private outboxRerun = false;
   private deliveryCycles: Record<DeliveryLane, Promise<void> | null> = {
     internal: null,
     external: null,
   };
-  private deliveryRerun: Record<DeliveryLane, boolean> = {
-    internal: false,
-    external: false,
-  };
 
   /**
-   * Set when the replica starts going away. The drain loops check it between
-   * batches and `wake()` stops starting new ones: shutdown used to only clear
-   * the timers, while a draining loop kept claiming batch after batch until
-   * the process exited under it — with rows still in flight.
+   * Where each lane's next fair claim starts (plano-escala F3-10): the last
+   * company the previous one visited. This process's own; another process
+   * keeps its own, and both rotate.
+   */
+  private fairCursors: Record<DeliveryLane, string> = {
+    internal: "",
+    external: "",
+  };
+
+  /** The outbox's, the same way (F3-11). */
+  private outboxFairCursor = "";
+
+  /**
+   * A look asked for while a batch cycle ran (OUTBOX_EXPANSION_MODE=batch,
+   * plano-escala F5-33): the batch loop's `rescan`, as the pool keeps its
+   * own for the per-event mode.
+   */
+  private outboxBatchRescan = false;
+
+  /**
+   * Set when the replica starts going away. The pools stop claiming and
+   * hand back what they claimed and did not start, and `wake()` stops
+   * starting new cycles: shutdown used to only clear the timers, while a
+   * draining loop kept claiming batch after batch until the process exited
+   * under it — with rows still in flight.
    */
   private stopping = false;
+
+  /**
+   * The outbox as a continuous pool (plano-escala F3-06): a batch claimed
+   * when nothing claimed still waits, OUTBOX_EXPANSION_CONCURRENCY events
+   * expanding, one per aggregate, and the next claim as soon as a slot
+   * frees instead of after the batch's slowest expansion.
+   */
+  private readonly outboxPool = new ContinuousPool<ClaimedEvent>({
+    slots: () => OUTBOX_EXPANSION_CONCURRENCY,
+    prefetch: OUTBOX_BATCH_SIZE,
+    perKey: { limit: 1, keyOf: aggregateKeyOf },
+    claim: (limit) => this.claimEvents(limit),
+    run: (event) => this.expandClaimedEvent(event),
+    giveBack: (event) => this.giveBackEvent(event),
+    stopping: () => this.stopping,
+    onClaim: () => workerHeartbeat.progress("notification-outbox"),
+  });
+
+  /**
+   * Each delivery lane as a continuous pool (plano-escala F3-06). A row is
+   * claimed only for a free slot (no prefetch): its lease runs from the
+   * claim, and a row claimed ahead would wait with it running. One slow
+   * e-mail now holds its own slot; the barrier of before held the four that
+   * had already finished until it ended.
+   */
+  private readonly lanePools: Record<
+    DeliveryLane,
+    ContinuousPool<ClaimedDelivery>
+  > = {
+    internal: this.lanePool("internal"),
+    external: this.lanePool("external"),
+  };
 
   /**
    * Success records still retrying after the batch moved on (the database
@@ -297,13 +881,23 @@ class NotificationPipelineService {
   public async initialize(): Promise<void> {
     this.stopping = false;
 
-    this.outboxTimer = setInterval(() => {
-      this.runOutboxCycle().catch((error) => {
-        log.error({ err: error }, "outbox cycle failed");
-      });
-    }, SWEEP_INTERVAL_MS);
+    // A timer per queue this process claims (WORKER_QUEUES, plano-escala
+    // F3-01): a worker-external sweeps the external lane and nothing else,
+    // and the outbox it does not claim is expanded by another process.
+    if (consumesQueue(env, "outbox")) {
+      this.outboxTimer = setInterval(() => {
+        // The sweep that expanded events chains into the lanes, as a wake
+        // does (plano-escala F3-04): the deliveries it just wrote do not
+        // wait for the lanes' own sweep.
+        this.runOutboxCycle()
+          .then((processed) => (processed ? this.chainLanes() : undefined))
+          .catch((error) => {
+            log.error({ err: error }, "outbox cycle failed");
+          });
+      }, SWEEP_INTERVAL_MS);
+    }
 
-    for (const lane of Object.keys(DELIVERY_LANES) as DeliveryLane[]) {
+    for (const lane of this.consumedLanes()) {
       this.deliveryTimers.push(
         setInterval(() => {
           this.runDeliveryCycle(lane).catch((error) => {
@@ -313,12 +907,66 @@ class NotificationPipelineService {
       );
     }
 
+    // The exhausted rows of the queues this process claims, closed off the
+    // claims' path (plano-escala F3-08): once now, so a replica that comes
+    // back after a crash closes what the crash left, then every minute.
+    if (this.outboxTimer !== null || this.deliveryTimers.length > 0) {
+      const sweep = () => {
+        this.closeExhausted().catch((error) => {
+          log.error({ err: error }, "exhausted rows close failed");
+        });
+      };
+
+      this.exhaustedTimer = setInterval(sweep, EXHAUSTED_CLOSE_INTERVAL_MS);
+      sweep();
+    }
+
     // No drain here. What accumulated while the API was down is drained by
     // the boot once Socket.IO is up (shared/lifecycle/startup.ts): drained
     // now, every in-app row in the backlog reached the bell with no toast,
     // because `io` did not exist yet (OUTBOX-19).
 
-    log.info("notification pipeline started");
+    log.info(
+      { outbox: this.outboxTimer !== null, lanes: this.consumedLanes() },
+      "notification pipeline started",
+    );
+  }
+
+  /** The delivery lanes this process claims, in their fixed order. */
+  private consumedLanes(): DeliveryLane[] {
+    return (Object.keys(DELIVERY_LANES) as DeliveryLane[]).filter((lane) =>
+      consumesQueue(env, lane),
+    );
+  }
+
+  /**
+   * After an outbox pass that expanded events: the lanes this process
+   * claims run now, and the ones it does not are announced to the
+   * processes that claim them (a worker without `external` wakes the
+   * worker-external, F3-04).
+   */
+  private async chainLanes(): Promise<void> {
+    for (const lane of Object.keys(DELIVERY_LANES) as DeliveryLane[]) {
+      if (!consumesQueue(env, lane)) announceWake(lane);
+    }
+
+    await Promise.all(
+      this.consumedLanes().map((lane) => this.runDeliveryCycle(lane)),
+    );
+  }
+
+  /**
+   * One lane, now: what another process's hint asks for (wake-listener.ts,
+   * F3-04). Safe at any time, like wake().
+   */
+  public wakeLane(lane: DeliveryLane): void {
+    if (this.stopping || !consumesQueue(env, lane)) return;
+
+    withoutRequestContext(() => {
+      this.runDeliveryCycle(lane).catch((error) => {
+        log.error({ err: error, lane }, "lane wake failed");
+      });
+    });
   }
 
   /**
@@ -334,37 +982,62 @@ class NotificationPipelineService {
    * drain lasted.
    */
   public wake(): void {
-    // On an HTTP-only replica (WORKERS_ENABLED=false) a publish drains
-    // nothing: the worker service's sweep picks the event up (GAP2-3).
-    if (this.stopping || !env.WORKERS_ENABLED) return;
+    if (this.stopping) return;
+
+    // Only the queues this process claims (WORKER_QUEUES, plano-escala
+    // F3-01). On an HTTP-only replica (WORKERS_ENABLED=false) a publish
+    // drains nothing: the worker service's sweep picks the event up
+    // (GAP2-3).
+    const outbox = consumesQueue(env, "outbox");
+    const lanes = this.consumedLanes();
+
+    if (!outbox && lanes.length === 0) return;
 
     withoutRequestContext(() => {
-      this.runOutboxCycle()
-        .then(() =>
-          Promise.all(
-            (Object.keys(DELIVERY_LANES) as DeliveryLane[]).map((lane) =>
-              this.runDeliveryCycle(lane),
-            ),
-          ),
-        )
+      (outbox ? this.runOutboxCycle() : Promise.resolve(false))
+        .then((processed) => {
+          // The lanes another process claims hear about the deliveries
+          // this pass wrote (F3-04).
+          if (processed) {
+            for (const lane of Object.keys(DELIVERY_LANES) as DeliveryLane[]) {
+              if (!consumesQueue(env, lane)) announceWake(lane);
+            }
+          }
+
+          return Promise.all(lanes.map((lane) => this.runDeliveryCycle(lane)));
+        })
         .catch((error) => {
           log.error({ err: error }, "pipeline wake failed");
         });
     });
   }
 
-  public async shutdown(): Promise<void> {
+  /**
+   * `deadlineMs` is the shutdown plan's (shared/lifecycle/shutdown-plan.ts):
+   * it can only shorten the pipeline's own 10 s, so a short stop grace is
+   * not outlived here.
+   */
+  public async shutdown(options: { deadlineMs?: number } = {}): Promise<void> {
     this.stopping = true;
 
     if (this.outboxTimer) clearInterval(this.outboxTimer);
     for (const timer of this.deliveryTimers) clearInterval(timer);
+    if (this.exhaustedTimer) clearInterval(this.exhaustedTimer);
 
     this.outboxTimer = null;
     this.deliveryTimers = [];
+    this.exhaustedTimer = null;
 
-    // Let the batch in flight finish; the loops take no new one. Leases cover
-    // anything cut off by the deadline.
-    const deadline = Date.now() + 10_000;
+    // The pools waiting on a slow row look now: what they claimed and did
+    // not start goes back at once, instead of waiting out its lease.
+    this.outboxPool.nudge();
+    for (const pool of Object.values(this.lanePools)) pool.nudge();
+
+    // Let the rows in flight finish; the pools claim nothing new. Leases
+    // cover anything cut off by the deadline.
+    const deadline =
+      Date.now() +
+      Math.min(PIPELINE_SHUTDOWN_WAIT_MS, options.deadlineMs ?? Infinity);
 
     while (
       (this.isBusy() || this.pendingRecords.size > 0) &&
@@ -374,6 +1047,76 @@ class NotificationPipelineService {
     }
 
     log.info("notification pipeline stopped");
+  }
+
+  /**
+   * Closes FAILED, with the reason, the rows of the queues this process
+   * claims whose last allowed attempt died with their process: PROCESSING,
+   * lease run out, attempts at the ceiling (see shared/queue/
+   * exhausted-close.ts). Every minute and at boot; public so a test can run
+   * it. A run that finds one in progress joins it.
+   */
+  public closeExhausted(): Promise<number> {
+    this.closingExhausted ??= this.closeExhaustedNow().finally(() => {
+      this.closingExhausted = null;
+    });
+
+    return this.closingExhausted;
+  }
+
+  private async closeExhaustedNow(): Promise<number> {
+    let closed = 0;
+
+    if (consumesQueue(env, "outbox")) {
+      const floor = await claimFloors.predicate("outbox");
+      const events = await closeExhaustedInBatches(() =>
+        database.$executeRaw(
+          exhaustedCloseSql({
+            table: "domain_outbox_event",
+            maxAttempts: OUTBOX_MAX_ATTEMPTS,
+            floor,
+          }),
+        ),
+      );
+
+      if (events > 0) {
+        log.warn(
+          { queue: "outbox", closed: events },
+          "notification events closed: their last allowed attempt died with the process",
+        );
+      }
+
+      closed += events;
+    }
+
+    const channels = this.consumedLanes().flatMap(
+      (lane) => DELIVERY_LANES[lane],
+    );
+
+    if (channels.length > 0) {
+      const floor = await claimFloors.predicate("deliveries");
+      const deliveries = await closeExhaustedInBatches(() =>
+        database.$executeRaw(
+          exhaustedCloseSql({
+            table: "notification_delivery",
+            maxAttempts: DELIVERY_MAX_ATTEMPTS,
+            floor,
+            channels,
+          }),
+        ),
+      );
+
+      if (deliveries > 0) {
+        log.warn(
+          { queue: "deliveries", channels, closed: deliveries },
+          "notification deliveries closed: their last allowed attempt died with the process",
+        );
+      }
+
+      closed += deliveries;
+    }
+
+    return closed;
   }
 
   private isBusy(): boolean {
@@ -398,7 +1141,8 @@ class NotificationPipelineService {
    */
   public runOutboxCycle(): Promise<boolean> {
     if (this.outboxCycle) {
-      this.outboxRerun = true;
+      this.outboxPool.rescan();
+      this.outboxBatchRescan = true;
 
       return this.outboxCycle.catch(() => false);
     }
@@ -418,15 +1162,18 @@ class NotificationPipelineService {
 
     try {
       for (;;) {
-        this.outboxRerun = false;
-
         processedAny = (await this.drainOutbox()) || processedAny;
 
-        if (!this.outboxRerun || this.stopping) break;
+        // A look asked for between the pool's last one and its end.
+        const again = this.inBatches()
+          ? this.outboxBatchRescan
+          : this.outboxPool.rescanPending;
+
+        if (!again || this.stopping) break;
       }
     } finally {
-      // Same synchronous turn as the last look at `outboxRerun`: a caller
-      // either saw this cycle and was covered by the pass it asked for, or
+      // Same synchronous turn as the last look at `rescanPending`: a caller
+      // either saw this cycle and was covered by the claim it asked for, or
       // finds it gone and starts the next one.
       this.outboxCycle = null;
       this.outboxRunning = false;
@@ -435,55 +1182,217 @@ class NotificationPipelineService {
     return processedAny;
   }
 
-  /** One pass: claims batches until a short one says the queue is empty. */
+  /** One cycle of the outbox's pool: until nothing is due nor in flight. */
   private async drainOutbox(): Promise<boolean> {
     // A hung await here keeps the flag set forever; the beats make that
     // visible on /health/metrics (OBS-10).
     workerHeartbeat.beginCycle("notification-outbox");
 
-    let processedAny = false;
-
     try {
-      // Drain: a full batch means there is probably more behind it.
-      while (!this.stopping) {
-        const events = await this.claimEvents();
-        processedAny = processedAny || events.length > 0;
-
-        workerHeartbeat.progress("notification-outbox");
-
-        for (const event of events) {
-          try {
-            // One lease covers the whole batch, and the batch is expanded
-            // event after event. Under a saturated pool the tail used to
-            // start after the lease ran out, when another replica had
-            // already reclaimed it — and both expanded it (OUTBOX-21).
-            if (!(await this.renewEventLease(event))) {
-              log.warn(
-                {
-                  outboxEventId: event.id,
-                  correlationId: event.correlationId ?? null,
-                  topic: event.topic,
-                  attempt: event.attempts,
-                },
-                "notification event reclaimed by another replica before its expansion; left to it",
-              );
-
-              continue;
-            }
-
-            await this.expandEvent(event);
-          } catch (error) {
-            await this.recordEventFailure(event, error);
-          }
-        }
-
-        if (events.length < OUTBOX_BATCH_SIZE) break;
-      }
+      return this.inBatches()
+        ? (await this.drainOutboxInBatches()) > 0
+        : (await this.outboxPool.drain()) > 0;
     } finally {
       workerHeartbeat.endCycle("notification-outbox");
     }
+  }
 
-    return processedAny;
+  /**
+   * OUTBOX_EXPANSION_MODE (plano-escala F5-33), read at every cycle:
+   * `per-event` (the default) is the pool of before, exactly.
+   */
+  private inBatches(): boolean {
+    return env.OUTBOX_EXPANSION_MODE === "batch";
+  }
+
+  /**
+   * The batch mode's cycle: a claim of OUTBOX_EXPANSION_BATCH_SIZE events,
+   * expanded together, then the next claim, until one comes back short and
+   * nobody asked for another look. One batch at a time per process, so two
+   * events of one aggregate are never expanded at once here, as the pool's
+   * perKey promises in the per-event mode (OUTBOX_EXPANSION_CONCURRENCY
+   * does not apply). A batch starts the moment it is claimed: no event
+   * waits for a slot with its lease running, so none is renewed.
+   */
+  private async drainOutboxInBatches(): Promise<number> {
+    let expanded = 0;
+
+    while (!this.stopping) {
+      // This claim answers every look asked for before it.
+      this.outboxBatchRescan = false;
+
+      const events = await this.claimEvents(OUTBOX_EXPANSION_BATCH_SIZE);
+
+      workerHeartbeat.progress("notification-outbox");
+
+      if (events.length === 0) break;
+
+      expanded += events.length;
+
+      await this.expandClaimedBatch(events);
+
+      if (
+        events.length < OUTBOX_EXPANSION_BATCH_SIZE &&
+        !this.outboxBatchRescan
+      ) {
+        break;
+      }
+    }
+
+    return expanded;
+  }
+
+  /**
+   * One claimed batch, start to settle (plano-escala F5-33). Never rejects.
+   *
+   * The same rows as the per-event path, event by event: the recipients
+   * are resolved by each event's policy as before, and the same rules
+   * decide the channels; only the lookups and the writes are shared. An
+   * event whose policy fails gets the failure of its own and the others go
+   * on. The batch's write is one transaction: the deliveries in one INSERT
+   * (their ids are decided by event, recipient and channel, so a second
+   * expansion writes nothing new) and one PUBLISHED mark fenced per event.
+   * A batch whose write fails is written again event by event, as the
+   * per-event path writes, so one bad event costs only itself a retry.
+   */
+  private async expandClaimedBatch(events: ClaimedEvent[]): Promise<void> {
+    const expansions: EventExpansion[] = [];
+
+    for (const event of [...events].sort(byCreation)) {
+      try {
+        const expansion = await this.resolveExpansion(event);
+
+        if (expansion) expansions.push(expansion);
+      } catch (error) {
+        await this.recordEventFailure(event, error);
+      }
+    }
+
+    if (expansions.length === 0) return;
+
+    const expanded: ExpandedEvent[] = [];
+
+    try {
+      const preferenceOf = await this.preferencesOf(expansions);
+      const pushOwners = await this.pushOwnersOf([
+        ...new Set(
+          expansions.flatMap((expansion) =>
+            expansion.recipients.map((recipient) => recipient.id),
+          ),
+        ),
+      ]);
+
+      for (const expansion of expansions) {
+        try {
+          expanded.push({
+            expansion,
+            ...(await this.deliveryRowsOf(
+              expansion,
+              (userId) => preferenceOf(expansion.policy.category, userId),
+              pushOwners,
+            )),
+          });
+        } catch (error) {
+          await this.recordEventFailure(expansion.event, error);
+        }
+      }
+    } catch (error) {
+      // The batch's lookups failed: every event of it retries, as each
+      // would have on its own path.
+      for (const expansion of expansions) {
+        await this.recordEventFailure(expansion.event, error);
+      }
+
+      return;
+    }
+
+    for (const chunk of chunkByRows(expanded)) {
+      try {
+        await database.$transaction([
+          this.createDeliveries(
+            chunk.map(({ expansion, rows }) => ({
+              event: expansion.event,
+              rows,
+            })),
+          ),
+          database.$executeRaw(
+            outboxPublishedBatchSql(
+              chunk.map(({ expansion }) => expansion.event),
+            ),
+          ),
+        ]);
+      } catch (error) {
+        log.warn(
+          {
+            err: error,
+            events: chunk.length,
+            outboxEventIds: chunk
+              .slice(0, SUPPRESSED_LOG_LIMIT)
+              .map(({ expansion }) => expansion.event.id),
+          },
+          "notification events batch write failed; written again event by event",
+        );
+
+        for (const each of chunk) {
+          try {
+            await this.writeExpansion(each.expansion.event, each.rows);
+          } catch (eventError) {
+            await this.recordEventFailure(each.expansion.event, eventError);
+            continue;
+          }
+
+          this.logSuppressed(each);
+        }
+
+        continue;
+      }
+
+      for (const each of chunk) this.logSuppressed(each);
+    }
+  }
+
+  /** One claimed event, start to settle. Never rejects: the pool goes on. */
+  private async expandClaimedEvent(event: ClaimedEvent): Promise<void> {
+    try {
+      // A claim's lease covers the events it took ahead of a slot, and they
+      // wait for one. Under a saturated pool the last ones used to start
+      // after the lease ran out, when another replica had already reclaimed
+      // them — and both expanded them (OUTBOX-21).
+      if (!(await this.renewEventLease(event))) {
+        log.warn(
+          {
+            outboxEventId: event.id,
+            correlationId: event.correlationId ?? null,
+            topic: event.topic,
+            attempt: event.attempts,
+          },
+          "notification event reclaimed by another replica before its expansion; left to it",
+        );
+
+        return;
+      }
+
+      await this.expandEvent(event);
+    } catch (error) {
+      await this.recordEventFailure(event, error);
+    }
+  }
+
+  /**
+   * An event claimed and never started, handed back on shutdown: the claim
+   * was not an attempt. Fenced like every settling write, and due now, so
+   * the next replica takes it without waiting out the lease.
+   */
+  private async giveBackEvent(event: ClaimedEvent): Promise<void> {
+    await database.domainOutboxEvent.updateMany({
+      where: this.fenced(event),
+      data: {
+        status: "PENDING",
+        attempts: event.attempts - 1,
+        availableAt: new Date(),
+        leaseExpiresAt: null,
+      },
+    });
   }
 
   /**
@@ -494,9 +1403,12 @@ class NotificationPipelineService {
    * it a second time. The database clock, like the claim.
    */
   private async renewEventLease(event: ClaimedEvent): Promise<boolean> {
+    // The due time follows the lease, as the claim writes it (F3-11): the
+    // event stays out of the claims' range for as long as it is held.
     const renewed = await database.$executeRaw`
       UPDATE "domain_outbox_event" SET
-        "leaseExpiresAt" = now() + make_interval(secs => ${OUTBOX_LEASE_SECONDS})
+        "leaseExpiresAt" = now() + make_interval(secs => ${OUTBOX_LEASE_SECONDS}),
+        "availableAt" = now() + make_interval(secs => ${OUTBOX_LEASE_SECONDS})
       WHERE "id" = ${event.id}
         AND "status" = 'PROCESSING'
         AND "attempts" = ${event.attempts}
@@ -505,35 +1417,42 @@ class NotificationPipelineService {
     return renewed === 1;
   }
 
-  private async claimEvents(): Promise<ClaimedEvent[]> {
-    // A row whose last allowed attempt died with the process is closed, with
-    // the reason, instead of being claimed again — see OUTBOX_MAX_ATTEMPTS.
-    await database.$executeRaw`
-      UPDATE "domain_outbox_event" SET
-        "status" = 'FAILED',
-        "leaseExpiresAt" = NULL,
-        "lastError" = 'O processo foi interrompido durante a última tentativa permitida.'
-      WHERE "status" = 'PROCESSING'
-        AND "leaseExpiresAt" < now()
-        AND "attempts" >= ${OUTBOX_MAX_ATTEMPTS}
-    `;
+  private async claimEvents(
+    limit: number = OUTBOX_BATCH_SIZE,
+  ): Promise<ClaimedEvent[]> {
+    const floor = await claimFloors.predicate("outbox");
 
-    return database.$queryRaw<ClaimedEvent[]>`
-      UPDATE "domain_outbox_event" SET
-        "status" = 'PROCESSING',
-        "leaseExpiresAt" = now() + make_interval(secs => ${OUTBOX_LEASE_SECONDS}),
-        "attempts" = "attempts" + 1
-      WHERE "id" IN (
-        SELECT "id" FROM "domain_outbox_event"
-        WHERE ("status" = 'PENDING' AND "availableAt" <= now())
-           OR ("status" = 'PROCESSING' AND "leaseExpiresAt" < now()
-               AND "attempts" < ${OUTBOX_MAX_ATTEMPTS})
-        ORDER BY "created_at"
-        LIMIT ${OUTBOX_BATCH_SIZE}
-        FOR UPDATE SKIP LOCKED
-      )
-      RETURNING "id", "topic", "payload", "businessId", "actorId", "attempts", "created_at", "correlationId"
-    `;
+    // A row whose last allowed attempt died with the process is left out
+    // (attempts < OUTBOX_MAX_ATTEMPTS) and closed by the minute's sweep
+    // (closeExhausted, plano-escala F3-08), not here: the claim is one
+    // statement, whatever is queued.
+    //
+    // The fair claim (plano-escala F3-11), with the lanes' switch: a
+    // carrier's twenty thousand events no longer hold another company's
+    // bell behind them, the expansion being the first step of every
+    // notification.
+    if (env.QUEUE_FAIR_CLAIM_ENABLED) {
+      const claimed = await database.$queryRaw<
+        Array<ClaimedEvent & { fairCursor?: string | null }>
+      >(
+        outboxFairClaimSql({
+          cursor: this.outboxFairCursor,
+          limit,
+          rowsPerTenant: env.QUEUE_FAIR_ROWS_PER_TENANT,
+          maxTenants: env.QUEUE_FAIR_MAX_TENANTS,
+          floor,
+          rowFloor: await claimFloors.predicate("outbox", "row"),
+        }),
+      );
+
+      this.outboxFairCursor = nextFairCursor(claimed, this.outboxFairCursor);
+
+      for (const event of claimed) delete event.fairCursor;
+
+      return claimed;
+    }
+
+    return database.$queryRaw<ClaimedEvent[]>(outboxClaimSql(floor, limit));
   }
 
   /**
@@ -566,6 +1485,46 @@ class NotificationPipelineService {
   }
 
   private async expandEvent(event: ClaimedEvent): Promise<void> {
+    const expansion = await this.resolveExpansion(event);
+
+    if (!expansion) return;
+
+    const recipientIds = expansion.recipients.map((recipient) => recipient.id);
+
+    // Per-category choices, fetched in one query for the whole batch. A user
+    // without a row falls back to their legacy global toggles.
+    const preferences = recipientIds.length
+      ? await database.notificationPreference.findMany({
+          where: {
+            category: expansion.policy.category,
+            userId: { in: recipientIds },
+          },
+        })
+      : [];
+
+    const preferenceByUser = new Map(
+      preferences.map((preference) => [preference.userId, preference]),
+    );
+
+    const { rows, suppressed } = await this.deliveryRowsOf(
+      expansion,
+      (userId) => preferenceByUser.get(userId),
+      await this.pushOwnersOf(recipientIds),
+    );
+
+    await this.writeExpansion(event, rows);
+
+    this.logSuppressed({ expansion, rows, suppressed });
+  }
+
+  /**
+   * Who an event is for, by its policy: the users besides its actor and the
+   * people with no account. Null when this build has no policy for the
+   * topic (the event was put back or failed).
+   */
+  private async resolveExpansion(
+    event: ClaimedEvent,
+  ): Promise<EventExpansion | null> {
     const policy = getNotificationPolicy(event.topic);
 
     if (!policy) {
@@ -574,7 +1533,7 @@ class NotificationPipelineService {
         `No notification policy registered for topic "${event.topic}"`,
       );
 
-      return;
+      return null;
     }
 
     const payload = event.payload as AnyPayload;
@@ -596,7 +1555,17 @@ class NotificationPipelineService {
       ),
     };
 
-    const recipients = await policy.resolveRecipients(payload, policyDeps);
+    const resolved = await policy.resolveRecipients(payload, policyDeps);
+
+    // Nobody is notified of what they just did, on any channel; the topics
+    // that still tell them say why in `notifiesActor` (pipeline-rules.ts).
+    const recipients = recipientsBesidesActor(
+      resolved,
+      event.actorId,
+      policy.notifiesActor,
+    );
+
+    const actorLeftOut = recipients.length < resolved.length;
 
     // People with no account. Absent on every internal topic, which is why
     // the hook is optional and nothing else in this method changed.
@@ -604,57 +1573,110 @@ class NotificationPipelineService {
       ? await policy.resolveExternalRecipients(payload, policyDeps)
       : [];
 
-    // Per-category choices, fetched in one query for the whole batch. A user
-    // without a row falls back to their legacy global toggles.
-    const preferences = recipients.length
-      ? await database.notificationPreference.findMany({
-          where: {
-            category: policy.category,
-            userId: { in: recipients.map((recipient) => recipient.id) },
-          },
-        })
-      : [];
+    return { event, policy, payload, recipients, externals, actorLeftOut };
+  }
 
-    const preferenceByUser = new Map(
-      preferences.map((preference) => [preference.userId, preference]),
+  /**
+   * Per-category choices of every recipient of a batch, in one query: the
+   * same rows the per-event path reads one category at a time.
+   */
+  private async preferencesOf(
+    expansions: readonly EventExpansion[],
+  ): Promise<
+    (
+      category: EventExpansion["policy"]["category"],
+      userId: string,
+    ) => PreferenceRow | undefined
+  > {
+    const usersByCategory = new Map<
+      EventExpansion["policy"]["category"],
+      Set<string>
+    >();
+
+    for (const { policy, recipients } of expansions) {
+      if (recipients.length === 0) continue;
+
+      const users = usersByCategory.get(policy.category) ?? new Set<string>();
+
+      for (const recipient of recipients) users.add(recipient.id);
+
+      usersByCategory.set(policy.category, users);
+    }
+
+    if (usersByCategory.size === 0) return () => undefined;
+
+    const preferences = await database.notificationPreference.findMany({
+      where: {
+        OR: [...usersByCategory].map(([category, users]) => ({
+          category,
+          userId: { in: [...users] },
+        })),
+      },
+    });
+
+    const byKey = new Map(
+      preferences.map((preference) => [
+        `${preference.category}:${preference.userId}`,
+        preference,
+      ]),
     );
 
-    // Who has a registered mobile device — a PUSH delivery only exists for
-    // them, so web-only users never accumulate dead push rows.
-    const pushOwners = recipients.length
-      ? new Set(
-          (
-            await database.pushDeviceToken.findMany({
-              where: {
-                userId: { in: recipients.map((recipient) => recipient.id) },
-              },
-              select: { userId: true },
-            })
-          ).map((row) => row.userId),
-        )
-      : new Set<string>();
+    return (category, userId) => byKey.get(`${category}:${userId}`);
+  }
 
-    const rows: Prisma.NotificationDeliveryCreateManyInput[] = [];
+  /**
+   * Who has a registered mobile device — a PUSH delivery only exists for
+   * them, so web-only users never accumulate dead push rows.
+   */
+  private async pushOwnersOf(userIds: readonly string[]): Promise<Set<string>> {
+    if (userIds.length === 0) return new Set<string>();
+
+    return new Set(
+      (
+        await database.pushDeviceToken.findMany({
+          where: { userId: { in: [...userIds] } },
+          select: { userId: true },
+        })
+      ).map((row) => row.userId),
+    );
+  }
+
+  /**
+   * The delivery rows of one event: a row per recipient and channel the
+   * rules allow, and what was left out and why. The same in both modes.
+   */
+  private async deliveryRowsOf(
+    expansion: EventExpansion,
+    preferenceOf: (userId: string) => PreferenceRow | undefined,
+    pushOwners: ReadonlySet<string>,
+  ): Promise<{ rows: DeliveryRow[]; suppressed: SuppressedChannel[] }> {
+    const { event, policy, payload, recipients, externals } = expansion;
+
+    const rows: DeliveryRow[] = [];
 
     // What was left out and why (OBS-08): no row is created for a suppressed
     // channel, so without this "she never gets WhatsApp" had nothing to show.
-    const suppressed: Array<{
-      userId?: string;
-      externalRecipientId?: string;
-      channel: NotificationChannel;
-      reason: string;
-    }> = [];
+    const suppressed: SuppressedChannel[] = [];
 
     for (const recipient of recipients) {
       const flags = resolveRecipientChannelFlags(
         recipient,
-        preferenceByUser.get(recipient.id),
+        preferenceOf(recipient.id),
       );
 
       const options = {
         hasInAppContent: Boolean(policy.renderInApp),
         hasEmailContent: Boolean(policy.renderInApp) && !policy.suppressEmail,
-        hasWhatsAppContent: Boolean(policy.renderWhatsApp),
+        // Asked of the render itself, per recipient (B1): a topic whose
+        // WhatsApp exists for one audience and not another (the automatic
+        // card of a service order) creates no row it could never send.
+        hasWhatsAppContent: Boolean(
+          policy.renderWhatsApp?.(payload, {
+            id: recipient.id,
+            role: recipient.role,
+            driverId: recipient.driverId,
+          }),
+        ),
         isMandatory: Boolean(policy.mandatory),
         hasPushDevice: pushOwners.has(recipient.id),
         hasStandalonePushContent: Boolean(policy.renderPush),
@@ -690,11 +1712,34 @@ class NotificationPipelineService {
         continue;
       }
 
+      // The same person opted out from another delivery of this company
+      // (D38): their phone or e-mail is suppressed for every one of them.
+      const blocked = await this.suppressedChannelsOf(
+        event.businessId,
+        external,
+      );
+
+      // Only the valid addresses are written to (recipient-email.ts): a value
+      // stored before the imports checked it may hold none.
+      const hasEmail = readRecipientEmails(external.email).addresses.length > 0;
+
       if (!external.email) {
         suppressed.push({
           externalRecipientId: external.id,
           channel: NotificationChannel.EMAIL,
           reason: "no_contact",
+        });
+      } else if (!hasEmail) {
+        suppressed.push({
+          externalRecipientId: external.id,
+          channel: NotificationChannel.EMAIL,
+          reason: "invalid_address",
+        });
+      } else if (blocked.has("EMAIL")) {
+        suppressed.push({
+          externalRecipientId: external.id,
+          channel: NotificationChannel.EMAIL,
+          reason: "suppressed_address",
         });
       }
 
@@ -704,13 +1749,19 @@ class NotificationPipelineService {
           channel: NotificationChannel.WHATSAPP,
           reason: "no_contact",
         });
+      } else if (blocked.has("WHATSAPP")) {
+        suppressed.push({
+          externalRecipientId: external.id,
+          channel: NotificationChannel.WHATSAPP,
+          reason: "suppressed_address",
+        });
       }
 
       // The channels follow the contact details we actually hold. No in-app,
       // no push: there is no app and no inbox. No preferences either — an
       // outsider never had a row to express one, and the way they say stop is
       // the opt-out link in the message itself.
-      if (external.email) {
+      if (hasEmail && !blocked.has("EMAIL")) {
         rows.push({
           outboxEventId: event.id,
           externalRecipientId: external.id,
@@ -718,7 +1769,7 @@ class NotificationPipelineService {
         });
       }
 
-      if (external.telephone) {
+      if (external.telephone && !blocked.has("WHATSAPP")) {
         rows.push({
           outboxEventId: event.id,
           externalRecipientId: external.id,
@@ -738,15 +1789,29 @@ class NotificationPipelineService {
       });
     }
 
-    // skipDuplicates + the (event, user, channel) unique key make a re-run
-    // after a crash a no-op instead of a second batch of notifications. The
-    // PUBLISHED mark is fenced: if this worker lost the row to another replica
-    // the rows above were a no-op and so is the mark.
+    return { rows, suppressed };
+  }
+
+  /**
+   * One event's deliveries and its PUBLISHED mark, in one transaction.
+   *
+   * skipDuplicates makes a re-run after a crash, or by a replica that took
+   * the event over, a no-op instead of a second batch of notifications:
+   * every row's id is decided by its event, recipient and channel
+   * (delivery-id.ts, plano-escala F5-03), so a second expansion computes
+   * the same primary keys. The (event, recipient, channel) unique indexes
+   * still say the same until wave 10 drops them (F5-06), and keep the rows
+   * the previous image wrote under random ids, during the rolling deploy,
+   * from gaining a twin. The PUBLISHED mark is fenced: if this worker lost
+   * the row to another replica the rows above were a no-op and so is the
+   * mark.
+   */
+  private async writeExpansion(
+    event: ClaimedEvent,
+    rows: DeliveryRow[],
+  ): Promise<void> {
     await database.$transaction([
-      database.notificationDelivery.createMany({
-        data: rows,
-        skipDuplicates: true,
-      }),
+      this.createDeliveries([{ event, rows }]),
       database.domainOutboxEvent.updateMany({
         where: this.fenced(event),
         data: {
@@ -757,15 +1822,44 @@ class NotificationPipelineService {
         },
       }),
     ]);
+  }
 
-    // Debug, not info: a web-only user has no push device on every event.
-    // LOG_LEVEL=debug answers "why did she never get it?" (OBS-08).
-    if (suppressed.length > 0) {
+  /**
+   * The deliveries of one or more expanded events, in one INSERT. Every row
+   * carries the event's company (plano-escala F3-09): the fair claim of the
+   * lanes takes them company by company. NULL for the platform's own
+   * events, the claim's "no company" bucket.
+   */
+  private createDeliveries(
+    expanded: ReadonlyArray<{ event: ClaimedEvent; rows: DeliveryRow[] }>,
+  ) {
+    return database.notificationDelivery.createMany({
+      data: expanded.flatMap(({ event, rows }) =>
+        rows.map((row) => ({
+          ...row,
+          id: deliveryIdFor(event, row, row.channel),
+          business_id: event.businessId,
+        })),
+      ),
+      skipDuplicates: true,
+    });
+  }
+
+  /**
+   * Debug, not info: a web-only user has no push device on every event.
+   * LOG_LEVEL=debug answers "why did she never get it?" (OBS-08), and
+   * `actorLeftOut` "why did I not get my own?".
+   */
+  private logSuppressed({ expansion, suppressed }: ExpandedEvent): void {
+    const { event, actorLeftOut } = expansion;
+
+    if (suppressed.length > 0 || actorLeftOut) {
       log.debug(
         {
           outboxEventId: event.id,
           topic: event.topic,
           businessId: event.businessId,
+          ...(actorLeftOut && { actorLeftOut: event.actorId }),
           suppressed: suppressed.slice(0, SUPPRESSED_LOG_LIMIT),
           suppressedTotal: suppressed.length,
         },
@@ -861,14 +1955,14 @@ class NotificationPipelineService {
    * Public so a test can drive one cycle against a real database.
    *
    * Same contract as `runOutboxCycle`: a call that finds this lane's cycle
-   * running joins it and gets one more pass, instead of returning before
-   * the rows it was called for were claimed.
+   * running joins it and gets a claim of its own before the cycle ends,
+   * instead of returning before the rows it was called for were claimed.
    */
   public runDeliveryCycle(lane: DeliveryLane): Promise<void> {
     const inFlight = this.deliveryCycles[lane];
 
     if (inFlight) {
-      this.deliveryRerun[lane] = true;
+      this.lanePools[lane].rescan();
 
       return inFlight.catch(() => undefined);
     }
@@ -885,11 +1979,10 @@ class NotificationPipelineService {
   private async runDeliveryPasses(lane: DeliveryLane): Promise<void> {
     try {
       for (;;) {
-        this.deliveryRerun[lane] = false;
-
         await this.drainDeliveries(lane);
 
-        if (!this.deliveryRerun[lane] || this.stopping) break;
+        // A look asked for between the pool's last one and its end.
+        if (!this.lanePools[lane].rescanPending || this.stopping) break;
       }
     } finally {
       this.deliveryCycles[lane] = null;
@@ -897,60 +1990,317 @@ class NotificationPipelineService {
     }
   }
 
-  /** One pass over a lane: batches until a short one empties it. */
+  /**
+   * A lane's continuous pool (see lanePools).
+   *
+   * With a provider of the lane under a global cap (plano-escala F3-15a;
+   * provider-caps.ts), its rows are keyed by provider and at most this
+   * process's part of the cap are in flight; the claim leaves the
+   * provider's channels out while it is at its part and keeps no more of
+   * its rows than the part has room for, so a claimed row never waits for
+   * its provider with the lease running. Without one (the default), the
+   * pool of before, exactly.
+   */
+  private lanePool(lane: DeliveryLane): ContinuousPool<ClaimedDelivery> {
+    if (providerCaps.providersOf(lane).length > 0) {
+      return new ContinuousPool<ClaimedDelivery>({
+        slots: () => LANE_CONCURRENCY[lane],
+        maxPerClaim: DELIVERY_BATCH_SIZE,
+        perKey: {
+          limit: (provider) => providerCaps.limitOf(provider as Provider),
+          keyOf: (delivery) => providerOfChannel(delivery.channel) ?? undefined,
+        },
+        skipsBusyKeys: true,
+        claim: (limit, busyProviders, inFlight) =>
+          this.claimLaneRows(lane, limit, { busyProviders, inFlight }),
+        run: (delivery) => this.runClaimedDelivery(delivery),
+        giveBack: (delivery) => this.giveBackDelivery(delivery),
+        stopping: () => this.stopping,
+        onClaim: () =>
+          workerHeartbeat.progress(`notification-delivery-${lane}`),
+      });
+    }
+
+    return new ContinuousPool<ClaimedDelivery>({
+      slots: () => LANE_CONCURRENCY[lane],
+      maxPerClaim: DELIVERY_BATCH_SIZE,
+      claim: (limit) => this.claimLaneRows(lane, limit),
+      run: (delivery) => this.runClaimedDelivery(delivery),
+      giveBack: (delivery) => this.giveBackDelivery(delivery),
+      stopping: () => this.stopping,
+      onClaim: () => workerHeartbeat.progress(`notification-delivery-${lane}`),
+    });
+  }
+
+  /** One cycle of a lane's pool: until nothing is due nor in flight. */
   private async drainDeliveries(lane: DeliveryLane): Promise<void> {
     const beatName = `notification-delivery-${lane}`;
 
     workerHeartbeat.beginCycle(beatName);
 
     try {
-      // Drain: a full batch means there is probably more behind it.
-      while (!this.stopping) {
-        const deliveries = await this.claimDeliveries(lane);
-
-        workerHeartbeat.progress(beatName);
-
-        if (deliveries.length === 0) return;
-
-        const events = await database.domainOutboxEvent.findMany({
-          where: { id: { in: deliveries.map((d) => d.outboxEventId) } },
-        });
-
-        const eventsById = new Map(events.map((event) => [event.id, event]));
-
-        const recipientCache: RecipientCache = new Map();
-
-        for (const delivery of deliveries) {
-          delivery.recipientCache = recipientCache;
-          delivery.event = eventsById.get(delivery.outboxEventId);
-        }
-
-        // Bounded concurrency instead of one-at-a-time: a batch used to
-        // cost the SUM of every provider round-trip. A shared cursor (rather
-        // than fixed slices) keeps every worker busy when the durations are
-        // uneven, which across channels they always are.
-        let cursor = 0;
-
-        const worker = async (): Promise<void> => {
-          while (cursor < deliveries.length) {
-            const delivery = deliveries[cursor++];
-
-            await this.runOneDelivery(delivery, eventsById);
-          }
-        };
-
-        await Promise.all(
-          Array.from(
-            { length: Math.min(DELIVERY_CONCURRENCY, deliveries.length) },
-            worker,
-          ),
-        );
-
-        if (deliveries.length < DELIVERY_BATCH_SIZE) break;
-      }
+      await this.lanePools[lane].drain();
     } finally {
       workerHeartbeat.endCycle(beatName);
     }
+  }
+
+  /**
+   * Claims up to `limit` rows of a lane and reads their events in one query,
+   * the rows of the claim sharing one recipient cache.
+   */
+  private async claimLaneRows(
+    lane: DeliveryLane,
+    limit: number,
+    caps?: {
+      busyProviders: ReadonlySet<string>;
+      inFlight: ReadonlyMap<string, number>;
+    },
+  ): Promise<ClaimedDelivery[]> {
+    const deliveries = caps
+      ? await this.claimWithinProviderCaps(lane, limit, caps)
+      : await this.claimDeliveries(lane, limit);
+
+    return this.withEvents(deliveries);
+  }
+
+  /** Reads the claimed rows' events in one query; one recipient cache. */
+  private async withEvents(
+    deliveries: ClaimedDelivery[],
+  ): Promise<ClaimedDelivery[]> {
+    if (deliveries.length === 0) return deliveries;
+
+    const events = await database.domainOutboxEvent.findMany({
+      where: { id: { in: deliveries.map((d) => d.outboxEventId) } },
+    });
+
+    const eventsById = new Map(events.map((event) => [event.id, event]));
+
+    const recipientCache: RecipientCache = new Map();
+
+    for (const delivery of deliveries) {
+      delivery.recipientCache = recipientCache;
+      delivery.event = eventsById.get(delivery.outboxEventId);
+    }
+
+    return deliveries;
+  }
+
+  /**
+   * What the lane's pool runs for a row it claimed: the row alone, or,
+   * for a push row with PUSH_BATCH_SIZE of 2 or more, the row and the push
+   * group it gathers (runPushGroup).
+   */
+  private runClaimedDelivery(delivery: ClaimedDelivery): Promise<void> {
+    if (delivery.channel === NotificationChannel.PUSH && pushBatchSize() > 1) {
+      return this.runPushGroup(delivery);
+    }
+
+    return this.runOneDelivery(delivery);
+  }
+
+  /**
+   * A push row and the due push rows it claims to go with it, in one call
+   * to Expo (plano-escala U-06).
+   *
+   * The pool claims only for its free slots, so with one call per row a
+   * slot carried one push per round trip to Expo, however long the queue
+   * behind it. A push row whose claim came back full (a backlog) claims
+   * up to PUSH_BATCH_SIZE − 1 more due push rows of its lane, for the slot
+   * it already holds. Every row is its own delivery (runOneDelivery: its
+   * checks, its render, its devices, its backstop and its fenced
+   * settling), and only the send is shared, through the gate: one call of
+   * up to 100 messages, each row getting back the tickets at its own
+   * positions (sendExpoPushBatch).
+   *
+   * The rows take one database turn at a time (push-group-turn.ts): each
+   * does its reads holding it, lets it go while it waits on the call, and
+   * takes it back to settle. All at once, a group of 20 in each of the
+   * lane's 5 slots was 100 deliveries on the pool of 10, behind which the
+   * HTTP requests and the other lanes waited; with the turn, the group
+   * costs the pool what its slot does, as the boot's headroom check
+   * (queue-config.ts) counts it. A row waits for its first turn before its
+   * backstop starts, so the wait never counts against it.
+   *
+   * The extra rows are claimed only for this start and never wait for a
+   * slot, so the lease holds as for any row (their turns add milliseconds
+   * of reads per row, far inside it), and a stop has none of them to hand
+   * back: once the process stops, no group claims more, and the group in
+   * flight ends as any row in flight does. Under the providers' global cap
+   * (F3-15a), the group is the one call its first row's slot stands for.
+   */
+  private async runPushGroup(first: ClaimedDelivery): Promise<void> {
+    let companions: ClaimedDelivery[] = [];
+
+    if (first.claimedInFull && !this.stopping) {
+      let claimed: ClaimedDelivery[] = [];
+
+      try {
+        claimed = await this.claimDeliveries(
+          PUSH_LANE,
+          pushBatchSize() - 1,
+          PUSH_LANE_OTHER_CHANNELS,
+        );
+
+        companions = await this.withEvents(claimed);
+
+        if (companions.length > 0) {
+          workerHeartbeat.progress(`notification-delivery-${PUSH_LANE}`);
+        }
+      } catch (error) {
+        // Rows claimed without their events cannot run (a row without its
+        // event fails for good): the claim is undone, as on a stop.
+        await Promise.allSettled(
+          claimed.map((row) => this.giveBackDelivery(row)),
+        );
+
+        // The row still goes, alone: its claim is the pool's.
+        log.warn(
+          { ...this.deliveryLogFields(first), err: error },
+          "push group claim failed; the push goes alone",
+        );
+      }
+    }
+
+    const group = [first, ...companions];
+
+    // Only push rows meet at the gate; the claim takes no other channel.
+    const pushRows = group.filter(
+      (row) => row.channel === NotificationChannel.PUSH,
+    );
+
+    const gate = new PushBatchGate(
+      pushRows.map((row) => row.id),
+      (requests) => this.sendPushBatch(requests),
+      PUSH_BATCH_GATE_WAIT_MS,
+    );
+
+    const turn = new PushGroupTurn();
+
+    for (const row of pushRows) row.pushGate = gate;
+    for (const row of group) row.pushTurn = turn;
+
+    await Promise.all(
+      group.map(async (row) => {
+        try {
+          await turn.enter(row.id);
+          await this.runOneDelivery(row);
+        } finally {
+          // However the row ended, its backstop included: the turn goes
+          // on, and the call stops waiting for it.
+          turn.close(row.id);
+          gate.leave(row.id);
+        }
+      }),
+    );
+  }
+
+  /**
+   * One call of a push group's requests (sendExpoPushBatch, which never
+   * rejects), with one line when Expo refused a call: each row logs its
+   * own failure, but a 5xx row goes back without a line of its own.
+   */
+  private async sendPushBatch(
+    requests: PushRequest[],
+  ): Promise<PushBatchOutcome[]> {
+    const outcomes = await sendExpoPushBatch(requests);
+
+    const failed = outcomes.filter(
+      (outcome): outcome is Extract<PushBatchOutcome, { ok: false }> =>
+        !outcome.ok,
+    );
+
+    if (failed.length > 0) {
+      log.warn(
+        {
+          deliveries: requests.length,
+          failed: failed.length,
+          httpStatus: [
+            ...new Set(failed.map((outcome) => outcome.error.httpStatus)),
+          ],
+          error: failed[0].error.message,
+        },
+        "Expo refused a push batch call; each delivery records its own outcome",
+      );
+    }
+
+    return outcomes;
+  }
+
+  /**
+   * A lane's claim under the providers' global caps (plano-escala F3-15a):
+   * the divisor read again (cached by the heartbeat reader), the channels
+   * of the providers at this process's part left out, and, of each capped
+   * provider, only the rows its part has room for kept; the rest go back
+   * at once, as unclaimed (giveBackDelivery: the claim was not an attempt).
+   * A row kept is a row that starts now: none waits for its provider with
+   * the lease running.
+   */
+  private async claimWithinProviderCaps(
+    lane: DeliveryLane,
+    limit: number,
+    caps: {
+      busyProviders: ReadonlySet<string>;
+      inFlight: ReadonlyMap<string, number>;
+    },
+  ): Promise<ClaimedDelivery[]> {
+    await providerCaps.refresh(lane);
+
+    const room = new Map<Provider, number>();
+
+    for (const provider of providerCaps.providersOf(lane)) {
+      room.set(
+        provider,
+        caps.busyProviders.has(provider)
+          ? 0
+          : providerCaps.limitOf(provider) - (caps.inFlight.get(provider) ?? 0),
+      );
+    }
+
+    const full = [...room]
+      .filter(([, left]) => left <= 0)
+      .flatMap(([provider]) => channelsOf(provider));
+
+    const claimed = await this.claimDeliveries(lane, limit, full);
+
+    const kept: ClaimedDelivery[] = [];
+    const over: ClaimedDelivery[] = [];
+
+    for (const delivery of claimed) {
+      const provider = providerOfChannel(delivery.channel);
+      const left = provider ? room.get(provider) : undefined;
+
+      if (left === undefined) {
+        kept.push(delivery);
+      } else if (left > 0) {
+        room.set(provider!, left - 1);
+        kept.push(delivery);
+      } else {
+        over.push(delivery);
+      }
+    }
+
+    if (over.length > 0) {
+      await Promise.allSettled(
+        over.map((delivery) => this.giveBackDelivery(delivery)),
+      );
+    }
+
+    return kept;
+  }
+
+  /**
+   * A row claimed and never started, handed back on shutdown: the claim was
+   * not an attempt. Fenced, and due now, so the next replica takes it
+   * without waiting out the 180 s lease.
+   */
+  private async giveBackDelivery(delivery: ClaimedDelivery): Promise<void> {
+    await this.settleDelivery(delivery, {
+      status: "PENDING",
+      attempts: delivery.attempts - 1,
+      availableAt: new Date(),
+      leaseExpiresAt: null,
+    });
   }
 
   /**
@@ -971,15 +2321,12 @@ class NotificationPipelineService {
    * and another replica took the row, the late write matches nothing. A call
    * that never settles is reclaimed when the lease expires, as before.
    */
-  private async runOneDelivery(
-    delivery: ClaimedDelivery,
-    eventsById: Map<string, ClaimedEventRow>,
-  ): Promise<void> {
+  private async runOneDelivery(delivery: ClaimedDelivery): Promise<void> {
     let providerMessageId: string | undefined;
     let work: Promise<string | undefined> | undefined;
 
     try {
-      const event = eventsById.get(delivery.outboxEventId);
+      const event = delivery.event;
 
       if (!event) {
         throw new NonRetryableDeliveryError("Outbox event no longer exists");
@@ -1002,6 +2349,22 @@ class NotificationPipelineService {
           { ...this.deliveryLogFields(delivery), error: error.message },
           "notification delivery overran its budget; its outcome is recorded when the provider answers",
         );
+
+        // The call is still open at the provider: it keeps its place in
+        // the provider's global cap (F3-15a) until it settles, not only
+        // until this slot frees, or a slow provider would get a new call
+        // for each one it has not answered.
+        const provider = providerOfChannel(delivery.channel);
+
+        if (provider) {
+          providerCaps.holdUntilSettled(
+            provider,
+            work,
+            (delivery.claimStartedAtMs ?? Date.now()) +
+              DELIVERY_LEASE_SECONDS * 1000 -
+              Date.now(),
+          );
+        }
 
         void work
           .then(
@@ -1142,56 +2505,57 @@ class NotificationPipelineService {
    */
   private async claimDeliveries(
     lane: DeliveryLane,
+    limit: number = DELIVERY_BATCH_SIZE,
+    notChannels: readonly string[] = [],
   ): Promise<ClaimedDelivery[]> {
-    // Literals, not parameters: with bound values the planner cannot prove
-    // a partial index predicate in a generic plan and falls back to a scan.
-    // Safe to inline — the list is DELIVERY_LANES, constants of this module,
-    // never input.
-    const channels = Prisma.raw(
-      DELIVERY_LANES[lane].map((channel) => `'${channel}'`).join(", "),
-    );
+    const floor = await claimFloors.predicate("deliveries");
 
-    // A row whose last allowed attempt died with the process is closed, with
-    // the reason, instead of being claimed again — see DELIVERY_MAX_ATTEMPTS.
-    await database.$executeRaw`
-      UPDATE "notification_delivery" SET
-        "status" = 'FAILED',
-        "leaseExpiresAt" = NULL,
-        "lastError" = 'O processo foi interrompido durante a última tentativa permitida.'
-      WHERE "status" = 'PROCESSING'
-        AND "channel" IN (${channels})
-        AND "availableAt" <= now()
-        AND "leaseExpiresAt" < now()
-        AND "attempts" >= ${DELIVERY_MAX_ATTEMPTS}
-    `;
-
+    // A row whose last allowed attempt died with the process is left out
+    // (attempts < DELIVERY_MAX_ATTEMPTS) and closed by the minute's sweep
+    // (closeExhausted, plano-escala F3-08). Closed here, before every claim,
+    // the UPDATE walked the lane's claim index — every due row, PENDING
+    // ones included — to find the few PROCESSING ones: a flood of due
+    // e-mails made each claim read the whole flood first.
     const claimStartedAtMs = Date.now();
 
-    // availableAt and leaseExpiresAt get the same expression in the same
-    // statement, so they are equal: now() does not move within a statement.
-    const claimed = await database.$queryRaw<ClaimedDelivery[]>`
-      UPDATE "notification_delivery" SET
-        "status" = 'PROCESSING',
-        "leaseExpiresAt" = now() + make_interval(secs => ${DELIVERY_LEASE_SECONDS}),
-        "availableAt" = now() + make_interval(secs => ${DELIVERY_LEASE_SECONDS}),
-        "attempts" = "attempts" + 1
-      WHERE "id" IN (
-        SELECT "id" FROM "notification_delivery"
-        WHERE "channel" IN (${channels})
-          AND "status" IN ('PENDING', 'PROCESSING')
-          AND "availableAt" <= now()
-          AND ("status" = 'PENDING'
-            OR ("leaseExpiresAt" < now()
-                AND "attempts" < ${DELIVERY_MAX_ATTEMPTS}))
-        ORDER BY "availableAt"
-        LIMIT ${DELIVERY_BATCH_SIZE}
-        FOR UPDATE SKIP LOCKED
-      )
-      RETURNING "id", "outboxEventId", "userId", "externalRecipientId", "channel", "attempts"
-    `;
+    // The fair claim (plano-escala F3-10), read on every claim: company by
+    // company from this lane's cursor, at most QUEUE_FAIR_ROWS_PER_TENANT
+    // of one company, the oldest due rows filling the rest. Off, the
+    // oldest due rows of the lane, as before.
+    if (env.QUEUE_FAIR_CLAIM_ENABLED) {
+      const claimed = await database.$queryRaw<
+        Array<ClaimedDelivery & { fairCursor?: string | null }>
+      >(
+        deliveryFairClaimSql(lane, {
+          cursor: this.fairCursors[lane],
+          limit,
+          rowsPerTenant: env.QUEUE_FAIR_ROWS_PER_TENANT,
+          maxTenants: env.QUEUE_FAIR_MAX_TENANTS,
+          floor,
+          rowFloor: await claimFloors.predicate("deliveries", "row"),
+          notChannels,
+        }),
+      );
 
-    for (const delivery of claimed)
+      this.fairCursors[lane] = nextFairCursor(claimed, this.fairCursors[lane]);
+
+      for (const delivery of claimed) {
+        delete delivery.fairCursor;
+        delivery.claimStartedAtMs = claimStartedAtMs;
+        delivery.claimedInFull = claimed.length >= limit;
+      }
+
+      return claimed;
+    }
+
+    const claimed = await database.$queryRaw<ClaimedDelivery[]>(
+      deliveryClaimSql(lane, floor, limit, notChannels),
+    );
+
+    for (const delivery of claimed) {
       delivery.claimStartedAtMs = claimStartedAtMs;
+      delivery.claimedInFull = claimed.length >= limit;
+    }
 
     return claimed;
   }
@@ -1240,7 +2604,7 @@ class NotificationPipelineService {
       case NotificationChannel.WHATSAPP:
         return this.deliverWhatsApp(delivery, event.payload, policy);
       case NotificationChannel.PUSH:
-        return this.deliverPush(delivery, event.payload, policy);
+        return this.deliverPush(delivery, event.payload, policy, event);
       case NotificationChannel.ACTIVITY:
         return this.deliverActivity(delivery, event.payload, policy, event);
       default:
@@ -1297,13 +2661,15 @@ class NotificationPipelineService {
    * System-tray push via Expo. A push-only topic (chat) renders through
    * `renderPush`; every other topic reuses the in-app render (push IS the
    * in-app message, on the phone's tray) and its data payload tells the app
-   * to open the notifications screen on tap. Dead tokens reported by the
-   * provider are pruned so they stop generating work.
+   * to open the notifications screen on tap — and, since wave 3, which item
+   * and whose (push-data.ts). Dead tokens reported by the provider are
+   * pruned so they stop generating work.
    */
   private async deliverPush(
     delivery: ClaimedDelivery,
     payload: AnyPayload,
     policy: AnyPolicy,
+    event: { businessId: string | null },
   ): Promise<undefined> {
     if (!policy.renderPush && !policy.renderInApp) {
       throw new NonRetryableDeliveryError(
@@ -1318,6 +2684,10 @@ class NotificationPipelineService {
 
     const recipient = { id: user.id, role: user.role, driverId: user.driverId };
 
+    // The same company the inbox row stores (deliverInApp), so the app can
+    // compare a tray notice with the row and with its session.
+    const owner = { userId: user.id, businessId: event.businessId };
+
     const content = policy.renderPush
       ? (() => {
           const rendered = policy.renderPush!(payload, recipient);
@@ -1325,7 +2695,10 @@ class NotificationPipelineService {
           return {
             title: rendered.title,
             body: rendered.body,
-            data: rendered.data ?? { url: "/notifications" },
+            data: withPushOwner(
+              rendered.data ?? { url: "/notifications" },
+              owner,
+            ),
           };
         })()
       : (() => {
@@ -1338,11 +2711,7 @@ class NotificationPipelineService {
           return {
             title: rendered.title,
             body: rendered.message,
-            data: {
-              url: "/notifications",
-              link: rendered.link ?? null,
-              type: rendered.type,
-            },
+            data: inAppPushData(rendered, owner),
           };
         })();
 
@@ -1356,25 +2725,41 @@ class NotificationPipelineService {
       );
     }
 
-    const { deliveredAny, invalidTokens, tickets } = await sendExpoPushMessages(
-      devices.map((device) => device.token),
+    // One notification per device is what Expo counts (plano-escala F3-15c).
+    await this.paceProvider("push", devices.length);
+
+    const request: PushRequest = {
+      tokens: devices.map((device) => device.token),
       // The delivery id rides along: the app can tell a repeated tray message
       // apart, and support can trace one back. It is also the collapse key,
       // so a redelivery of this same row replaces the tray message instead
       // of showing it twice (push-provider.ts).
-      {
+      content: {
         ...content,
         data: { ...content.data, deliveryId: delivery.id },
         collapseKey: delivery.id,
+        // The topic's validity (D41): a stale "rota liberada" is worse than
+        // none on a phone that comes back after days.
+        ttlSeconds: policy.pushTtlSeconds,
       },
       // Collapsing in transit is iPhone-only: on Android it would cap what
       // FCM keeps for an offline phone at four messages.
-      new Set(
+      iosTokens: new Set(
         devices
           .filter((device) => device.platform === "ios")
           .map((device) => device.token),
       ),
-    );
+    };
+
+    // In a push group (U-06), the call is the group's and the tickets are
+    // this row's own; alone, the call of before.
+    const { deliveredAny, invalidTokens, tickets } = delivery.pushGate
+      ? await this.sendInPushGroup(delivery, delivery.pushGate, request)
+      : await sendExpoPushMessages(
+          request.tokens,
+          request.content,
+          request.iosTokens,
+        );
 
     if (invalidTokens.length > 0) {
       await database.pushDeviceToken
@@ -1409,6 +2794,52 @@ class NotificationPipelineService {
     return undefined;
   }
 
+  /**
+   * This row's share of its push group's call (U-06). A 5xx is Expo
+   * failing the whole call before sending any of it: the row goes back to
+   * the queue without spending an attempt, after the retry schedule's wait
+   * for its age (pushOutageDelayMs), so one Expo incident does not exhaust
+   * every row of a group at once. Past the schedule, and on any other
+   * failure, the row's failure is what it always was.
+   */
+  private async sendInPushGroup(
+    delivery: ClaimedDelivery,
+    gate: PushBatchGate,
+    request: PushRequest,
+  ): Promise<PushSendResult> {
+    // The group's turn goes on while this row waits on the call: the
+    // others still do their reads, and the call gathers every row.
+    delivery.pushTurn?.exit(delivery.id);
+
+    try {
+      return await gate.submit(delivery.id, request);
+    } catch (error) {
+      const httpStatus = (error as PushCallError | null)?.httpStatus;
+
+      if (typeof httpStatus !== "number" || httpStatus < 500) throw error;
+
+      const createdAt = delivery.event?.created_at;
+      const waitMs = pushOutageDelayMs(
+        createdAt ? Date.now() - new Date(createdAt).getTime() : 0,
+      );
+
+      if (waitMs === null) throw error;
+
+      throw new DeferredDeliveryError(
+        formatDeliveryError((error as Error).message, {
+          provider: "push",
+          httpStatus,
+        }),
+        new Date(Date.now() + withRetryJitter(waitMs)),
+        "aguardando o Expo voltar, sem gastar tentativa",
+      );
+    } finally {
+      // Back in line for the settling writes (at once for a row its
+      // backstop already ended: push-group-turn.ts).
+      await delivery.pushTurn?.enter(delivery.id);
+    }
+  }
+
   private async deliverInApp(
     delivery: ClaimedDelivery,
     payload: AnyPayload,
@@ -1433,6 +2864,10 @@ class NotificationPipelineService {
     try {
       const notification = await database.notification.create({
         data: {
+          // The delivery's id (plano-escala F5-14): a retried IN_APP hits
+          // the primary key, with or without the unique on deliveryId,
+          // which goes when the bell is partitioned by month (F5-15).
+          id: delivery.id,
           userId,
           type: rendered.type,
           title: rendered.title,
@@ -1456,10 +2891,13 @@ class NotificationPipelineService {
         created_at: notification.created_at,
       });
     } catch (error) {
-      // Unique deliveryId hit: a previous attempt already created the row
-      // (crash before the DELIVERED mark). Done — and no duplicate emit. If
-      // that attempt died before ITS emit, the toast is lost: the emit is
-      // at-most-once by design, the bell is the truth (ADR 0003).
+      // The row is there (primary key or unique deliveryId): a previous
+      // attempt already created it (crash before the DELIVERED mark). Done —
+      // and no duplicate emit. If that attempt died before ITS emit, the
+      // toast is lost: the emit is at-most-once by design, the bell is the
+      // truth (ADR 0003). A row the image before F5-14 wrote under a random
+      // id is caught by the unique deliveryId, which stays until F5-15 —
+      // releases after any delivery of that image stopped being retried.
       if (
         error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === "P2002"
@@ -1501,6 +2939,15 @@ class NotificationPipelineService {
     );
 
     this.assertStillReachable(user);
+
+    // Expansion never queues an EMAIL row for a user without an address
+    // (hasEmail); this is the e-mail removed after the row was queued, the
+    // same as a WhatsApp phone removed in between.
+    if (!user.email) {
+      throw new NonRetryableDeliveryError(
+        "Recipient no longer has an e-mail address",
+      );
+    }
 
     const rendered = policy.renderInApp(
       payload,
@@ -1552,6 +2999,9 @@ class NotificationPipelineService {
     mailProvider: IMailProvider,
     message: Parameters<IMailProvider["sendMail"]>[0],
   ): Promise<string | undefined> {
+    // Both e-mail paths go through here: one request each (F3-15c).
+    await this.paceProvider("email");
+
     try {
       const sent = await mailProvider.sendMail(message);
 
@@ -1564,6 +3014,7 @@ class NotificationPipelineService {
           provider: "email",
           smtpCode: error.code,
           smtpReply: error.responseCode,
+          ...(error.throttled && { throttled: true }),
         };
 
         if (!error.retryable) {
@@ -1605,18 +3056,211 @@ class NotificationPipelineService {
       );
     }
 
+    // The card is the master key (pipeline-rules.ts): a row queued before
+    // the person switched it off is not sent either. The number stays
+    // stored after that, so the phone check above lets it through.
+    if (!user.whatsapp_notifications_enabled) {
+      throw new NonRetryableDeliveryError("Recipient turned WhatsApp off");
+    }
+
+    const rendered = policy.renderWhatsApp(payload, {
+      id: user.id,
+      role: user.role,
+      driverId: user.driverId,
+    });
+
+    // Expansion asked the same render before creating this row; a null now
+    // is a payload that changed meaning in between — nothing to send.
+    if (!rendered) {
+      throw new NonRetryableDeliveryError(
+        "The WhatsApp render has nothing for this recipient",
+      );
+    }
+
+    // The approved template and its fitted parameters (whatsapp-templates.ts,
+    // B1). A render that does not match its template is a bug that fails the
+    // same way on every attempt, so it is not retried.
+    let template: { name: string; parameters: string[] };
+
+    try {
+      template = prepareInternalWhatsApp(rendered);
+    } catch (error) {
+      if (error instanceof WhatsAppTemplateMismatchError) {
+        throw new NonRetryableDeliveryError(error.message);
+      }
+
+      throw error;
+    }
+
+    // The platform's rate (F3-15c) before the company's quota: a message
+    // put off by the rate must not have spent a unit of the company's day.
+    await this.paceProvider("whatsapp");
+
+    // The company's daily quota, last: only a message that would be sent
+    // now counts (plano-escala F3-15b).
+    await this.takeWhatsAppQuota(delivery);
+
     const whatsAppProvider =
       container.resolve<IWhatsAppProvider>("WhatsAppProvider");
 
     const result = await whatsAppProvider.sendMessage({
       phoneNumber: user.whatsapp_phone,
-      message: policy.renderWhatsApp(payload),
+      template,
       // Comes back on Meta's status callbacks: every wamid of this delivery,
       // a resend after a crash included, lands in the receipts ledger.
       referenceId: delivery.id,
     });
 
     return this.whatsAppOutcome(result);
+  }
+
+  /**
+   * The provider's place in its rate (plano-escala F3-15c;
+   * provider-rate-bucket.ts), right before its call: with the rate off,
+   * nothing is read and nothing waits. A place within a second is kept and
+   * waited for here, in the slot; one further ahead sends the row back to
+   * the queue at that place, without spending an attempt
+   * (DeferredDeliveryError).
+   */
+  private async paceProvider(provider: Provider, cost = 1): Promise<void> {
+    const verdict = await providerRateBucket.take(provider, cost);
+
+    if (verdict.kind === "off") return;
+
+    if (verdict.kind === "go") {
+      if (verdict.waitMs > 0) {
+        await new Promise((done) => setTimeout(done, verdict.waitMs));
+      }
+
+      return;
+    }
+
+    throw new DeferredDeliveryError(
+      `Taxa de envio do provedor ${provider} no teto`,
+      new Date(Date.now() + Math.max(verdict.retryInMs, 1)),
+      verdict.local
+        ? "aguardando a vez na taxa do provedor (parte deste processo, Redis fora)"
+        : "aguardando a vez na taxa do provedor",
+    );
+  }
+
+  /**
+   * One message of the company's daily WhatsApp quota (plano-escala
+   * F3-15b; whatsapp-daily-quota.ts), right before the call to Meta. Past
+   * the quota the row waits for the company's next business day without
+   * spending an attempt (DeferredDeliveryError), in the order it was held
+   * (heldReleaseAt), and the admins are told, once that day. With the
+   * quota off, nothing is read.
+   */
+  private async takeWhatsAppQuota(delivery: ClaimedDelivery): Promise<void> {
+    const businessId = delivery.event?.businessId ?? null;
+    const verdict = await whatsAppDailyQuota.take(businessId);
+
+    if (verdict.allowed) {
+      delivery.whatsAppQuotaDay = verdict.day;
+      return;
+    }
+
+    await this.noticeWhatsAppQuota(businessId!, verdict).catch((error) => {
+      log.error(
+        { ...this.deliveryLogFields(delivery), err: error },
+        "daily WhatsApp quota notice could not be published",
+      );
+    });
+
+    throw new DeferredDeliveryError(
+      `${WHATSAPP_QUOTA_HELD} (${verdict.limit} por dia)`,
+      await this.heldReleaseAt(delivery, businessId!, verdict.until),
+      `aguardando o próximo dia da empresa, ${verdict.until.toISOString()}`,
+    );
+  }
+
+  /**
+   * When a message the company's quota holds goes out (plano-escala
+   * F3-15b): one millisecond after the last one already held for the same
+   * day, or at the day's start for the first. Held all at the start of
+   * the day, they became due at one instant, and the claims, which order
+   * by availableAt alone (the lane's index has nothing after it), took
+   * them in no order: the next day's quota went to any of them, and an
+   * older message could be held again behind newer ones, against the
+   * notice that says they go out in the order they came. The held ones
+   * are told by their lastError (WHATSAPP_QUOTA_HELD), not by the window
+   * alone: a retry scheduled past midnight (backoffs reach 3 h) must not
+   * push the held messages behind it. One backward probe of the company's
+   * fair index, notification_delivery_business_external_idx; two messages
+   * held at the same instant may share a millisecond, the order they had
+   * anyway. A failed probe holds the message for the day's start, as
+   * before: the order is never worth a lost hold.
+   */
+  private async heldReleaseAt(
+    delivery: ClaimedDelivery,
+    businessId: string,
+    dayStart: Date,
+  ): Promise<Date> {
+    try {
+      const [last] = await database.$queryRaw<Array<{ at: Date | null }>>`
+        SELECT max("availableAt") AS "at" FROM "notification_delivery"
+        WHERE "business_id" = ${businessId}
+          AND "status" IN ('PENDING', 'PROCESSING')
+          AND "channel" IN ('EMAIL', 'WHATSAPP')
+          AND "status" = 'PENDING'
+          AND "channel" = 'WHATSAPP'
+          AND "availableAt" >= ${dayStart}
+          AND "availableAt" < ${new Date(dayStart.getTime() + 86_400_000)}
+          AND "lastError" LIKE ${`${WHATSAPP_QUOTA_HELD}%`}
+      `;
+
+      return last?.at ? new Date(last.at.getTime() + 1) : dayStart;
+    } catch (error) {
+      log.warn(
+        { ...this.deliveryLogFields(delivery), err: error },
+        "the place of a message held by the WhatsApp quota could not be read; it waits for the day's start",
+      );
+
+      return dayStart;
+    }
+  }
+
+  /**
+   * The admins' notice of the day: one outbox event per company and
+   * business day, its key the dedupe. A second message held the same day
+   * meets the key already written and publishes nothing.
+   */
+  private async noticeWhatsAppQuota(
+    businessId: string,
+    verdict: Extract<WhatsAppQuotaVerdict, { allowed: false }>,
+  ): Promise<void> {
+    const outbox = new OutboxService();
+    const resumesOn = shiftDateKey(verdict.day, 1);
+
+    try {
+      await database.$transaction(async (tx) => {
+        await outbox.publish(tx, {
+          topic: "whatsapp-quota.reached",
+          aggregateType: "business",
+          aggregateId: businessId,
+          businessId,
+          actorId: null,
+          payload: {
+            businessId,
+            day: verdict.day,
+            limit: verdict.limit,
+            resumesOn,
+          },
+          eventKey: `whatsapp-quota.reached:${businessId}:${verdict.day}`,
+        });
+      });
+    } catch (error) {
+      // Already told today: the day's key is taken.
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === "P2002"
+      ) {
+        return;
+      }
+
+      throw error;
+    }
   }
 
   /**
@@ -1663,11 +3307,13 @@ class NotificationPipelineService {
    *
    * Three things differ from the internal path and each of them is the point:
    *
-   *  - the WORDS are the company's, from their own template, not ours;
+   *  - the WORDS are the company's on the e-mail, from their own template;
+   *    on WhatsApp they are the moment's fixed template approved by Meta
+   *    (plan of 02/11/2026, B2), with the carrier's name in it;
    *  - the LINK is their tracking page, not a dashboard they cannot open;
-   *  - a missing template is a DECISION. A carrier that never wrote the
-   *    "saiu para entrega" message does not want one sent, so the delivery is
-   *    dropped as non-retryable rather than failing forever.
+   *  - a missing or switched-off row is a DECISION. A carrier that turned
+   *    the "saiu para entrega" message off does not want one sent, so the
+   *    delivery is dropped as non-retryable rather than failing forever.
    */
   private async loadExternalMessage(
     delivery: ClaimedDelivery,
@@ -1699,9 +3345,7 @@ class NotificationPipelineService {
     });
 
     if (!external) {
-      throw new NonRetryableDeliveryError(
-        "External recipient no longer exists",
-      );
+      throw new RecipientGoneError("External recipient no longer exists");
     }
 
     // Asked to stop between the row being created and the worker reaching it.
@@ -1711,6 +3355,19 @@ class NotificationPipelineService {
       throw new NonRetryableDeliveryError(
         "External recipient opted out before this message was sent",
       );
+    }
+
+    // Or opted out from another delivery of this company since (D38): the
+    // phone or e-mail this channel writes to is suppressed. Asked on every
+    // attempt, so a message already queued is dropped the moment they click.
+    const blocked = await this.suppressedChannelsOf(external.businessId, {
+      email: channel === NotificationChannel.EMAIL ? external.email : null,
+      telephone:
+        channel === NotificationChannel.WHATSAPP ? external.telephone : null,
+    });
+
+    if (blocked.size > 0) {
+      throw new NonRetryableDeliveryError(SUPPRESSED_ADDRESS_REASON);
     }
 
     // The three customer messages are separate events on separate retry
@@ -1745,6 +3402,25 @@ class NotificationPipelineService {
     return { external, rendered };
   }
 
+  /**
+   * The channels a company's customers asked to stop at this contact's
+   * phone or e-mail (D38). Only customer messages ask; a company-less event
+   * has no customer to suppress.
+   */
+  private async suppressedChannelsOf(
+    businessId: string | null,
+    contact: { email: string | null; telephone: string | null },
+  ): Promise<Set<"EMAIL" | "WHATSAPP">> {
+    if (!businessId) return new Set();
+
+    return container
+      .resolve<IExternalRecipientRepository>("ExternalRecipientRepository")
+      .suppressedChannels(businessId, {
+        email: contact.email,
+        telephone: contact.telephone,
+      });
+  }
+
   private async deliverExternalEmail(
     delivery: ClaimedDelivery,
     payload: AnyPayload,
@@ -1763,6 +3439,16 @@ class NotificationPipelineService {
       );
     }
 
+    // The valid addresses only, never the stored text: what reaches the
+    // transport's address parser is a list this API checked.
+    const addresses = readRecipientEmails(external.email).addresses;
+
+    if (addresses.length === 0) {
+      throw new NonRetryableDeliveryError(
+        "External recipient has no valid e-mail address",
+      );
+    }
+
     const mailProvider = container.resolve<IMailProvider>("MailProvider");
 
     const templatePath = resolve(
@@ -1777,7 +3463,8 @@ class NotificationPipelineService {
     const [firstName] = external.name?.split(" ") ?? ["Cliente"];
 
     return this.sendMailClassified(mailProvider, {
-      to: external.email,
+      // Each one passed the e-mail check, so none holds a comma to split on.
+      to: addresses.join(", "),
       subject: rendered.subject,
       path: templatePath,
       referenceId: delivery.id,
@@ -1810,16 +3497,27 @@ class NotificationPipelineService {
       );
     }
 
+    // The moment's fixed template (B2). A render without it is a policy that
+    // never learnt the fixed templates — nothing a retry can fix, and never
+    // a reason to fall back to free text.
+    if (!rendered.whatsapp) {
+      throw new NonRetryableDeliveryError(
+        "Customer WhatsApp rendered without its approved template",
+      );
+    }
+
+    // The rate first, as above; the company's daily quota counts the
+    // customers' messages too.
+    await this.paceProvider("whatsapp");
+    await this.takeWhatsAppQuota(delivery);
+
     const whatsAppProvider =
       container.resolve<IWhatsAppProvider>("WhatsAppProvider");
 
     const result = await whatsAppProvider.sendMessage({
       phoneNumber: external.telephone,
-      message: rendered.body,
+      template: rendered.whatsapp,
       referenceId: delivery.id,
-      // The customer template, when configured: a spam report on a carrier's
-      // message must not pause the template every driver depends on.
-      audience: "customer",
     });
 
     return this.whatsAppOutcome(result);
@@ -1841,30 +3539,47 @@ class NotificationPipelineService {
 
     // Same dynamic import the old NotificationService used — the activity
     // module imports shared services, so a static import here would cycle.
-    const { CreateActivityUseCase } = await import(
-      "@/modules/activity/usecases/create-activity/create-activity-usecase"
-    );
+    const { CreateActivityUseCase } =
+      await import("@/modules/activity/usecases/create-activity/create-activity-usecase");
 
     const createActivityUseCase = container.resolve(CreateActivityUseCase);
+    const performedBy = this.requireUserId(delivery);
 
-    await createActivityUseCase.execute({
-      type: rendered.type,
-      action: rendered.action,
-      entityId: rendered.entityId,
-      description: rendered.description,
-      status: rendered.status,
-      performedBy: this.requireUserId(delivery),
-      businessId: event.businessId,
-      tenantName: rendered.tenantName,
-      visibilityLevel: rendered.visibilityLevel,
-      performingUserRole: rendered.performingUserRole,
+    try {
+      await createActivityUseCase.execute({
+        type: rendered.type,
+        action: rendered.action,
+        entityId: rendered.entityId,
+        description: rendered.description,
+        status: rendered.status,
+        performedBy,
+        businessId: event.businessId,
+        tenantName: rendered.tenantName,
+        visibilityLevel: rendered.visibilityLevel,
+        performingUserRole: rendered.performingUserRole,
 
-      // Makes this write idempotent, the same way IN_APP already is. The
-      // audit trail is our own table, so a duplicate here is entirely
-      // preventable — and a trail that double-counts is worse than one that
-      // is merely incomplete, because it is confidently wrong.
-      deliveryId: delivery.id,
-    });
+        // Makes this write idempotent, the same way IN_APP already is. The
+        // audit trail is our own table, so a duplicate here is entirely
+        // preventable — and a trail that double-counts is worse than one
+        // that is merely incomplete, because it is confidently wrong.
+        deliveryId: delivery.id,
+      });
+    } catch (error) {
+      // The trail's row names its actor by a foreign key, so an actor
+      // deleted since the event fails the write. Asked only on that path:
+      // the happy one pays no lookup. The cascade of today took this row
+      // with the actor; it closes the same way (F5-05, D54).
+      const actor = await database.user.findUnique({
+        where: { id: performedBy },
+        select: { id: true },
+      });
+
+      if (!actor) {
+        throw new RecipientGoneError("Activity actor no longer exists");
+      }
+
+      throw error;
+    }
 
     // No provider: the activity trail is our own table.
     return undefined;
@@ -1902,7 +3617,7 @@ class NotificationPipelineService {
       const user = await userRepository.findUserById(userId);
 
       if (!user) {
-        throw new NonRetryableDeliveryError("Recipient user no longer exists");
+        throw new RecipientGoneError("Recipient user no longer exists");
       }
 
       return user;
@@ -1924,15 +3639,25 @@ class NotificationPipelineService {
   ): Promise<void> {
     const message = error instanceof Error ? error.message : String(error);
 
-    if (error instanceof DeferredDeliveryError) {
-      // Not ours yet: back to the queue as it was, without spending one of
-      // its attempts, for a replica that knows this topic.
+    await this.giveBackWhatsAppQuota(delivery, error);
+
+    const deferred =
+      error instanceof DeferredDeliveryError
+        ? error
+        : await this.throttleDeferral(delivery, error);
+
+    if (deferred) {
+      // Not ours yet (or not today: the company's WhatsApp quota; or not
+      // now: the provider's rate): back to the queue as it was, without
+      // spending one of its attempts, for a replica that knows this topic,
+      // for the company's next day or for the provider's next place.
       await this.settleDelivery(delivery, {
         status: "PENDING",
         attempts: { decrement: 1 },
-        availableAt: new Date(Date.now() + UNKNOWN_TOPIC_RECHECK_MS),
+        availableAt:
+          deferred.until ?? new Date(Date.now() + UNKNOWN_TOPIC_RECHECK_MS),
         leaseExpiresAt: null,
-        lastError: `${message} (aguardando uma versão que conheça o tópico)`,
+        lastError: `${deferred.message} (${deferred.waiting})`,
       }).catch((updateError) => {
         log.error(
           { ...this.deliveryLogFields(delivery), err: updateError },
@@ -2002,6 +3727,96 @@ class NotificationPipelineService {
     });
   }
 
+  /**
+   * The unit of the company's daily WhatsApp quota this attempt took, given
+   * back when Meta refused the call for rate (130429 or a 429; F3-15b with
+   * F3-15c): Meta did not take it, and with the rate bucket on the row
+   * comes back without spending an attempt, so each retry while Meta
+   * throttles spent another unit of the company's day on nothing. Any
+   * other failure keeps its unit (whatsapp-daily-quota.ts). A unit that
+   * cannot be given back only logs: it is a unit spent, as before.
+   */
+  private async giveBackWhatsAppQuota(
+    delivery: ClaimedDelivery,
+    error: unknown,
+  ): Promise<void> {
+    const day = delivery.whatsAppQuotaDay;
+
+    if (day === undefined) return;
+
+    if (
+      throttledProviderOf(providerDetailOf(error, delivery.channel)) !==
+      "whatsapp"
+    ) {
+      return;
+    }
+
+    delivery.whatsAppQuotaDay = undefined;
+
+    await whatsAppDailyQuota
+      .giveBack(delivery.event?.businessId ?? null, day)
+      .catch((giveBackError) => {
+        log.warn(
+          { ...this.deliveryLogFields(delivery), err: giveBackError },
+          "the WhatsApp quota unit of a call Meta refused for rate could not be given back",
+        );
+      });
+  }
+
+  /**
+   * A provider's refusal for rate (plano-escala F3-15c): Meta's 130429 or
+   * 429, the e-mail provider's, Expo's 429. Always counted for the
+   * provider-throttled alert. With the provider's rate on, it holds the
+   * provider for every process (the bucket's TAT moves past the pause) and
+   * the row waits as long, without spending an attempt: the refusal was
+   * about the platform's pace, not this message. With the rate off, null:
+   * the failure is handled as before.
+   */
+  private async throttleDeferral(
+    delivery: ClaimedDelivery,
+    error: unknown,
+  ): Promise<DeferredDeliveryError | null> {
+    const detail = providerDetailOf(error, delivery.channel);
+    const provider = throttledProviderOf(detail);
+
+    if (!provider) return null;
+
+    countProviderThrottle(provider);
+
+    if (!providerRateBucket.enabled(provider)) return null;
+
+    const retryAfterMs =
+      error instanceof RetryableDeliveryError ? error.retryAfterMs : undefined;
+    const pauseMs = throttlePauseMs(retryAfterMs);
+
+    await providerRateBucket.penalize(provider, pauseMs);
+
+    // The row waits the provider's own Retry-After when it is longer than
+    // the bucket's pause (capped at an hour, as any Retry-After).
+    const waitMs = honourRetryAfter(pauseMs, retryAfterMs);
+    const stored = formatDeliveryError(
+      error instanceof Error ? error.message : String(error),
+      detail,
+    );
+
+    log.warn(
+      {
+        ...this.deliveryLogFields(delivery),
+        provider,
+        pauseMs,
+        nextAttemptAt: new Date(Date.now() + waitMs).toISOString(),
+        error: stored,
+      },
+      "provider refused for rate; the provider is held and the delivery waits without spending an attempt",
+    );
+
+    return new DeferredDeliveryError(
+      stored,
+      new Date(Date.now() + waitMs),
+      "aguardando a taxa do provedor, que pediu para diminuir o ritmo",
+    );
+  }
+
   /** The ids a delivery's log lines are found by (OBS-06). */
   private deliveryLogFields(delivery: ClaimedDelivery) {
     return {
@@ -2016,4 +3831,15 @@ class NotificationPipelineService {
   }
 }
 
-export { NotificationPipelineService };
+export {
+  NotificationPipelineService,
+  OUTBOX_EXPANSION_BATCH_MAX_ROWS,
+  OUTBOX_EXPANSION_BATCH_SIZE,
+  byCreation,
+  chunkByRows,
+  deliveryClaimSql,
+  deliveryFairClaimSql,
+  outboxClaimSql,
+  outboxFairClaimSql,
+  outboxPublishedBatchSql,
+};

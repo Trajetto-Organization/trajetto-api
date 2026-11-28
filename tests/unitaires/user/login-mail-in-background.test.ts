@@ -74,6 +74,7 @@ import { UpdateUserPasswordUseCase } from "@/modules/user/usecases/update-user-p
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
 import { InMemoryUserTokensRepository } from "@/modules/user/repositories/in-memory/in-memory-user-tokens-repository";
 import { InMemoryDriverRepository } from "@/modules/driver/repositories/in-memory/in-memory-driver-repository";
+import { InMemoryDriverTrustedDeviceRepository } from "@/modules/user/repositories/in-memory/in-memory-driver-trusted-device-repository";
 
 vi.mock("@/websocket", () => ({ sendSecurityEventToUser: vi.fn() }));
 
@@ -116,6 +117,7 @@ beforeEach(() => {
     users as never,
     tokens as never,
     new InMemoryDriverRepository() as never,
+    new InMemoryDriverTrustedDeviceRepository(),
   );
 });
 
@@ -179,7 +181,10 @@ describe("a password change", () => {
   it("answers before the notice is sent", async () => {
     await account();
 
-    const update = new UpdateUserPasswordUseCase(users as never);
+    const update = new UpdateUserPasswordUseCase(
+      users as never,
+      tokens as never,
+    );
 
     await update.execute({
       userId: "user-1",

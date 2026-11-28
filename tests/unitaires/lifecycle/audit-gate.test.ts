@@ -272,23 +272,41 @@ describe.skipIf(!hasShell("bash"))(
 );
 
 describe("the workflows run the gate", () => {
-  it.each([
-    ["ci.yml", "validate", "AUDIT_BASE: ${{ github.event.before }}"],
-    [
-      "deploy.yml",
-      "test",
-      "AUDIT_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}",
-    ],
-  ])("%s → %s compares with the base of the push or PR", (file, name, env) => {
-    const workflow = readWorkflow(file);
-    const job = workflow.jobs.find((each) => each.name === name)!;
+  it("in the validation, comparing with the base the caller's Changes picked", () => {
+    const workflow = readWorkflow("validate.yml");
+    const job = workflow.jobs.find((each) => each.name === "validate")!;
     const step = job.steps.find(
       (each) => each.name === "Audit production dependencies",
     )!;
 
     expect(step.run.trim()).toBe("bash .github/scripts/audit-gate.sh");
-    expect(step.text).toContain(env);
+    expect(step.text).toContain("AUDIT_BASE: ${{ inputs.audit_base }}");
     // The comparison needs the history.
     expect(job.text).toContain("fetch-depth: 0");
+  });
+
+  // On staging, the last build staging served (`staged-<7>`), not the
+  // previous push: a push whose run was cancelled or failed is in the next
+  // run's range, so a dependency change it brought is still audited for
+  // real (changes-script.test.ts runs the choice). On a work branch, where
+  // it left staging.
+  it.each([
+    ["ci.yml", "branch"],
+    ["staging.yml", "staging"],
+  ])("%s hands it the base its Changes job chose (%s)", (file, mode) => {
+    const workflow = readWorkflow(file);
+    const changes = workflow.jobs.find((each) => each.name === "changes")!;
+    const validate = workflow.jobs.find((each) => each.name === "validate")!;
+
+    expect(changes.text).toContain(
+      `run: bash .github/scripts/changes.sh ${mode}`,
+    );
+    expect(changes.text).toContain(
+      "audit_base: ${{ steps.changes.outputs.audit_base }}",
+    );
+    expect(changes.text).toContain("fetch-depth: 0");
+    expect(validate.text).toContain(
+      "audit_base: ${{ needs.changes.outputs.audit_base }}",
+    );
   });
 });

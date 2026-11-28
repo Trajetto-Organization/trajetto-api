@@ -9,7 +9,8 @@ a rule.
 
 HTTP contract v1 (docs/desenho/ia-local-implementacao.md, P1):
   GET  /health                        200 after the warm-up, 503 before it; both
-                                      carry "version"/"commit" (the build's commit)
+                                      carry "version"/"commit" (the build's commit);
+                                      the 200 also "digitsMaxSide" (0 = off)
   POST /v1/read?profile=receipt|digits
        body: the image bytes (Content-Type image/jpeg|png|webp)
        header: Authorization: Bearer <AI_TOKEN>
@@ -50,6 +51,17 @@ ENGINE_VERSION = "3.9.2"
 MEDIA_TYPES = {"image/jpeg", "image/png", "image/webp"}
 
 RETRY_AFTER_SECONDS = "5"
+
+# The longest side, in pixels, the digits profile reads (OCR_DIGITS_MAX_SIDE,
+# F3-30 of the scale plan). 0, the default, reads every photo as the app
+# recorded it (<= 1600 px). At 896 px the receipt's handwritten date fell
+# from 17/20 to 8/20 (scripts/ai-benchmark/results-2026-10.md), so the
+# receipt is never shrunk. A digits read at 896 px took 44% less CPU, but the
+# exact odometer fell from 14/15 to 11/15 (results-2026-11.md): it stays off
+# until the real gold set says otherwise. Below the floor a dropped digit
+# ("89" for "896") would leave the odometer unreadable.
+DIGITS_MAX_SIDE_FLOOR = 320
+DIGITS_MAX_SIDE_CEILING = 4096
 
 
 def profile_params():
@@ -205,8 +217,30 @@ def decode_image(data):
     return image, image.shape[1], image.shape[0]
 
 
-def lines_of(output):
-    """RapidOCR's output as JSON lines. Text never goes to the log."""
+def fit_within(image, max_side):
+    """
+    (image, scale): the image with its longest side at most `max_side`
+    pixels. As it is, with scale 1.0, when it already fits or `max_side` is 0;
+    otherwise a shrunken copy (INTER_AREA, OpenCV's filter for shrinking) and
+    the factor applied. Never enlarges.
+    """
+    height, width = image.shape[:2]
+    longest = max(width, height)
+    if max_side <= 0 or longest <= max_side:
+        return image, 1.0
+
+    import cv2
+
+    scale = max_side / longest
+    size = (max(1, round(width * scale)), max(1, round(height * scale)))
+    return cv2.resize(image, size, interpolation=cv2.INTER_AREA), scale
+
+
+def lines_of(output, scale=1.0):
+    """
+    RapidOCR's output as JSON lines, the boxes in the pixels of the photo that
+    was sent (divided by the `scale` it was read at). Text never goes to the log.
+    """
     lines = []
     texts = getattr(output, "txts", None)
     if texts is None:
@@ -217,7 +251,7 @@ def lines_of(output):
             {
                 "text": str(text),
                 "score": round(float(score), 4),
-                "box": [[round(float(x), 1), round(float(y), 1)] for x, y in box],
+                "box": [[round(float(x) / scale, 1), round(float(y) / scale, 1)] for x, y in box],
             }
         )
 
@@ -227,21 +261,28 @@ def lines_of(output):
 class OcrService:
     """State shared by every request thread: engines, gate, readiness."""
 
-    def __init__(self, token, engines=None, max_queue=2, queue_wait_s=10.0, log=None):
+    def __init__(self, token, engines=None, max_queue=2, queue_wait_s=10.0, log=None, digits_max_side=0):
         self.token = token.encode()
         self.engines = engines or {}
+        # Per profile; the receipt always reads the photo as sent.
+        self.max_side = {"receipt": 0, "digits": digits_max_side}
         self.gate = Gate(max_queue, queue_wait_s)
         self.ready = threading.Event()
         self.models_sha = models_fingerprint()
         self.log = log or (lambda record: print(json.dumps(record), flush=True))
 
     def warm_up(self, image_path=HERE / "warmup.jpg"):
-        """Both profiles load and read once: /health is honest after this."""
+        """Both profiles load and read once, the way a request reads: /health is honest after this."""
         data = Path(image_path).read_bytes()
         image, _, _ = decode_image(data)
         for profile in PROFILES:
-            self.engines[profile](image)
+            self.read(profile, image)
         self.ready.set()
+
+    def read(self, profile, image):
+        """The profile's lines for a decoded photo, read at the profile's size."""
+        scaled, scale = fit_within(image, self.max_side.get(profile, 0))
+        return lines_of(self.engines[profile](scaled), scale)
 
     def authorized(self, header):
         expected = b"Bearer " + self.token
@@ -316,6 +357,7 @@ def make_handler(service):
                     "engineVersion": ENGINE_VERSION,
                     "profiles": list(PROFILES),
                     "modelsSha": service.models_sha,
+                    "digitsMaxSide": service.max_side["digits"],
                     **BUILD,
                 },
             )
@@ -406,8 +448,7 @@ def make_handler(service):
 
                 infer_started = time.perf_counter()
                 try:
-                    output = service.engines[profile](image)
-                    lines = lines_of(output)
+                    lines = service.read(profile, image)
                 except Exception:  # the engine's message may quote the input
                     refuse(500, "engine_error", profile=profile, bytes=length)
                     return
@@ -449,14 +490,22 @@ def serve(service, host="0.0.0.0", port=8080):
     return server
 
 
-def env_int(name, default, minimum, maximum):
-    raw = os.environ.get(name, "")
+def env_int(name, default, minimum, maximum, environ=os.environ):
+    raw = environ.get(name, "")
     try:
         value = int(raw) if raw.strip() else default
     except ValueError:
         sys.exit(f"{name} deve ser um inteiro")
     if not minimum <= value <= maximum:
         sys.exit(f"{name} fora do intervalo {minimum}..{maximum}")
+    return value
+
+
+def digits_max_side(environ=os.environ):
+    """OCR_DIGITS_MAX_SIDE: 0 (off, the default) or a side between the floor and the ceiling."""
+    value = env_int("OCR_DIGITS_MAX_SIDE", 0, 0, DIGITS_MAX_SIDE_CEILING, environ)
+    if 0 < value < DIGITS_MAX_SIDE_FLOOR:
+        sys.exit(f"OCR_DIGITS_MAX_SIDE deve ser 0 (desligado) ou de {DIGITS_MAX_SIDE_FLOOR} a {DIGITS_MAX_SIDE_CEILING}")
     return value
 
 
@@ -471,13 +520,20 @@ def main():
     max_queue = env_int("AI_MAX_QUEUE", 2, 0, 32)
     queue_wait_ms = env_int("AI_QUEUE_WAIT_MS", 10_000, 100, 60_000)
     port = env_int("PORT", 8080, 1, 65535)
+    digits_side = digits_max_side()
 
     # PID 1 in the container: without a handler SIGTERM is ignored and every
     # stop waits for the SIGKILL. Nothing to drain: the API re-queues.
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 
     engines = {profile: build_engine(profile, threads) for profile in PROFILES}
-    service = OcrService(token, engines, max_queue=max_queue, queue_wait_s=queue_wait_ms / 1000)
+    service = OcrService(
+        token,
+        engines,
+        max_queue=max_queue,
+        queue_wait_s=queue_wait_ms / 1000,
+        digits_max_side=digits_side,
+    )
 
     # Listening before the warm-up: the healthcheck sees 503 instead of a
     # refused connection, and a read that arrives early gets "warming_up".
@@ -491,6 +547,7 @@ def main():
                 "warmupMs": round((time.monotonic() - started) * 1000),
                 "threads": threads,
                 "maxQueue": max_queue,
+                "digitsMaxSide": digits_side,
                 "modelsSha": service.models_sha,
                 "version": BUILD["version"],
             }

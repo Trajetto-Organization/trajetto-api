@@ -186,11 +186,7 @@ async function seedVehicle(
 }
 
 type Status =
-  | "PLANNED"
-  | "RELEASED"
-  | "IN_PROGRESS"
-  | "COMPLETED"
-  | "CANCELLED";
+  "PLANNED" | "RELEASED" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED";
 
 /**
  * Thirteen routes, more than one page of ten, so a sort or a filter that only
@@ -763,5 +759,100 @@ describe("search by the id the board shows (spec §5)", () => {
     const theirs = await board(`search=${TAIL_4}`, tokens.otherAdmin);
 
     expect(theirs.rows.map((row) => row.id)).toEqual([FOREIGN_SAME_TAIL]);
+  });
+});
+
+/**
+ * Plan of 02/11/2026, K14: a board page used to carry every stop of every
+ * route with its delivery — up to twenty routes of two hundred stops. A row
+ * now carries its stops counted by status, which is all the board's progress
+ * column and blockers read; the deliveries stay on the detail. The bare
+ * `stops` list (id and status) is a one-release bridge for the web in the
+ * field.
+ */
+describe("the row's shape (K14)", () => {
+  const SHIPPER = "018fe200-0000-7000-8000-0000000000f1";
+  let routeId = "";
+
+  beforeAll(async () => {
+    await prisma.shipper.create({
+      data: { id: SHIPPER, name: "Embarcador da lista", businessId: CARRIER },
+    });
+
+    routeId = (
+      await prisma.route.findFirstOrThrow({
+        where: { businessId: CARRIER, code: 13 },
+      })
+    ).id;
+
+    const statuses = ["COMPLETED", "FAILED", "PENDING", "PENDING"] as const;
+
+    for (const [index, status] of statuses.entries()) {
+      const delivery = await prisma.delivery.create({
+        data: {
+          recipient_name: `Cliente da lista ${index}`,
+          city: "São Paulo",
+          uf: "SP",
+          street: "Rua da Lista",
+          businessId: CARRIER,
+          shipperId: SHIPPER,
+          status: status === "PENDING" ? "IN_TRANSIT" : "DELIVERED",
+        },
+      });
+
+      await prisma.routeStop.create({
+        data: {
+          routeId,
+          deliveryId: delivery.id,
+          sequence: (index + 1) * 10,
+          status,
+        },
+      });
+    }
+  });
+
+  it("counts the stops by status and carries no delivery", async () => {
+    const { status, rows, body } = await board("search=Rota%2013");
+
+    expect(status, body).toBe(200);
+
+    const row = rows.find((entry) => entry.id === routeId) as unknown as {
+      stopCounts: Record<string, number>;
+      stops: Array<Record<string, unknown>>;
+    };
+
+    expect(row.stopCounts).toEqual({
+      PENDING: 2,
+      ARRIVED: 0,
+      COMPLETED: 1,
+      FAILED: 1,
+      CANCELLED: 0,
+    });
+    expect(row.stops.map((stop) => stop.status)).toEqual([
+      "COMPLETED",
+      "FAILED",
+      "PENDING",
+      "PENDING",
+    ]);
+    expect(row.stops.every((stop) => !("delivery" in stop))).toBe(true);
+    expect(body).not.toContain("Cliente da lista");
+  });
+
+  it("answers zeros for a route without stops", async () => {
+    const { rows } = await board("search=Rota%2011");
+
+    const row = rows.find((entry) => entry.code === 11) as unknown as {
+      stopCounts: Record<string, number>;
+      stops: unknown[];
+    };
+
+    expect(row.stopCounts).toEqual({
+      PENDING: 0,
+      ARRIVED: 0,
+      COMPLETED: 0,
+      FAILED: 0,
+      CANCELLED: 0,
+    });
+    expect(row.stops).toEqual([]);
   });
 });

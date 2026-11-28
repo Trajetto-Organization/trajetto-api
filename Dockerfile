@@ -126,11 +126,15 @@ RUN find node_modules/.prisma -name '*.d.ts' -delete
 
 COPY . .
 
-# The seeds belong to the release step, not to the API: they go to release/,
-# which only the `migrate` stage copies (back into its build/).
+# The seeds and the release step's own scripts belong to the release step,
+# not to the API: they go to release/, which only the `migrate` stage copies
+# (back into its build/). The release step's SQL directories may hold only
+# their README, which .dockerignore leaves out (**/*.md): `mkdir -p` keeps
+# the migrate stage's COPY of an empty one from failing.
 RUN yarn build \
     && mkdir release \
-    && mv build/seed.js build/import-violation-codes.js release/
+    && mv build/seed.js build/import-violation-codes.js build/prebuild-online-ddl.js build/release-steps.js release/ \
+    && mkdir -p prisma/concurrent prisma/post-deploy infra/sql
 
 # ================================
 # Stage: Production dependencies
@@ -305,6 +309,23 @@ COPY --from=builder --chown=nodejs:nodejs /app/build ./build
 ARG GIT_SHA=""
 ENV APP_COMMIT_SHA=${GIT_SHA}
 
+# What the realtime role runs and the contract it speaks (plano-escala
+# F3-31c), computed by .github/scripts/realtime-closure.mjs in the build
+# job: the deploy compares them with the image trajetto-realtime runs and
+# deploys it only when one of them changed (or past 7 days). After the
+# last RUN like GIT_SHA: no layer depends on them. Empty in a local build,
+# which the deploy reads as "deploy it". The same two values go to the
+# process as APP_REALTIME_SOURCE and APP_CONTRACT_EPOCH: it writes them in
+# its process_heartbeat row, so the fleet's alert (mixed-versions) tells
+# the realtime the deploy held on its build from a role left behind
+# (src/shared/build-info.ts). Image config only, too.
+ARG REALTIME_SOURCE=""
+ARG CONTRACT_EPOCH=""
+LABEL trajetto.realtime-source="${REALTIME_SOURCE}" \
+      trajetto.contract-epoch="${CONTRACT_EPOCH}"
+ENV APP_REALTIME_SOURCE=${REALTIME_SOURCE} \
+    APP_CONTRACT_EPOCH=${CONTRACT_EPOCH}
+
 USER nodejs
 
 EXPOSE 3333
@@ -341,8 +362,12 @@ CMD ["./docker-entrypoint.sh"]
 #
 # The CLI keeps to migrate/: its node_modules, prisma.config.ts and the
 # schema with its migrations, where `prisma migrate deploy` runs from
-# (docker-entrypoint.sh). The seeds and the infraction table go where the
-# seeds read them, beside the API's build: build/ and the working directory.
+# (docker-entrypoint.sh), and prisma/concurrent beside them, the online DDL
+# that runs right before it (build/prebuild-online-ddl.js), and the steps
+# that run right after it, infra/sql and prisma/post-deploy
+# (build/release-steps.js, with migrate/ as their root). The seeds and the
+# infraction table go where the seeds read them, beside the API's build:
+# build/ and the working directory.
 # Most stable first, as in the runner.
 FROM runner AS migrate
 
@@ -353,6 +378,9 @@ COPY --from=builder --chown=nodejs:nodejs /app/tabela-codigo-infracoes-renainf-x
 COPY --from=builder --chown=nodejs:nodejs /app/prisma.config.ts ./migrate/prisma.config.ts
 COPY --from=builder --chown=nodejs:nodejs /app/prisma/schema.prisma ./migrate/prisma/schema.prisma
 COPY --from=builder --chown=nodejs:nodejs /app/prisma/migrations ./migrate/prisma/migrations
+COPY --from=builder --chown=nodejs:nodejs /app/prisma/concurrent ./migrate/prisma/concurrent
+COPY --from=builder --chown=nodejs:nodejs /app/prisma/post-deploy ./migrate/prisma/post-deploy
+COPY --from=builder --chown=nodejs:nodejs /app/infra/sql ./migrate/infra/sql
 COPY --from=builder --chown=nodejs:nodejs /app/release/ ./build/
 
 # The release step's outcome, as Swarm reports it (docker-entrypoint.sh,

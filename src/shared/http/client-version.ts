@@ -1,4 +1,5 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
+import { z } from "zod";
 
 /**
  * Which build of the driver's app is calling.
@@ -38,6 +39,55 @@ interface ClientVersion {
 }
 
 const MAX_HEADER_LENGTH = 512;
+
+/**
+ * The header as the document states it, on the routes whose answer depends
+ * on the build (the checklist's arrival rule, the refuelling's second
+ * within 30 minutes and the 5 minutes between pauses, all from contract 5;
+ * the generic pause's reason, from contract 7).
+ * Not a `schema.headers`: that would replace `request.headers` with the
+ * parsed object. Documentation only, like Idempotency-Key and
+ * X-Client-Sent-At.
+ */
+const clientVersionHeaders = z.object({
+  [CLIENT_VERSION_HEADER]: z
+    .string()
+    .max(MAX_HEADER_LENGTH)
+    .optional()
+    .describe(
+      "Qual build do app do motorista chama: `platform=android; version=…; build=…; runtime=…; update=…; contract=N; outbox=N`. Só o `contract` muda a resposta, como a descrição da rota diz; sem o cabeçalho (a web, builds antigos do app) vale o comportamento anterior.",
+    ),
+});
+
+/**
+ * Sent by the app's offline queue (outbox runner) on every resend of every
+ * kind, never by a direct send: the instant the item was queued, by the
+ * phone's clock. Only its PRESENCE is read — it says the driver tapped this
+ * earlier and nobody can be asked about it any more (the refuelling's
+ * second-within-30-minutes question and the pause start's cooldown, both
+ * from contract 5, and the generic pause's reason, from contract 7). The
+ * value is never trusted as a date: X-Client-Sent-At
+ * with `occurred_at` dates the fact.
+ */
+const CLIENT_QUEUED_AT_HEADER = "x-client-queued-at";
+
+/** The header as the document states it; documentation only, as above. */
+const clientQueuedAtHeaders = z.object({
+  [CLIENT_QUEUED_AT_HEADER]: z
+    .string()
+    .max(64)
+    .optional()
+    .describe(
+      "Enviado pela fila offline do app em todo reenvio (nunca no envio direto): o instante ISO 8601 em que o item entrou na fila, pelo relógio do aparelho. Só a presença conta — o motorista já tocou antes e não pode mais ser perguntado; o valor não data nada (para isso, `occurred_at` com X-Client-Sent-At).",
+    ),
+});
+
+/** Whether the request came from the app's offline queue (any value). */
+function isQueuedResend(header: unknown): boolean {
+  const value = Array.isArray(header) ? header[0] : header;
+
+  return typeof value === "string" && value.trim().length > 0;
+}
 
 /** Null when the header is absent or says nothing this API understands. */
 function parseClientVersion(header: unknown): ClientVersion | null {
@@ -162,9 +212,13 @@ function clientUpgradeGate(minContract: number | undefined, storeUrl?: string) {
 }
 
 export {
+  CLIENT_QUEUED_AT_HEADER,
   CLIENT_VERSION_HEADER,
+  clientQueuedAtHeaders,
   clientUpgradeGate,
+  clientVersionHeaders,
   clientVersionForLog,
+  isQueuedResend,
   isUpgradeExempt,
   parseClientVersion,
 };

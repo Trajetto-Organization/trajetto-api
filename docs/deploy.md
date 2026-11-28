@@ -36,7 +36,7 @@
 16. [Promover para produção](#16-promover-para-produção)
 17. [Rollback](#17-rollback)
 18. [Backup e restauração](#18-backup-e-restauração)
-19. [Réplicas, workers e tempo real](#19-réplicas-workers-e-tempo-real)
+19. [Papéis da mesma imagem](#19-papéis-da-mesma-imagem)
 20. [Alertas e monitoramento](#20-alertas-e-monitoramento)
 21. [Cadeia de suprimentos e segredos](#21-cadeia-de-suprimentos-e-segredos)
 22. [Bucket R2 e retenção no GHCR](#22-bucket-r2-e-retenção-no-ghcr)
@@ -44,34 +44,40 @@
 24. [Migrar do Portainer para o Dokploy](#24-migrar-do-portainer-para-o-dokploy)
 25. [Checklist do primeiro deploy](#25-checklist-do-primeiro-deploy)
 26. [Os três repositórios juntos](#26-os-três-repositórios-juntos)
+27. [PITR com pgBackRest](#27-pitr-com-pgbackrest)
 
 ---
 
 ## 1. Visão geral
 
 ```
-branch de trabalho ──push──▶ ci.yml (lint, typecheck, unitários + cobertura, audit, gitleaks, IA)
+branch de trabalho ──push──▶ ci.yml: Changes ─▶ Secret scan + Validate (validate.yml, sem E2E; E2E só no Run workflow)
         │
-        └─ merge/push ─▶ staging ──▶ deploy.yml
-                                     ├─ validação completa (+ E2E com Postgres e Redis)
-                                     ├─ build ÚNICO das 3 imagens ─▶ GHCR  sha-<7>  (imutável)
+        └─ merge/push ─▶ staging ──▶ staging.yml
+                                     ├─ Changes: só documentação? (então só Secret scan e Docs, sem build)
+                                     ├─ Secret scan + Validate (validate.yml), em paralelo:
+                                     │    Validate (audit, lint, tsc, unitários + piso) · E2E (1/3) · E2E (2/3) · E2E (3/3) · AI OCR
+                                     ├─ Gate (tudo acima verde; é o check que o PR e a promoção conferem)
+                                     ├─ Build: as 3 imagens UMA vez ─▶ GHCR  sha-<7>  (imutável)
                                      │  (API, migração e IA; a migração e a IA são reaproveitadas, sem rebuild, se o que rodam não mudou)
-                                     ├─ migrations, só se o banco não aplicou essa imagem: Application trajetto-api-migrate (Dokploy)
-                                     ├─ por serviço: tag `staging` movida por digest ─▶ Dokploy staging
-                                     │  trajetto-ai (só se o digest mudou) → trajetto-api
-                                     ├─ a API pública responde este commit? (/health/liveness)
-                                     └─ marcador staged-<7> (o que o PR e a promoção exigem)
+                                     ├─ Image scan (Trivy, por digest)
+                                     └─ Deploy (environment staging, ação .github/actions/deploy):
+                                          migrations, só se o banco não aplicou essa imagem (Application trajetto-api-migrate)
+                                          ─▶ trajetto-ai (só se o digest mudou) ─▶ trajetto-api, cada tag `staging` movida por digest
+                                          ─▶ a API pública responde este commit (/health/liveness)
+                                          ─▶ marcador staged-<7> (o que o PR e a promoção exigem)
 
-PR staging → main ──▶ deploy.yml: a mesma validação + "o staging rodou o head do PR?" (staged-<7>)
+PR staging → main ──▶ pr.yml: Secret scan + Staging evidence (staged-<7>, Gate verde, a main só traz documentação)
+                      Não valida de novo: o staging já validou o commit que o merge promove.
 
-merge em main ──▶ deploy.yml: PROMOÇÃO (sem build)       [aprovação do environment production]
-                  ├─ resolve o build do commit mergeado (2º pai do merge commit)
-                  ├─ migrations, se preciso (trajetto-api-migrate, imagem de migração do build) ─▶ tag `stable` movida por digest
-                  ├─ Dokploy produção: trajetto-ai → trajetto-api ─▶ convergência
-                  └─ release (tag semver, CHANGELOG, GitHub Release)
+merge em main ──▶ production.yml: PROMOÇÃO (sem build)
+                  ├─ Staging evidence: o build do commit mergeado (2º pai do merge commit), staged-<7>, Gate, digests
+                  ├─ Deploy [aprovação do environment production] (a mesma ação do staging, com `stable`):
+                  │    migrations, se preciso ─▶ trajetto-ai ─▶ trajetto-api ─▶ convergência (Swarm por SSH)
+                  └─ Release (tag semver, CHANGELOG, GitHub Release)
 
-Run workflow na main ──▶ a mesma promoção com uma tag antiga: o botão de ROLLBACK
-Run workflow na staging ──▶ o caminho de staging de novo (force_ai_build: reconstrói e reimplanta a IA)
+Run workflow do Production na main ──▶ a mesma promoção com uma tag antiga: o botão de ROLLBACK
+Run workflow do Staging ──▶ o caminho de staging de novo (force_ai_build: testa, reconstrói e reimplanta a IA)
 ```
 
 Princípios que não mudam:
@@ -127,16 +133,17 @@ Princípios que não mudam:
 
 - **Tags**:
 
-  | Tag                                                             | Quem cria/move                                                                     | Muda?                                                                                                                  |
-  | --------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-  | `sha-<7 primeiros do commit>`                                   | o build de cada push em `staging`                                                  | **nunca** (imutável)                                                                                                   |
-  | `staging`                                                       | o job `deploy-staging`, por digest                                                 | a cada push em `staging`                                                                                               |
-  | `staged-<7>`                                                    | o job `deploy-staging`, **por último**: depois do scan, do deploy e da conferência | nunca; sem ele o PR e a promoção recusam o commit (salvo um commit só de documentação, que usa o de um ancestral)      |
-  | `src-<hash git de infra/ai-ocr>` (só `trajetto-ai`)             | o build da IA                                                                      | nunca; é por ela que um push acha a imagem da IA de mesmo código e a reaproveita                                       |
-  | `src-<hash de migrate-source.sh>` (só `trajetto-api-migrate`)   | o build da imagem de migração                                                      | nunca; é por ela que um push sem mudança nas migrations, nos seeds e no que eles rodam reaproveita a imagem            |
-  | `staging-applied`, `stable-applied` (só `trajetto-api-migrate`) | `deploy-staging` e `promote-production`, **depois** de a etapa de release terminar | a cada etapa que roda; dizem qual imagem de migração o banco do ambiente já aplicou, e a etapa é pulada se for a mesma |
-  | `stable`                                                        | o job `promote-production`, por digest                                             | a cada promoção ou rollback                                                                                            |
-  | `main-<sha>`                                                    | builds antigos, de antes da branch `staging`                                       | nunca; aceitos só como alvo de rollback                                                                                |
+  | Tag                                                                                                                             | Quem cria/move                                                                                                                                              | Muda?                                                                                                                  |
+  | ------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+  | `sha-<7 primeiros do commit>`                                                                                                   | o build de cada push em `staging`                                                                                                                           | **nunca** (imutável)                                                                                                   |
+  | `staging`                                                                                                                       | o Deploy do `staging.yml` (job `deploy-staging`), por digest                                                                                                | a cada push em `staging`                                                                                               |
+  | `staged-<7>`                                                                                                                    | o Deploy do `staging.yml`, **por último**: depois do scan, do deploy e da conferência                                                                       | nunca; sem ele o PR e a promoção recusam o commit (salvo um commit só de documentação, que usa o de um ancestral)      |
+  | `src-<hash git de infra/ai-ocr>` (só `trajetto-ai`)                                                                             | o build da IA                                                                                                                                               | nunca; é por ela que um push acha a imagem da IA de mesmo código e a reaproveita                                       |
+  | `src-<hash de migrate-source.sh>` (só `trajetto-api-migrate`)                                                                   | o build da imagem de migração                                                                                                                               | nunca; é por ela que um push sem mudança nas migrations, nos seeds e no que eles rodam reaproveita a imagem            |
+  | `staging-applied`, `stable-applied` (só `trajetto-api-migrate`)                                                                 | o Deploy de cada ambiente (`.github/actions/deploy`), **depois** de a etapa de release terminar                                                             | a cada etapa que roda; dizem qual imagem de migração o banco do ambiente já aplicou, e a etapa é pulada se for a mesma |
+  | `stable`                                                                                                                        | o Deploy do `production.yml` (job `promote-production`), por digest                                                                                         | a cada promoção ou rollback                                                                                            |
+  | `staging-<papel>`, `stable-<papel>` (só `trajetto-api`; papel = `worker`, `scheduler`, `worker-external`, `ingest`, `realtime`) | o Deploy de cada ambiente (`.github/scripts/deploy-roles.sh`), por digest, logo antes do deploy daquela Application; sem a Application, no fim do run verde | a cada deploy; sempre o digest da API do mesmo run (plano de escala F3-31a)                                            |
+  | `main-<sha>`                                                                                                                    | builds antigos, de antes da branch `staging`                                                                                                                | nunca; aceitos só como alvo de rollback                                                                                |
 
   Não existem `latest`, `main` nem `pr-*`. As Applications de produção rodam
   `stable`; as de staging, `staging` (a `trajetto-api-migrate` também). O pipeline **nunca** muda a imagem
@@ -173,39 +180,56 @@ Princípios que não mudam:
 
 O fluxo normal:
 
-1. Trabalhe numa branch e faça push: o `ci.yml` roda.
-2. Leve para `staging` (PR para `staging` ou merge/push). O `deploy.yml` roda
-   a validação completa, constrói as imagens e faz o deploy do staging.
+1. Trabalhe numa branch e faça push: o `ci.yml` roda (a validação sem o E2E;
+   o E2E inteiro só por _Run workflow_ com **e2e** marcado).
+2. Leve para `staging` (PR para `staging` ou merge/push). O `staging.yml`
+   roda a validação completa (com o E2E em 3 jobs paralelos), constrói as
+   imagens e faz o deploy do staging. Um push só de documentação roda o
+   secret scan e o job `Docs`, e não constrói nada.
 3. Confira o staging ([seção 16](#16-promover-para-produção), "O que conferir
    no staging").
-4. Abra o PR `staging → main`. O PR roda a mesma validação e confirma que o
-   staging **rodou** o commit do head: o marcador `staged-<7>` das duas
-   imagens, no mesmo digest de `sha-<7>` (espera até 45 min, porque o PR
-   costuma abrir enquanto o staging ainda constrói e implanta o mesmo
-   commit). Um commit cujo scan, deploy de staging ou conferência falhou tem
-   a imagem, mas não o marcador, e o check falha. Um head que só muda
-   documentação desde um commit que o staging rodou passa com o marcador
-   desse commit ([seção 16](#16-promover-para-produção), "Commits só de
-   documentação").
+4. Abra o PR `staging → main`. O PR **não valida de novo** (o staging já
+   validou o commit que o merge promove; o merge ref que um PR testaria nem é
+   o que vai para a produção). O check _Staging evidence_ confirma três
+   coisas: a `main` só traz documentação que o head não tem; o staging
+   **rodou** o commit do head (o marcador `staged-<7>` das duas imagens, no
+   mesmo digest de `sha-<7>`; espera até 45 min, porque o PR costuma abrir
+   enquanto o staging ainda constrói e implanta o mesmo commit); e o `Gate`
+   do run de staging desse build está verde. Um commit cujo scan, deploy de
+   staging ou conferência falhou tem a imagem, mas não o marcador, e o check
+   falha. Um head que só muda documentação desde um commit que o staging
+   rodou passa com o marcador (e o `Gate`) desse commit
+   ([seção 16](#16-promover-para-produção), "Commits só de documentação").
 5. **Merge com "Create a merge commit".** Nunca _Squash and merge_ nem
    _Rebase and merge_: os dois criam um commit que o staging nunca construiu,
    e a promoção falha de propósito ("não passou pelo pipeline de staging"). O
    merge commit também preserva os SHAs que a baseline do gitleaks usa. Para
    não errar, deixe só essa opção ligada ([seção 13](#13-configurar-o-github),
    "Proteção das branches").
-6. O push em `main` dispara a promoção; com revisores obrigatórios no
-   environment `production`, o job espera a aprovação.
+6. O push em `main` dispara a promoção (`production.yml`): o _Staging
+   evidence_ confere tudo antes, e o job _Deploy_, com revisores
+   obrigatórios no environment `production`, espera a aprovação.
+
+**Mudança que atravessa repositórios** (uma rota nova que a web chama, um
+evento de socket que o app ouve): uma branch com **o mesmo nome** em cada
+repositório. O contrato de rotas da API (a ação `.github/actions/siblings`,
+passo _Pick the sibling branches_, no `Validate` e no `Docs` do
+`validate.yml`) testa a branch contra a web e o app de mesmo nome, e as
+sondas da web e do app fazem o mesmo com a API; sem branch de mesmo nome, a
+sonda usa a `staging` do irmão. A regra, com o mesmo texto nos três manuais,
+está na [seção 26, "O CI dos três"](#o-ci-dos-três-desde-10112026).
 
 **Hotfix**: a mesma estrada, mais curta — branch `fix/...` → `staging`
 (espera o verde) → PR `staging → main`. Não existe caminho que pule o
 staging, porque a produção só roda imagens construídas lá.
 
 **Depois de cada release**: o `semantic-release` faz um commit
-`chore(release): x.y.z [skip ci]` com o `CHANGELOG.md` em `main`. Traga `main`
-de volta para `staging` de vez em quando (`git merge origin/main` em
-`staging`) para as duas não divergirem; esse merge vira um build de staging
-como qualquer outro. Como ele só traz o `CHANGELOG.md` (o único arquivo que
-o `@semantic-release/git` commita), pode ir com `[skip ci]` na mensagem
+`chore(release): x.y.z` (com a marcação de pular CI do próprio
+`@semantic-release/git`) com o `CHANGELOG.md` em `main`. Traga `main` de
+volta para `staging` de vez em quando (`git merge origin/main` em
+`staging`) para as duas não divergirem. Como esse merge só traz o
+`CHANGELOG.md`, o `staging.yml` o classifica como documentação: roda o
+secret scan e o `Docs`, sem build e sem deploy
 ([seção 16](#16-promover-para-produção), "Commits só de documentação").
 
 O Dependabot abre os PRs dele contra `staging` (`target-branch: staging` em
@@ -213,63 +237,374 @@ O Dependabot abre os PRs dele contra `staging` (`target-branch: staging` em
 
 ## 3. Os workflows em detalhe
 
-### `.github/workflows/ci.yml` — portão das branches de trabalho
+### O mapa
 
-Roda em todo push de branch que **não** seja `main`, `master` nem `staging`
-(e por _Run workflow_). Um push novo na mesma branch cancela o run anterior.
+Desde 10/11/2026 o CI/CD da API está em um arquivo por gatilho, com a mesma
+forma e os mesmos nomes nos três repositórios. A validação está num
+workflow reutilizável só (`validate.yml`), que o `ci.yml` e o `staging.yml`
+chamam; o setup e o deploy são ações compostas.
 
-| Job            | O que faz                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `validate`     | serviço `redis:7-alpine` por digest (um teste unitário do adapter do Socket.IO precisa dele); checkout com histórico completo; os repositórios irmãos (`Trajetto-Organization/trajetto-ui` e `Trajetto-Organization/trajetto-mobile`, na mesma branch quando ela existe lá) para o contrato de rotas, se o secret `CLIENT_REPOS_READ_TOKEN` existir — só "a branch não existe" (código 2 do `git ls-remote`) cai na branch padrão, com aviso; erro de rede repete 3 vezes e falha; Node `22.21.1`; cache dos engines do Prisma; auditoria de dependências (`audit-gate.sh`: bloqueia só um push que muda dependência); Prettier; `prisma generate`; `tsc`; unitários com piso de cobertura; publica `coverage-<sha>` |
-| `secrets`      | gitleaks em todo o histórico, imagem fixada por digest                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `ai-ocr`       | o stage `test` de `infra/ai-ocr` pelo Buildx, com cache do GitHub (escopo `ai-test`): o pytest roda dentro da imagem, e um código que já passou leva segundos                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `ai-local-e2e` | só em _Run workflow_: o contrato da API contra o contêiner real de IA (`tests/ai-local`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| Arquivo                    | Gatilho                                                                                          | Jobs (o nome do check)                                                                                                                                                                                                     |
+| -------------------------- | ------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ci.yml`                   | push em branch de trabalho (todas menos `main`, `master` e `staging`); _Run workflow_ (`e2e`)    | `Changes` → `Secret scan` + `Validate` (o `validate.yml`, sem E2E; no _Run workflow_, com o E2E se pedido e o `AI local contract (manual)`)                                                                                |
+| `staging.yml`              | push em `staging`; _Run workflow_ **na `staging`** (`force_ai_build`; em outra branch nada roda) | `Changes` → `Secret scan` + `Validate` (o `validate.yml`, com E2E) → `Gate` → `Build` → `Image scan` → `Deploy`                                                                                                            |
+| `validate.yml`             | `workflow_call` (do `ci.yml` e do `staging.yml`)                                                 | `Validate`, `E2E (1/3)`, `E2E (2/3)`, `E2E (3/3)`, `AI OCR`; num push só de documentação, só `Docs`; no _Run workflow_ do `ci.yml`, também `AI local contract (manual)`; depois de todos, `Result` (o veredito da chamada) |
+| `pr.yml`                   | pull request para `main`                                                                         | `Secret scan`, `Staging evidence`                                                                                                                                                                                          |
+| `production.yml`           | push em `main`; _Run workflow_ (o rollback: `image_tag`, `force_ai_build`)                       | `Staging evidence` → `Deploy` (a aprovação do environment `production`) → `Release` (só no push)                                                                                                                           |
+| `cloudflare-ranges.yml`    | toda segunda, 06:00 de São Paulo; _Run workflow_                                                 | `Cloudflare ranges` ([seção 6.1](#61-firewall-da-vps-contabo))                                                                                                                                                             |
+| `.github/actions/setup`    | ação composta                                                                                    | Node `22.21.1` com o cache do yarn, o cache dos engines do Prisma, `yarn install --frozen-lockfile`, o schema engine (no E2E) e o `prisma generate`                                                                        |
+| `.github/actions/deploy`   | ação composta, chamada pelo `Deploy` do `staging.yml` e do `production.yml`                      | o deploy de um ambiente, igual nos dois (abaixo)                                                                                                                                                                           |
+| `.github/actions/siblings` | ação composta, chamada pelo `Validate` e pelo `Docs`                                             | a web e o app ao lado da API (`../trajetto-ui`, `../trajetto-mobile`), na branch de mesmo nome ou na `staging` deles: o contrato de rotas e os links da documentação os leem                                               |
 
-Sem E2E, sem imagem, sem deploy: a pergunta é só "esse código pode ir para o
-staging?".
+Na tela do GitHub, um job de workflow reutilizável aparece com o nome do job
+que o chamou na frente: `Validate / Validate`, `Validate / E2E (1/3)`,
+`Validate / AI OCR`, `Validate / Docs`, `Validate / Result`. Os nomes são afirmações curtas, em
+inglês, iguais nos três repositórios quando é a mesma coisa, e nunca
+perguntas (o `ci-stability.test.ts` recusa `?` em nome de job ou de passo).
 
-### `.github/workflows/deploy.yml` — Pipeline (staging → produção)
+### `ci.yml` — branch de trabalho
 
-| Gatilho                                                 | Jobs que rodam                                                    |
-| ------------------------------------------------------- | ----------------------------------------------------------------- |
-| push em `staging`                                       | `test`, `ai-ocr`, `secrets` → `build-and-push` → `deploy-staging` |
-| pull request para `main`                                | `test`, `ai-ocr`, `secrets`, `staging-image`                      |
-| push em `main` (o merge)                                | `promote-production` → `release`                                  |
-| _Run workflow_ na `main` (`image_tag`)                  | `promote-production` (o rollback)                                 |
-| _Run workflow_ na `staging` (`force_ai_build` opcional) | os mesmos do push em `staging`                                    |
+Um push novo na mesma branch cancela o run anterior, e pode: o run novo
+valida tudo o que a branch muda desde que saiu da `staging`, um push de
+documentação por cima de um de código inclusive. Sem imagem e sem deploy: a
+pergunta é só "esse código pode ir para o staging?".
 
-| Job                  | Detalhes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `test`               | serviços `postgres:16-alpine` e `redis:7-alpine` fixados por digest; checkout completo (o teste de rotas aposentadas compara com `origin/main`, e a auditoria com a base do push ou do PR); Node `22.21.1`; cache dos engines do Prisma pela versão deles e `yarn install --frozen-lockfile` com cache; confere que o schema engine do Prisma ficou instalado (baixa de novo, até 3 vezes, se o `postinstall` falhou calado); auditoria de dependências (`audit-gate.sh`); `lint:check`; `prisma:generate`; `typecheck`; `test:coverage` (o piso de cobertura); publica `coverage-<sha>`; `test:e2e` (um banco por arquivo; em duas fases, os arquivos que sobem réplicas por último, um por vez).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `ai-ocr`             | o pytest do serviço de IA dentro da imagem (stage `test`, Buildx com cache do GitHub no escopo `ai-test`; o build só fala com o Docker Hub e o PyPI, porque os pesos do OCR estão versionados em `infra/ai-ocr/models`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `secrets`            | o mesmo gitleaks do `ci.yml` (mesma imagem, flags, `.gitleaksignore`). Nenhuma imagem é construída antes dele passar.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `build-and-push`     | só no `staging` (push ou _Run workflow_), depois dos três acima. Buildx com cache do GitHub (um escopo por imagem); publica `sha-<7>` das três imagens (API, migração e IA) com SBOM e proveniência (`provenance: mode=max`; o único build arg é o commit, `GIT_SHA`, que vai para a imagem e sai na liveness). A IA só é reconstruída se o código dela mudou: toda imagem da IA leva também a tag `src-<hash git de infra/ai-ocr>`, e um push que encontra essa tag reaproveita a imagem (mesmo digest) e só acrescenta o `sha-<7>` dele, sem rebuild; `force_ai_build` reconstrói mesmo assim. A imagem de migração segue a mesma regra, com a tag `src-<hash>` de `.github/scripts/migrate-source.sh` (as migrations, o schema, os seeds e o que eles importam, o entrypoint, o `Dockerfile` e as dependências). Varre as três por digest com Trivy (CRITICAL corrigível; só relata até `IMAGE_SCAN_ENFORCE=true`, e só um achado reprova: o banco de vulnerabilidades é baixado uma vez por run, com cache diário, e falha no download ou erro do Trivy viram aviso). Exporta os três digests.                                                                                                                                                                                                                                                                                                                                              |
-| `deploy-staging`     | environment `staging`; um por vez (`concurrency: deploy-staging`, nunca cancelado no meio). Confere se o run ainda é o head de `staging` (runs terminam fora de ordem; o mais velho não volta a tag, a menos que o head só acrescente documentação, como um `[skip ci]` de doc: `docs-only.sh`); anota para onde as tags `staging` apontam; as migrations, antes de qualquer tag da API ou da IA andar e só se o banco de staging ainda não aplicou a imagem de migração deste commit (o digest comparado com `trajetto-api-migrate:staging-applied`): move `trajetto-api-migrate:staging`, pede o deploy da Application `trajetto-api-migrate` e espera o Swarm dizer que a etapa terminou ou falhou (`.github/scripts/dokploy-release.mjs`; [seção 15](#15-migrations)), e só então move `staging-applied`; por serviço, na ordem **`trajetto-ai` → `trajetto-api`**, move a tag `staging` para o digest deste run e logo depois pede o deploy da Application (`.github/scripts/dokploy-deploy.mjs`, se os quatro secrets obrigatórios do Dokploy existirem). A IA só é movida e reimplantada se o digest dela mudou (ou com `force_ai_build`). Depois espera a API pública responder este commit em `/health/liveness` (`wait-for-version.mjs`; `ROLLOUT_VERIFY=ssh` troca pela conferência no Swarm), escreve o marcador `staged-<7>` das duas imagens e, se um deploy do Dokploy falhou, devolve a tag daquele serviço ao digest anterior. |
-| `staging-image`      | só no PR (nome do check: _The PR head was built on staging_): espera (até 45 min) o marcador `staged-<head do PR>` das duas imagens, no mesmo digest de `sha-<head do PR>`, ou que o head só mude documentação desde um commit que o staging rodou (`.github/scripts/staged-build.sh`). Sem isso o merge promoveria um build que o staging não rodou.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `promote-production` | environment `production` (revisores obrigatórios = aprovação); um por vez (`concurrency: promote-production`); só a partir de `main`. Resolve o build (2º pai do merge commit; fast-forward = o próprio commit; _Run workflow_ = a tag digitada), valida o formato (`sha-<hex>` ou `main-<hex>`), confere num merge que o staging rodou o build — o marcador `staged-<7>` no mesmo digest, esperando até 20 min um deploy de staging ainda em andamento, ou o build do commit mais próximo que o staging rodou, quando o merge só muda documentação desde ele (o rollback por _Run workflow_ é isento) —, confere que a imagem existe no GHCR, compara com o que o staging roda (só informa), roda as migrations com a imagem de migração do build pela Application `trajetto-api-migrate` de produção, como no staging, só se o digest dela não é o de `stable-applied` (se o deploy de produção está configurado; um build anterior à imagem de migração pula a etapa com aviso, e um posterior sem ela reprova antes de mover `stable`), move `stable` das duas imagens por digest (a IA só se o build tiver essa imagem), pede o deploy das Applications de produção na mesma ordem (se configurado) e espera a convergência da API (SSH por padrão; `ROLLOUT_VERIFY=http` usa a liveness pública).                                                                                                                                         |
-| `release`            | depois da promoção, só no push em `main`: `semantic-release` cria a tag, o `CHANGELOG.md` (commit com `[skip ci]`) e o GitHub Release.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Job                          | O que faz                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Changes`                    | `.github/scripts/changes.sh branch`: a branch **inteira** (do ponto em que saiu da `staging` ao commit, `docs-only.sh`) só muda documentação? Não o push sozinho: como um push novo cancela o run anterior, um push de documentação por cima de um de código ainda valida o código. _Run workflow_ roda tudo. A base do audit é o mesmo ponto (o que a branch muda). O job `Postgres image` do `validate.yml` só roda quando a branch muda `infra/postgres` desde a `staging` (ou sem intervalo para comparar), e o `PgBouncer image`, do mesmo jeito, quando ela muda `infra/pgbouncer` |
+| `Secret scan`                | gitleaks em todo o histórico, imagem fixada por digest                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `Validate`                   | o `validate.yml` com `e2e` só no _Run workflow_ com **e2e** marcado (os 3 jobs de E2E, uns 30 min cobrados); num push só de documentação, só o `Docs`                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `AI local contract (manual)` | job do `validate.yml` (`ai_local`), ligado só no _Run workflow_ do `ci.yml`: o contrato da API contra o contêiner real de IA (`tests/ai-local`), com o mesmo `env` de teste dos outros jobs                                                                                                                                                                                                                                                                                                                                                                                              |
 
-Antes do push, o `build-and-push` carrega as imagens da API e de migração no
-runner e roda um smoke test contra um Postgres e um Redis descartáveis, numa
-rede interna sem saída para a internet (a CLI do Prisma não pode baixar
-engine): confere que a imagem da API não traz o CLI, migrations nem seeds e
-traz `build/schema-version.json`; sobe a API no banco vazio e exige que ela
+### `validate.yml` — a validação, num lugar só
+
+Todos os jobs correm em paralelo, e o `Result`, depois deles, dá o veredito
+da chamada: a saída `passed`, que o `Gate` do `staging.yml` lê.
+
+| Job                                   | O que faz                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Validate`                            | serviço `redis:7-alpine` por digest (um teste unitário do adapter do Socket.IO precisa dele); checkout com histórico completo (o teste de rotas aposentadas compara com `origin/main`); os repositórios irmãos pela ação `.github/actions/siblings` (`trajetto-ui` e `trajetto-mobile`, na branch de mesmo nome quando ela existe lá, senão na `staging` deles) para o contrato de rotas, se o secret `CLIENT_REPOS_READ_TOKEN` existir — só "a branch não existe" (código 2 do `git ls-remote`) cai na `staging`, com aviso; erro de rede repete 3 vezes e falha. No push em `staging` o contrato roda contra a `staging` da web e do app (antes ele era pulado ali). Depois a ação `setup`; auditoria de dependências (`audit-gate.sh`, com a base que o `Changes` escolheu); Prettier; `tsc` (heap fixo de 4 GB); unitários com o piso de cobertura (`yarn test:coverage`, 2 processos); publica `coverage-<sha>`                                                                                                                                                                                                                                                                                     |
+| `E2E (1/3)`, `E2E (2/3)`, `E2E (3/3)` | serviços `postgres:16-alpine` (com `max_connections=200` e o `pg_stat_statements` pré-carregado, por `ALTER SYSTEM` e restart) e `redis:7-alpine`, um par por job; a ação `setup` conferindo o schema engine; `yarn test:e2e` com `E2E_SHARD=<i>/3` (`infra/scripts/run-e2e.mjs`): os jobs 1 e 2 dividem a fase `shared` com o `--shard` do próprio vitest (1/2 e 2/2), e o job 3 roda a fase de réplicas inteira, um arquivo por vez. O job 1, depois da fatia dele (mesmo vermelha), roda a fase infra (`yarn test:e2e:infra`, plano de escala F4-38): `tests/E2E/infra` contra um PgBouncer de verdade (a imagem de `infra/pgbouncer` do próprio commit, construída ali com o cache dos jobs do PgBouncer) e um standby em streaming, numa pilha própria que `tests/E2E/infra/run.sh` sobe e apaga ([`testes.md`](./testes.md#a-fase-infra-yarn-teste2einfra)). Cada job migra o banco molde uma vez e clona um banco por arquivo ([`testes.md`](./testes.md#e2e-testse2e)), com 2 processos. O resumo do job traz arquivos, testes e duração de cada fase. Um job vermelho não para os outros (`fail-fast: false`). O `e2e-shards.test.ts` confere que a matriz roda cada arquivo exatamente uma vez |
+| `AI OCR`                              | o pytest do serviço de IA dentro da imagem (stage `test`, Buildx com cache do GitHub no escopo `ai-test`; o build só fala com o Docker Hub e o PyPI). Pulado quando o GHCR já tem `trajetto-ai:src-<hash git de infra/ai-ocr>`: essa imagem só foi construída depois de o mesmo pytest passar nos mesmos arquivos. O GHCR sem resposta não é "não tem": o job avisa e testa — inclusive quando é o login que falha (`ghcr.sh login`, que repete; o `docker/login-action` derrubava o job antes da alternativa). `force_ai_build` testa sempre                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `Postgres image`                      | a imagem do Database (`infra/postgres`, plano de escala F1-01/F1-03), só quando o `Changes` diz que a fonte não tem imagem publicada (`postgres`), e de novo pulado se o próprio job acha `trajetto-postgres:src-<hash git de infra/postgres>` no GHCR. Roda o stage `test` (sem rede: os parâmetros lidos de volta com `SHOW`, um PITR de ida e volta e o descarte da fila num repositório posix, e o `trajetto-backup` e o `trajetto-restore-drill` de verdade) e a prova S3 (`infra/postgres/test/s3-proof.sh`): a imagem, pelo digest local, contra uma MinIO fixada por digest, com TLS, URL em path style e região `auto`, como no R2 (stanza, arquivamento, check, full e diff, archive-get e o ensaio até um instante com uma chave só de leitura). Buildx com cache do GitHub no escopo `postgres-test`, que o `Build` também lê. Timeout de 25 min                                                                                                                                                                                                                                                                                                                                             |
+| `PgBouncer image`                     | a imagem do PgBouncer (`infra/pgbouncer`, plano de escala F4-34/F4-35), pela mesma regra: só quando o `Changes` diz que a fonte não tem imagem publicada (`pgbouncer`), e de novo pulado se o próprio job acha `trajetto-pgbouncer:src-<hash git de infra/pgbouncer>` no GHCR. Roda o stage `test`: o PgBouncer de verdade, sem rede e com o usuário da imagem, a partir do `entrypoint.sh` que ela leva, com cada valor lido de volta pelo console (`SHOW CONFIG`, `SHOW DATABASES`). Buildx com cache do GitHub no escopo `pgbouncer-test`, que o `Build` também lê. Timeout de 15 min                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `Docs`                                | só num push de documentação: os irmãos (a mesma ação do `Validate`), o Prettier (`yarn lint:check`, que lê `*.md` e `docs/`) e os unitários sem cobertura (`yarn test`), porque há testes que leem a documentação (`tests/unitaires/docs`, os guias de agente, as seções deste guia) e os links dela para os irmãos. Um vermelho cai no commit que o causou, não no próximo push de código                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `AI local contract (manual)`          | só com `ai_local` (o _Run workflow_ do `ci.yml`): `tests/ai-local` contra o contêiner real de IA, timeout de 45 min                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `Result`                              | depois de todos (`!cancelled()`): confere o resultado de cada job desta chamada contra o que ela pediu (verde se pedido, pulado se não: o `Docs` num push de código, o E2E sem `e2e`, o contrato manual sem `ai_local`, o `Postgres image` sem `postgres`, o `PgBouncer image` sem `pgbouncer`) e só então grava `passed=true`, a saída do `validate.yml`. Um job a mais aqui entra no `needs` dele (`ci-stability.test.ts`). Ver "O veredito do `validate.yml`" no `staging.yml`, abaixo                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+
+### `staging.yml` — push em `staging`
+
+| Job           | O que faz                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Changes`     | `.github/scripts/changes.sh staging`: o push (`before` → commit) só muda documentação? Sem `before` (_Run workflow_) é código e roda tudo. A base do audit é o **último build que a staging serviu** (o ancestral mais próximo, pelo primeiro pai, com `staged-<7>` no digest de `sha-<7>`), e não o push anterior: um push cujo run foi cancelado ou falhou entra no intervalo do seguinte, e uma mudança de dependência dele passa pelo audit que bloqueia. Sem ancestral servido em 50 commits, a base fica vazia e o audit bloqueia; o GHCR sem resposta (inclusive no login, que repete e não derruba o job) volta ao push anterior, com aviso. Também decide o job `Postgres image`: ele só roda quando o GHCR não tem `trajetto-postgres:src-<hash git de infra/postgres>` (ou não respondeu); um push que não muda `infra/postgres` não gasta nem o runner dele. O job `PgBouncer image` segue a mesma regra, com `trajetto-pgbouncer:src-<hash git de infra/pgbouncer>`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `Secret scan` | o mesmo gitleaks do `ci.yml` (mesma imagem, flags, `.gitleaksignore`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `Validate`    | o `validate.yml` com o E2E inteiro (todo push de código). Concorrência própria, `cancel-in-progress: true`: um push novo **de código** cancela a validação do run anterior (grupo `staging-validate`), que nunca faria deploy (só a cabeça da branch implanta). Um push de documentação valida num grupo só do próprio run (`staging-docs-<run>`) e não cancela nada: ele não constrói, e quem implanta é o run de código embaixo dele (a conferência da cabeça deixa)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `Gate`        | junta tudo o que bloqueia o deploy: `Changes`, `Secret scan` e o veredito do `validate.yml` (a saída `passed` do `Result`, que só existe com o `Validate`, os 3 E2E e o `AI OCR` verdes, ou com o `Docs` num push de documentação; nunca o `needs.validate.result`, abaixo). É o check que o _Staging evidence_ confere no commit promovido (e só o deste workflow, na branch `staging`, vale). Uma validação cancelada por um push novo **pula** o `Gate` (o run fica cancelado, cinza, sem build)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `Build`       | só depois do `Gate` e do `Secret scan` (nenhuma imagem sai do runner antes deles: INFRA-21 e o piso de cobertura), e nunca num push de documentação. Buildx com cache do GitHub (um escopo por imagem); publica `sha-<7>` das três imagens (API, migração e IA) com SBOM e proveniência (`provenance: mode=max`; o único build arg é o commit, `GIT_SHA`, que vai para a imagem e sai na liveness). A IA só é reconstruída se o código dela mudou: toda imagem da IA leva também a tag `src-<hash git de infra/ai-ocr>`, e um push que encontra essa tag reaproveita a imagem (mesmo digest) e só acrescenta o `sha-<7>` dele; `force_ai_build` reconstrói mesmo assim. A imagem de migração segue a mesma regra, com a tag `src-<hash>` de `.github/scripts/migrate-source.sh`. Smoke test das imagens antes do push (abaixo). Exporta os três digests. A imagem do Database (`trajetto-postgres`, de `infra/postgres`) só é publicada quando o GHCR não tem `src-<hash git de infra/postgres>` e o job `Postgres image` testou essa fonte: tags `src-<hash>` e `sha-<7>`, nenhuma nos commits que a reaproveitam (o espaço do GHCR conta); smoke test com o teto da staging, SBOM e proveniência; o digest vai no resumo para a troca do Database, que é ação do dono. Nenhum passo implanta o Database, e o GHCR sem resposta sobre essa imagem só avisa. A imagem do PgBouncer (`trajetto-pgbouncer`, de `infra/pgbouncer`, plano de escala F4-35) segue as regras da IA, porque o deploy a implanta: reaproveitada por `src-<hash git de infra/pgbouncer>`, com o `sha-<7>` de cada commit acrescentado ao mesmo digest; construída só para uma fonte que o job `PgBouncer image` testou, a partir do cache dele; smoke test com o teto de 32 MiB da staging, sem rede (saudável pelo próprio HEALTHCHECK, uid 6432, o commit na partida e `pool_mode=transaction` pelo login de estatística), SBOM e proveniência. O GHCR sem resposta nessa busca falha o passo, como nas outras imagens que vão para o ar; uma fonte que sumiu do GHCR depois do `Changes`, sem teste, não é publicada, e o build segue sem imagem do PgBouncer (o deploy o deixa onde está) |
+| `Image scan`  | o Trivy nas três imagens, pelos digests que o `Build` publicou, na `trajetto-pgbouncer` deste build (construída ou reaproveitada; ela vai para o ar, então o achado dela reprova como o das outras), e na `trajetto-postgres` quando o run a publicou (sempre só relata: nenhum job a implanta, e o achado dela não segura o deploy da API) (CRITICAL corrigível; só relata até `IMAGE_SCAN_ENFORCE=true`, e só um achado reprova: o banco de vulnerabilidades é baixado uma vez por run, com cache diário, e falha no download ou erro do Trivy viram aviso). Um achado com a variável ligada para o `Deploy`: o build nunca ganha `staged-<7>`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `Deploy`      | job `deploy-staging`, environment `staging`, um por vez (`concurrency: deploy-staging`, nunca cancelado no meio): a ação `.github/actions/deploy` com a tag `staging`, os digests do `Build`, a conferência pela liveness pública como padrão, só da cabeça da branch, as tags devolvidas depois de um deploy do Dokploy que falhou, e o `staged-<7>` no fim (o do PgBouncer também, quando o build tem a imagem dele)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+
+**Só na branch `staging`.** O _Run workflow_ aceita qualquer branch, e o
+formulário vem com a `main` (a branch padrão) marcada. Deixado ali, ou numa
+branch de trabalho, ele construiria aquele ref, rodaria a migração dele no
+banco de staging e gravaria `staged-<7>` e um `Gate` verde num commit que a
+staging nunca teve, que o _Staging evidence_ de um PR dessa branch aceitaria.
+Por isso todo job confere `github.ref == 'refs/heads/staging'` (ou precisa
+de um que confere): fora da `staging`, o run sai inteiro pulado, como o
+botão do `production.yml` fora da `main`. O `check-gate.sh` também só aceita
+o `Gate` de um run do `staging.yml` na branch `staging`
+(`ci-stability.test.ts`, "the staging road"; `check-gate.test.ts`).
+
+**Função de status explícita.** O `Build`, o `Image scan` e o `Deploy` dizem
+na própria condição `!cancelled()` e o resultado de que precisam
+(`needs.gate.result == 'success'` e assim por diante). Sem uma função de
+status, o GitHub acrescenta um `success()` que enxerga todo job acima, os de
+dentro do `validate.yml` inclusive, e um job pulado em qualquer ponto (o
+`Docs` num push de código, o `AI local contract (manual)` na staging)
+pularia o build mesmo com o `Gate` verde
+([actions/runner#2205](https://github.com/actions/runner/issues/2205)). O
+`ci-stability.test.ts` ("a job downstream of one that runs past a skip")
+recusa, depois de um job que roda apesar de um pulado, um job sem
+`!cancelled()` e um que não cite o resultado (ou uma saída) de cada job do
+`needs`: só o `!cancelled()` rodaria o build depois de um `Gate` vermelho.
+É a mesma regra dos testes da web e do app.
+
+**O veredito do `validate.yml`.** O `Gate` lê `needs.validate.outputs.passed`,
+e nunca `needs.validate.result`. Algum job do `validate.yml` é sempre
+pulado (o `Docs` num push de código; o `Validate`, os E2E e o `AI OCR` num
+push de documentação), um job pulado dentro de um workflow reutilizável
+vaza para quem o chama
+([community/discussions/189172](https://github.com/orgs/community/discussions/189172)),
+e o valor que isso deixa em `needs.validate.result` não é contrato: se fosse
+`skipped`, o `Gate` ficaria vermelho em todo push e nada seria implantado.
+Lá dentro, o resultado de cada job é confiável, e o job `Result` do
+`validate.yml` o confere (abaixo de todos, com `!cancelled()`) e só então
+grava `passed=true`. O E2E em matriz impede o jeito do app, em que cada job
+grava a própria saída: a saída de um job em matriz é a do último shard que
+escreve. Uma validação cancelada por um push novo cancela o `Result` junto,
+e o `Gate` fica pulado (`!contains(needs.*.result, 'cancelled')`). O
+`ci-stability.test.ts` executa o passo do `Result` em cada combinação, exige
+que o `needs` dele tenha todo job do arquivo e recusa, nos workflows que
+chamam o `validate.yml`, qualquer leitura do resultado do job que o chama.
+
+Antes do push, o `Build` carrega as imagens da API e de migração no runner e
+roda um smoke test contra um Postgres e um Redis descartáveis, numa rede
+interna sem saída para a internet (a CLI do Prisma não pode baixar engine):
+confere que a imagem da API não traz o CLI, migrations nem seeds e traz
+`build/schema-version.json`; sobe a API no banco vazio e exige que ela
 **recuse** (a trava de schema); roda a imagem de migração como a Application
 dela a roda (comando `release`, só com o Environment daquela Application:
 `DATABASE_URL`, `ALLOW_EMPTY_DATABASE_BOOTSTRAP` e as duas `MASTER_USER_*`),
-que aplica todas as migrations e os seeds e precisa ficar saudável (o
-próprio `HEALTHCHECK`); e sobe a API de novo, que precisa passar no
-próprio HEALTHCHECK, responder este commit em `/health/liveness` e 200 em
+que aplica todas as migrations e os seeds e precisa ficar saudável (o próprio
+`HEALTHCHECK`); e sobe a API de novo, que precisa passar no próprio
+HEALTHCHECK, responder este commit em `/health/liveness` e 200 em
 `/health/readiness`. Se falhar, nada vai para o GHCR. Os pushes seguintes
 publicam os mesmos builds, do cache do builder. Uma imagem de migração
 reaproveitada é baixada do GHCR por digest e é ela que roda no smoke test: é
-a que o deploy vai rodar.
+a que o deploy vai rodar. A imagem da IA passa pelo mesmo: sobe sem rede,
+com a raiz só de leitura, e precisa ficar saudável e responder este commit.
 
-Permissões: o workflow inteiro tem `contents: read`; só `build-and-push`,
-`deploy-staging` e `promote-production` pedem `packages: write`;
-`staging-image` pede `packages: read`; `release` pede `contents`, `issues` e
-`pull-requests: write`. Todas as actions são fixadas por SHA de commit, com a
-versão em comentário (o teste `supply-chain.test.ts` recusa uma tag solta).
+### `pr.yml` — pull request para `main`
+
+O PR não valida de novo: o staging já validou, no commit que o merge
+promove, e o merge ref que um PR testaria nem é o que vai para a produção (a
+promoção envia o build da cabeça). Um push novo no PR cancela o run anterior.
+
+| Job                | O que faz                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Secret scan`      | o mesmo gitleaks, no histórico que a `main` receberia                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `Staging evidence` | (1) a `main` só traz documentação que a cabeça do PR não tem (`docs-only.sh` do ponto em comum até a `main`): código ali chegaria à produção no merge sem build de staging; (2) espera (até 45 min) o marcador `staged-<head do PR>` das duas imagens, no mesmo digest de `sha-<head do PR>`, ou que o head só mude documentação desde um commit que o staging rodou (`.github/scripts/staged-build.sh`); (3) o `Gate` do run de staging desse build está verde (`.github/scripts/check-gate.sh`, pela API do GitHub: só o `Gate` de um run do `staging.yml` na branch `staging` conta, lido pela suíte do check, por isso `actions: read`; builds de antes de 10/11/2026 têm, no lugar, o job antigo _Lint, type-check, unit (coverage floor) and E2E_ do `deploy.yml`, que valia o mesmo); (4) num head só de documentação, também o `Gate` do run do próprio head (o `Docs` dele), esperando até 20 min um run ainda no `Docs`. Timeout de 75 min |
+
+`Secret scan` e `Staging evidence` são os checks exigidos na `main`
+([seção 13](#13-configurar-o-github), "Proteção das branches").
+
+### `production.yml` — promoção e rollback
+
+| Job                | O que faz                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Staging evidence` | sem environment, **antes** da aprovação; só a partir de `main`. Resolve o build (2º pai do merge commit; fast-forward = o próprio commit; _Run workflow_ = a tag digitada, que é obrigatória), valida o formato (`sha-<hex>` ou `main-<hex>`), confere num merge que o staging rodou o build — o marcador `staged-<7>` no mesmo digest, esperando até 20 min um deploy de staging ainda em andamento, ou o build do commit mais próximo que o staging rodou, quando o merge só muda documentação desde ele — e que o `Gate` dele está verde, e, nesse caso de documentação, também o `Gate` do commit mergeado (o rollback é isento dos três), confere que a imagem existe no GHCR, compara com o que o staging roda (só informa) e lê os digests a promover (API, migração, IA e PgBouncer, este pelo `sha-<7>`, como o da IA: o `staged-build.sh` exige o `staged-<7>` dele no mesmo digest), mais o da `trajetto-postgres` da mesma `infra/postgres` (`src-<hash>`), só como referência. A imagem de migração: um build anterior a ela (`main-<sha>`, ou um rollback para uma árvore sem `infra/scripts/schema-guard.ts`) segue sem ela, marcado; um posterior sem ela reprova aqui, antes de qualquer coisa andar |
+| `Deploy`           | job `promote-production`, environment `production` (revisores obrigatórios = aprovação); um por vez (`concurrency: promote-production`, nunca cancelado no meio). A ação `.github/actions/deploy` com a tag `stable`, os digests do _Staging evidence_, a conferência pelo Swarm por SSH como padrão (`ROLLOUT_VERIFY=http` usa a liveness pública), só as tags da IA e do PgBouncer devolvidas depois de um deploy que falhou (uma promoção que falhou se corrige promovendo de novo) e sem marcador. Depois do deploy, move `trajetto-postgres:stable` para aquele digest, só como referência do que o Database da produção deve rodar com essa API (o GHCR sem resposta só avisa; o Database nunca é implantado pela CI)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `Release`          | depois do deploy, só no push em `main`: `semantic-release` cria a tag, o `CHANGELOG.md` e o GitHub Release. O commit do CHANGELOG leva a marcação de pular CI do `@semantic-release/git` e não dispara outra promoção                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+
+### `.github/actions/deploy` — o deploy de um ambiente
+
+O mesmo código para o staging e a produção, chamado pelo job que carrega o
+environment: uma aprovação só, e os secrets e as variáveis continuam no
+environment, com os mesmos nomes de sempre. Uma ação composta não lê
+`secrets` nem `vars` sozinha: o job entrega cada um como entrada
+(`dokploy-url: ${{ secrets.DOKPLOY_URL }}` etc.), e nos passos eles chegam ao
+script por `env`, nunca colados no `run:`. Os passos, em ordem:
+
+1. **Check run is branch head** (só no staging): runs terminam fora de ordem,
+   e o mais velho não volta a tag, a menos que a cabeça nova só acrescente
+   documentação (`docs-only.sh`: um push de documentação não faz deploy, e o
+   build deste run é o conteúdo dela). Só um sha válido decide; a leitura
+   repete 3 vezes. Todo passo seguinte depende da resposta.
+2. **Read what the environment runs now**: para onde as tags `staging` (ou
+   `stable`) da API e da IA apontam; a IA só é reimplantada se o digest
+   mudou ou com `force_ai_build`, e nunca se o build não tem imagem de IA.
+3. **Check deploy settings**: os quatro secrets obrigatórios do Dokploy;
+   nenhum = pula o deploy com aviso (as tags andam); alguns = falha. Logo
+   depois, **Pick the rollout check**: qual conferência roda (passo 9),
+   escolhida antes de qualquer deploy, porque a do PgBouncer vem antes das
+   migrations e a dos papéis, antes da API.
+4. **Decide migrations**: compara a imagem de migração do build com
+   `trajetto-api-migrate:<tag>-applied`; um build anterior à imagem de
+   migração pula a etapa. Em seguida, o PgBouncer (plano de escala F4-35),
+   antes das migrations e de qualquer código que rode por ele: **Decide
+   the PgBouncer deploy** compara o digest da `trajetto-pgbouncer` do build
+   com o que `trajetto-pgbouncer:<tag>` aponta, e só um digest novo segue
+   (um push que não muda `infra/pgbouncer` entrega o mesmo digest e não
+   reimplanta nada; um build sem a imagem deixa o PgBouncer onde está);
+   **Move the PgBouncer tag to this build** move a tag por digest, com ou
+   sem Dokploy; **Deploy the PgBouncer (Dokploy)**, só com o secret
+   `DOKPLOY_PGBOUNCER_APPLICATION_ID` (sem ele, aviso, e só a tag andou);
+   e **Wait for the PgBouncer to converge**, no modo `ssh`, o
+   `verify-rollout.sh` da imagem dele no serviço de `SWARM_PGBOUNCER_SERVICE`
+   (sem a variável, aviso; no modo `http`, que não tem conferência pública
+   para ele, um aviso). Um deploy ou uma conferência do PgBouncer que falha
+   para tudo o que vem depois, as migrations inclusive.
+5. **Move the release image tag to this build**, **Run the database
+   migrations (Dokploy)** (`dokploy-release.mjs`, espera o Swarm dizer que a
+   etapa terminou ou falhou) e **Record the migrations as applied**, só
+   quando é preciso, e antes de qualquer tag da API ou da IA andar.
+6. **Move the AI tag to this build** e **Deploy the AI service (Dokploy)**
+   (a IA vai antes, porque a API a chama; só se o digest mudou).
+7. **Deploy the worker roles (Dokploy)** (plano de escala F3-31a,
+   `.github/scripts/deploy-roles.sh before-api`): as Applications de papel
+   que vão antes da API, na ordem `trajetto-worker` → `trajetto-scheduler`
+   → `trajetto-worker-external`. Cada uma roda
+   `trajetto-api:<tag>-<papel>` (`staging-worker`, `stable-worker`…), e
+   essa tag anda para o digest da API logo antes do deploy dela: uma tag só
+   para todas deixaria o Swarm puxar o build novo fora de ordem num
+   reinício de task. Papel sem o secret `DOKPLOY_<PAPEL>_APPLICATION_ID` =
+   aviso, e não é implantado; um deploy de papel que falha para tudo o que
+   vem depois, a API inclusive. Em seguida, **Wait for the worker roles to
+   converge**: o `done` do Dokploy só diz que o Swarm aceitou a spec, e um
+   worker cuja task nova recusa o boot (um erro de digitação em
+   `WORKER_QUEUES`, que o boot recusa de propósito) volta ao build anterior
+   pelo Swarm. Por isso, antes de a tag da API andar, cada papel implantado
+   aqui precisa estar no build novo: no modo `ssh`, pelo `verify-rollout.sh`
+   de cada um; no `http`, pelo `/health/rollout` da API ainda no build
+   anterior (`wait-for-roles.mjs` só com esses papéis, abaixo). Um papel
+   que não sobe falha o run, e a API não é implantada.
+8. **Move the API tag to this build** e **Deploy the API (Dokploy)**. Na
+   produção, `stable` da API passou a andar só depois do deploy da IA, como
+   no staging.
+9. A conferência da API, a escolhida no passo 3: **Wait for the API to
+   serve this build** (`http`, a liveness pública), **Wait for the rollout
+   to converge** (`ssh`, o Swarm) ou **Report the rollout as unverified**
+   (`off`). Valor vazio ou desconhecido de `ROLLOUT_VERIFY` = o padrão do
+   ambiente (staging `http`, produção `ssh`), com aviso no desconhecido:
+   exatamente uma conferência roda, salvo `off`.
+10. **Deploy the edge roles (Dokploy)** (`deploy-roles.sh after-api`):
+    `trajetto-ingest` → `trajetto-realtime`, com as regras do passo 7, só
+    depois de a conferência da API passar.
+11. **Move the tags of the roles not deployed**
+    (`deploy-roles.sh follow`): com tudo verde, os papéis sem Application (ou sem Dokploy)
+    ficam com a tag no digest da API, para uma Application criada depois
+    subir no build do ambiente; o GHCR sem resposta aqui só avisa. Sem
+    nenhum secret novo, o run implanta exatamente o que implantava antes.
+    Um rollback (`production.yml` com `image_tag`) leva todos os papéis
+    junto com a API, porque todos rodam o digest dela.
+12. **Mark this build as staged** (só no staging, por último; o
+    `staged-<7>` da `trajetto-pgbouncer` também, quando o build tem a imagem
+    dela).
+13. **Put the tags back after a failed deploy**: depois de um deploy do
+    Dokploy que falhou, a tag daquele serviço volta ao digest anterior (no
+    staging a do PgBouncer, a da IA, a da API e a do papel que falhou; na
+    produção só a do PgBouncer e a da IA).
+
+### Concorrência e cancelamento
+
+| Grupo                | Onde                                                | Cancela o run anterior?                                             |
+| -------------------- | --------------------------------------------------- | ------------------------------------------------------------------- |
+| `ci-<ref>`           | `ci.yml` inteiro                                    | sim (a branch de trabalho)                                          |
+| `pr-<número>`        | `pr.yml` inteiro                                    | sim                                                                 |
+| `staging-validate`   | job `Validate` do staging, num push de código       | sim: só a validação; o `Build` e o `Deploy` que começaram terminam  |
+| `staging-docs-<run>` | job `Validate` do staging, num push de documentação | não: um grupo por run, que não cancela o run de código embaixo dele |
+| `deploy-staging`     | job `Deploy` do staging                             | **nunca**: um por vez                                               |
+| `promote-production` | job `Deploy` da produção                            | **nunca**: um por vez                                               |
+
+Rodar de novo, à mão, um run antigo de código da staging enquanto um mais
+novo valida cancela a validação do mais novo (o grupo é o mesmo). O mesmo
+acontece, raramente, sem ninguém tocar em nada: o GitHub resolve o grupo
+pela ordem de chegada do job, não pela dos commits, e se dois pushes de
+código chegam em segundos e o `Changes` do mais velho atrasa (fila de
+runner, a leitura do GHCR repetindo), o `Validate` dele entra no grupo
+depois e cancela o do mais novo. O run do topo fica cancelado, sem `Gate`
+nem `staged-<7>`, e o mais velho para no `Check run is branch head` sem
+implantar: nada chega ao staging sem validação, mas o PR para `main` espera.
+**Reexecute sempre o run mais novo, nunca um antigo** (um run cancelado não
+é vermelho, e reexecutá-lo não é o re-run de instabilidade que a regra do
+pipeline proíbe). A web fecha essa corrida com o `Check run is current` no
+fim do `Changes`, do `Build` e do `Gate`; na API e no app, onde o `Changes`
+leva segundos, ela fica com esta regra.
+
+### Permissões
+
+Todo workflow tem `contents: read` no topo. `packages: read` no `Changes` do
+staging, nos dois jobs que chamam o `validate.yml` (o `Validate` do
+`ci.yml` e o do `staging.yml`, para o `AI OCR`), no `AI OCR`, no `Image
+scan` e nos _Staging evidence_; `checks: read` e `actions: read` nos
+_Staging evidence_ (o `check-gate.sh` lê os checks do commit e o workflow e
+a branch do run de cada `Gate`); `packages: write` só no `Build` e nos dois
+`Deploy`; `release` pede `contents`, `issues` e `pull-requests: write`. Só os dois `Deploy` têm
+environment. Todas as actions de fora são fixadas por SHA de commit, com a
+versão em comentário (o `supply-chain.test.ts` recusa uma tag solta); as
+ações e o workflow reutilizável deste repositório vêm do mesmo commit.
+
+### Tempos e minutos
+
+Medido numa réplica Linux (`node:22.21.1`, 2 núcleos com `--cpuset-cpus`,
+como o runner de 2 vCPU de repositório privado), em 10/11/2026, com os
+mesmos Postgres e Redis dos serviços:
+
+| Medida                                            | Antes (CI de 04/11/2026, 2 vCPU)          | Agora (réplica, 10/11/2026)                                                                                                                                                                           |
+| ------------------------------------------------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| E2E inteiro (`yarn test:e2e`), um job só          | ~47 min (1 processo, migrate por arquivo) | **24,4 min** (1.462 s, molde e 2 processos): fase `shared` 1.178 s (347 arquivos), fase de réplicas 281 s (10 arquivos)                                                                               |
+| custo de cada arquivo E2E antes do primeiro teste | 4,66 s                                    | 0,35 s (122 s de _environment_ do Vitest em 347 arquivos)                                                                                                                                             |
+| `E2E (1/3)`: metade da fase `shared`              | —                                         | ~9,3 min (174 arquivos, 47 % do tempo somado dos arquivos); mais a fase infra (F4-38), com teto de 3 min: 34 s na máquina do dono com a imagem pronta, mais o Buildx e o build do PgBouncer no runner |
+| `E2E (2/3)`: a outra metade                       | —                                         | ~10,4 min (173 arquivos, 53 %)                                                                                                                                                                        |
+| `E2E (3/3)`: a fase de réplicas inteira           | —                                         | 4,7 min (281 s)                                                                                                                                                                                       |
+| unitários com o piso de cobertura                 | ~10 min (1 processo)                      | 7 min (421 s, 631 arquivos, 2 processos, com o host carregado por outros contêineres; cobertura 79,4 / 85,79 / 69,46 / 79,4 %, acima do piso)                                                         |
+
+Os tempos dos jobs 1 e 2 saem do E2E inteiro (a parte de cada um na soma
+dos tempos dos arquivos, pela divisão exata do `--shard` do Vitest); cada
+job também rodou sozinho na réplica, com o próprio Postgres, para conferir
+que passa: `E2E (1/3)` com 173 arquivos verdes em 647 s, `E2E (2/3)` com 173
+em 670 s e `E2E (3/3)` com 10 em 335 s, os três com o host carregado por
+outros contêineres (por isso acima da estimativa). Numa primeira rodada do
+`E2E (1/3)`, com o host ainda mais carregado (cada arquivo 2 a 4 vezes mais
+lento), dois testes com orçamento de tempo estouraram:
+`assignment-atomicity` (o limite padrão de 5 s por teste) e
+`webhook-held-release` (um `statement_timeout` fixo de 600 ms num lote de
+2.000 linhas, ~80 ms normalmente). Os dois mediam a máquina, não o código, e
+foram corrigidos na causa: o `assignment-atomicity` tem 30 s por teste (uma
+trava contra travamento, como os outros E2E que fazem várias chamadas HTTP),
+e o `webhook-held-release` mede no próprio teste quanto a liberação de um
+lote leva naquela hora e põe o limite em 5 vezes isso, nunca abaixo de
+600 ms (ainda reprova uma liberação numa instrução só sobre as 40.000
+linhas, 20 lotes). Depois disso, na réplica de 2 núcleos sem outros
+contêineres, o `E2E (1/3)` passou duas vezes seguidas (173 arquivos verdes e
+1 pulado, em 514 s e 604 s), e os dois arquivos passaram 4 rodadas seguidas
+com 4 processos gastando CPU nos mesmos 2 núcleos. Os unitários com
+cobertura, na mesma imagem, em 2 núcleos: 396 s, 7.594 testes, cobertura
+79,41 / 85,94 / 69,38 / 79,41 %. Num runner do GitHub, some uns 2 min de cada job
+(checkout, Node, `yarn install` do cache, serviços, `prisma generate`).
+
+Estimativa por run (relógio / minutos cobrados, cada job arredondado para
+cima), no ritmo de novembro de 2026:
+
+| Run                                  | Antes (`deploy.yml` único)                  | Agora                                                                                                                                                                 |
+| ------------------------------------ | ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| push de código na `staging`          | ~72 / ~75 (o job `test` sozinho, ~60)       | ~25 / ~61 (o caminho crítico: `Changes` → `E2E (2/3)` ~12,5 → `Result` → `Gate` → `Build` ~6,5 → `Image scan` ~1,5 → `Deploy` ~4)                                     |
+| push só de documentação na `staging` | ~72 / ~75 (ou 0 com a marcação de pular CI) | ~9 / ~12 (`Changes`, `Secret scan`, `Docs` com o Prettier e os irmãos, `Result`, `Gate`)                                                                              |
+| PR `staging → main`                  | ~62 / ~66, mais a espera do `staging-image` | ~1 / ~2 (mais a espera, se o staging ainda roda o mesmo commit)                                                                                                       |
+| merge em `main` (promoção)           | ~8 / ~10, mais a aprovação                  | ~9 / ~11, mais a aprovação (o _Staging evidence_ é um job à parte)                                                                                                    |
+| push numa branch de trabalho         | ~10 / ~13                                   | ~9 / ~12 (`Changes` ~1, `Secret scan` ~1, `Validate` ~8 com os unitários em 2 processos, `AI OCR` ~1, `Result` ~1; sem E2E). Numa branch só de documentação, ~9 / ~11 |
+
+Cobrados num push de código na `staging`: `Validate` ~11, os três E2E
+~12 + ~13 + ~7, `Build` ~7, `Image scan` ~2, `Deploy` ~4, e `Changes`,
+`Secret scan`, `AI OCR`, `Result` e `Gate` ~1 cada. O `Result` é o minuto
+que custa o `Gate` não depender do resultado de quem chama o
+`validate.yml` ("O veredito do `validate.yml`", acima). Os jobs em paralelo custam uns 11
+min a mais por push do que um job só de validação com o molde (uns 36 min:
+o push inteiro em uns 47 de relógio e 50 cobrados), para caber nos ~25 min. Um lint vermelho não para mais o E2E
+(rodam juntos): custa o run inteiro em vez de ~6 min, raro se o lint roda
+antes do push.
+
+No mês, no ritmo de novembro de 2026 (uns 22 pushes de código e 5 de
+documentação na `staging`, 5 runs de PR, 3 promoções, 7 pushes de branch e
+13 do Dependabot): de uns **2.450 min** para uns **1.750 min** só da API.
+Somando a web e o app, a organização fica acima da cota grátis de 2.000 min:
+a conta dos três, com o mesmo texto nos três manuais, está na
+[seção 26, "O CI dos três"](#o-ci-dos-três-desde-10112026).
+
+### Ações do dono
+
+As ações comuns aos três repositórios (os Rulesets, o orçamento, a limpeza
+do GHCR, os runs antigos, os nomes novos dos runs, a ordem do primeiro push
+com o CI novo e o que acompanhar nele) estão na
+[seção 26, "O CI dos três"](#o-ci-dos-três-desde-10112026), com o mesmo
+texto nos três manuais; o orçamento tem o detalhe em
+[`infraestrutura.md`, seção 7.2](./infraestrutura.md#72-visibilidade-e-a-cota-do-actions).
+Aqui, só o que é da API:
+
+- **No primeiro run da API, além da lista comum**: os secrets de
+  environment chegando à ação composta de deploy, o grupo de concorrência
+  do `Validate`, que lê o `needs` (`staging-validate` num push de código,
+  um grupo do próprio run num de documentação), e a leitura do workflow de
+  cada `Gate` pelo `check-gate.sh` (`actions: read`): só um run de verdade
+  confirma.
+- **Na máquina**: depois de puxar esta mudança, `yarn install --force` (o
+  ambiente do E2E é uma dependência `file:`; [`testes.md`](./testes.md#o-banco-molde)).
+- **Comentários que ainda citam o `deploy.yml`**: os do `Dockerfile` e do
+  `infra/ai-ocr/Dockerfile` ficaram de propósito. Mudar só o comentário troca
+  a chave da imagem de migração (`migrate-source.sh` lê o `Dockerfile`) e a
+  árvore da IA (`src-<hash de infra/ai-ocr>`), o que força rebuild e
+  redeploy das duas. Corrija-os (para `staging.yml` e a ação de deploy) na
+  próxima mudança de verdade de cada arquivo.
 
 ### Um vermelho é sempre do código
 
@@ -279,27 +614,32 @@ errado — nunca a rede, um registry, uma tag que andou ou um passo que travou.
 "Rodar de novo" não é correção. O que garante isso aqui (e os testes que
 guardam cada item, em `tests/unitaires/lifecycle`):
 
-| Causa de vermelho (ou verde) falso                                                                                      | O que o pipeline faz agora                                                                                                                                                                                                                                                                                                                                                     | Teste                                                    |
-| ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------- |
-| Um aviso CRITICAL publicado hoje reprovava o push de qualquer commit, até de documentação                               | `.github/scripts/audit-gate.sh`: o `audit-ci` bloqueia só o push ou PR que muda `package.json`, `yarn.lock` ou `package-lock.json` (em qualquer pasta) ou o `audit-ci.jsonc`, ou que não tem base para comparar (branch nova, _Run workflow_, base fora do checkout). Nos outros, roda e relata: `::warning::` e o relatório no resumo do job. O vigia contínuo é o Dependabot | `audit-gate.test.ts`                                     |
-| Uma consulta ao GHCR com erro passageiro virava "a tag não existe" (`2>/dev/null \|\| true`)                            | `.github/scripts/ghcr.sh`: só o "not found" do GHCR é resposta vazia; qualquer outro erro repete (5 tentativas, pausa de 5 s dobrando, `::warning::` com a contagem) e depois falha dizendo que o GHCR está fora. Mover uma tag também repete (é idempotente)                                                                                                                  | `ghcr-script.test.ts`, `staging-deploy-workflow.test.ts` |
-| O download do banco do Trivy (com limite de taxa) duas vezes por run, escondido junto com os achados                    | um download por run, com retentativa, num diretório que o cache do Actions guarda por dia; o scan usa `--skip-db-update`. Falha no download usa a cópia do cache; sem cópia, o scan não roda e o resumo diz isso. Só um achado reprova, e só com `IMAGE_SCAN_ENFORCE=true`                                                                                                     | `ci-stability.test.ts`                                   |
-| Os pesos PP-OCRv5 da IA baixados de `www.modelscope.cn` em todo build sem cache (um pedido, sem retentativa)            | versionados em `infra/ai-ocr/models` (4,8 e 7,9 MB) e conferidos pelo `models.sha256` num `RUN --network=none`; o job `ai-ocr` usa o Buildx com o cache do GitHub                                                                                                                                                                                                              | `image-layers.test.ts`, `ci-stability.test.ts`           |
-| O `postinstall` do `@prisma/engines` baixa o schema engine de `binaries.prisma.sh` e falha calado                       | cache de `~/.cache/prisma` pela versão dos engines; o job `test` confere o engine antes do E2E e baixa de novo (até 3 vezes); o `Dockerfile` faz o mesmo no `yarn install` da imagem de migração (a única que leva o CLI) e para o build com a causa                                                                                                                           | `ci-stability.test.ts`, `image-layers.test.ts`           |
-| Um erro de rede no `git ls-remote` dos irmãos caía calado na branch padrão                                              | só o código 2 ("a branch não existe") cai na padrão, com `::notice::`; outro código repete 3 vezes (10 s, 20 s) e falha                                                                                                                                                                                                                                                        | `compose-ci-siblings.test.ts`                            |
-| `git ls-remote \| cut` sem `pipefail`: uma falha virava "este run não é o head" e o deploy de staging era pulado, verde | `defaults.run.shell: bash` (`-eo pipefail`) nos três workflows; a leitura do head repete 3 vezes e só um sha válido decide; a leitura dos pais do merge (`gh api`) também repete                                                                                                                                                                                               | `ci-stability.test.ts`, `promote-workflow.test.ts`       |
-| Um erro passageiro da borda zerava a janela de 90 s da conferência pela liveness                                        | só uma resposta de outro commit zera; sondagem sem resposta não zera, e cada sequência delas vira `::warning::` com a contagem ([seção 14](#14-conferir-a-convergência))                                                                                                                                                                                                       | `wait-for-version.test.ts`                               |
-| As retentativas do deploy no Dokploy só apareciam no log                                                                | cada retentativa (pedido, consulta, deploy) é `::warning::` com a contagem, e o resumo do job lista cada tentativa que falhou com o motivo do Dokploy                                                                                                                                                                                                                          | `dokploy-deploy.test.ts`                                 |
-| Uma exportação de cache que falhava (429 ou 5xx do serviço de cache) derrubava o build já publicado                     | todo `cache-to: type=gha` com `ignore-error=true`                                                                                                                                                                                                                                                                                                                              | `ci-stability.test.ts`                                   |
-| Um passo travado segurava o runner até 6 h                                                                              | `timeout-minutes` em todo job, com folga sobre o pior medido: `test` 90, `ai-ocr` 30, `secrets` 10, `build-and-push` 45, `deploy-staging` 120, `staging-image` 60, `release` 20, `promote-production` 120; no `ci.yml`, `validate` 30, `ai-ocr` 30, `secrets` 10, `ai-local-e2e` 45                                                                                            | `ci-stability.test.ts`                                   |
-| Um commit `[skip ci]` só de documentação na ponta da `staging` travava a promoção                                       | a regra de documentação abaixo ([seção 16](#16-promover-para-produção)); e o run do commit de código logo abaixo de uma ponta só de documentação implanta mesmo assim (`docs-only.sh`, testado no `ci-stability.test.ts`)                                                                                                                                                      | `staged-build.test.ts`, `promote-workflow.test.ts`       |
+| Causa de vermelho (ou verde) falso                                                                                                                      | O que o pipeline faz agora                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Teste                                                                   |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| Um aviso CRITICAL publicado hoje reprovava o push de qualquer commit, até de documentação                                                               | `.github/scripts/audit-gate.sh`: o `audit-ci` bloqueia só o run cujo intervalo (desde a base que o `Changes` escolheu: no staging, o último build servido) muda `package.json`, `yarn.lock` ou `package-lock.json` (em qualquer pasta) ou o `audit-ci.jsonc`, ou que não tem base para comparar (nenhum build servido nos 50 commits anteriores, base fora do checkout). Nos outros, roda e relata: `::warning::` e o relatório no resumo do job. O vigia contínuo é o Dependabot | `audit-gate.test.ts`                                                    |
+| Uma consulta ao GHCR com erro passageiro virava "a tag não existe" (`2>/dev/null \|\| true`)                                                            | `.github/scripts/ghcr.sh`: só o "not found" do GHCR é resposta vazia; qualquer outro erro repete (5 tentativas, pausa de 5 s dobrando, `::warning::` com a contagem) e depois falha dizendo que o GHCR está fora. Mover uma tag também repete (é idempotente)                                                                                                                                                                                                                     | `ghcr-script.test.ts`, `staging-deploy-workflow.test.ts`                |
+| O login no GHCR (`docker/login-action`) falhava antes da alternativa "o GHCR não respondeu" dos jobs que podem seguir sem ele                           | no `AI OCR` e no `Changes` do staging, o login é o `ghcr.sh login` (5 tentativas, aviso no fim): sem login, o `AI OCR` testa e a base do audit volta ao push anterior, com aviso. Os jobs que precisam do GHCR (`Build`, `Image scan`, `Deploy`, _Staging evidence_) continuam falhando nele                                                                                                                                                                                      | `ci-stability.test.ts`, `ghcr-script.test.ts`, `changes-script.test.ts` |
+| O download do banco do Trivy (com limite de taxa) duas vezes por run, escondido junto com os achados                                                    | um download por run, com retentativa, num diretório que o cache do Actions guarda por dia; o scan usa `--skip-db-update`. Falha no download usa a cópia do cache; sem cópia, o scan não roda e o resumo diz isso. Só um achado reprova, e só com `IMAGE_SCAN_ENFORCE=true`                                                                                                                                                                                                        | `ci-stability.test.ts`                                                  |
+| Os pesos PP-OCRv5 da IA baixados de `www.modelscope.cn` em todo build sem cache (um pedido, sem retentativa)                                            | versionados em `infra/ai-ocr/models` (4,8 e 7,9 MB) e conferidos pelo `models.sha256` num `RUN --network=none`; o job `AI OCR` usa o Buildx com o cache do GitHub                                                                                                                                                                                                                                                                                                                 | `image-layers.test.ts`, `ci-stability.test.ts`                          |
+| O `postinstall` do `@prisma/engines` baixa o schema engine de `binaries.prisma.sh` e falha calado                                                       | cache de `~/.cache/prisma` pela versão dos engines; a ação `setup` confere o engine nos jobs de E2E e baixa de novo (até 3 vezes); o `Dockerfile` faz o mesmo no `yarn install` da imagem de migração (a única que leva o CLI) e para o build com a causa                                                                                                                                                                                                                         | `ci-stability.test.ts`, `image-layers.test.ts`                          |
+| Um erro de rede no `git ls-remote` dos irmãos caía calado na branch padrão                                                                              | só o código 2 ("a branch não existe") cai na padrão, com `::notice::`; outro código repete 3 vezes (10 s, 20 s) e falha                                                                                                                                                                                                                                                                                                                                                           | `compose-ci-siblings.test.ts`                                           |
+| `git ls-remote \| cut` sem `pipefail`: uma falha virava "este run não é o head" e o deploy de staging era pulado, verde                                 | `defaults.run.shell: bash` (`-eo pipefail`) em todo workflow, e `shell: bash` em todo passo das ações compostas; a leitura do head repete 3 vezes e só um sha válido decide; a leitura dos pais do merge (`gh api`) também repete                                                                                                                                                                                                                                                 | `ci-stability.test.ts`, `promote-workflow.test.ts`                      |
+| Um job pulado dentro do `validate.yml` (o `Docs` num push de código) pulava, pelo `success()` implícito, o `Build` e o deploy depois de um `Gate` verde | o `Build`, o `Image scan` e o `Deploy` do `staging.yml` declaram `!cancelled()` e o resultado de que precisam ([actions/runner#2205](https://github.com/actions/runner/issues/2205)), como na web e no app                                                                                                                                                                                                                                                                        | `ci-stability.test.ts`                                                  |
+| Um erro passageiro da borda zerava a janela de 90 s da conferência pela liveness                                                                        | só uma resposta de outro commit zera; sondagem sem resposta não zera, e cada sequência delas vira `::warning::` com a contagem ([seção 14](#14-conferir-a-convergência))                                                                                                                                                                                                                                                                                                          | `wait-for-version.test.ts`                                              |
+| As retentativas do deploy no Dokploy só apareciam no log                                                                                                | cada retentativa (pedido, consulta, deploy) é `::warning::` com a contagem, e o resumo do job lista cada tentativa que falhou com o motivo do Dokploy                                                                                                                                                                                                                                                                                                                             | `dokploy-deploy.test.ts`                                                |
+| Uma exportação de cache que falhava (429 ou 5xx do serviço de cache) derrubava o build já publicado                                                     | todo `cache-to: type=gha` com `ignore-error=true`                                                                                                                                                                                                                                                                                                                                                                                                                                 | `ci-stability.test.ts`                                                  |
+| Um passo travado segurava o runner até 6 h                                                                                                              | `timeout-minutes` em todo job, com folga sobre o pior medido: `Validate` 30, cada `E2E` 30, `AI OCR` 30, `Docs` 20, `Changes` 5 (10 no staging), `Secret scan` 10, `Gate` 5, `Build` 45, `Image scan` 20, os dois `Deploy` 120, _Staging evidence_ 75 no PR e 50 na promoção, `Release` 20, `AI local contract` 45. Um job que chama o `validate.yml` não aceita timeout: os jobs dele têm o seu                                                                                  | `ci-stability.test.ts`                                                  |
+| Um commit `[skip ci]` só de documentação na ponta da `staging` travava a promoção                                                                       | a regra de documentação abaixo ([seção 16](#16-promover-para-produção)); e o run do commit de código logo abaixo de uma ponta só de documentação implanta mesmo assim (`docs-only.sh`, testado no `ci-stability.test.ts`)                                                                                                                                                                                                                                                         | `staged-build.test.ts`, `promote-workflow.test.ts`                      |
+| Uma mudança de dependência cujo run foi cancelado por um push mais novo ficava fora do audit que bloqueia                                               | a base do audit no staging é o último build servido (`staged-<7>`), não o push anterior; o push cancelado continua no intervalo até um build ser servido (`changes.sh`)                                                                                                                                                                                                                                                                                                           | `changes-script.test.ts`, `audit-gate.test.ts`                          |
+| Um run **failed** sem nenhum job vermelho, com jobs que nem aparecem                                                                                    | não é do código: o job não começou. A causa está em _Summary → Annotations_ do run ("The job was not started because recent account payments have failed or your spending limit needs to be increased": a cota do Actions acabou, ou o limite de gasto). Quando houver minutos, _Re-run failed jobs_ refaz só o que não rodou. Ver as ações do dono abaixo ([Tempos e minutos](#tempos-e-minutos))                                                                                | —                                                                       |
 
-Uma borda do `audit-gate.sh`: a base do push é o `before`. Uma mudança de
-dependência que chegue à `staging` sem run próprio (num `[skip ci]`, o que a
-regra de documentação proíbe, ou num run pendente que o GitHub trocou pelo do
-push seguinte) não entra no diff do push seguinte, e ali o achado só avisa. A
-produção continua protegida: o PR `staging → main` compara com a `main`, vê a
-mudança e bloqueia.
+A base do audit (decisão D1 de 10/11/2026): no staging, o último build que a
+staging **serviu** (`staged-<7>`), e não o push anterior. Antes, uma mudança
+de dependência cujo run foi cancelado pelo push seguinte (ou que falhou) não
+entrava no diff do push seguinte, e ali um achado só avisava. Agora ela
+continua no intervalo até um build ser servido, e o audit bloqueia de
+verdade (`changes.sh`, testado no `changes-script.test.ts`). Numa branch de
+trabalho, a base é o ponto em que ela saiu da `staging`: o que a branch muda.
 
 O que continua dependendo de fora, de propósito: o npm (instalação e o
 endpoint de auditoria; o `audit-gate.sh` repete 3 vezes um audit que não
@@ -311,28 +651,37 @@ de rede do `setupTests.ts`, [`testes.md`](./testes.md#nenhuma-rede-de-fora)).
 
 O mesmo commit testa e publica sempre nas mesmas versões:
 
-- **Node**: `node-version: "22.21.1"` em todo `actions/setup-node` dos três
-  workflows, a mesma versão da base do `Dockerfile` (`node:22.21.1-alpine`).
-  Antes era `"22"`, que andava com o _toolcache_ do runner. Quando o
-  Dependabot sobe a base do `Dockerfile`, suba o `node-version` dos
-  workflows no mesmo PR: o `ci-stability.test.ts` falha enquanto os dois
-  não batem.
+- **Node**: `node-version: "22.21.1"` em todo `actions/setup-node` (nas
+  ações `setup` e `deploy` e no `cloudflare-ranges.yml`), a mesma versão da
+  base do `Dockerfile` (`node:22.21.1-alpine`). Antes era `"22"`, que andava
+  com o _toolcache_ do runner. Quando o Dependabot sobe a base do
+  `Dockerfile`, suba o `node-version` no mesmo PR: o `ci-stability.test.ts`
+  falha enquanto não batem.
 - **Runner**: `runs-on: ubuntu-24.04` em todo job dos três repositórios,
   nunca `ubuntu-latest`. O `ubuntu-latest` passou a migrar para o 26.04 em
   19/10/2026, sem commit nosso, e o Playwright 1.56 recusou o 26.04 nas
   suítes da web. Troque à mão, nos três no mesmo dia, quando o GitHub
   anunciar o fim do 24.04 (o `ci-stability.test.ts` recusa `ubuntu-latest`).
 - **Imagens dos jobs**, por digest do índice multi-arquitetura, com a tag ao
-  lado em comentário: `postgres:16-alpine` (16.15) e `redis:7-alpine`
-  (7.4.12) nos serviços e no smoke test; o BuildKit do Buildx
-  (`moby/buildkit:v0.33.1`, a versão que o `buildx-stable-1` apontava em
-  30/10/2026); gitleaks e Trivy. Os digests do Postgres e do Redis são os
-  mesmos nos três repositórios. O Dependabot não lê imagens dentro dos
+  lado em comentário: `postgres:16-alpine` (16.16, desde 25/11/2026) e
+  `redis:7-alpine` (7.4.12) nos serviços e no smoke test; o BuildKit do
+  Buildx (`moby/buildkit:v0.33.1`, a versão que o `buildx-stable-1` apontava
+  em 30/10/2026); gitleaks e Trivy. Os digests do Postgres e do Redis são os
+  mesmos nos três repositórios. O Postgres está hoje em quatro lugares: o
+  `validate.yml` e o `staging.yml` daqui, o `validate.yml` da web e a base do
+  `infra/postgres/Dockerfile`. O Dependabot não lê imagens dentro dos
   workflows: para subir, pegue o digest novo do índice
   (`docker buildx imagetools inspect postgres:16-alpine`, a linha `Digest:`)
   e troque em todos os lugares de uma vez, nos três repositórios. O
   `ci-stability.test.ts` recusa uma imagem sem digest e o mesmo nome com dois
-  digests.
+  digests, também entre repositórios: com a web e o app ao lado (no
+  `Validate`, a ação `siblings` os traz), o Postgres e o Redis deles têm que
+  estar no digest daqui, e a base do `Dockerfile` também.
+- **Builders do `infra/postgres/Dockerfile`**, também por digest e à mão:
+  a base `postgres:16-alpine` (a mesma dos serviços, acima) e a
+  `golang:1.27.4-alpine3.24`, que só compila o `gosu` da imagem
+  ([seção 27](#o-gosu-recompilado)); o `postgres-image.test.ts` recusa um Go
+  sem a correção da CVE-2025-68121.
 - **O `docker buildx` dos jobs** é o que vem no runner (só o BuildKit é
   fixado), e ele muda com a imagem do runner. Uma diferença entre versões já
   medida: o `--format '{{.Manifest.Digest}}'` que o `ghcr.sh` usa devolve o
@@ -386,7 +735,8 @@ Os passos são sequenciais, e a tag `staging` de cada serviço só se move logo
 antes do deploy dele: **um deploy da IA que falha para o job antes de tocar
 na API** (a API antiga continua no ar, e a tag `staging` da API continua no
 build que o staging roda). Um deploy do Dokploy que falha devolve a tag
-`staging` daquele serviço ao digest anterior (último passo do job). O que o
+`staging` daquele serviço ao digest anterior (último passo da ação de
+deploy). O que o
 script pega e um webhook não pegaria: imagem que o Dokploy não consegue
 puxar (credencial do GHCR errada, tag inexistente), chave ou id errados. Por
 isso a API usa a chave de API e o id de cada Application, e não o webhook de
@@ -397,17 +747,19 @@ usa o mesmo script, numa cópia que um teste dela compara com esta
 **A IA só é reimplantada quando muda.** A imagem `trajetto-ai` era
 reconstruída a cada push e ganhava um digest novo toda vez (labels), e o
 passo de deploy dela não tinha condição: todo push da API reiniciava a IA e
-mandava ~200 MB pela rota instável da VPS. Agora o `build-and-push` acha a
+mandava ~200 MB pela rota instável da VPS. Agora o `Build` acha a
 imagem pelo hash git de `infra/ai-ocr` (tag `src-<hash>`) e a reaproveita
-quando o código da IA não mudou, e o `deploy-staging` pula o deploy da IA
+quando o código da IA não mudou, e o `Deploy` pula o deploy da IA
 quando o digest é o mesmo que a tag `staging` já aponta; a promoção faz o
-mesmo com a tag `stable`. Um deploy da IA que falha devolve a tag do
+mesmo com a tag `stable` (a mesma ação de deploy). Um deploy da IA que falha devolve a tag do
 ambiente ao digest anterior, para a comparação seguinte não pular um deploy
 que não aconteceu. Para forçar (correção que chegou à imagem base sem mudar
-o digest, IA fora do lugar): _Actions_ → _Pipeline (staging → produção)_ →
-_Run workflow_ com **force_ai_build** marcado — na branch `staging`
-reconstrói e reimplanta a IA de staging; na `main`, junto com o
-`image_tag`, reimplanta a IA de produção.
+o digest, IA fora do lugar): _Actions_ → _Staging_ → _Run workflow_ com
+**force_ai_build** marcado testa, reconstrói e reimplanta a IA de staging;
+_Actions_ → _Production_ → _Run workflow_ (na `main`), junto com o
+`image_tag`, reimplanta a IA de produção. Do mesmo jeito,
+**force_realtime** implanta a `trajetto-realtime` mesmo sem mudança no
+código que ela executa (ver o papel `realtime`, na seção 19).
 
 ## 4. A topologia no servidor
 
@@ -434,17 +786,35 @@ com `trajetto-postgres-production:5432`, `trajetto-redis-production:6379` e
 `http://trajetto-ai-production:8080`. Só a API (e a web) têm domínio; nenhum
 serviço publica porta no host. O backup do banco é o do próprio Database
 PostgreSQL (aba _Backups_), que envia as cópias ao Cloudflare R2
-([seção 18](#18-backup-e-restauração)).
+([seção 18](#18-backup-e-restauração)); o PITR vem do pgBackRest da imagem
+`trajetto-postgres`, na staging desde a onda 3 e na produção desde a onda 6
+([seção 27](#27-pitr-com-pgbackrest)).
 
-| Serviço (App Name em produção)    | Tipo no Dokploy       | Imagem                                   | Porta interna  | Réplicas                              | Health                                                                       | Limites                        |
-| --------------------------------- | --------------------- | ---------------------------------------- | -------------- | ------------------------------------- | ---------------------------------------------------------------------------- | ------------------------------ |
-| `trajetto-api-production`         | Application (Docker)  | `trajetto-api:stable`                    | 3333 (domínio) | 2, rolling `start-first` com rollback | liveness no Swarm (`/health/liveness`)                                       | memória 1 GiB, heap 768 MB     |
-| `trajetto-ai-production`          | Application (Docker)  | `trajetto-ai:stable`                     | 8080           | 1                                     | `GET /health` (200 depois do aquecimento)                                    | memória 1 GiB, 2 CPUs          |
-| `trajetto-api-migrate-production` | Application (Docker)  | `trajetto-api-migrate:stable`            | nenhuma        | 1, _Restart Policy_ `none`            | o da imagem: saudável quando a etapa de release terminou; depois fica parado | nenhum (alguns MB parado)      |
-| `trajetto-postgres-production`    | Database → PostgreSQL | `postgres:16-alpine` (fixado por digest) | 5432           | 1                                     | do Dokploy                                                                   | sem teto, de propósito         |
-| `trajetto-redis-production`       | Database → Redis      | `redis:7-alpine`                         | 6379           | 1                                     | do Dokploy                                                                   | memória 512 MiB (dados 256 MB) |
+| Serviço (App Name em produção)    | Tipo no Dokploy       | Imagem                                                                                                                | Porta interna  | Réplicas                              | Health                                                                       | Limites                                         |
+| --------------------------------- | --------------------- | --------------------------------------------------------------------------------------------------------------------- | -------------- | ------------------------------------- | ---------------------------------------------------------------------------- | ----------------------------------------------- |
+| `trajetto-api-production`         | Application (Docker)  | `trajetto-api:stable`                                                                                                 | 3333 (domínio) | 2, rolling `start-first` com rollback | liveness no Swarm (`/health/liveness`)                                       | memória 1 GiB, heap 768 MB                      |
+| `trajetto-ai-production`          | Application (Docker)  | `trajetto-ai:stable`                                                                                                  | 8080           | 1                                     | `GET /health` (200 depois do aquecimento)                                    | memória 1 GiB, 2 CPUs                           |
+| `trajetto-api-migrate-production` | Application (Docker)  | `trajetto-api-migrate:stable`                                                                                         | nenhuma        | 1, _Restart Policy_ `none`            | o da imagem: saudável quando a etapa de release terminou; depois fica parado | nenhum (alguns MB parado)                       |
+| `trajetto-postgres-production`    | Database → PostgreSQL | `trajetto-postgres` por digest ([seção 27](#27-pitr-com-pgbackrest)); antes da troca, `postgres:16-alpine` por digest | 5432           | 1                                     | do Dokploy                                                                   | 2 GiB desde a troca da imagem (antes, sem teto) |
+| `trajetto-redis-production`       | Database → Redis      | `redis:7-alpine`                                                                                                      | 6379           | 1                                     | do Dokploy                                                                   | memória 512 MiB (dados 256 MB)                  |
 
 Em staging, troque `-production` por `-staging` e `:stable` por `:staging`.
+
+### Nós, labels e placement (onda 17)
+
+Cada ambiente roda num nó só, e o Swarm põe tudo nele. Desde a onda 17
+(plano de escala F4-52, decisão D59), o nó leva os labels `trajetto.app`,
+`trajetto.db`, `trajetto.ai` e `trajetto.edge`, e cada serviço leva a
+constraint que diz em que tipo de nó ele pode rodar (_Advanced → Swarm
+Settings → Placement_): o banco e o PgBouncer em `trajetto.db`, com o
+banco e o Redis presos também ao hostname do nó do volume; a IA em
+`trajetto.ai`; a API, os papéis, a migração e a web em `trajetto.app`, a
+API com até 4 réplicas por nó. No nó único nada muda de lugar (medido num
+Swarm descartável: as tasks ficam no mesmo nó), e o segundo nó passa a ser
+só adicionar. A tabela de cada serviço, a ordem (os labels antes das
+constraints; os Databases só na janela do Postgres), o que foi medido e o
+procedimento de um nó novo estão em
+[runbooks/swarm-multi-no.md](./runbooks/swarm-multi-no.md).
 
 ## 5. Applications em vez de Compose: o que mudou e o que ficou de fora
 
@@ -481,27 +851,27 @@ O que isso muda no dia a dia:
 
 ### O que cada proteção do compose virou
 
-| O compose fazia                                                                                      | Agora                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| variáveis obrigatórias (`${VAR:?mensagem}`) derrubavam o deploy                                      | **API**: o schema de ambiente derruba o boot sem `DATABASE_URL`, `REDIS_URL`, `JWT_*`, `MASTER_USER_*`, `HTTP_REQUEST` e, em produção, sem `RATE_LIMIT_TRUSTED_PROXY` e as `R2_*`. **IA**: o serviço recusa subir com `AI_TOKEN` ausente ou curto. **`APP_ENV`: nada obriga.** Vazia, a API segue o `NODE_ENV=production` da imagem e se comporta como produção; confira no staging                                                                                                                                                         |
-| `AI_LOCAL_URL=http://trajetto-ai:8080` fixo                                                          | `AI_LOCAL_URL=http://<App Name da IA>:8080` no Environment da API. **Faltando, a IA fica desligada em silêncio** (a API trata como `none`); confira em _Sistema → Provedores_                                                                                                                                                                                                                                                                                                                                                               |
-| `NODE_OPTIONS` montada de `API_HEAP_MB`; `RATE_LIMIT_TRUSTED_PROXY` com padrão `cloudflare`          | as duas digitadas no Environment da API (`NODE_OPTIONS=--max-old-space-size=768`, `RATE_LIMIT_TRUSTED_PROXY=cloudflare`)                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| labels do Traefik (`Host()`, `websecure`, certificado, porta 3333, `passHostHeader`)                 | aba _Domains_ da Application: o Dokploy gera o arquivo `/etc/dokploy/traefik/dynamic/<App Name>.yml` com tudo isso (e o redirecionamento HTTP→HTTPS). `ROUTER_PREFIX` não existe mais: os roteadores levam o App Name, único por servidor                                                                                                                                                                                                                                                                                                   |
-| health check do balanceador do Traefik em `/health/readiness` (tirava uma réplica sem banco do ar)   | **lacuna**. O Traefik do Dokploy fala com o endereço virtual do serviço do Swarm (um só destino para as duas réplicas), então um health check ali tiraria o serviço inteiro do ar quando uma réplica falhasse. Não configure. O Swarm só põe uma réplica nova no balanceamento depois de ela passar no healthcheck (liveness), e tira a réplica que está desligando                                                                                                                                                                         |
-| `priority=1` no roteador                                                                             | desnecessário: cada ambiente tem o próprio host                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| bloco `deploy:` (réplicas, `update_config`, `rollback_config`, `restart_policy`, `resources`)        | _Advanced_ da Application: _Replicas_, _Swarm Settings_ (JSON pronto na [seção 7](#7-montar-o-dokploy-do-zero-staging-e-produção)) e _Resources_                                                                                                                                                                                                                                                                                                                                                                                            |
-| `stop_grace_period` (40 s na API, 60 s no Postgres)                                                  | API: campo _Stop Grace Period_ do _Swarm Settings_, se a sua versão do Dokploy tiver. Sem ele, o Swarm mata o processo 10 s depois do SIGTERM e o desligamento ordenado (até 35 s) é cortado: **lacuna**, com o contorno `docker service update --stop-grace-period 40s <App Name da API>` no host, que vale até o próximo deploy (o Dokploy reaplica a spec dele). Postgres: os Databases não têm o campo — rode `CHECKPOINT` antes de qualquer parada planejada ([seção 10](#10-postgres-e-redis))                                        |
-| `logging: json-file` com rotação por serviço                                                         | rotação **global** no `/etc/docker/daemon.json` do host ([seção 6](#6-preparar-o-servidor-uma-vez)), que vale para todo contêiner                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `docker stack deploy` resolvia a tag para o digest e o fixava na spec                                | o Dokploy faz `pull` da tag e força a atualização do serviço, mas a spec guarda **a tag**, não o digest. Consequências: (1) o rollback automático do Swarm protege só o momento do deploy (as réplicas antigas continuam de pé), mas uma réplica antiga que reinicie depois sobe a imagem nova, que já está no host; (2) `docker service rollback` não volta a imagem ([seção 17](#17-rollback)); (3) a conferência da convergência passou a ler o digest do contêiner de cada task, e não a spec ([seção 14](#14-conferir-a-convergência)) |
-| rede interna `backend` (`internal: true`): Postgres, Redis e IA inalcançáveis por outros contêineres | **lacuna**. Tudo fica na `dokploy-network`, junto com a web, o staging e o que mais rodar no Dokploy. A proteção passa a ser: nenhuma porta externa, senha forte no Postgres e no Redis, token na IA, segredos diferentes entre staging e produção                                                                                                                                                                                                                                                                                          |
-| volume do Postgres com nome fixo (`POSTGRES_VOLUME`)                                                 | o Dokploy cria e nomeia o volume do Database (aparece em _Advanced → Volumes_). A guarda da API contra banco vazio em produção continua valendo                                                                                                                                                                                                                                                                                                                                                                                             |
-| Postgres preso no manager (`node.role == manager`)                                                   | desnecessário com um nó só. Com mais nós no Swarm, **lacuna**: os Databases não têm campo de placement                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| imagem do Postgres fixada (`POSTGRES_IMAGE`)                                                         | campo _Docker Image_ do Database com o digest (`postgres:16-alpine@sha256:…`)                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| tuning do Postgres e `/dev/shm` em tmpfs (comentados no compose)                                     | tuning: comando personalizado do Database, se a versão tiver ([seção 10](#10-postgres-e-redis)). `/dev/shm`: **lacuna** (use `max_parallel_maintenance_workers=0` se um VACUUM/CREATE INDEX paralelo falhar)                                                                                                                                                                                                                                                                                                                                |
-| Redis sem persistência, `--maxmemory 256mb --maxmemory-policy allkeys-lru`, senha obrigatória        | senha: o Database Redis sempre tem. O resto: comando personalizado do Database ([seção 10](#10-postgres-e-redis)); se a sua versão não tiver o campo, **lacuna** (Redis com snapshot em disco e sem teto de memória)                                                                                                                                                                                                                                                                                                                        |
-| IA com `read_only`, `/tmp` em tmpfs e `cap_drop: ALL`                                                | **lacuna**: a Application não tem esses campos. Continua valendo o usuário 10001 (não root) da imagem, sem domínio e sem porta publicada                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `REDIS_ENFORCE_AUTH` (transição de um Redis sem senha)                                               | não existe mais: o Redis do Dokploy nasce com senha                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| job de migrations na rede `<stack>_backend`, lendo o env de `<stack>_api`                            | a Application `trajetto-api-migrate` de cada ambiente, na `dokploy-network`, com o próprio _Environment_ (só a URL do banco) e o deploy pedido pelo pipeline antes da API ([seção 15](#15-migrations))                                                                                                                                                                                                                                                                                                                                      |
+| O compose fazia                                                                                      | Agora                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| variáveis obrigatórias (`${VAR:?mensagem}`) derrubavam o deploy                                      | **API**: o schema de ambiente derruba o boot sem `DATABASE_URL`, `REDIS_URL`, `JWT_*`, `MASTER_USER_*`, `HTTP_REQUEST` e, em produção, sem `RATE_LIMIT_TRUSTED_PROXY` e as `R2_*`. **IA**: o serviço recusa subir com `AI_TOKEN` ausente ou curto. **`APP_ENV`: nada obriga.** Vazia, a API segue o `NODE_ENV=production` da imagem e se comporta como produção; confira no staging                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `AI_LOCAL_URL=http://trajetto-ai:8080` fixo                                                          | `AI_LOCAL_URL=http://<App Name da IA>:8080` no Environment da API. **Faltando, a IA fica desligada em silêncio** (a API trata como `none`); confira em _Sistema → Provedores_                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `NODE_OPTIONS` montada de `API_HEAP_MB`; `RATE_LIMIT_TRUSTED_PROXY` com padrão `cloudflare`          | as duas digitadas no Environment da API (`NODE_OPTIONS=--max-old-space-size=768`, `RATE_LIMIT_TRUSTED_PROXY=cloudflare`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| labels do Traefik (`Host()`, `websecure`, certificado, porta 3333, `passHostHeader`)                 | aba _Domains_ da Application: o Dokploy gera o arquivo `/etc/dokploy/traefik/dynamic/<App Name>.yml` com tudo isso (e o redirecionamento HTTP→HTTPS). `ROUTER_PREFIX` não existe mais: os roteadores levam o App Name, único por servidor                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| health check do balanceador do Traefik em `/health/readiness` (tirava uma réplica sem banco do ar)   | **lacuna**. O Traefik do Dokploy fala com o endereço virtual do serviço do Swarm (um só destino para as duas réplicas), então um health check ali tiraria o serviço inteiro do ar quando uma réplica falhasse. Não configure. O Swarm só põe uma réplica nova no balanceamento depois de ela passar no healthcheck (liveness), e tira a réplica que está desligando                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `priority=1` no roteador                                                                             | desnecessário: cada ambiente tem o próprio host                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| bloco `deploy:` (réplicas, `update_config`, `rollback_config`, `restart_policy`, `resources`)        | _Advanced_ da Application: _Replicas_, _Swarm Settings_ (JSON pronto na [seção 7](#7-montar-o-dokploy-do-zero-staging-e-produção)) e _Resources_                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `stop_grace_period` (40 s na API, 60 s no Postgres)                                                  | API: campo _Stop Grace Period_ do _Swarm Settings_, se a sua versão do Dokploy tiver. Sem ele, o Swarm mata o processo 10 s depois do SIGTERM: **lacuna**, com o contorno `docker service update --stop-grace-period 40s <App Name da API>` no host, que vale até o próximo deploy (o Dokploy reaplica a spec dele). O desligamento ordenado segue a variável `STOP_GRACE_PERIOD_MS` (sem ela, 10 s, e ele termina em menos de 9 s); ela só sobe para `40000` depois de o grace de 40 s aparecer no `inspect`, e o `verify-rollout` reprova o deploy quando ela passa do grace do serviço ([seção 19](#19-papéis-da-mesma-imagem)). Postgres: o Dokploy dá 30 s ao Database, e o F0-01 põe 120 s onde o painel tiver o campo; rode `CHECKPOINT` antes de qualquer parada planejada ([seção 27](#grace-e-placement-do-database)) |
+| `logging: json-file` com rotação por serviço                                                         | rotação **global** no `/etc/docker/daemon.json` do host ([seção 6](#6-preparar-o-servidor-uma-vez)), que vale para todo contêiner                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `docker stack deploy` resolvia a tag para o digest e o fixava na spec                                | o Dokploy faz `pull` da tag e força a atualização do serviço, mas a spec guarda **a tag**, não o digest. Consequências: (1) o rollback automático do Swarm protege só o momento do deploy (as réplicas antigas continuam de pé), mas uma réplica antiga que reinicie depois sobe a imagem nova, que já está no host; (2) `docker service rollback` não volta a imagem ([seção 17](#17-rollback)); (3) a conferência da convergência passou a ler o digest do contêiner de cada task, e não a spec ([seção 14](#14-conferir-a-convergência))                                                                                                                                                                                                                                                                                     |
+| rede interna `backend` (`internal: true`): Postgres, Redis e IA inalcançáveis por outros contêineres | **lacuna**. Tudo fica na `dokploy-network`, junto com a web, o staging e o que mais rodar no Dokploy. A proteção passa a ser: nenhuma porta externa, senha forte no Postgres e no Redis, token na IA, segredos diferentes entre staging e produção                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| volume do Postgres com nome fixo (`POSTGRES_VOLUME`)                                                 | o Dokploy cria e nomeia o volume do Database (aparece em _Advanced → Volumes_). A guarda da API contra banco vazio em produção continua valendo                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| Postgres preso no manager (`node.role == manager`)                                                   | com um nó só, nada muda. O Dokploy já põe `node.role==manager` em todo serviço com volume, o Database incluído; desde a onda 17, o Database fica preso ao label `trajetto.db` e ao hostname do nó do volume, antes de qualquer nó novo ([swarm-multi-no](./runbooks/swarm-multi-no.md))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| imagem do Postgres fixada (`POSTGRES_IMAGE`)                                                         | campo _Docker Image_ do Database com o digest (`trajetto-postgres@sha256:…` desde a troca da onda 3; antes, `postgres:16-alpine@sha256:…`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| tuning do Postgres e `/dev/shm` em tmpfs (comentados no compose)                                     | tuning: os parâmetros vêm da imagem `trajetto-postgres` e a memória do teto, com _Command_ e _Args_ vazios ([seção 27](#27-pitr-com-pgbackrest)). `/dev/shm`: **lacuna**, contornada pela imagem, que desliga os workers paralelos                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Redis sem persistência, `--maxmemory 256mb --maxmemory-policy allkeys-lru`, senha obrigatória        | senha: o Database Redis sempre tem. O resto: os _Args_ do Database, com o _Custom command_ vazio ([seção 7.5](#75-redis-database)); o snapshot do padrão do Redis continua (o `--save ""` não entrou nos _Args_)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| IA com `read_only`, `/tmp` em tmpfs e `cap_drop: ALL`                                                | **lacuna**: a Application não tem esses campos. Continua valendo o usuário 10001 (não root) da imagem, sem domínio e sem porta publicada                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `REDIS_ENFORCE_AUTH` (transição de um Redis sem senha)                                               | não existe mais: o Redis do Dokploy nasce com senha                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| job de migrations na rede `<stack>_backend`, lendo o env de `<stack>_api`                            | a Application `trajetto-api-migrate` de cada ambiente, na `dokploy-network`, com o próprio _Environment_ (só a URL do banco) e o deploy pedido pelo pipeline antes da API ([seção 15](#15-migrations))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 
 ## 6. Preparar o servidor (uma vez)
 
@@ -673,6 +1043,12 @@ Staging e produção são **os mesmos passos**, feitos duas vezes: uma no
 environment `staging` e outra no `production`, cada uma no projeto
 `trajetto-api`. Faça staging primeiro, inteiro, e só depois produção.
 
+Antes do primeiro serviço, o nó recebe os quatro labels, e cada serviço
+criado abaixo (os Databases, a IA, a API, a migração, o PgBouncer e os
+papéis, mais a web no projeto `trajetto-ui`) leva a constraint dele em
+_Advanced → Swarm Settings → Placement_, pela tabela de
+[runbooks/swarm-multi-no.md](./runbooks/swarm-multi-no.md) (onda 17).
+
 ### 7.1 O que muda entre staging e produção
 
 | Item                                                                                                   | Staging                                                                                                                               | Produção                                                                                          |
@@ -694,31 +1070,34 @@ environment `staging` e outra no `production`, cada uma no projeto
 | `PROOF_SIGNING_*`                                                                                      | o certificado **de teste** ([seção 7.11](#711-certificado-do-comprovante-a1-icp-brasil)), ou vazio (sem assinatura, e o PDF diz isso) | o certificado A1 (e-CNPJ)                                                                         |
 | réplicas da API                                                                                        | 1 (hoje; 2 para testar duas réplicas)                                                                                                 | 2                                                                                                 |
 | environment do GitHub                                                                                  | `staging` (sem revisores)                                                                                                             | `production` (revisores obrigatórios)                                                             |
-| `SWARM_API_SERVICE` (GitHub)                                                                           | `trajetto-api-staging`                                                                                                                | `trajetto-api-production`                                                                         |
+| `SWARM_API_SERVICE` (GitHub)                                                                           | o App Name real da API de staging (`trajetto-api-staging-<sufixo>`, [seção 7.2](#72-nomes-name-e-app-name))                           | o App Name real da API de produção (`trajetto-api-production-<sufixo>`)                           |
 
 ### 7.2 Nomes: Name e App Name
 
 Toda vez que o Dokploy pede para criar um serviço, o diálogo tem dois nomes:
 **Name** (o rótulo no painel) e **App Name** (o nome do serviço no Swarm e o
 **nome de rede** pelo qual os outros serviços o encontram). O App Name precisa
-ser único no servidor inteiro, então o Dokploy sugere o Name com um sufixo
-aleatório. Na montagem de 10/2026 os App Names ficaram com esse sufixo
-aleatório, e o Dokploy instalado (v0.30.10) não deixa editar o App Name depois
-de criado. **Os nomes da tabela abaixo, usados no resto deste documento, são
-marcadores**: troque-os pelo App Name que o painel mostra (o sufixo não causa
-problema e evita colisão entre staging e produção). Na criação, mantenha o App
-Name sugerido (com o sufixo) ou digite o da tabela, se o diálogo deixar; depois
-de criado, ele não muda. Os passos 7.4 a 7.7 dizem `<o App Name sugerido>`
-para esse campo.
+ser único no servidor inteiro, então o Dokploy acrescenta a todo App Name um
+sufixo aleatório de 6 caracteres: o `trajetto-worker-staging` da tabela vira,
+no painel, `trajetto-worker-staging-<sufixo>`. Na montagem de 10/2026 e na do
+worker de 26/11/2026 os App Names ficaram com esse sufixo, e o Dokploy
+instalado (v0.30.10) não deixa editar o App Name depois de criado. **Os nomes
+da tabela abaixo, usados no resto deste documento, são marcadores**: troque-os
+pelo App Name que o painel mostra (o sufixo não causa problema e evita colisão
+entre staging e produção). Vale também para o GitHub: cada variável
+`SWARM_*_SERVICE` ([seção 13](#13-configurar-o-github)) recebe o App Name
+real, copiado da aba _General_ da Application, nunca o marcador. Os passos
+7.4 a 7.7 dizem `<o App Name sugerido>` para esse campo.
 
-| Serviço                     | Onde criar                               | Name                   | App Name (staging)             | App Name (produção)               |
-| --------------------------- | ---------------------------------------- | ---------------------- | ------------------------------ | --------------------------------- |
-| banco                       | _Create Service → Database → PostgreSQL_ | `trajetto-postgres`    | `trajetto-postgres-staging`    | `trajetto-postgres-production`    |
-| Redis                       | _Create Service → Database → Redis_      | `trajetto-redis`       | `trajetto-redis-staging`       | `trajetto-redis-production`       |
-| IA                          | _Create Service → Application_           | `trajetto-ai`          | `trajetto-ai-staging`          | `trajetto-ai-production`          |
-| API                         | _Create Service → Application_           | `trajetto-api`         | `trajetto-api-staging`         | `trajetto-api-production`         |
-| migrations                  | _Create Service → Application_           | `trajetto-api-migrate` | `trajetto-api-migrate-staging` | `trajetto-api-migrate-production` |
-| web (projeto `trajetto-ui`) | `trajetto-ui/docs/deploy.md`             | `trajetto-ui`          | `trajetto-ui-staging`          | `trajetto-ui-production`          |
+| Serviço                                                | Onde criar                               | Name                   | App Name (staging)             | App Name (produção)               |
+| ------------------------------------------------------ | ---------------------------------------- | ---------------------- | ------------------------------ | --------------------------------- |
+| banco                                                  | _Create Service → Database → PostgreSQL_ | `trajetto-postgres`    | `trajetto-postgres-staging`    | `trajetto-postgres-production`    |
+| Redis                                                  | _Create Service → Database → Redis_      | `trajetto-redis`       | `trajetto-redis-staging`       | `trajetto-redis-production`       |
+| IA                                                     | _Create Service → Application_           | `trajetto-ai`          | `trajetto-ai-staging`          | `trajetto-ai-production`          |
+| API                                                    | _Create Service → Application_           | `trajetto-api`         | `trajetto-api-staging`         | `trajetto-api-production`         |
+| migrations                                             | _Create Service → Application_           | `trajetto-api-migrate` | `trajetto-api-migrate-staging` | `trajetto-api-migrate-production` |
+| worker (papel, [seção 19](#19-papéis-da-mesma-imagem)) | _Create Service → Application_           | `trajetto-worker`      | `trajetto-worker-staging`      | `trajetto-worker-production`      |
+| web (projeto `trajetto-ui`)                            | `trajetto-ui/docs/deploy.md`             | `trajetto-ui`          | `trajetto-ui-staging`          | `trajetto-ui-production`          |
 
 Onde ver depois: o App Name aparece no topo da página do serviço (e na aba
 _General_ dos Databases, como _Internal Host_). No host, `docker service ls`
@@ -755,31 +1134,32 @@ a credencial: o deployment da Application termina em `error` com
    PostgreSQL**.
 2. Preencha:
 
-   | Campo             | Valor                                                                                                        |
-   | ----------------- | ------------------------------------------------------------------------------------------------------------ |
-   | Name              | `trajetto-postgres`                                                                                          |
-   | App Name          | `<o App Name sugerido>` (marcador neste documento: `trajetto-postgres-staging` ou `-production`; seção 7.2)  |
-   | Database Name     | `trajetto`                                                                                                   |
-   | Database User     | `trajetto`                                                                                                   |
-   | Database Password | `openssl rand -hex 24` (hex: entra na URL da API sem precisar de escape); guarde no gerenciador de senhas    |
-   | Docker Image      | `postgres:16-alpine` (a mesma versão maior do banco atual e do CI; nunca outra maior sem migração planejada) |
+   | Campo             | Valor                                                                                                                                                                         |
+   | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+   | Name              | `trajetto-postgres`                                                                                                                                                           |
+   | App Name          | `<o App Name sugerido>` (marcador neste documento: `trajetto-postgres-staging` ou `-production`; seção 7.2)                                                                   |
+   | Database Name     | `trajetto`                                                                                                                                                                    |
+   | Database User     | `trajetto`                                                                                                                                                                    |
+   | Database Password | `openssl rand -hex 24` (hex: entra na URL da API sem precisar de escape); guarde no gerenciador de senhas                                                                     |
+   | Docker Image      | `ghcr.io/trajetto-organization/trajetto-postgres@sha256:<digest>` ([seção 27](#27-pitr-com-pgbackrest); o Postgres 16 do CI; nunca outra versão maior sem migração planejada) |
 
 3. **Create**, abra o serviço e clique em **Deploy** (o Database só sobe
    depois disso).
 4. Na aba _General_, confira em _Internal Credentials_: _Internal Host_ = o
    App Name, _Internal Port_ = 5432. Em _External Credentials_, **deixe
    _External Port_ vazio**: o banco não pode ter porta no host.
-5. Fixe a imagem por digest (uma tag flutuante atualizada no Docker Hub
-   reiniciaria e atualizaria o banco num redeploy). No host:
-   ```sh
-   docker image inspect postgres:16-alpine --format '{{index .RepoDigests 0}}'
-   ```
-   e ponha o resultado (`postgres@sha256:…`, escrito como
-   `postgres:16-alpine@sha256:…`) no campo da imagem em _Advanced_; salve e
-   faça **Deploy** de novo.
-6. O backup do banco é a aba _Backups_ deste Database (seção 7.9): diário,
+5. A imagem vai sempre por digest (uma tag flutuante reiniciaria e
+   atualizaria o banco num redeploy), copiado do resumo do run que publicou
+   a `trajetto-postgres`. Um Database criado antes da onda 3 roda a
+   `postgres:16-alpine@sha256:…` e troca de imagem pela
+   [seção 27](#27-pitr-com-pgbackrest).
+6. _Environment_ e _Resources_ da coluna do ambiente na
+   [seção 27](#valores-por-ambiente) (no mínimo `POSTGRES_MEMORY_LIMIT_MB`
+   igual ao _Memory Limit_), com _Command_ e _Args_ vazios; **Deploy**.
+7. O backup do banco é a aba _Backups_ deste Database (seção 7.9): diário,
    para o Cloudflare R2, configurado na
-   [seção 18](#18-backup-e-restauração).
+   [seção 18](#18-backup-e-restauração). O PITR, onde já estiver ligado,
+   segue a [seção 27](#27-pitr-com-pgbackrest).
 
 ### 7.5 Redis (Database)
 
@@ -788,29 +1168,54 @@ a credencial: o deployment da Application termina em `error` com
    (marcador: `trajetto-redis-staging` ou `-production`; seção 7.2); Database
    Password `openssl rand -hex 32` (guarde); Docker Image `redis:7-alpine`.
 3. **Create** e **Deploy**. _External Port_ vazio.
-4. **Sem persistência e com teto de memória** (era o comando do compose): o
-   Redis só guarda chaves curtas que expiram sozinhas (contadores do rate
-   limit, tickets de socket, o intervalo do "esqueci minha senha" e fotos de
-   5–60 s das leituras do MASTER) e o pub/sub do Socket.IO
-   ([ADR 0002](./adr/0002-redis-descartavel.md)); um snapshot só traria de volta chaves que deviam ter expirado, e o
-   padrão `noeviction` de um Redis cheio desliga todo limitador de uma vez. Em
-   _Advanced_, no campo de comando personalizado (_Command_ ou _Run Command_,
-   conforme a versão), ponha **numa linha só**:
+4. **Com teto de memória** (o compose também desligava a persistência, que
+   aqui continua ligada; o fim deste passo diz por quê): o
+   Redis só guarda chaves que expiram sozinhas (contadores do rate limit,
+   tickets de socket, o intervalo do "esqueci minha senha", fotos de 5–60 s
+   das leituras do MASTER e as chaves do geocodificador, `geocoding:*`, entre
+   elas o cache cifrado, por empresa, de até 48 h da busca de endereço) e o
+   pub/sub do Socket.IO ([ADR 0002](./adr/0002-redis-descartavel.md) e o
+   adendo de 10/11/2026); um snapshot só traria de volta chaves que deviam ter expirado, e o
+   padrão `noeviction` de um Redis cheio desliga todo limitador de uma vez.
+   O Database Redis do Dokploy (v0.30.10) tem, em _Advanced_, dois campos:
+   _Custom command_ e _Args_ (_Add Argument_, um argumento por linha). O
+   padrão do Dokploy roda
+   `["/bin/sh","-c","redis-server --requirepass <senha>"]`, e qualquer
+   valor seu substitui esse padrão inteiro. O _Custom command_ troca o
+   ENTRYPOINT da imagem (o texto é cortado nos espaços); os _Args_ trocam só
+   o CMD, e o entrypoint da imagem continua passando o processo ao usuário
+   `redis`. Por isso: **_Custom command_ vazio** e estes 7 _Args_, um por
+   _Add Argument_, nesta ordem (`256mb` na produção, `64mb` na staging):
    ```
-   redis-server --requirepass <a senha do passo 2> --save "" --appendonly no --maxmemory 256mb --maxmemory-policy allkeys-lru
+   redis-server
+   --requirepass
+   <senha do Database>
+   --maxmemory
+   256mb
+   --maxmemory-policy
+   allkeys-lru
    ```
-   A senha precisa estar aqui: o comando personalizado substitui o padrão do
-   Dokploy, que é quem passava o `--requirepass`. Salve, **Deploy**, e confira:
+   A senha precisa estar aqui, porque os _Args_ substituem o padrão que
+   passava o `--requirepass`: ela passa a morar também nos _Args_, e trocar a
+   senha do Database é trocar esse argumento junto
+   ([seção 10](#redis), "Trocar a senha"). **Save**, **Deploy**, e confira:
    ```sh
    docker exec -it $(docker ps -q -f name=trajetto-redis-production | head -n 1) \
      redis-cli -a '<senha>' --no-auth-warning CONFIG GET maxmemory-policy   # allkeys-lru
+   docker exec -it $(docker ps -q -f name=trajetto-redis-production | head -n 1) \
+     redis-cli -a '<senha>' --no-auth-warning CONFIG GET maxmemory   # 268435456 (64mb: 67108864)
    ```
-   Se a sua versão não tiver campo de comando nos Databases, deixe o padrão:
-   funciona, só fica sem o teto e com snapshot em disco (lacuna da
-   [seção 5](#5-applications-em-vez-de-compose-o-que-mudou-e-o-que-ficou-de-fora)).
+   Assim ficou a staging em 26/11/2026: o `CONFIG GET` com `allkeys-lru` e
+   `64mb`, e o alerta `Teto do Redis` ([seção 20](#20-alertas-e-monitoramento))
+   verde; e a produção em 27/11/2026, antes da primeira promoção do plano de
+   escala: `268435456` e `allkeys-lru`. O `--save ""` e o `--appendonly no` do comando antigo ficaram de
+   fora: o `appendonly` já é `no` por padrão, e um argumento vazio nos _Args_
+   não foi testado. O snapshot do padrão do Redis continua (`CONFIG GET save`
+   mostra quando ele roda).
 5. Em _Advanced → Resources_, _Memory Limit_ `536870912` (512 MiB: os 256 MB
-   de dados mais os buffers das conexões de pub/sub de cada réplica). Os
-   campos de recursos do Dokploy recebem bytes (confira a dica do campo; se ele
+   de dados mais os buffers das conexões de pub/sub de cada réplica) na
+   produção e `167772160` (160 MiB, com os 64 MB) na staging. Os campos de
+   recursos do Dokploy recebem bytes (confira a dica do campo; se ele
    aceitar `512M`, tanto faz).
 
 ### 7.6 `trajetto-ai` (Application)
@@ -827,7 +1232,7 @@ a credencial: o deployment da Application termina em `error` com
    | Username     | o usuário do token (seção 7.3)                                            |
    | Password     | o token `read:packages`                                                   |
 
-   **Save**.
+   **Save**. Não ligue _Autodeploy_: quem decide o deploy é o workflow.
 
 3. Aba _Environment_ (uma variável por linha, sem aspas) → **Save**:
    ```
@@ -923,7 +1328,7 @@ pipeline avisa "deploy de trajetto-ai pulado" e segue).
    NODE_OPTIONS=--max-old-space-size=768
    LOG_LEVEL=info
 
-   DATABASE_URL=postgresql://trajetto:<SENHA_DO_POSTGRES>@trajetto-postgres-production:5432/trajetto?schema=public&connection_limit=10&pool_timeout=20&connect_timeout=5&socket_timeout=60&max_idle_connection_lifetime=300&options=-c%20statement_timeout%3D30000%20-c%20lock_timeout%3D5000%20-c%20idle_in_transaction_session_timeout%3D60000
+   DATABASE_URL=postgresql://trajetto:<SENHA_DO_POSTGRES>@trajetto-postgres-production:5432/trajetto?schema=public&connection_limit=10&pool_timeout=5&connect_timeout=5&socket_timeout=60&max_idle_connection_lifetime=300&options=-c%20statement_timeout%3D30000%20-c%20lock_timeout%3D5000%20-c%20idle_in_transaction_session_timeout%3D60000
    ALLOW_EMPTY_DATABASE_BOOTSTRAP=false
    RUN_MIGRATIONS_ON_BOOT=false
 
@@ -958,20 +1363,40 @@ pipeline avisa "deploy de trajetto-ai pulado" e segue).
 
    META_WHATSAPP_ACCESS_TOKEN=<token>
    META_WHATSAPP_PHONE_NUMBER_ID=<id>
-   META_WHATSAPP_TEMPLATE_NAME=trajetto_notification
    META_WHATSAPP_API_VERSION=v23.0
+   META_WHATSAPP_BUSINESS_ACCOUNT_ID=<id da WABA>
+   EXPO_ACCESS_TOKEN=<token de acesso do projeto na Expo>
    RESEND_SECRET_KEY=<re_…>
    RESEND_FROM_EMAIL=<remetente do domínio verificado>
    ```
 
-   Mais, quando forem usadas: `META_WHATSAPP_CUSTOMER_TEMPLATE_NAME`,
-   `META_WHATSAPP_BUSINESS_ACCOUNT_ID`, `META_WHATSAPP_APP_SECRET`,
+   Os nomes dos 21 modelos de WhatsApp são fixos no código
+   ([whatsapp-modelos.md](./whatsapp-modelos.md)): `META_WHATSAPP_TEMPLATE_NAME`
+   e `META_WHATSAPP_CUSTOMER_TEMPLATE_NAME` não são mais lidas e podem sair do
+   _Environment_. Defina `EXPO_ACCESS_TOKEN` nos dois ambientes **antes** de
+   ligar a "segurança reforçada de push" no projeto da Expo (D43).
+
+   Mais, quando forem usadas: `META_WHATSAPP_APP_SECRET`,
    `META_WHATSAPP_WEBHOOK_VERIFY_TOKEN`, `RESEND_WEBHOOK_SECRET`,
    `TURNSTILE_SECRET_KEY` (definida, o formulário de orçamento exige o token
    do Turnstile), `RATE_LIMIT_EDGE_SECRET`, o
    certificado do comprovante (`PROOF_SIGNING_*`), mapa e geocoder
    (`PROOF_MAP_*`, `REVERSE_GEOCODER_*`), `MIN_MOBILE_CONTRACT`,
    `MOBILE_STORE_URL`, `ACTIVITY_RETENTION_DAYS`.
+
+   Mapa de fundo do app (onda 5, `GET /config/map`): o dono define no
+   Dokploy `MAP_TILE_URL`, `MAP_TILE_ATTRIBUTION`, `MAP_TILE_URL_DARK` e
+   `MAP_TILE_ATTRIBUTION_DARK` com **os mesmos valores do web** do mesmo
+   ambiente (copie do _Environment_ da Application da web). Sem elas, o mapa
+   do app mostra os marcadores sem mapa de fundo e avisa; um modelo inválido
+   derruba o boot da réplica nova (o _Update Config_ do passo 8 volta para
+   a anterior). A
+   chave do MapTiler dentro da URL é restrita por _Allowed HTTP Origins_; o
+   app carrega a página do mapa sob a origem da web do build
+   (`EXPO_PUBLIC_WEB_APPLICATION_URL`), e os tiles levam o `Referer` dela:
+   confira no primeiro teste no aparelho se os tiles carregam no WebView do
+   app ([`infraestrutura.md` §11.2](./infraestrutura.md#112-credenciais-de-provedores),
+   "Chave do MapTiler").
 
    Cuidados:
 
@@ -1082,11 +1507,26 @@ pipeline avisa "deploy de trajetto-ai pulado" e segue).
    }
    ```
 
-   _Stop Grace Period_ (se existir na sua versão): `40000000000` (40 s; o
-   desligamento ordenado da API termina em até 35 s). Sem o campo, o contorno
-   é `docker service update --stop-grace-period 40s trajetto-api-production`
-   no host depois de cada deploy (o deploy seguinte o desfaz); ver a lacuna
-   na [seção 5](#5-applications-em-vez-de-compose-o-que-mudou-e-o-que-ficou-de-fora).
+   _Stop Grace Period_ (se existir na sua versão): `40000000000` (40 s). Sem
+   o campo, o contorno é `docker service update --stop-grace-period 40s
+trajetto-api-production` no host depois de cada deploy (o deploy seguinte
+   o desfaz); ver a lacuna na
+   [seção 5](#5-applications-em-vez-de-compose-o-que-mudou-e-o-que-ficou-de-fora).
+   Só quando o grace aparecer no serviço,
+
+   ```bash
+   docker service inspect trajetto-api-production \
+     --format '{{json .Spec.TaskTemplate.ContainerSpec.StopGracePeriod}}'
+   # 40000000000
+   ```
+
+   ponha `STOP_GRACE_PERIOD_MS=40000` no _Environment_ (passo 3) →
+   **Save** → **Deploy**: o desligamento passa a ter teto de 35 s. Sem a
+   variável, ele cabe nos 10 s do Docker.
+
+   _Placement_ (onda 17, depois dos labels do nó; até 4 réplicas por nó,
+   [runbooks/swarm-multi-no.md](./runbooks/swarm-multi-no.md)):
+   `{ "Constraints": ["node.labels.trajetto.app==true"], "MaxReplicas": 4 }`.
 
 9. **Deploy**, depois de a `trajetto-api-migrate` ter rodado a etapa de
    release (seção 7.12; num banco vazio, a seção 8, passo 4). No primeiro
@@ -1377,8 +1817,8 @@ em produção.
 **Produção**, depois de o staging estar verde:
 
 1. **Crie a tag `stable` antes de montar as Applications de produção**: no
-   GitHub, _Actions → Pipeline (staging → produção) → Run workflow_ (branch
-   `main`), `image_tag = sha-<7>` de um build verde de staging, e aprove o
+   GitHub, _Actions → Production → Run workflow_ (branch `main`),
+   `image_tag = sha-<7>` de um build verde de staging, e aprove o
    environment `production`. Como o environment `production` ainda não tem os
    secrets do Dokploy, o job move `stable` da API e da IA e pula o deploy
    com um aviso. Assim as Applications de produção já nascem em `:stable`. A
@@ -1417,8 +1857,9 @@ decide o que a foto diz é a API (ADR 0010; ver
 
 **Como é criado**: uma Application própria do Dokploy, sem domínio
 ([seção 7.6](#76-trajetto-ai-application)). A imagem `trajetto-ai` é
-construída no job `build-and-push` (do stage `runtime`, depois de o pytest
-passar no stage `test`) e promovida junto com a API (`staging` e `stable`).
+construída no job `Build` do `staging.yml` (do stage `runtime`, depois de o
+pytest passar no stage `test`, no job `AI OCR`) e promovida junto com a API
+(`staging` e `stable`).
 Antes do push, essa mesma imagem sobe no runner sem rede, com a raiz só
 leitura e um token descartável: precisa passar no próprio HEALTHCHECK (os
 dois perfis carregados e a leitura do `warmup.jpg`) e informar o commit em
@@ -1476,12 +1917,12 @@ confere o commit dela de fora (lacuna na
 
 **Como fica conectado**:
 
-| Do lado da API (Application `trajetto-api`)                    | Do lado da IA (Application `trajetto-ai`) | Observação                                                      |
-| -------------------------------------------------------------- | ----------------------------------------- | --------------------------------------------------------------- |
-| `AI_PROVIDER=local`                                            | —                                         | `local` é o padrão; `none` desliga as leituras                  |
-| `AI_LOCAL_URL=http://<App Name da IA>:8080`                    | escuta na 8080                            | o App Name é o nome de rede na `dokploy-network`                |
-| `AI_LOCAL_TOKEN`                                               | `AI_TOKEN`                                | **o mesmo valor**, digitado nas duas Applications               |
-| `AI_LOCAL_TIMEOUT_MS` (15 000), `AI_LOCAL_MAX_CONCURRENCY` (1) | `AI_MAX_QUEUE` (2), `OCR_THREADS` (2)     | opcionais; `OCR_THREADS` = o limite de CPU da Application da IA |
+| Do lado da API (Application `trajetto-api`)                    | Do lado da IA (Application `trajetto-ai`)                        | Observação                                                                                      |
+| -------------------------------------------------------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `AI_PROVIDER=local`                                            | —                                                                | `local` é o padrão; `none` desliga as leituras                                                  |
+| `AI_LOCAL_URL=http://<App Name da IA>:8080`                    | escuta na 8080                                                   | o App Name é o nome de rede na `dokploy-network`                                                |
+| `AI_LOCAL_TOKEN`                                               | `AI_TOKEN`                                                       | **o mesmo valor**, digitado nas duas Applications                                               |
+| `AI_LOCAL_TIMEOUT_MS` (15 000), `AI_LOCAL_MAX_CONCURRENCY` (1) | `AI_MAX_QUEUE` (2), `OCR_THREADS` (2), `OCR_DIGITS_MAX_SIDE` (0) | opcionais; `OCR_THREADS` = o limite de CPU da Application da IA; `OCR_DIGITS_MAX_SIDE` fica `0` |
 
 Trocar o token: gere outro (`openssl rand -hex 32`), salve em `AI_TOKEN` da
 IA e em `AI_LOCAL_TOKEN` da API e faça **Deploy** das duas, IA primeiro.
@@ -1492,6 +1933,10 @@ token volta a bater. Faça os dois deploys em seguida.
 
 Dimensionamento: pico medido de 0,60–0,63 GiB e p95 de 3,1 s por foto a
 2 CPU / 1 GiB. Mais CPU = suba _CPU Limit_ e `OCR_THREADS` juntos.
+`OCR_DIGITS_MAX_SIDE` reduziria só a foto do odômetro (896 px gasta 44% menos
+CPU por leitura), mas o benchmark de 18/11/2026 perdeu 3 km exatas em 15
+(`scripts/ai-benchmark/results-2026-11.md`): não defina a variável. Ela só
+muda com o conjunto-ouro de fotos reais medido de novo.
 
 Ligue a IA por empresa no `/admin` (limite mensal
 `Business.ai_analysis_limit`; 0 desliga).
@@ -1547,14 +1992,19 @@ App Name na `dokploy-network`. O backup do Postgres é o do próprio Dokploy
   ([seção 8](#8-primeiro-deploy-na-ordem-com-conferências), passo 4;
   [seção 18](#18-backup-e-restauração)).
 - **Imagem fixada** por digest no campo da imagem
-  ([seção 7.4](#74-postgresql-database), passo 5). Trocar a versão maior
+  ([seção 7.4](#74-postgresql-database), passo 5): a `trajetto-postgres`
+  ([seção 27](#27-pitr-com-pgbackrest)). Trocar a versão maior
   (16 → 17) não é trocar a imagem: exige dump e restore.
 - **Conexões**: cada réplica abre `connection_limit=10` + 1 da readiness.
   Mantenha `réplicas × 11 + migrations (2) + ferramentas` abaixo do
-  `max_connections` (100 por padrão). Os parâmetros da URL estão em
+  `max_connections` (200 na `trajetto-postgres`, por
+  `POSTGRES_MAX_CONNECTIONS`; 100 na `postgres:16-alpine` de antes da
+  troca). Os parâmetros da URL estão em
   [`arquitetura.md`](./arquitetura.md#conexão-com-o-postgres).
-- **Parada planejada**: o Database não tem _Stop Grace Period_ e o Swarm dá
-  10 s antes do SIGKILL; um Postgres morto volta por _crash recovery_. Antes de
+- **Parada planejada**: o Dokploy dá 30 s de _Stop Grace Period_ ao Database
+  (120 s depois do F0-01, onde o painel tiver o campo) antes do SIGKILL; um
+  Postgres morto volta por _crash recovery_
+  ([seção 27](#grace-e-placement-do-database)). Antes de
   qualquer _Stop_, _Redeploy_ ou mudança no Database, force o checkpoint:
   ```sh
   docker exec $(docker ps -q -f name=trajetto-postgres-production | head -n 1) \
@@ -1562,38 +2012,336 @@ App Name na `dokploy-network`. O backup do Postgres é o do próprio Dokploy
   ```
   e junte numa janela só toda mudança (imagem, comando, recursos), porque
   cada uma recria o contêiner.
-- **Mais de um nó no Swarm**: o volume é local e o Database não tem campo de
-  placement. Antes de adicionar nós, planeje (restaurar num nó fixo ou
-  restringir por label via CLI).
+- **Mais de um nó no Swarm**: o volume é local, e o Dokploy prende o
+  Database a um manager (`node.role==manager`), não a um nó. Desde a onda
+  17 o Placement dele pede o label `trajetto.db` e o hostname do nó do
+  volume, aplicado na janela do Postgres e antes de qualquer nó novo
+  ([seção 27](#grace-e-placement-do-database);
+  [runbooks/swarm-multi-no.md](./runbooks/swarm-multi-no.md)).
 
 #### Tuning do Postgres
 
-O banco roda com os defaults da imagem (`shared_buffers` 128MB, `work_mem`
-4MB, `random_page_cost` 4). Mudar isso reinicia o Postgres: janela combinada.
-Se a sua versão do Dokploy tiver o campo de comando personalizado nos
-Databases (_Advanced_), use, numa linha só, passando pelo entrypoint da imagem
-(é ele que troca para o usuário `postgres`):
+Os parâmetros vêm da imagem `trajetto-postgres`
+([seção 27](#27-pitr-com-pgbackrest)), versionados em
+`infra/postgres/postgres.params` (logs sem dado pessoal, `jit` e
+paralelismo desligados, `random_page_cost=1.1`, `pg_stat_statements`
+pré-carregado), e toda a memória sai do teto, `POSTGRES_MEMORY_LIMIT_MB`,
+pelo `infra/postgres/trajetto-entrypoint.sh`:
+
+| Teto (MiB) | `shared_buffers` | `effective_cache_size` | `maintenance_work_mem` | `autovacuum_work_mem` | `work_mem` |
+| ---------- | ---------------- | ---------------------- | ---------------------- | --------------------- | ---------- |
+| 576        | 108MB            | 302MB                  | 54MB                   | 27MB                  | 4MB        |
+| 2048       | 448MB            | 1254MB                 | 224MB                  | 112MB                 | 13MB       |
+| 3072       | 704MB            | 1971MB                 | 352MB                  | 176MB                 | 21MB       |
+
+**_Command_ e _Args_ do Database ficam vazios**: eles passam por cima do
+wrapper que soma esses parâmetros. Mudar um valor é mudar o
+`postgres.params` (ou o teto) e trocar o digest, com `CHECKPOINT` antes e
+numa janela combinada. Os workers paralelos ficam desligados porque o
+Docker dá 64 MB de `/dev/shm` e o Database não tem como aumentar (um VACUUM
+paralelo falhou com "could not resize shared memory segment" na medição de
+10/2026). Confira depois: `psql -c 'SHOW shared_buffers'`. Até a troca da
+imagem, o banco de produção roda com os padrões da imagem oficial
+(`shared_buffers` 128MB).
+
+### Roles do banco: logins, URLs e conexões
+
+Até o corte (plano de escala, onda 6), o runtime conecta como o usuário do
+Database, superusuário e dono de todas as tabelas: uma injeção de SQL ali
+leria as chaves do PITR e apagaria os backups. O corte troca as URLs do
+runtime por logins que só têm o que cada processo precisa. A etapa de
+release cria os roles e os grants em toda release
+(`infra/sql/20-runtime-roles.sql`), sempre **NOLOGIN**; o login e a senha
+são do dono, à mão, e nunca entram num arquivo do repositório nem num SQL
+com a senha escrita.
+
+| Role                   | O que pode                                                                                                                                                                                                                        | Quem usa                                                                                           |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `trajetto_app`         | o grupo (nunca um login): lê e grava toda tabela, menos a trilha das entregas e as tabelas da etapa de release, que só lê                                                                                                         | ninguém direto; os três abaixo são membros                                                         |
+| `trajetto_http`        | o grupo; na trilha (`delivery_event`), lê, insere e preenche o endereço do GPS do comprovante; `statement_timeout` de 30 s                                                                                                        | as requisições (API, tempo real, ingestão)                                                         |
+| `trajetto_worker`      | igual ao `trajetto_http`                                                                                                                                                                                                          | os workers (onda 12)                                                                               |
+| `trajetto_batch`       | o grupo; na trilha, lê, altera e apaga; membro do `trajetto_partitions` e dos roles de estatística; `statement_timeout` de 30 min                                                                                                 | o cron: expurgos, partições, métricas pesadas                                                      |
+| `trajetto_read`        | só SELECT, fora do grupo; `statement_timeout` de 10 s                                                                                                                                                                             | as leituras pesadas (onda 12)                                                                      |
+| `trajetto_partitions`  | dono das tabelas particionadas e das partições (`infra/sql/10-partitions.sql`); no schema, só cria, altera e apaga tabelas (`infra/sql/15-untrusted-code.sql`)                                                                    | só por `SET ROLE`, a partir do `trajetto_batch`                                                    |
+| `pgbouncer_auth`       | só executa `pgbouncer.user_lookup(text)` (`infra/sql/30-pgbouncer-auth.sql`), que devolve o verificador SCRAM de um login do runtime e nada para superusuário, replicação, o dono das tabelas, `trajetto_replication` e ele mesmo | o PgBouncer (onda 17), pelo `auth_query`                                                           |
+| `trajetto_replication` | só REPLICATION (`infra/sql/40-replication.sql`): clona o cluster inteiro e segue o WAL; entra só pela linha de replicação do `pg_hba` da imagem (`POSTGRES_REPLICATION_CIDR`), nunca pelo PgBouncer                               | o standby (o do ensaio de failover; o do prod-db-2 na onda 23), com login dado só quando houver um |
+
+Todos levam `lock_timeout` de 5 s e `idle_in_transaction_session_timeout`
+de 60 s no próprio role, além dos da URL. Cada URL, com o login, o
+`connection_limit` e o destino de cada Application, está em
+[`variaveis-de-ambiente.md`](./variaveis-de-ambiente.md#2-banco-de-dados); o
+formato é o mesmo de hoje, trocando só o usuário, a senha e o
+`connection_limit`:
 
 ```
-docker-entrypoint.sh postgres -c shared_buffers=1GB -c effective_cache_size=3GB -c work_mem=16MB -c maintenance_work_mem=256MB -c random_page_cost=1.1 -c max_wal_size=2GB -c log_min_duration_statement=1000 -c log_lock_waits=on
+DATABASE_URL=postgresql://trajetto_http:<SENHA>@trajetto-postgres-production:5432/trajetto?schema=public&connection_limit=10&pool_timeout=5&connect_timeout=5&socket_timeout=60&max_idle_connection_lifetime=300&options=-c%20statement_timeout%3D30000%20-c%20lock_timeout%3D5000%20-c%20idle_in_transaction_session_timeout%3D60000
+BATCH_DATABASE_URL=postgresql://trajetto_batch:<SENHA>@trajetto-postgres-production:5432/trajetto?schema=public&connection_limit=3
 ```
 
-Valores de partida pela RAM reservada ao banco:
+Na staging, `-staging` no lugar de `-production`, com senhas diferentes
+por ambiente. A `trajetto-api-migrate` continua com o usuário do Database:
+é ela que cria as tabelas e roda o `infra/sql`.
 
-| RAM para o Postgres | `shared_buffers` | `effective_cache_size` | `work_mem` | `maintenance_work_mem` |
-| ------------------- | ---------------- | ---------------------- | ---------- | ---------------------- |
-| 2 GB                | 512MB            | 1536MB                 | 8MB        | 128MB                  |
-| 4 GB                | 1GB              | 3GB                    | 16MB       | 256MB                  |
-| 8 GB                | 2GB              | 6GB                    | 32MB       | 512MB                  |
+**A conta das conexões** (`max_connections` 200 na `trajetto-postgres`): no
+papel `all`, cada réplica abre até 10 (requisições) + 3 (batch) + 1 (a
+readiness). Com as 2 réplicas de hoje, mais a `trajetto-api-migrate` (2) e
+as ferramentas (8: `psql`, o backup do Dokploy, o pgBackRest, o
+monitoramento), 2 × (10 + 3 + 1) + 2 + 8 = 38 de 200. O pool de leitura
+(`databaseRead`, onde rodam as exportações e as listas pesadas desde a
+onda 12, F3-17) abre até mais 3 por réplica enquanto uma delas roda, mesmo
+sem `DATABASE_READ_URL`: 2 × 17 + 10 = 44. Depois da separação (onda 12),
+some cada linha da tabela de
+[`variaveis-de-ambiente.md`](./variaveis-de-ambiente.md#2-banco-de-dados)
+vezes as réplicas da Application, e mantenha a soma abaixo de 200 com
+folga.
 
-`random_page_cost=1.1` só em SSD/NVMe. `work_mem` vale por operação, por
-conexão: com 2 réplicas × 10 conexões, 32MB vira centenas de MB num pico. O
-Docker dá 64 MB de `/dev/shm` e o Database não tem como aumentar: se um VACUUM
-ou CREATE INDEX paralelo falhar com "could not resize shared memory segment"
-(aconteceu na medição de 10/2026), acrescente
-`-c max_parallel_maintenance_workers=0`. Sem campo de comando, o tuning é uma
-lacuna (os defaults funcionam; só não estão dimensionados). Confira depois:
-`psql -c 'SHOW shared_buffers'`.
+**O corte, na staging** (uma semana antes da produção):
+
+1. Um `psql` no Database, no host:
+
+   ```sh
+   docker exec -it $(docker ps -q -f label=com.docker.swarm.service.name=trajetto-postgres-staging) psql -U trajetto -d trajetto
+   ```
+
+2. Para `trajetto_http`, `trajetto_worker`, `trajetto_batch` e
+   `trajetto_read`: `ALTER ROLE <role> LOGIN;` e depois o meta-comando
+   `\password <role>`, que pede a senha duas vezes e a envia já cifrada.
+   Nunca escreva a senha num SQL: ela ficaria no histórico e nos logs.
+   Gere cada senha com `openssl rand -hex 32` e guarde no cofre.
+3. `trajetto-api` → _Environment_: a `DATABASE_URL` com `trajetto_http` e
+   `connection_limit=10` (as `options` ficam como estão) e a
+   `BATCH_DATABASE_URL` com `trajetto_batch` e `connection_limit=3`,
+   direta. A `trajetto-api-migrate` fica como está.
+4. **Deploy**. No log do boot, `database role checked` com
+   `superuser: false` e `tablesOwner: false`, e nenhuma linha "O runtime
+   conecta ao banco como …". No `psql`, nenhuma conexão do runtime como
+   `trajetto`:
+
+   ```sql
+   SELECT usename, application_name, count(*) FROM pg_stat_activity GROUP BY 1, 2;
+   ```
+
+5. Exercite login, criação de entrega, posições do app, comprovante,
+   planilha e webhook. Uma rota com 500 e `permission denied` (42501) no
+   log é um grant que faltou: volte a URL (abaixo) e abra o problema.
+6. `DATABASE_REQUIRE_RUNTIME_ROLE=true` → **Deploy**. A partir daí, um boot
+   como o dono, ou com o cron sem a `BATCH_DATABASE_URL`, é recusado.
+7. No dia seguinte, depois das 04:10 UTC, a partição de amanhã existe e é
+   do `trajetto_partitions`, criada pelo `trajetto_batch`:
+   `partitions.driver_position.owner_ok` em `/health/metrics`, ou
+
+   ```sql
+   SELECT relname, pg_get_userbyid(relowner) FROM pg_class
+    WHERE relname LIKE 'driver_position_%' ORDER BY relname DESC LIMIT 3;
+   ```
+
+**Na produção**: promova a onda 6 e, uma semana depois do corte na
+staging, os mesmos passos com `trajetto-postgres-production`. O PITR da
+produção ([seção 27](#f1b-o-pitr-na-produção-fim-da-onda-6)) só depois de
+7 dias com `DATABASE_REQUIRE_RUNTIME_ROLE=true` sem erro novo.
+
+**Reversão**: primeiro `DATABASE_REQUIRE_RUNTIME_ROLE=false` (com ela
+`true`, um boot como o dono é recusado), depois as URLs de volta ao
+usuário do Database → **Deploy**. Os roles e os logins ficam, sem uso;
+para tirar o acesso de um login, `ALTER ROLE <role> NOLOGIN;` à mão.
+
+### PgBouncer: a imagem `trajetto-pgbouncer` (onda 17)
+
+Da onda 17 em diante, as Applications chegam ao Postgres pela Application
+`trajetto-pgbouncer`, e o failover troca só o host para onde ela aponta.
+Nada usa a imagem antes de o dono criar a Application. A imagem
+(`infra/pgbouncer`, plano de escala F4-34) é o PgBouncer compilado da
+fonte sobre Alpine, por digest, rodando com um usuário sem privilégio:
+
+- **Versão**: 1.26.1 ou mais nova, nunca abaixo. A 1.26.1 corrige o laço
+  infinito com um nome de opção vazio no `options` da partida
+  (CVE-2026-107349, alcançável antes do login com esta configuração) e a
+  troca de identidade no SCRAM por um segundo pacote de partida
+  (CVE-2026-107350). A versão e o SHA-256 do código-fonte ficam num `ARG`
+  só do `Dockerfile` e sobem à mão, juntos, a partir do arquivo `.sha256`
+  da própria release; a base Alpine sobe pelo Dependabot.
+- **Configuração gerada a cada partida** pelo `entrypoint.sh`, a partir
+  das variáveis do _Environment_
+  ([variaveis-de-ambiente.md → PgBouncer](./variaveis-de-ambiente.md#pgbouncer-application-trajetto-pgbouncer-onda-17)):
+  `pool_mode=transaction`; o banco (`trajetto`) e o alias
+  `trajetto_probe`, no mesmo banco, com pool de 2 (a readiness nunca
+  espera atrás do tráfego); `max_client_conn` 2000, `default_pool_size`
+  20 e `max_db_connections` 60 por padrão; `query_wait_timeout` de 5 s,
+  `server_lifetime` de 3600 s e `ignore_startup_parameters` só com
+  `extra_float_digits`. O `options` da partida passa só com o que o
+  PgBouncer rastreia (o TimeZone): um `-c statement_timeout` ali é
+  recusado, e os timeouts vêm do `ALTER ROLE` de cada login.
+- **Senhas fora do PgBouncer**: o verificador SCRAM de cada login vem do
+  próprio banco, pelo `auth_query`
+  (`SELECT * FROM pgbouncer.user_lookup($1)`, a função fechada do
+  `infra/sql/30-pgbouncer-auth.sql`), lido com o login `pgbouncer_auth`. O
+  `auth_file` guarda só a senha do `pgbouncer_auth` (em claro: sem ela o
+  PgBouncer não entra no banco) e os dois logins de console:
+  `pgbouncer_admin` (PAUSE, RESUME e KILL), só quando a senha dele está no
+  _Environment_, e `pgbouncer_stats` (só `SHOW`), sempre; sem a senha de
+  estatística, ele fica com uma senha aleatória que ninguém tem.
+- **Quem entra por onde** (`pg_hba.conf` gerado): SCRAM para todos; o
+  console de administração só de dentro do contêiner (`127.0.0.1`), nunca
+  pela rede; o de estatística pela rede (a API lê as métricas por ele);
+  replicação física recusada; `pgbouncer_auth` e os dois logins de console
+  nunca chegam ao banco da aplicação; um banco fora do `trajetto` e do
+  alias não existe. Uma replicação lógica (`replication=database`) chega
+  ao banco como no Postgres e é recusada lá, porque nenhum login do
+  runtime tem `REPLICATION`.
+- **Partida recusada (saída 64)** quando falta ou está malformado o que
+  decide para onde as conexões vão e quem entra: host, porta e banco, a
+  senha do `pgbouncer_auth` (em claro, 16 caracteres ou mais), as senhas
+  de console com menos de 16 caracteres ou a de administração igual à de
+  estatística. Num rolling start-first, a tarefa antiga continua servindo.
+  Um número inválido volta ao padrão, com aviso no log. Nenhuma senha
+  aparece no log, e nenhuma fica no ambiente do processo do PgBouncer.
+- **HEALTHCHECK**: `pg_isready` no console da porta local 6432, sem senha
+  e sem tocar o Postgres: o PgBouncer continua saudável enquanto o banco
+  reinicia (sob PAUSE ou num failover), e o Swarm não derruba o endpoint
+  de todas as Applications por causa do banco. A checagem não deixa linha
+  no log.
+- **Desligamento**: o SIGTERM do Swarm é o `SHUTDOWN WAIT_FOR_CLIENTS`: a
+  tarefa antiga recusa conexões novas, termina as que tem e sai quando o
+  último cliente vai embora (os pools do runtime renovam cada conexão em
+  até um minuto), dentro do _Stop Grace Period_ de 90 s da Application.
+- **Log**: sem as linhas de login e de desconexão (seriam centenas por
+  minuto, com cada conexão renovada a cada minuto). Os erros mandados aos
+  clientes, o login recusado inclusive, e as falhas de login no Postgres
+  continuam no log; as contagens ficam no `SHOW STATS`.
+
+Conferência sem Docker: `tests/unitaires/lifecycle/pgbouncer-image.test.ts`
+roda o `entrypoint.sh` com o PgBouncer simulado e compara os arquivos
+gerados. Com Docker, `docker build --target test infra/pgbouncer` sobe o
+PgBouncer de verdade, sem rede, e lê cada valor de volta pelo console
+(`SHOW CONFIG`, `SHOW DATABASES`).
+
+**No CI e no deploy** (plano de escala F4-35), pela regra da IA, porque o
+deploy a implanta:
+
+- **Teste e build só para uma fonte nova.** A chave é o hash git de
+  `infra/pgbouncer`. O job `PgBouncer image` do `validate.yml` roda o
+  stage `test` só quando o GHCR não tem
+  `trajetto-pgbouncer:src-<hash>` (o `changes.sh` decide). O `Build` do
+  `staging.yml` publica a imagem só para uma fonte que esse job testou, a
+  partir do cache dele, com smoke test no teto da staging, SBOM e
+  proveniência; as tags são `src-<hash>` e `sha-<7>`. Uma fonte que já tem
+  imagem é reaproveitada: o mesmo digest ganha o `sha-<7>` do commit, no
+  registro, sem download.
+- **Varredura.** O Trivy lê a imagem do build, construída ou
+  reaproveitada. Como ela vai para o ar, um achado reprova com
+  `IMAGE_SCAN_ENFORCE=true`, como nas outras.
+- **Deploy só com digest novo, antes das migrations.** A ação de deploy
+  compara o digest do build com o de `trajetto-pgbouncer:<tag>` (`staging`
+  ou `stable`). Igual: nada é reimplantado, e um push que não muda
+  `infra/pgbouncer` não reinicia o endpoint de todas as Applications.
+  Diferente: a tag anda por digest e a Application é implantada, antes das
+  migrations; no modo `ssh` o `verify-rollout.sh` confere a convergência
+  dela. Sem o secret `DOKPLOY_PGBOUNCER_APPLICATION_ID`, só a tag anda, e
+  uma Application criada depois sobe no build do ambiente. Um build sem a
+  imagem deixa o PgBouncer onde está.
+- **Marcador e promoção.** O staging grava o `staged-<7>` dela junto com o
+  da API e o da IA, e o `staged-build.sh` exige o marcador no mesmo digest
+  do `sha-<7>`. A promoção lê o `sha-<7>` dela e move `stable` só se a
+  produção roda outro digest. Um rollback (`image_tag`) leva o PgBouncer
+  do build escolhido, como a IA. Um deploy do Dokploy que falha devolve a
+  tag dela nos dois ambientes.
+
+**A adoção** (plano de escala F4-39) é um passo a passo do dono, no
+[runbook do PgBouncer](./runbooks/pgbouncer.md): a Application
+`trajetto-pgbouncer` (32 MiB e 0,1 CPU na staging do 2º VPS; 64 MiB e
+0,25 CPU na produção da VPS 1, só depois de a staging sair dela; uma
+réplica start-first, com _Stop Grace Period_ de 90 s), as URLs trocadas
+uma Application por vez, a semana de observação, o reinício planejado do
+Postgres (`PAUSE trajetto`, `CHECKPOINT`, redeploy do Database,
+`RESUME trajetto`, no console de administração que só o dono abre), o
+rolling sob o burn-in e a volta ao Postgres direto. O que a API faz com
+ele:
+
+- **A URL pelo PgBouncer** (porta 6432 com `pgbouncer=true`) leva só o
+  `TimeZone` no `options`, e cada conexão vive até 60 s, para a tarefa
+  antiga de um rolling ficar sem cliente antes dos 90 s; o boot recusa o
+  resto (F4-31).
+- **As recusas dele** viram 503 com `Retry-After`, nunca 500: o pool cheio
+  (`query_wait_timeout`, 5 s) e o teto de clientes são `SERVICE_BUSY`; o
+  PgBouncer sem entrar no Postgres, a conexão de servidor que morreu e a
+  tarefa antiga recusando login são `SERVICE_UNAVAILABLE` (F4-32).
+- **As métricas**: o processo com o cron lê o console de cada tarefa por
+  `pgbouncer_stats` (só `SHOW`), uma vez por minuto, e o `/health/metrics`
+  mostra `pgbouncer`, com os alertas `pgbouncer-down`,
+  `pgbouncer-clients-waiting` e `pgbouncer-server-saturation` (F4-36).
+  Variáveis: `PGBOUNCER_STATS_URL` e `PGBOUNCER_STATS_HOSTS`, na
+  Application que roda o cron.
+- **A readiness** vai ao alias `trajetto_probe`, com 2 conexões só dela,
+  pela `READINESS_DATABASE_URL`: um pool das requisições saturado não tira
+  todas as réplicas do ar juntas (F4-37).
+- **As sessões do PgBouncer têm nome**: a do `auth_query` chega como
+  `trajetto-pgbouncer-auth`, por um padrão do role, para a checagem das
+  contrações da etapa de release não a ler como a imagem antiga.
+- **Nunca pelo PgBouncer**: a `BATCH_DATABASE_URL` e a URL da
+  `trajetto-api-migrate`, que usam sessão própria; o boot e a etapa de
+  release as recusam na porta 6432.
+
+### Standby: o `pg_hba` da imagem e o ramo standby (onda 17)
+
+A imagem `trajetto-postgres` já sai pronta para um standby (plano de
+escala, F4-40). Nada muda num Database sem as variáveis abaixo, a não ser
+de onde o Postgres lê o `pg_hba`:
+
+- **O `pg_hba` vem da imagem** (`infra/postgres/pg_hba.conf`): as mesmas
+  regras que a imagem oficial escreveu no volume (confiança só dentro do
+  contêiner, `scram-sha-256` de qualquer endereço), copiadas a cada partida
+  para `/etc/trajetto/run/pg_hba.conf`, para onde aponta o `hba_file`. O
+  arquivo do volume fica como estava: voltar o digest volta a ele. O
+  primário aceita as mesmas conexões de antes, e o teste da imagem compara
+  as regras com as do volume que a imagem oficial cria.
+- **Replicação pela rede só de um endereço**: com
+  `POSTGRES_REPLICATION_CIDR`, o wrapper soma uma linha só,
+  `host replication trajetto_replication <cidr> scram-sha-256`. Só IPv4, de
+  /16 a /32; `all`, `0.0.0.0/0`, uma máscara mais larga ou um nome não
+  abrem nada (o log avisa e o banco sobe). Use o endereço mais estreito de
+  onde o standby conecta: o IP privado dele, `/32`, quando ele vem pela
+  rede privada; pela `dokploy-network`, cujo endereço de cada tarefa muda a
+  cada deploy, a sub-rede dela
+  (`docker network inspect dokploy-network -f '{{(index .IPAM.Config 0).Subnet}}'`).
+- **O role** `trajetto_replication` vem da etapa de release, NOLOGIN e
+  com REPLICATION ([roles do banco](#roles-do-banco-logins-urls-e-conexões)).
+  Só quando houver standby, no `psql` do primário:
+  `ALTER ROLE trajetto_replication LOGIN;` e `\password trajetto_replication`
+  (senha de `openssl rand -hex 32`, no cofre).
+- **O ramo standby**, num Database da mesma imagem e do mesmo digest, com
+  `POSTGRES_STANDBY_PRIMARY_HOST` (o App Name do primário),
+  `POSTGRES_REPLICATION_PASSWORD` e, de preferência, `POSTGRES_STANDBY_SLOT`:
+  - volume vazio: o wrapper clona o primário (`pg_basebackup` pelo slot,
+    criado se faltar) e sobe o clone em recuperação, só leitura, seguindo o
+    primário. A senha vai para um passfile, nunca para o
+    `primary_conninfo` nem para o volume, e sai do ambiente antes de o
+    servidor subir (o stage `test` pergunta o ambiente ao próprio servidor,
+    com `COPY ... TO PROGRAM 'env'`, e falha se ela estiver lá com qualquer
+    nome). Sem a senha, com um host ou um
+    slot inválido, ou com o clone falhando, o contêiner para (código 64):
+    um volume vazio nunca vira um primário novo no lugar do standby;
+  - volume que já é standby (tem `standby.signal`): segue o primário, sem
+    clonar de novo; com o repo1 do PITR completo, o WAL que o streaming
+    não tem mais vem do repositório (`restore_command`);
+  - volume que é primário, ou um standby promovido depois: sobe como
+    **primário**, com aviso no log. A imagem nunca rebaixa um primário.
+    Os mesmos `POSTGRES_MAX_CONNECTIONS` (e o resto do _Environment_ de
+    memória) do primário: a recuperação recusa valores menores. Sem
+    _Domain_, e sem `PITR_ARCHIVE` nem `PGBACKREST_*` num standby de ensaio:
+    promovido, ele arquivaria na stanza do primário.
+- **Promover** é à mão, no `psql` do standby: `SELECT pg_promote();` e
+  depois `CHECKPOINT;`. O failover inteiro (o primário parado, a etapa de
+  release subindo a época do cluster direto no promovido e só então o
+  `infra/pgbouncer/retarget.sh`, que devolve o tráfego)
+  está em [failover-standby](./runbooks/failover-standby.md), e o
+  calendário dos ensaios em [drills](./runbooks/drills.md).
+
+**Trocar o digest no primário** (a imagem com este `pg_hba`), numa janela,
+a staging antes: no console de administração do PgBouncer (só o dono tem a
+senha), `PAUSE trajetto;`; no Database, `CHECKPOINT;`; _Deploy_ do
+Database com o digest novo; `RESUME trajetto;`. Sem o PgBouncer, o
+`CHECKPOINT` e o _Deploy_ de sempre ([Postgres](#postgres)). Depois,
+`SHOW hba_file` responde `/etc/trajetto/run/pg_hba.conf`.
 
 ### Redis
 
@@ -1601,13 +2349,15 @@ lacuna (os defaults funcionam; só não estão dimensionados). Confira depois:
   contêiner que alcançasse um Redis aberto poderia publicar nos canais do
   adapter do Socket.IO. A API recebe `REDIS_URL=redis://:<senha>@<App Name do
 Redis>:6379`.
-- **Nada durável**: o comando personalizado da [seção 7.5](#75-redis-database)
-  desliga RDB/AOF e põe o teto de 256 MB com `allkeys-lru`. Só guarda
-  chaves curtas que expiram sozinhas e o pub/sub do Socket.IO
-  ([ADR 0002](./adr/0002-redis-descartavel.md)); não precisa de backup nem de
-  restore.
-- **Trocar a senha**: nova senha no Database (e no comando, se personalizado)
-  e no `REDIS_URL` da API; **Deploy** do Redis e logo em seguida da API.
+- **Nada durável**: os _Args_ da [seção 7.5](#75-redis-database) põem o
+  teto (256 MB na produção, 64 MB na staging) com `allkeys-lru`, sem AOF. Só guarda
+  chaves que expiram sozinhas, entre elas as do geocodificador (`geocoding:*`,
+  com o cache cifrado de até 48 h da busca de endereço), e o pub/sub do
+  Socket.IO ([ADR 0002](./adr/0002-redis-descartavel.md)); não precisa de
+  backup nem de restore.
+- **Trocar a senha**: nova senha no Database, no argumento da senha dos
+  _Args_ ([seção 7.5](#75-redis-database)) e no `REDIS_URL` de cada
+  Application (a API e os papéis); **Deploy** do Redis e logo em seguida da API.
   Entre os dois, a API segue em modo degradado (rate limit local, tempo real
   sem cruzar réplicas).
 
@@ -1706,14 +2456,20 @@ autenticação por minuto antes de 429 `RATE_LIMITED`.
 | Onde                                                                           | Sonda                                                        | Para quê                                                                                                                                                                                                                                                         |
 | ------------------------------------------------------------------------------ | ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Swarm (_Health Check_ da Application `trajetto-api` e `HEALTHCHECK` da imagem) | `wget http://127.0.0.1:3333/health/liveness` a cada 30 s     | **liveness**: o processo está vivo. Não toca dependência nenhuma: no Swarm, falhar aqui **destrói** a réplica; apontar para a readiness já fez um soluço do Postgres derrubar as duas réplicas. Uma réplica nova só entra no balanceamento depois de passar aqui |
-| Pipeline (`deploy-staging`; na promoção com `ROLLOUT_VERIFY=http`)             | `GET <API_PUBLIC_URL>/health/liveness` a cada 5 s, até 600 s | a mesma liveness responde `version` e `commit` (o commit do build); o deploy só fica verde depois de a API pública responder o commit novo por 90 s seguidos ([seção 14](#14-conferir-a-convergência))                                                           |
+| Pipeline (o `Deploy` do staging; na promoção com `ROLLOUT_VERIFY=http`)        | `GET <API_PUBLIC_URL>/health/liveness` a cada 5 s, até 600 s | a mesma liveness responde `version` e `commit` (o commit do build); o deploy só fica verde depois de a API pública responder o commit novo por 90 s seguidos ([seção 14](#14-conferir-a-convergência))                                                           |
 | `/health/readiness`                                                            | consultada pelo monitor externo e pelo desligamento          | **readiness**: pode receber tráfego. Banco fora → 503. Vira 503 durante o desligamento ordenado (12 s antes de fechar). O Traefik não a consulta mais (lacuna da [seção 5](#5-applications-em-vez-de-compose-o-que-mudou-e-o-que-ficou-de-fora))                 |
 | Swarm (`trajetto-ai`)                                                          | `GET http://127.0.0.1:8080/health`                           | 200 só depois de carregar os dois perfis e ler a foto de aquecimento; responde também `version` e `commit`                                                                                                                                                       |
 | Databases (Postgres e Redis)                                                   | o que o Dokploy configura                                    | conferência manual: `pg_isready`; `redis-cli -a … ping`                                                                                                                                                                                                          |
 | Monitor externo                                                                | `/health/readiness` da API e `/api/health` da web, 1/min     | uptime ([seção 20](#20-alertas-e-monitoramento))                                                                                                                                                                                                                 |
 
-Outras rotas: `/health/metrics` (filas, workers, crons, pool, certificado) e
-`/health/providers` (prontidão dos provedores), ambas só MASTER.
+Outras rotas: `/health/metrics` (filas, workers, crons, pool, certificado e
+os números do próprio banco: xid, cache, escrita e snapshot mais antigos,
+arquivamento, `pg_wal`, tabelas quentes, tamanhos e `pg_stat_statements`) e
+`/health/providers` (prontidão dos provedores), ambas só MASTER. O tamanho do
+`pg_wal` só aparece quando o usuário do banco é superusuário ou tem
+`pg_monitor`; as idades das sessões dos outros usuários, com superusuário ou
+`pg_read_all_stats` (depois do corte dos roles, na onda 6 do plano de escala,
+essa leitura passa ao role de manutenção).
 
 ## 13. Configurar o GitHub
 
@@ -1725,16 +2481,24 @@ _Add environment secret_ / _Add environment variable_.
 
 **`staging`** (sem revisores; o deploy de staging é automático):
 
-| Tipo     | Nome                                                                                    | Valor                                                                                                                                                                                                      | Obrigatório?                                                                               |
-| -------- | --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| secret   | `DOKPLOY_URL`                                                                           | URL do painel, **https**: `https://dokploy.intrajetto.com`, pela Cloudflare (nunca o IP, que o firewall fecha; o script recusa http)                                                                       | sim (com os três abaixo; nenhum dos quatro = deploy pulado com aviso)                      |
-| secret   | `DOKPLOY_API_KEY`                                                                       | a chave da seção 7.10                                                                                                                                                                                      | sim                                                                                        |
-| secret   | `DOKPLOY_API_APPLICATION_ID`                                                            | applicationId da `trajetto-api` de staging                                                                                                                                                                 | sim                                                                                        |
-| secret   | `DOKPLOY_MIGRATE_APPLICATION_ID`                                                        | applicationId da `trajetto-api-migrate` de staging ([seção 15](#15-migrations))                                                                                                                            | sim                                                                                        |
-| secret   | `DOKPLOY_AI_APPLICATION_ID`                                                             | applicationId da `trajetto-ai` de staging                                                                                                                                                                  | não (sem ele: aviso e a IA não é atualizada)                                               |
-| variable | `API_PUBLIC_URL`                                                                        | a origem pública da API de staging, `https://api-staging.intrajetto.com` (sem barra no fim): o pipeline espera a `/health/liveness` dela responder o commit novo ([seção 14](#14-conferir-a-convergência)) | sim, enquanto `ROLLOUT_VERIFY` não for `off` nem `ssh` (é a conferência padrão do staging) |
-| variable | `SWARM_API_SERVICE`                                                                     | `trajetto-api-staging` (o App Name da API)                                                                                                                                                                 | só com `ROLLOUT_VERIFY=ssh`                                                                |
-| secrets  | `DEPLOY_SSH_HOST`, `DEPLOY_SSH_USER`, `DEPLOY_SSH_KNOWN_HOSTS`, `DEPLOY_VERIFY_SSH_KEY` | conferência do rollout ([seção 14](#14-conferir-a-convergência)); podem ficar no repositório, já que os dois ambientes dividem o host                                                                      | só com `ROLLOUT_VERIFY=ssh`                                                                |
+| Tipo      | Nome                                                                                                                                                                              | Valor                                                                                                                                                                                                                                                                                   | Obrigatório?                                                                               |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| secret    | `DOKPLOY_URL`                                                                                                                                                                     | URL do painel, **https**: `https://dokploy.intrajetto.com`, pela Cloudflare (nunca o IP, que o firewall fecha; o script recusa http)                                                                                                                                                    | sim (com os três abaixo; nenhum dos quatro = deploy pulado com aviso)                      |
+| secret    | `DOKPLOY_API_KEY`                                                                                                                                                                 | a chave da seção 7.10                                                                                                                                                                                                                                                                   | sim                                                                                        |
+| secret    | `DOKPLOY_API_APPLICATION_ID`                                                                                                                                                      | applicationId da `trajetto-api` de staging                                                                                                                                                                                                                                              | sim                                                                                        |
+| secret    | `DOKPLOY_MIGRATE_APPLICATION_ID`                                                                                                                                                  | applicationId da `trajetto-api-migrate` de staging ([seção 15](#15-migrations))                                                                                                                                                                                                         | sim                                                                                        |
+| secret    | `DOKPLOY_AI_APPLICATION_ID`                                                                                                                                                       | applicationId da `trajetto-ai` de staging                                                                                                                                                                                                                                               | não (sem ele: aviso e a IA não é atualizada)                                               |
+| secret    | `DOKPLOY_PGBOUNCER_APPLICATION_ID`                                                                                                                                                | applicationId da `trajetto-pgbouncer` de staging (onda 17), só depois de ela existir: o deploy a implanta antes das migrations, e só quando o digest da imagem mudou                                                                                                                    | não (sem ele: aviso, e só a tag `staging` da `trajetto-pgbouncer` anda)                    |
+| secrets   | `DOKPLOY_WORKER_APPLICATION_ID`, `DOKPLOY_SCHEDULER_APPLICATION_ID`, `DOKPLOY_WORKER_EXTERNAL_APPLICATION_ID`, `DOKPLOY_INGEST_APPLICATION_ID`, `DOKPLOY_REALTIME_APPLICATION_ID` | opcionais: o applicationId de cada Application de papel de staging, só depois de ela existir; sem o secret, o papel não é implantado e a tag `<tag>-<papel>` segue a da API (plano de escala F3-31a)                                                                                    |
+| variable  | `API_PUBLIC_URL`                                                                                                                                                                  | a origem pública da API de staging, `https://api-staging.intrajetto.com` (sem barra no fim): o pipeline espera a `/health/liveness` dela responder o commit novo ([seção 14](#14-conferir-a-convergência))                                                                              | sim, enquanto `ROLLOUT_VERIFY` não for `off` nem `ssh` (é a conferência padrão do staging) |
+| variable  | `SWARM_API_SERVICE`                                                                                                                                                               | o App Name real da API de staging, copiado da aba _General_ (`trajetto-api-staging-<sufixo>`; o marcador sem sufixo não acha o serviço, [seção 7.2](#72-nomes-name-e-app-name))                                                                                                         | só com `ROLLOUT_VERIFY=ssh`                                                                |
+| variables | `SWARM_WORKER_SERVICE`, `SWARM_SCHEDULER_SERVICE`, `SWARM_WORKER_EXTERNAL_SERVICE`, `SWARM_INGEST_SERVICE`, `SWARM_REALTIME_SERVICE`                                              | o App Name real de cada Application de papel de staging, copiado da aba _General_ (`trajetto-worker-staging-<sufixo>`…), junto com o secret dela: a conferência por SSH confere cada papel implantado ([seção 14](#pelo-swarm-por-ssh-padrão-na-produção-rollout_verifyssh-no-staging)) | só com `ROLLOUT_VERIFY=ssh` e o papel implantado (sem ela, aviso)                          |
+| variable  | `SWARM_PGBOUNCER_SERVICE`                                                                                                                                                         | o App Name real do PgBouncer de staging, copiado da aba _General_ (`trajetto-pgbouncer-staging-<sufixo>`), junto com o secret dele: a conferência por SSH confere o PgBouncer antes das migrations                                                                                      | só com `ROLLOUT_VERIFY=ssh` e o PgBouncer implantado (sem ela, aviso)                      |
+| secret    | `ROLLOUT_STATUS_TOKEN`                                                                                                                                                            | o mesmo valor do `ROLLOUT_STATUS_TOKEN` da `trajetto-api` de staging (`openssl rand -hex 32`): o deploy lê os passos pendentes da etapa de release em `<API_PUBLIC_URL>/health/rollout` ([seção 15](#quando-a-etapa-roda)); sem ele, aviso e a regra de antes                           |
+| variable  | `ROLLOUT_ROLES_EXPECTED`                                                                                                                                                          | os papéis que o deploy espera no commit novo ([seção 14](#os-papéis-da-mesma-imagem-rollout_roles_expected)): `all` enquanto só existe a `trajetto-api`; `api,worker` quando a `trajetto-worker` de staging existir (onda 12)                                                           | não (sem ela, a conferência por papel não roda)                                            |
+| variable  | `RELEASE_SERIALIZE_WITH_APPLICATION_ID`                                                                                                                                           | o applicationId da `trajetto-api-migrate` de **produção**: na VPS única a etapa de staging espera a de produção terminar. Sai quando a staging for para o 2º VPS                                                                                                                        |
+| variable  | `RELEASE_TIMEOUT_SECONDS`                                                                                                                                                         | opcional (vazio = 1800, teto 3600): quanto a etapa de release pode levar no deploy, a espera pela do outro ambiente incluída                                                                                                                                                            |
+| secrets   | `DEPLOY_SSH_HOST`, `DEPLOY_SSH_USER`, `DEPLOY_SSH_KNOWN_HOSTS`, `DEPLOY_VERIFY_SSH_KEY`                                                                                           | conferência do rollout ([seção 14](#14-conferir-a-convergência)); podem ficar no repositório, já que os dois ambientes dividem o host                                                                                                                                                   | só com `ROLLOUT_VERIFY=ssh`                                                                |
 
 Sem o `DOKPLOY_MIGRATE_APPLICATION_ID`, com os outros três definidos, o job
 falha logo no começo ("configuração parcial"), antes de qualquer tag andar: a
@@ -1745,15 +2509,23 @@ aprovar uma ida para produção) e, em _Deployment branches and tags_,
 _Selected branches and tags_ → `main` (o _Run workflow_ de rollback também
 roda a partir de `main`):
 
-| Tipo     | Nome                                                                                    | Valor                                                                                      |
-| -------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| secret   | `DOKPLOY_URL`, `DOKPLOY_API_KEY`                                                        | os mesmos do staging (um painel só)                                                        |
-| secret   | `DOKPLOY_API_APPLICATION_ID`                                                            | applicationId da `trajetto-api` de produção                                                |
-| secret   | `DOKPLOY_MIGRATE_APPLICATION_ID`                                                        | applicationId da `trajetto-api-migrate` de produção ([seção 15](#15-migrations))           |
-| secret   | `DOKPLOY_AI_APPLICATION_ID`                                                             | applicationId da `trajetto-ai` de produção                                                 |
-| variable | `API_PUBLIC_URL`                                                                        | a origem pública da API de produção; só é lida com `ROLLOUT_VERIFY=http` neste environment |
-| variable | `SWARM_API_SERVICE`                                                                     | `trajetto-api-production`                                                                  |
-| secrets  | `DEPLOY_SSH_HOST`, `DEPLOY_SSH_USER`, `DEPLOY_SSH_KNOWN_HOSTS`, `DEPLOY_VERIFY_SSH_KEY` | conferência do rollout (só sem `ROLLOUT_VERIFY=http`)                                      |
+| Tipo      | Nome                                                                                                                                                                              | Valor                                                                                                                                                                                                      |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| secret    | `DOKPLOY_URL`, `DOKPLOY_API_KEY`                                                                                                                                                  | os mesmos do staging (um painel só)                                                                                                                                                                        |
+| secret    | `DOKPLOY_API_APPLICATION_ID`                                                                                                                                                      | applicationId da `trajetto-api` de produção                                                                                                                                                                |
+| secret    | `DOKPLOY_MIGRATE_APPLICATION_ID`                                                                                                                                                  | applicationId da `trajetto-api-migrate` de produção ([seção 15](#15-migrations))                                                                                                                           |
+| secret    | `DOKPLOY_AI_APPLICATION_ID`                                                                                                                                                       | applicationId da `trajetto-ai` de produção                                                                                                                                                                 |
+| secret    | `DOKPLOY_PGBOUNCER_APPLICATION_ID`                                                                                                                                                | opcional: applicationId da `trajetto-pgbouncer` de produção, só depois de ela existir (uma semana depois da staging); sem ele, só a tag `stable` dela anda                                                 |
+| secrets   | `DOKPLOY_WORKER_APPLICATION_ID`, `DOKPLOY_SCHEDULER_APPLICATION_ID`, `DOKPLOY_WORKER_EXTERNAL_APPLICATION_ID`, `DOKPLOY_INGEST_APPLICATION_ID`, `DOKPLOY_REALTIME_APPLICATION_ID` | opcionais: o applicationId de cada Application de papel de produção, só depois de ela existir; sem o secret, o papel não é implantado e a tag `<tag>-<papel>` segue a da API (plano de escala F3-31a)      |
+| variable  | `API_PUBLIC_URL`                                                                                                                                                                  | a origem pública da API de produção; lida com `ROLLOUT_VERIFY=http` e para os passos pendentes da etapa de release (com o `ROLLOUT_STATUS_TOKEN`)                                                          |
+| variable  | `SWARM_API_SERVICE`                                                                                                                                                               | o App Name real da API de produção, copiado da aba _General_ (`trajetto-api-production-<sufixo>`)                                                                                                          |
+| variables | `SWARM_WORKER_SERVICE`, `SWARM_SCHEDULER_SERVICE`, `SWARM_WORKER_EXTERNAL_SERVICE`, `SWARM_INGEST_SERVICE`, `SWARM_REALTIME_SERVICE`                                              | o App Name real de cada Application de papel de produção, copiado da aba _General_ (`trajetto-worker-production-<sufixo>`…), junto com o secret dela; lida pela conferência por SSH (o padrão da produção) |
+| variable  | `SWARM_PGBOUNCER_SERVICE`                                                                                                                                                         | o App Name real do PgBouncer de produção, copiado da aba _General_ (`trajetto-pgbouncer-production-<sufixo>`), junto com o secret dele; lida pela conferência por SSH (o padrão da produção)               |
+| secret    | `ROLLOUT_STATUS_TOKEN`                                                                                                                                                            | o mesmo valor do `ROLLOUT_STATUS_TOKEN` da `trajetto-api` de produção (outro valor, não o do staging); lido em `<API_PUBLIC_URL>/health/rollout`, então a `API_PUBLIC_URL` precisa existir aqui também     |
+| variable  | `ROLLOUT_ROLES_EXPECTED`                                                                                                                                                          | `all` até a `trajetto-worker` de produção existir (onda 14); depois, `api,worker` ([seção 14](#os-papéis-da-mesma-imagem-rollout_roles_expected)). Sem ela, a conferência por papel não roda               |
+| variable  | `RELEASE_SERIALIZE_WITH_APPLICATION_ID`                                                                                                                                           | o applicationId da `trajetto-api-migrate` de **staging**                                                                                                                                                   |
+| variable  | `RELEASE_TIMEOUT_SECONDS`                                                                                                                                                         | opcional (vazio = 1800, teto 3600)                                                                                                                                                                         |
+| secrets   | `DEPLOY_SSH_HOST`, `DEPLOY_SSH_USER`, `DEPLOY_SSH_KNOWN_HOSTS`, `DEPLOY_VERIFY_SSH_KEY`                                                                                           | conferência do rollout (só sem `ROLLOUT_VERIFY=http`)                                                                                                                                                      |
 
 Os quatro `DOKPLOY_*` obrigatórios de um environment (`DOKPLOY_URL`,
 `DOKPLOY_API_KEY`, `DOKPLOY_API_APPLICATION_ID` e
@@ -1762,6 +2534,33 @@ o job move a tag e pula o deploy com aviso; só alguns = o job falha
 ("configuração parcial"). O `DOKPLOY_BACKUP_APPLICATION_ID` não existe
 mais (o backup é do Dokploy, sem Application): apague-o dos dois
 environments, se ficou lá.
+
+**Como ficaram em 27/11/2026, antes da primeira promoção do plano de
+escala.** A `production` recebeu o secret `ROLLOUT_STATUS_TOKEN` (outro
+valor, o mesmo da `trajetto-api` de produção) e as variáveis
+`ROLLOUT_ROLES_EXPECTED=all`, `RELEASE_SERIALIZE_WITH_APPLICATION_ID` (a
+migrate de staging) e `RELEASE_TIMEOUT_SECONDS=3600` (a primeira promoção
+aplica as 81 migrations de uma vez); a `API_PUBLIC_URL` já existia, e a
+`ROLLOUT_VERIFY=http` do repositório vale nela. Os `DOKPLOY_WORKER_*` e os
+`SWARM_*` ficam de fora até a `trajetto-worker` de produção existir. Na
+`staging`, a `RELEASE_SERIALIZE_WITH_APPLICATION_ID` estava com o sufixo do
+App Name, e não com o id: o script só avisava e seguia sem esperar. Agora
+ela tem o id da URL da migrate de produção. O valor é sempre o trecho da
+URL do Dokploy depois de `/application/`.
+
+**Sem plano pago, não há Required reviewers nem Ruleset.** A organização
+está no plano gratuito, e num repositório privado esse plano não oferece
+nem os _Required reviewers_ do environment nem a aplicação de um Ruleset
+(um Ruleset criado com o repositório público fica salvo, mas não vale
+depois que ele volta a ser privado; e não se abre o repositório para
+isso). Até a assinatura, **o clique no merge é a aprovação**: o deploy de
+produção começa logo depois. O dono só faz o merge com o `Secret scan` e
+o _Staging evidence_ do PR verdes. O _Staging evidence_ do `production.yml`
+roda de novo antes do deploy e reprova um commit que a staging não
+validou. A única trava que o plano gratuito aplica é a do tipo de merge
+(_Settings → General → Pull Requests_, só _Allow merge commits_). Na
+assinatura, crie o Ruleset da `main` (abaixo) e marque os _Required
+reviewers_.
 
 ### Variáveis e secrets do repositório
 
@@ -1772,7 +2571,7 @@ _Settings → Secrets and variables → Actions_, abas _Secrets_ e _Variables_
 | -------- | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | variable | `ROLLOUT_VERIFY`          | como o run prova o rollout da API: `http` (padrão no staging) = a liveness pública responde o commit novo por 90 s; `ssh` (padrão na produção) = o Swarm, por SSH; `off` = nenhuma (só em emergência; fica registrado no resumo). Valor vazio ou desconhecido = o padrão do ambiente. Pode ser definida só num environment para valer só nele. Em uso em 29/10/2026: `http` nos dois ambientes (o SSH não está configurado) |
 | variable | `IMAGE_SCAN_ENFORCE`      | `true` faz um CRITICAL corrigível no Trivy falhar o build                                                                                                                                                                                                                                                                                                                                                                   |
-| secret   | `CLIENT_REPOS_READ_TOKEN` | token só leitura de `Trajetto-Organization/trajetto-ui` e `Trajetto-Organization/trajetto-mobile` (fine-grained, _Contents: Read-only_), para o contrato de rotas do `ci.yml`                                                                                                                                                                                                                                               |
+| secret   | `CLIENT_REPOS_READ_TOKEN` | token só leitura de `Trajetto-Organization/trajetto-ui` e `Trajetto-Organization/trajetto-mobile` (fine-grained, _Contents: Read-only_), para o contrato de rotas do `validate.yml` (nas branches e na `staging`)                                                                                                                                                                                                           |
 
 **Apague se existirem** (não são mais lidos por nada):
 `DOKPLOY_COMPOSE_ID` (dos dois environments: era o id do app Compose), as
@@ -1784,9 +2583,17 @@ a ser criada) e os secrets `PORTAINER_WEBHOOK_URL` e
 
 ### Proteção das branches
 
-- `main`: exigir PR, exigir os checks _Lint, type-check, unit (coverage floor)
+- `main` (o Ruleset da branch, em _Settings → Rules → Rulesets_): exigir PR
+  e exigir os checks **`Secret scan`** e **`Staging evidence`**, os dois do
+  `pr.yml` (o _Staging evidence_ já prova o `staged-<7>` e o `Gate` da
+  validação do staging, então a validação não precisa ser exigida de novo, e
+  um head só de documentação não fica preso esperando um check que não
+  roda). Os quatro nomes antigos (_Lint, type-check, unit (coverage floor)
   and E2E_, _AI OCR service (image + pytest)_, _Secret scan (gitleaks)_ e
-  _The PR head was built on staging_; permitir só **merge commit**: em
+  _The PR head was built on staging_) deixaram de existir em 10/11/2026:
+  **troque o Ruleset no primeiro PR para `main` depois da virada**, senão o
+  PR fica esperando checks que ninguém mais publica. Permitir só **merge
+  commit**: em
   _Settings → General → Pull Requests_, deixe marcado só _Allow merge
   commits_ e desmarque _Allow squash merging_ e _Allow rebase merging_. Se a
   proteção impedir o push do `semantic-release` (o commit do CHANGELOG),
@@ -1850,12 +2657,43 @@ promovido. São dois jeitos, escolhidos pela variável `ROLLOUT_VERIFY`
   chave restrita (forced command).
 - Entrada: `<SWARM_API_SERVICE> ghcr.io/trajetto-organization/trajetto-api@sha256:<digest>`
   — o App Name da API e o digest que este run publicou.
+- Uma chamada por serviço implantado, na ordem do deploy (plano de escala
+  X-07): o PgBouncer, quando este run o implantou (antes das migrations,
+  com a imagem dele, `trajetto-pgbouncer@sha256:<digest>`, e o App Name de
+  `SWARM_PGBOUNCER_SERVICE`; sem a variável, aviso), os papéis implantados
+  antes da API (`trajetto-worker`,
+  `trajetto-scheduler`, `trajetto-worker-external`), antes de a tag da API
+  andar, a API e, depois do deploy deles, os de borda (`trajetto-ingest`,
+  `trajetto-realtime`). Cada
+  papel entra pelo App Name da variável `SWARM_<PAPEL>_SERVICE` do
+  environment, com o digest da API (todos rodam a imagem dela), por
+  `.github/scripts/deploy-roles.sh verify`. Um papel que o run não
+  implantou não é conferido; um implantado sem a variável é um aviso; um
+  que não converge falha o run, e os seguintes não são conferidos.
+- Imagens aceitas: `trajetto-api`, `trajetto-ui`, `trajetto-backup`,
+  `trajetto-pgbouncer` e os nomes dos papéis, sempre por digest.
 - Lê: o `UpdateStatus` do serviço, as tasks e o digest da imagem do
-  contêiner de cada task.
-- Passa quando: o update terminou (`completed`) e toda task em execução roda
-  o digest esperado, na quantidade de réplicas.
+  contêiner de cada task. Na API, depois de convergir, também o _Stop Grace
+  Period_ da spec (ausente = os 10 s do Docker) e só a variável
+  `STOP_GRACE_PERIOD_MS` do _Environment_ (ausente = 10000): o filtro roda
+  dentro do template do `docker`, e nenhum outro valor do _Environment_
+  chega ao script.
+- Passa quando: o update terminou (`completed`), toda task em execução roda
+  o digest esperado, na quantidade de réplicas, e (na imagem da API, papéis
+  inclusive) o grace cobre a variável. Vai no log a linha
+  `grace: … cobre STOP_GRACE_PERIOD_MS=…`, e a do `ok:` termina com
+  `grace=<s>s`, o _Stop Grace Period_ que o serviço tem de fato (em
+  qualquer imagem).
+- Com `ROLLOUT_REQUIRE_GRACE=true` no forced command (abaixo), a imagem da
+  API (e dos papéis) e a do PgBouncer falham com grace abaixo de 40 s, o
+  piso do plano; a web e o backup só imprimem o valor. Sem a variável, o
+  grace só é impresso e conferido contra o `STOP_GRACE_PERIOD_MS`.
 - Falha quando: `rollback_*`/`paused`, uma task com outra imagem, 600 s sem
-  convergir (`ROLLOUT_TIMEOUT_SECONDS`).
+  convergir (`ROLLOUT_TIMEOUT_SECONDS`) ou, na API, `STOP_GRACE_PERIOD_MS`
+  acima do grace do serviço (contado em segundos inteiros, como o daemon
+  faz). Nesse caso a imagem nova já está no ar, mas cada deploy seguinte
+  mataria o desligamento ordenado no meio: suba o _Stop Grace Period_
+  ([seção 7.7](#77-trajetto-api-application), passo 8) ou baixe a variável.
 
 Como o Dokploy atualiza o serviço com a **tag** (`…:staging`/`…:stable`) e
 não grava o digest na spec, o script não compara a spec: ele lê o digest da
@@ -1863,7 +2701,10 @@ imagem do contêiner de cada task em execução. Limite: só enxerga contêinere
 do próprio nó (o manager). Com a VPS única, são todas as tasks; com mais nós
 no Swarm, o script precisa ser revisto.
 
-Instalação, uma vez, no host do Dokploy:
+Instalação, uma vez, no host do Dokploy, e de novo sempre que o script
+mudar no repositório (o host roda a cópia instalada; a de 15/11/2026 passou
+a conferir o grace; a da onda 12 aceita os papéis e o PgBouncer, imprime
+`grace=` e entende `ROLLOUT_REQUIRE_GRACE`):
 
 ```sh
 sudo install -m 755 infra/scripts/verify-rollout.sh /usr/local/bin/trajetto-verify-rollout
@@ -1876,6 +2717,14 @@ E uma chave **só para isso** no `~/.ssh/authorized_keys` do usuário de deploy
 command="/usr/local/bin/trajetto-verify-rollout",no-pty,no-port-forwarding,no-agent-forwarding,no-X11-forwarding ssh-ed25519 AAAA... verify-trajetto
 ```
 
+Para exigir os 40 s de grace (depois de todas as Applications da API, dos
+papéis e do PgBouncer terem o _Stop Grace Period_ do plano), a mesma linha
+com a variável na frente do comando:
+
+```
+command="ROLLOUT_REQUIRE_GRACE=true /usr/local/bin/trajetto-verify-rollout",no-pty,no-port-forwarding,no-agent-forwarding,no-X11-forwarding ssh-ed25519 AAAA... verify-trajetto
+```
+
 Gere com `ssh-keygen -t ed25519 -f verify-trajetto -N ''`; a privada vai em
 `DEPLOY_VERIFY_SSH_KEY`, e `ssh-keyscan -t ed25519 <host>` vai em
 `DEPLOY_SSH_KNOWN_HOSTS`. A única entrada que o CI manda é a linha acima; o
@@ -1886,10 +2735,59 @@ trajetto-verify-rollout trajetto-api-production ghcr.io/trajetto-organization/tr
 # conferência manual equivalente:
 docker service ps trajetto-api-production --filter desired-state=running --no-trunc --format '{{.Image}} {{.CurrentState}}'
 docker service inspect trajetto-api-production --format '{{.UpdateStatus.State}}'   # completed
+docker service inspect trajetto-api-production --format '{{json .Spec.TaskTemplate.ContainerSpec.StopGracePeriod}}'   # 40000000000 (null = 10 s)
 ```
 
 Desligar (só numa emergência, e fica registrado no resumo do run): variável
 `ROLLOUT_VERIFY=off`.
+
+### Os papéis da mesma imagem (`ROLLOUT_ROLES_EXPECTED`)
+
+As duas conferências acima provam a API. Com o worker (e, depois, os outros
+papéis) como Application própria, um worker cuja task nova não passou no
+healthcheck volta ao build anterior pelo Swarm e continua consumindo as
+filas nele, com a API já no commit novo. Por isso, depois do deploy dos
+papéis de borda, roda mais um passo (plano de escala F3-31b):
+
+- O quê: `.github/scripts/wait-for-roles.mjs`, no runner do GitHub (testado
+  em `tests/unitaires/lifecycle/wait-for-roles.test.ts`).
+- Lê: `GET <API_PUBLIC_URL>/health/rollout`, com o `ROLLOUT_STATUS_TOKEN`
+  do environment, a cada 5 s. A resposta traz os processos vivos do
+  `process_heartbeat`, contados por papel, ambiente, commit, impressão da
+  configuração, filas, cron e sockets, sem nome de máquina, réplica ou nó.
+- Passa quando, por **90 s seguidos**: cada papel de
+  `ROLLOUT_ROLES_EXPECTED` tem um processo vivo no commit deste run; nenhum
+  processo deste ambiente roda outro commit; toda fila tem consumidor e
+  algum processo roda o cron (contados pela união dos processos no commit
+  novo); e todos os processos vivos têm a mesma impressão da configuração.
+- O papel `all` vale por api, worker e scheduler, dos dois lados: um
+  processo em `all` cobre `ROLLOUT_ROLES_EXPECTED=api,worker`, e o valor
+  `all` pede os três cobertos. A produção usa `all` até ter o worker dela
+  (onda 14); a staging, `api,worker` desde que o worker existe.
+- Falha quando: 600 s sem a janela fechar (um papel que não sobe, uma fila
+  sem consumidor, ninguém com o cron), Environments que divergem (duas
+  impressões), um processo do outro ambiente apontado para este banco, ou
+  um papel desconhecido na variável.
+- Não roda: sem o secret `ROLLOUT_STATUS_TOKEN` ou sem a variável
+  `ROLLOUT_ROLES_EXPECTED` (aviso, e o run é o de antes), com
+  `ROLLOUT_VERIFY=off`, num build anterior a esta conferência (a resposta
+  sem os processos: aviso) e quando a rota responde 404 três vezes seguidas
+  (um build anterior à rota, ou um token diferente do da API: aviso).
+- Antes da API, sem SSH (`ROLLOUT_VERIFY=http`, o padrão da staging): o
+  mesmo script, com `WAIT_ROLES_SCOPE=roles`, espera só os papéis que o
+  run acabou de implantar antes da API (`deploy-roles.sh verify`, passo 7
+  da lista acima). A API que responde ainda é a do build anterior, então
+  só esses papéis são julgados: cada um com um processo vivo no commit
+  novo e nenhum em outro, pelo nome do papel (o `all` da API anterior não
+  vale por um worker). Uma API anterior a esta conferência só avisa, e o
+  primeiro deploy que traz o passo não confere os papéis antes da API.
+
+À mão (o token nunca vai para a linha de comando de outra pessoa nem para
+um log):
+
+```sh
+curl -s -H "Authorization: Bearer $ROLLOUT_STATUS_TOKEN" https://api-staging.intrajetto.com/health/rollout
+```
 
 ## 15. Migrations
 
@@ -1911,10 +2809,10 @@ Quem migra é a **imagem de migração** (`trajetto-api-migrate`, estágio
 `trajetto-api-migrate` de cada ambiente, **antes do rollout** e **só quando o
 banco ainda não aplicou aquela imagem**:
 
-| Quando                                     | Quem chama                                                                                                                         | O que acontece numa migration que falha                                                                         |
-| ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| deploy de staging                          | `deploy-staging`, passo _Run the database migrations on staging (Dokploy)_, com a imagem de migração **deste commit**              | o passo falha; nenhuma tag da API ou da IA anda, elas não são reimplantadas e o staging segue no build que roda |
-| promoção (merge em `main`, _Run workflow_) | `promote-production`, passo _Run the database migrations on production (Dokploy)_, com a imagem de migração **do build promovido** | o passo falha; `stable` não anda, nada é reimplantado e as réplicas de produção nem percebem                    |
+| Quando                                     | Quem chama                                                                                                                            | O que acontece numa migration que falha                                                                         |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| deploy de staging                          | `Deploy` do `staging.yml`, passo _Run the database migrations (Dokploy)_ da ação de deploy, com a imagem de migração **deste commit** | o passo falha; nenhuma tag da API ou da IA anda, elas não são reimplantadas e o staging segue no build que roda |
+| promoção (merge em `main`, _Run workflow_) | `Deploy` do `production.yml`, o mesmo passo, com a imagem de migração **do build promovido** (lida pelo _Staging evidence_)           | o passo falha; `stable` não anda, nada é reimplantado e as réplicas de produção nem percebem                    |
 
 **Só quando precisa.** A imagem de migração é reconstruída apenas quando
 muda o que ela roda, como a da IA: `.github/scripts/migrate-source.sh` faz um
@@ -1950,6 +2848,7 @@ ser alvo de rollback ("Configurar a Application `trajetto-api-migrate`",
 passo 7, abaixo).
 
 O modo `release` do entrypoint (o comando padrão da imagem de migração) roda
+`build/prebuild-online-ddl.js` (o `prisma/concurrent`, logo abaixo),
 `prisma migrate deploy` (de `/app/migrate`, onde estão o CLI e o
 `prisma.config.ts`), `build/seed.js` e `build/import-violation-codes.js` de
 forma **estrita**, sem subir o servidor: qualquer erro reprova a etapa. Os
@@ -1964,6 +2863,163 @@ falhada.
 
 As regras para escrever uma migration (expandir/contrair, `lock_timeout`,
 índices) estão em [`arquitetura.md`](./arquitetura.md#migrations-expandir-e-contrair).
+
+### `prisma/concurrent`: os índices antes das migrations
+
+Um `CREATE INDEX` comum segura as escritas da tabela durante todo o build, e
+o Prisma roda cada migration numa transação, onde o CREATE INDEX
+CONCURRENTLY não roda. O índice de uma tabela quente vai então num arquivo
+de `prisma/concurrent/` (as regras estão no `README.md` dessa pasta), que a
+etapa roda **antes** do `prisma migrate deploy`, com CONCURRENTLY; a
+migration mantém o `CREATE INDEX IF NOT EXISTS` com o mesmo nome, que acha o
+índice pronto e não faz nada (num banco novo, o molde do E2E ou o
+`yarn dev`, ela o constrói com a tabela vazia). O roteiro "construa à mão
+antes" dos comentários de migration saiu daí.
+
+O passo roda de novo logo **depois** do `prisma migrate deploy` (linhas
+`[postbuild]` no log), para o arquivo que a primeira passada pulou porque a
+coluna ainda não existia: uma coluna e o índice dela na mesma release. A
+migration desse índice o constrói só com a tabela vazia (o bloco `DO $$`
+do `README.md`, que confere se a tabela tem linha), e com linhas quem o
+constrói é essa segunda passada, com CONCURRENTLY, antes de a API nova
+subir. O `migration-prebuild.test.ts` cobra o bloco e a declaração da
+coluna.
+
+**Ajustes do planejador (plano de escala, F2-22).** O mesmo passo aplica o
+alvo de estatística de uma coluna (`SET STATISTICS`), os parâmetros de
+armazenamento (`SET (...)`, como os do autovacuum) e as estatísticas
+estendidas (`CREATE STATISTICS`). Cada um pega SHARE UPDATE EXCLUSIVE, a
+trava de todo vacuum e ANALYZE (as escritas seguem), e é pulado quando o
+catálogo já o tem, sem pegar trava. A migration de mesmo nome faz o mesmo
+só onde o catálogo não tem (banco novo, ou `PREBUILD_ONLINE_DDL=off`), num
+bloco `DO $$` que confere antes de cada comando. O
+`migration-prebuild.test.ts` cobra que cada comando do arquivo esteja na
+migration, escrito igual, e o `prebuild-online-ddl.test.ts`, que um banco
+migrado não deixa nada para o passo. Os de hoje estão em
+`prisma/concurrent/20261117180000_tenant_statistics.sql`:
+
+- alvo 1000 em `businessId` de `delivery`, `delivery_event`, `route`,
+  `delivery_occurrence`, `activity` e `webhook_delivery` (o planejador
+  guarda as 1000 empresas mais comuns, e não 100);
+- dependências `(businessId, status)` e `(businessId, driverId)` de
+  `delivery` e `route` (um motorista é de uma empresa só; sem isso a conta
+  de um motorista saía de 20 a 200 vezes menor);
+- autovacuum a 2% e ANALYZE a 1% das linhas em `delivery`, `route`,
+  `route_stop` e `delivery_occurrence`.
+
+Para conferir num banco:
+
+```sql
+SELECT stxname, pg_get_statisticsobjdef(oid) FROM pg_statistic_ext;
+SELECT relname, reloptions FROM pg_class WHERE reloptions IS NOT NULL;
+```
+
+- Cada espera de lock tem `lock_timeout` (`PREBUILD_LOCK_TIMEOUT_MS`, 3 s) e
+  é repetida (`PREBUILD_LOCK_RETRIES`, 20). Esgotadas, a etapa falha (a API
+  não é implantada) e o próximo deploy a roda de novo; um CIC longo é para a
+  madrugada.
+- Um índice que um CIC deixou inválido é removido com DROP INDEX
+  CONCURRENTLY e refeito; numa tabela particionada, o passo cria o índice
+  no pai com `ON ONLY`, um CIC por partição e um `ATTACH` de cada.
+- Quando a etapa desiste de um índice (duplicata num `UNIQUE`, lock que não
+  veio), ela remove o que o CIC deixou antes de falhar: a API segue no
+  build anterior, e um `UNIQUE` inválido recusaria as duplicatas que ele
+  grava. Se a remoção também não conseguir o lock, o log da
+  `trajetto-api-migrate` traz o `DROP INDEX CONCURRENTLY` para rodar à mão,
+  fora do pico.
+- No fim, nenhum índice que o passo administra pode estar inválido. Outros
+  índices inválidos do banco aparecem como aviso no log da
+  `trajetto-api-migrate` (linhas `[prebuild]`): confira e refaça à mão.
+- A etapa **recusa** uma URL do PgBouncer (porta 6432 ou `pgbouncer=true`)
+  e sai com 64 antes de tocar no banco: CIC, o lock do `migrate deploy` e os
+  passos depois dele precisam de uma sessão própria no Postgres.
+- Emergência: `PREBUILD_ONLINE_DDL=off` no _Environment_ da
+  `trajetto-api-migrate` desliga as duas passadas (as migrations passam a
+  construir esses índices com lock, menos o de uma coluna da mesma
+  release, que fica faltando); tire depois e dê Deploy na
+  `trajetto-api-migrate` para a etapa rodar de novo.
+- Uma release com um índice grande pode passar dos 30 min que o deploy
+  espera a etapa: suba a variável `RELEASE_TIMEOUT_SECONDS` do environment
+  do GitHub antes ([seção 13](#13-configurar-o-github)), até 3600 s. É um
+  prazo só para a etapa inteira, a espera pela etapa do outro ambiente
+  incluída; acima do teto vale 3600, com aviso, porque o job do deploy tem
+  120 min e a IA, a API e a conferência do rollout vêm depois. Um build
+  maior que isso roda fora do pipeline: **Deploy** na
+  `trajetto-api-migrate` pelo painel, espere `Running` e rode o pipeline
+  de novo.
+
+### Depois das migrations: `infra/sql` e `prisma/post-deploy`
+
+A ordem inteira da etapa é `prisma/concurrent` → `prisma migrate deploy` →
+`prisma/concurrent` de novo (o que a release acabou de criar) →
+`infra/sql/*.sql` → `prisma/post-deploy/*.sql` → seeds
+(`build/release-steps.js` roda os dois do meio; o molde do E2E e o
+`yarn dev` rodam o mesmo).
+
+- **`infra/sql`**: roles, donos e grants, em ordem de nome, em **toda**
+  release. Um `pg_restore --no-owner` (restore, PITR, failover) apaga grants
+  e donos, e só um arquivo reaplicado converge. Esses arquivos só criam
+  roles `NOLOGIN`, e só quando faltam; nunca mexem em `LOGIN`, senha,
+  validade, limite de conexões, nome nem `DROP ROLE`, nem tiram o
+  `CONNECT` do banco (`tests/unitaires/lifecycle/infra-sql-rules.test.ts`
+  cobra, também no SQL montado em texto).
+  O login e a senha de qualquer role são sempre seus, à mão. Nenhuma
+  migration do Prisma referencia um role. O `50-cluster-epoch.sql` (plano
+  de escala, U-14) mantém a época do cluster na tabela `cluster_epoch`: ela
+  sobe quando o `system_identifier` ou a timeline do Postgres mudam (um
+  PITR, um promote, um cluster novo), e o `ops-heartbeat` alerta
+  `cluster-epoch-stale` até a etapa rodar depois de um deles.
+- **`prisma/post-deploy`**: DDL com pré-condição (por exemplo, a troca das
+  filas, que espera todas as imagens vivas anunciarem a capability).
+- Cada arquivo testa o próprio estado e termina com um `RAISE NOTICE`
+  `'applied: …'`, `'skipped: …'` (já feito) ou `'pending: …'` (espera um
+  estado). O resultado de cada um, e o da execução (`@release`), fica na
+  tabela `release_step_state`; um arquivo sem esse aviso, ou com erro,
+  reprova a etapa, e os seguintes e os seeds não rodam. Um arquivo que saiu
+  do repositório vira `retired`. As regras de cada pasta estão no
+  `README.md` dela.
+- No log da `trajetto-api-migrate`, as linhas `[release-steps]` dizem o que
+  cada passo fez.
+- Emergência: `POST_DEPLOY_STEPS=off` no _Environment_ da
+  `trajetto-api-migrate` pula o `prisma/post-deploy` (o estado dos passos
+  fica como estava; o `infra/sql` continua). Tire depois.
+
+### Quando a etapa roda
+
+O passo _Decide migrations_ da ação de deploy roda a etapa quando:
+
+1. a imagem de migração do build não é a que o banco do ambiente já aplicou
+   (a tag `<ambiente>-applied`; o caso de sempre); ou
+2. o _Run workflow_ veio com `force_release` (no `staging.yml`, que refaz
+   o caminho todo do staging; no `production.yml`, com a `image_tag` que
+   está no ar). É o que se usa depois de um restore, de um failover, ou para
+   um passo pendente que não pode esperar o próximo deploy; ou
+3. a última etapa deixou um passo de `infra/sql` ou `prisma/post-deploy`
+   `pending` ou `failed`: o deploy lê `GET <API_PUBLIC_URL>/health/rollout`
+   com o secret `ROLLOUT_STATUS_TOKEN` do environment (o mesmo valor da
+   variável da `trajetto-api`) e roda a etapa de novo, com a mesma imagem.
+   O resumo do run diz quais passos.
+
+Sem o `ROLLOUT_STATUS_TOKEN` (ou quando a API não responde a rota: um build
+anterior a ela, um token diferente, sem `API_PUBLIC_URL`), vale só o caso 1
+e o 2, com um aviso no run. A rota responde 404, igual a uma rota que não
+existe, sem o token certo; 30 pedidos por minuto, sem cache. Um passo
+pendente para sempre roda a etapa a cada deploy (1 a 2 min): o resumo do run
+mostra qual.
+
+**Uma migração por vez na VPS.** Com a variável
+`RELEASE_SERIALIZE_WITH_APPLICATION_ID` (o applicationId da
+`trajetto-api-migrate` do **outro** ambiente), a etapa espera enquanto a do
+outro ambiente está em andamento: um deployment dela `running` no Dokploy
+(baixando a imagem) ou uma tarefa que ainda não chegou a `Running`
+(`Preparing`, `Starting`); passado o prazo (`RELEASE_TIMEOUT_SECONDS`), o
+passo falha sem tocar no banco. Um deployment `running` há mais de 15 min
+é tomado como travado (aviso, sem espera). Sem a variável, ou sem
+conseguir ler a outra Application, segue sem esperar (com aviso). As duas
+etapas conferem uma à outra logo antes do próprio deploy; duas que leem no
+mesmo segundo ainda podem rodar juntas (o Dokploy não tem trava), o que
+custa memória por alguns minutos, nunca dado. Sai quando a staging for
+para o próprio servidor.
 
 ### Como a etapa roda
 
@@ -1997,7 +3053,8 @@ deploy.
    `trajetto-api-migrate` (seguro) volta a pôr um `done` nele.
 3. Lê as tarefas a cada 5 s até uma tarefa **nova** ficar `Running` (ou
    `Complete`: sucesso) ou `Failed`/`Rejected`/`Orphaned` (falha), por até
-   30 min (`RELEASE_TIMEOUT_SECONDS`). Só as novas contam: com o _Update
+   30 min (`RELEASE_TIMEOUT_SECONDS`, até 60, menos o que a espera pela
+   etapa do outro ambiente já gastou). Só as novas contam: com o _Update
    Config_ padrão do Dokploy (_start-first_, _rollback_), uma etapa que falha
    deixa a tarefa anterior, parada e saudável, em `Running`.
 4. Sucesso: move `<ambiente>-applied` e segue para a IA e a API. Falha: o
@@ -2039,7 +3096,8 @@ produção, cada um a sua):
 2. **General → Provider: Docker**: _Docker Image_
    `ghcr.io/trajetto-organization/trajetto-api-migrate:staging` (produção:
    `:stable`), com a mesma credencial do GHCR da API
-   ([seção 7.3](#73-credencial-do-ghcr)) → **Save**.
+   ([seção 7.3](#73-credencial-do-ghcr)) → **Save**. Não ligue
+   _Autodeploy_: quem roda a etapa é o workflow.
 3. **Environment** → **Save**:
    ```
    DATABASE_URL=postgresql://trajetto:<SENHA_DO_POSTGRES>@<App Name do Postgres>:5432/trajetto?schema=public&connection_limit=2&connect_timeout=10
@@ -2138,6 +3196,759 @@ produção: criar a migration de contract (o SQL está no cabeçalho de
 `20260924090000`) com `-- contract-phase: <release> não lê mais estas
 colunas` e remover os três campos `@ignore` no mesmo commit.
 
+### Expansões que pedem a release seguinte (plano de 02/11/2026)
+
+Duas colunas viraram opcionais por `-- nullable-expand:` e **na release que
+as expandiu ninguém gravava NULL nelas**. O código daquela release já lê as
+duas como opcionais (é o que permite voltar a ela depois da seguinte):
+
+| Coluna                           | Migration                                       | O que a release seguinte faz                                                                                                                                                                                                     |
+| -------------------------------- | ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `user.email`                     | `20261102120100_user_email_nullable`            | **já saiu** (D2): liga o cadastro de motorista sem e-mail, que grava NULL; o e-mail continua obrigatório para quem não é motorista. Daqui em diante, um rollback só volta até a release que expandiu a coluna                    |
+| `delivery_message_template.body` | `20261102120800_message_template_body_nullable` | passa a gravar NULL no WhatsApp e roda a migração de dados que zera `body` e `subject` das linhas de WhatsApp, marcada `-- contract-phase:` (B3); o `CHECK delivery_message_template_email_body_chk` mantém o e-mail obrigatório |
+
+No staging isso são dois pushes da API (o segundo só depois do primeiro no
+ar); em produção, duas releases. Nunca as duas fases juntas: um rollback
+para a imagem anterior encontraria NULL numa coluna que o client dela lê como
+obrigatória (P2032). A fase seguinte do B3 está pronta como patch em
+`_n1/api-b3-whatsapp-template-body-null.patch` no workspace (com o
+`README.md` da pasta: ordem e testes).
+
+**Um campo de resposta pela mesma regra (K14).** A lista de rotas
+(`GET /route/list-routes`) passou a trazer `stopCounts` e, nesta release,
+ainda manda `stops` só com id e status: o painel em produção lê esse campo, e
+tirá-lo junto quebraria a tabela entre o deploy da API e o da web. A release
+seguinte, depois da web que lê `stopCounts` no ar, tira `stops` da lista
+(`_n1/api-k14-route-list-without-stops.patch`, sem migration).
+
+**WhatsApp ao cliente desligado na migração (D35).** Esta release roda
+`20261103110000_whatsapp_customer_messages_off`, que desliga todas as linhas
+WHATSAPP de `delivery_message_template`: o texto passa a ser o modelo fixo
+aprovado pela Meta, que nenhuma empresa viu. Avise as empresas que usam a aba
+"Mensagens ao Cliente": cada uma liga de novo, na web, os momentos que quiser.
+Antes, conte as linhas (Fase 0 do plano):
+`SELECT "businessId", topic, is_active FROM delivery_message_template WHERE channel = 'WHATSAPP';`.
+
+**Origem dos checklists (05/11/2026).** Esta release roda duas migrations
+para a origem (e uma terceira, a do alerta de abastecimento, logo abaixo).
+`20261105120000_vehicle_checklist_created_from` cria
+`vehicle_checklist.created_from` (padrão `WEB_DASHBOARD`): só catálogo, e o
+lock exclusivo que ela toma na tabela dura só essa mudança. Depois,
+`20261105120100_vehicle_checklist_created_from_backfill` marca como
+`MOBILE_APP` os checklists antigos do app (atividade "Origem: Aplicativo" ou
+`client_submission_id` preenchido), numa transação à parte de propósito: na
+mesma do `ADD COLUMN`, o lock exclusivo duraria o `UPDATE` inteiro e, como a
+API roda com `lock_timeout=5s`, toda leitura e gravação de checklist (lista,
+cadastro, edição, exclusão, análise de IA, detalhe da rota) que chegasse
+nesse meio-tempo não esperaria: falharia com 500 depois de 5 s. Sozinho, o
+`UPDATE` não trava leitura nem cadastro; só a edição, a exclusão ou a análise
+de IA de um checklist que ele marca espera o fim dele, e falha com 500 depois
+de 5 s. Ele lê a tabela `activity`, que não tem índice em `type`, a partir de
+14/09/2026 (antes disso a atividade não trazia a origem). Antes do deploy,
+meça a tabela inteira,
+`SELECT count(*), pg_size_pretty(pg_total_relation_size('activity')) FROM activity;`,
+e a parte que o `UPDATE` lê,
+`SELECT count(*) FROM activity WHERE created_at >= '2026-09-14';`; se for
+grande, suba fora do pico. A imagem anterior grava `WEB_DASHBOARD` em todo
+checklist novo, inclusive os do app: os que ela gravar entre as migrations e
+o fim do rollout (ou durante um rollback) ficam "Web". O `UPDATE` do backfill
+é idempotente e não contradiz esta release, que já grava como `MOBILE_APP` o
+checklist com chave e sem origem; para corrigi-los, rode-o de novo à mão no
+banco depois que esta release estiver servindo.
+
+**Alerta de abastecimento repetido (05/11/2026).** A mesma release roda
+`20261105130000_fuel_recent_refuel_alert`: cria o enum `FuelAlert` (num bloco
+`DO` que ignora `duplicate_object`) e, em `fuel`, `alerts` (`FuelAlert[]`,
+`NOT NULL`, padrão vazio), `recent_refuel_reason` (`VARCHAR(300)`) e
+`recent_refuel_previous_at`, todos com `ADD COLUMN IF NOT EXISTS` sob
+`lock_timeout=5s`. Só catálogo (o padrão é constante): o lock exclusivo em
+`fuel` dura a mudança do catálogo, sem reescrever nem varrer a tabela. **Sem
+backfill:** os abastecimentos gravados antes não são marcados, e o filtro
+"Alertas" da lista começa daqui. A imagem anterior não conhece as colunas:
+o que ela gravar durante o rollout (ou depois de um rollback) fica sem
+alerta, e nada mais muda para ela. A recusa `409 FUEL_RECENT_REFUEL` só vale
+para o app de `contract` 5 em diante, que ainda não está nas mãos dos
+motoristas: até lá todo segundo abastecimento é gravado e marcado.
+
+**Intervalo entre pausas (05/11/2026).** Sem migration: a pausa anterior é
+lida pelo índice `driver_pause (driverId, started_at)`, que já existe. O
+início de uma pausa nova menos de 5 minutos depois do fim da anterior
+responde `409 PAUSE_COOLDOWN` só para o app de `contract` 5 em diante num
+envio direto (sem `X-Client-Queued-At`); a fila offline, o app em produção
+(sem o cabeçalho) e a web continuam gravando como antes, e cada início assim
+deixa a linha `warn` "Pause started inside the cooldown by a queued resend or
+a build without the rule: recorded". Encerrar uma pausa nunca é recusado. A
+imagem anterior não conhece a regra nem os três campos novos de
+`GET /driver-pause/current` (`last_ended_at`, `next_pause_allowed_at`,
+`next_pause_in_seconds`): durante o rollout (ou depois de um rollback), a
+réplica com ela responde `/current` sem esses campos e grava todo início,
+como antes.
+
+**Motivo na pausa por outro motivo (09/11/2026).** Sem migration nem
+variável: o tipo é lido pelo `system_key` que já existe. A API passa a dizer
+`requires_note` em cada tipo de `pause_types` do dia do motorista e responde
+`400 PAUSE_NOTE_REQUIRED` ao início do tipo padrão "Outra pausa" sem motivo
+(menos de 3 letras, sem contar espaços) só para o app de `contract` 7 em
+diante num envio direto (sem `X-Client-Queued-At`). A fila offline, o app em
+produção (sem o cabeçalho), os builds de contrato 5 e 6 e a web continuam
+gravando como antes, com ou sem motivo, e cada "Outra pausa" gravada assim
+sem motivo deixa a linha `warn` "Generic pause started without a reason by a
+queued resend or a build without the rule: recorded" (é por ela que se vê
+quando a OTA do contrato 7 chegou a todos); o fim nunca é recusado por isso.
+Ordem de subida livre (o recomendado: API, web e, por último, a OTA do app
+com o contrato 7). A imagem anterior não conhece a regra nem
+`requires_note`: durante o rollout (ou depois de um rollback), a réplica
+com ela grava todo início, e o app de contrato 7 deduz a exigência sozinho
+(o padrão de natureza Outra, ou o "Outra" da lista fixa) e pede o motivo do
+mesmo jeito.
+
+**Conta e acesso do motorista, onda 2 (06/11/2026).** Três migrations, pela
+mesma etapa da `trajetto-api-migrate` (nada à mão no deploy):
+
+1. `20261106120000_user_must_change_password` cria
+   `user.must_change_password` (`BOOLEAN NOT NULL DEFAULT false`), sozinha e
+   sob `lock_timeout=5s`: só catálogo, e o lock exclusivo em `user` (lida por
+   toda requisição) dura só essa mudança. Sem backfill: as senhas que os
+   gestores definiram antes não pedem troca.
+2. `20261106120100_driver_trusted_device` cria a tabela
+   `driver_trusted_device` (um aparelho por login, pelo SHA-256 do
+   identificador, nunca o identificador; `source` `qr` ou `backfill`). A
+   chave estrangeira toma um lock curto em `user`, solto ao fim desta
+   migration.
+3. `20261106120200_driver_trusted_device_backfill` confia, por login, nos
+   aparelhos que os motoristas já usam: os de sessão presa ao aparelho ainda
+   válida (`refresh_token` com `device_id`, sem revogação nem vencimento) e o
+   do último QR Code lido (`driver_enrollment_token` consumido), **menos**
+   esse último quando o gestor desconectou algum aparelho daquele login
+   depois da leitura (a atividade "Aparelho do motorista … desconectado pelo
+   gestor" não diz qual aparelho, então nenhum aparelho revogado volta a
+   valer; os que ainda têm sessão entram pela primeira fonte). Numa
+   transação à parte, lê essas duas tabelas e a `activity` (pelo índice
+   `("businessId", created_at)`) e grava só a nova: nenhum login nem
+   renovação espera por ela. Antes do deploy, se quiser o tamanho,
+   `SELECT count(*) FROM refresh_token WHERE device_id IS NOT NULL AND revoked_at IS NULL AND expires_in > now();`.
+
+**O que muda para quem está em campo.** Daqui em diante, CPF e senha só
+valem num aparelho em que aquele login já entrou pelo QR Code (o backfill
+cobre os aparelhos em uso hoje). Um motorista que entrava por CPF num
+aparelho sem sessão viva e sem QR lido recebe `403 AUTH_DEVICE_NOT_TRUSTED`
+("Não foi possível entrar com este CPF neste aparelho. Confira o CPF ou peça
+ao gestor o QR Code de acesso."): o gestor gera um QR Code na tela de
+usuários. O app em produção mostra essa frase da API (é o que ele faz com um
+código que não conhece). **A imagem anterior** não conhece a tabela nem a
+coluna: durante o rollout (ou depois de um rollback) a réplica antiga aceita
+CPF em qualquer aparelho, como antes, e um QR lido nela não confia no
+aparelho. **Nada a rodar à mão depois do rollout**: os aparelhos que a
+imagem anterior abriu no meio-tempo (por QR Code ou por CPF) se resolvem
+sozinhos no login por CPF. Quando nenhum login daquele CPF confia no
+aparelho, mas o próprio login tem uma sessão viva presa a ele
+(`refresh_token` com aquele `device_id`, sem revogação nem vencimento), a
+API passa a confiar no aparelho (`source` `backfill`, linha `info`
+`event: auth.device_trust_restored`) e segue o login; a consulta vem antes de
+qualquer bcrypt e, sem sessão viva, a recusa continua a mesma. O QR Code
+consumido nunca vale para isso: um QR lido antes desta release ainda aponta
+para o aparelho mesmo depois de o gestor desconectá-lo. Um aparelho que o
+gestor desconectou **numa réplica antiga durante o rollout** perdeu as
+sessões, mas não a confiança (a imagem anterior não conhece a tabela), e sem
+sessão ele não aparece mais na lista de aparelhos: se a atividade mostrar um "Aparelho do motorista …
+desconectado pelo gestor" nesse intervalo, revogue e restaure o acesso
+daquele motorista (tira a confiança de todos os aparelhos dele; ele entra de
+novo pelo QR Code) ou espere o prazo da confiança (210 dias sem login no
+aparelho).
+
+**A troca de senha que mantém a sessão** devolve `token` e `refresh_token`
+em `PATCH /user/password` (campos novos, opcionais para quem lê): a web e o
+app de antes ignoram e saem na próxima requisição, como sempre saíram.
+
+**A lista de aparelhos do gestor** (`GET /user/:userId/devices`) deixa de
+devolver o Android ID: cada aparelho vem por `deviceHash` (SHA-256 do
+identificador), e `deviceId` passa a levar esse mesmo hash. O `DELETE
+/user/:userId/devices/:deviceId` aceita o hash e ainda o identificador. A web
+da release anterior confere o identificador antes de mandar o `DELETE`
+(Android ID ou UUID): entre o deploy da API e o da web, o "Revogar este
+aparelho" dela recusa o hash na própria tela e o rótulo mostra o fim do hash.
+A web desta release lê o hash; a ordem de sempre (API → web) fecha a janela.
+
+**Ordens de serviço sem valores para o motorista (09/11/2026).** O histórico
+de um veículo (`GET /service-order/search-service-order-by-vehicle/:vehicleId`),
+que a página `/driver/vehicles/:vehicleId/service-orders` da web lê, passa a
+mandar ao login de motorista a visão sem valores da onda 3: sem total, sem
+preço ou desconto de peça, sem fornecedor. O escritório continua recebendo
+tudo. A web desta release não mostra mais valor nem fornecedor e só lê campos
+que a API anterior também manda, então pode subir antes da API. **A web da
+release anterior**, contra esta API, mostra ao motorista "Valor Total R$ 0,00"
+e "Fornecedor: N/A" (não quebra nem mostra NaN; mandar `null` daria o mesmo)
+até a web nova estar no ar e a aba recarregar. Nunca mostra o valor real.
+
+- **No staging**, suba a web primeiro e a API depois que a web estiver no ar.
+- **Em produção**, o lote vai API → web, porque o gate de rotas da web exige
+  a API das ondas 2 a 5 no ar. Promova a web logo depois da convergência da
+  API: na janela entre as duas, o motorista que abrir essa página vê o total
+  zerado e o fornecedor "N/A".
+
+**Card automático da ordem de serviço sem valor (09/11/2026).** O card que
+cada ordem cria no Kanban para o responsável, motorista inclusive, deixou de
+trazer a linha "Valor: R$ …". O motorista lê o card inteiro em
+`GET /kanban/card/:cardId`, que o app abre pelo aviso, e no WhatsApp de um
+card repassado a ele. A prioridade do card continua calculada pelo total da
+ordem (Urgente acima de R$ 10.000, Alta acima de R$ 5.000, Média acima de
+R$ 2.000). A migration `20261109120000_kanban_service_order_card_without_amount`
+tira a linha dos cards já gravados: só essa linha, e só nos cards com título
+"Manutenção …" cujo texto ainda começa como a API o escreveu ("Veículo: …" e
+logo depois "Valor: …"). O card que o escritório reescreveu fica como está, e
+`updated_at` não muda. É um `UPDATE` simples sob `lock_timeout=5s`, que não
+trava leitura nem cadastro; só mover ou editar um desses cards espera o fim
+dele. A imagem anterior ainda escreve a linha nos cards das ordens criadas
+durante o rollout (ou depois de um rollback). O `UPDATE` é idempotente: rode-o
+de novo à mão no banco depois que esta release estiver servindo.
+
+**Ponto do endereço sem esperar o job (09/11/2026).** Sem migration, sem
+variável nova e sem rota nova. A criação, a edição do endereço e a rota pedem
+o ponto logo depois do commit, e a página da rota passa a se atualizar
+sozinha (`routeStopsLocated`). Uma recusa do provedor ou um 429 pausa o
+geocodificador em vez de marcar as entregas. O detalhe está em
+[arquitetura.md (Geocerca e coordenadas do endereço)](./arquitetura.md#geocerca-e-coordenadas-do-endereço).
+A ordem entre API, web e app não importa. A web anterior ignora
+`address_lookup` e o evento novo. A web nova contra a API anterior mostra
+"Sem localização", como hoje. O app não muda: ele relê o dia em qualquer
+`routeEvent`, inclusive no `route-stop.located` novo.
+
+- **Durante o rollout**, a réplica com a imagem anterior grava pelas regras
+  antigas (todo 404 como `NOT_FOUND`, até 5 tentativas). Isso é inofensivo: a
+  imagem nova assume na reserva seguinte.
+- **O teto de tentativas sobe de 5 para 8.** As entregas abertas que tinham
+  falhado 5 vezes voltam para a fila uma vez, dentro do orçamento do dia.
+- **O geocodificador faz no máximo 1 chamada por segundo**, somando réplicas
+  e caminhos (a versão anterior fazia uma a cada 600 ms, numa réplica só). A
+  outra das 2 por segundo do LocationIQ grátis fica para a geocodificação
+  reversa do comprovante, que usa a mesma chave. O job continua com até 20
+  entregas por minuto, as paradas abertas de rota primeiro.
+- **"Localizando endereço…" tem prazo**: só até 10 min depois de o endereço
+  ser gravado ou reservado, e nunca com o provedor recusando a chave, com a
+  cota do dia do provedor ou com o orçamento do dia gastos. Fora disso a
+  parada diz "Sem localização", como antes.
+- **Depois de subir**, procure nos logs da `trajetto-api`
+  `geocode-deliveries off` (o motivo vem junto) ou
+  `delivery addresses geocoded`. Um `geocoding provider refused the request`
+  traz o código HTTP: 401/403 é a chave, 404 é a `REVERSE_GEOCODER_URL`.
+- **Com o provedor certo e esta versão servindo, reenfileire uma vez** os
+  `NOT_FOUND`, `COARSE` e `FAILED` que a versão anterior gravou, com os lotes
+  da mesma seção da arquitetura (`lock_timeout`, 1.000 por lote,
+  `SKIP LOCKED`, até `UPDATE 0`, fora do pico). Vale mesmo que a
+  configuração estivesse certa: aqueles veredictos vieram da consulta
+  anterior (CEP sem hífen, sem a segunda busca), e a nova acha vários deles.
+
+**Período das rotas (09/11/2026).** A lista de rotas
+(`GET /route/list-routes`) e o quadro da Torre (`GET /route/monitoring`)
+aceitam `period`, `from` e `to`, pelo dia da rota no fuso da empresa. A
+regra está em
+[arquitetura.md (Rotas esquecidas, a lista e a torre)](./arquitetura.md#rotas-esquecidas-a-lista-e-a-torre).
+A migration `20261109150000_route_business_scheduled_date_idx` só cria um
+índice (`CREATE INDEX IF NOT EXISTS` sob `lock_timeout=5s`), que a imagem
+anterior não lê. Sem variável nova.
+
+- **Ordem: API antes da web**, a de sempre. A API anterior descarta os
+  parâmetros que não conhece, sem 400. Diante dela, a web nova esconde o
+  filtro, e a lista e o quadro ficam como hoje.
+- **A web anterior contra esta API** não manda período e recebe o mesmo de
+  antes: todas as datas na lista e o dia no quadro. `searchMeta.period` e
+  `data.period` chegam `null`, e ela os ignora.
+- **O app não muda.** Ele não lê nenhum dos dois endpoints.
+- **Banco com volume:** antes de promover, crie o índice à mão com
+  `CREATE INDEX CONCURRENTLY IF NOT EXISTS "route_businessId_scheduled_date_idx" ON "route"("businessId", "scheduled_date");`.
+  A migration então não faz nada. Com o volume atual não é preciso.
+
+**CPF conferido no cadastro do motorista (10/11/2026).** Sem migration, sem
+variável nova e sem rota nova. `POST /driver/create-driver` e
+`PATCH /driver/update-driver` passam a recusar, com `400 VALIDATION_ERROR` e
+"O CPF informado não é válido.", o CPF cujos dígitos verificadores não
+conferem ou que repete um dígito só, a regra que o login já usava. Antes só o
+tamanho era conferido. O detalhe está em
+[arquitetura.md (Acesso do motorista)](./arquitetura.md#acesso-do-motorista).
+
+- **A ordem não importa.** A web anterior que mandar um CPF inválido recebe o
+  400 e mostra a mensagem num toast. A web nova recusa no próprio campo,
+  antes de enviar, e contra a API anterior manda os mesmos 11 dígitos de
+  sempre. O app não cria nem edita motorista.
+- **A edição confere o CPF sempre que ele vem**, e a web manda o formulário
+  inteiro. Um motorista gravado com CPF inválido só salva depois de corrigir
+  o CPF (decisão do dono), **e isso vale também para inativar**: a
+  inativação é essa mesma rota, e o Status fica no mesmo diálogo da web.
+  Esse motorista já não conseguia entrar no app pelo CPF, mas ainda entra
+  pelo QR Code e pelo e-mail. Para cortar o acesso dele sem mexer no
+  cadastro, um administrador usa **Revogar Acesso** na tela Cadastro de
+  usuário (`PATCH /user/revoke-access/:userId`): a próxima requisição do app
+  recebe `403 AUTH_ACCESS_REVOKED`, e o QR Code ainda não usado e os aparelhos
+  confiáveis caem junto (com rota aberta, a recusa é o mesmo
+  `409 DRIVER_HAS_OPEN_ROUTES` da inativação). Não invente um CPF só para
+  salvar: ele fica gravado como se fosse o da pessoa e pode ser o de outra.
+- **Antes de subir**, conte em staging e em produção os motoristas gravados
+  com CPF inválido, no psql do Database PostgreSQL do Dokploy (só leitura):
+  ```sql
+  SELECT "businessId", count(*) AS cpfs_invalidos
+  FROM (
+    SELECT "businessId",
+      CASE
+        WHEN cpf !~ '^[0-9]{11}$' THEN false
+        WHEN cpf = repeat(left(cpf, 1), 11) THEN false
+        ELSE (SELECT (sum(substr(cpf, i, 1)::int * (11 - i)) * 10 % 11) % 10
+                FROM generate_series(1, 9) AS i) = substr(cpf, 10, 1)::int
+         AND (SELECT (sum(substr(cpf, i, 1)::int * (12 - i)) * 10 % 11) % 10
+                FROM generate_series(1, 10) AS i) = substr(cpf, 11, 1)::int
+      END AS valido
+    FROM driver
+  ) d
+  WHERE NOT valido
+  GROUP BY "businessId"
+  ORDER BY cpfs_invalidos DESC;
+  ```
+  Se aparecer algum em produção, combine a correção com as empresas antes de
+  subir: esses motoristas já não entram no app pelo CPF e, depois da subida,
+  editar ou inativar o cadastro deles pede o CPF certo.
+
+**Cancelamento de entrega pela API (L9, 10/11/2026).** Rota nova
+`POST /integration/v1/deliveries/:id/cancel` e escopo novo
+`deliveries:cancel`. A regra está em
+[arquitetura.md (Integrações externas)](./arquitetura.md#integrações-externas).
+Uma migration, pela mesma etapa da `trajetto-api-migrate` (nada à mão no
+deploy), e nenhuma variável nova:
+`20261110120000_delivery_event_api_key` cria `delivery_event."apiKeyId"`
+(nula, sem default, catálogo apenas), o índice parcial
+`delivery_event_apiKeyId_partial_idx` e a chave estrangeira para `api_key`
+(`ON DELETE SET NULL`), sob `lock_timeout=5s`. A imagem anterior não
+seleciona nem grava a coluna. A chave estrangeira entra `NOT VALID`: toda
+linha que já existe tem a coluna nula, então não há o que conferir, e
+validá-la leria a tabela inteira segurando `SHARE ROW EXCLUSIVE` (chegada,
+comprovante e mudança de status de todas as empresas esperariam; o índice
+parcial não ajuda, porque a coluna recém-criada não tem estatística). As
+linhas gravadas daqui em diante são conferidas como em qualquer chave
+estrangeira. Validar depois é opcional e não muda o que ela garante:
+`ALTER TABLE "delivery_event" VALIDATE CONSTRAINT "delivery_event_apiKeyId_fkey";`
+lê a tabela sem bloquear escrita (`SHARE UPDATE EXCLUSIVE`).
+
+- **Ordem: API antes da web.** A web nova oferece "Entregas — cancelamento"
+  ao emitir uma chave, e a API anterior recusaria esse escopo com 400
+  "Escopo desconhecido". Confira a liveness da API com o commit novo antes de
+  liberar a web. O app não muda e não precisa de OTA.
+- **A web anterior contra esta API** não oferece o escopo novo e mostra os
+  escopos de uma chave como texto, então `deliveries:cancel` aparece sem
+  quebrar nada. A linha do tempo dela já desenha o ator INTEGRATION.
+- **Durante o rollout**, uma réplica anterior responde 404 ao caminho novo.
+  Isso não atinge ninguém, porque só a web nova emite chave com o escopo. O
+  aviso `delivery.status_overridden` e o webhook `delivery.cancelled` não
+  mudam de formato, e os workers anteriores os processam como sempre.
+- **As chaves existentes não ganham o escopo.** Quem for cancelar pela API
+  cria uma chave nova com "Entregas — cancelamento" marcado (chave não se
+  edita) e troca a antiga.
+- **Banco com volume:** antes de promover, crie a coluna e o índice à mão,
+  nesta ordem:
+  `ALTER TABLE "delivery_event" ADD COLUMN IF NOT EXISTS "apiKeyId" TEXT;` e
+  `CREATE INDEX CONCURRENTLY IF NOT EXISTS "delivery_event_apiKeyId_partial_idx" ON "delivery_event" ("apiKeyId") WHERE "apiKeyId" IS NOT NULL;`.
+  Confira `indisvalid`. A migration então só cria a chave estrangeira, sem
+  ler a tabela. Com o volume atual não é preciso.
+
+**Busca de endereço do "Fixar no mapa" (10/11/2026).** Rota nova
+`GET /address-search/:businessId`, sem migration. A regra está em
+[arquitetura.md (Busca de endereço)](./arquitetura.md#busca-de-endereço-fixar-no-mapa).
+
+- **Ordem: API antes da web, na staging e na produção.** A web nova chama
+  `relayUrl("/address-search/…")`, e o `scripts/check-api-routes.mjs` da web
+  recusa a promoção enquanto a API do ambiente não serve a rota (o contrato
+  `tests/unitaires/contract/client-routes.test.ts` diz o mesmo). Confira a
+  liveness da API com o commit novo antes de liberar a web. O app não muda e
+  não precisa de OTA.
+- **Variáveis, no _Environment_ da Application `trajetto-api`** (staging
+  primeiro, depois produção): `ADDRESS_SEARCH_URL=https://api.locationiq.com/v1`
+  e `ADDRESS_SEARCH_PROTOCOL=locationiq-autocomplete`. A chave é a mesma
+  `REVERSE_GEOCODER_KEY`, a menos que se defina `ADDRESS_SEARCH_KEY`.
+  `ADDRESS_SEARCH_DAILY_BUDGET` (1000) e `ADDRESS_SEARCH_BUSINESS_DAILY_LIMIT`
+  (150) só se quiser outros valores. Antes, em my.locationiq.com, confira que
+  o token libera o Autocomplete. Sem as variáveis, a rota responde
+  `503 ADDRESS_SEARCH_UNAVAILABLE`, a web mostra a busca indisponível e o
+  clique no mapa continua fixando. Nada quebra antes de configurar.
+- **A web anterior contra esta API** não chama a rota. **A web nova contra a
+  API anterior** (se a ordem falhar) recebe 404 pelo relay e trata como busca
+  indisponível. O clique no mapa, o pino de rascunho e o "Confirmar local"
+  funcionam por inteiro, porque o `PATCH /route/set-delivery-location` não
+  mudou.
+- **Rolling deploy.** A vaga por segundo continua na chave
+  `geocoding:deliveries:rate:{segundo}`, então réplicas antigas e novas contam
+  juntas. O registro dos últimos 60 s (`geocoding:provider:minute`, um
+  _sorted set_) só é contado pelas réplicas novas. Durante o rollout, o job de
+  uma réplica antiga não entra nele.
+- **Depois de subir**, nos logs da API: uma linha `address search` por busca
+  (`component: "address-search"`, com `outcome`, `status`, `ms` e `cached`,
+  nunca o texto). `address search provider refused the request` (`error`)
+  quer dizer chave ou URL errada: a busca pausa sozinha por 15 min e a
+  localização das entregas continua.
+  `address search provider rejected the text; nothing paused` (`warn`) é um
+  400 do provedor para um texto: só aquela busca falhou; em série, confira se
+  o provedor mudou os parâmetros do `/autocomplete`. `UNAVAILABLE_PAUSED` em
+  série é a cota do dia do provedor.
+  `DAILY_LIMIT_PLATFORM` com frequência é a hora de trocar de plano
+  ([infraestrutura.md §14.3](./infraestrutura.md#143-servidor-e-dokploy)).
+- **O cache fica cifrado** com uma chave derivada da `JWT_SECRET`. Para a
+  busca, uma troca da `JWT_SECRET` só esvazia o cache: as respostas antigas
+  não abrem e contam como cache vazio. Nada a fazer.
+
+**nodemailer 10.3.1 e o e-mail do destinatário das importações e do
+painel (10/11/2026).** Sem variável nova e sem rota nova. A imagem da API muda
+(nodemailer 6.9.16 → 10.3.1, sem `@types/nodemailer`) e há uma migration,
+pela mesma etapa da `trajetto-api-migrate` (nada à mão no deploy):
+`20261110130000_customer_message_suppression_email_entries`. A regra está em
+[arquitetura.md (Integrações externas)](./arquitetura.md#integrações-externas)
+e em [arquitetura.md (Arquivos)](./arquitetura.md#arquivos).
+
+- **API antes da web**, na staging e na produção. O cadastro e a edição da
+  entrega pelo painel passam a aceitar a lista de e-mails que a importação
+  grava (até 5, separados por `;` ou `,`, gravada com `;`), e a web desta
+  release passa a mandá-la do formulário. Contra a API anterior, um cadastro
+  ou uma edição com lista volta 400 "O e-mail do destinatário não é
+  válido." (sem gravar nada); com um endereço só, tudo segue como antes. A
+  web anterior manda um endereço só, que esta API aceita, e já mostra o
+  `message` de uma linha importada (é o mesmo campo das notas de rota). O
+  app não muda. A integração continua com um endereço só: o contrato público
+  não mudou.
+- **A migration** só insere linhas em `customer_message_suppression`: para
+  cada descadastro de e-mail com `;` ou `,` (gravado pela primeira versão da
+  D38 com o campo inteiro), uma linha por endereço, aparado e em minúsculas,
+  com a data e a entrega do descadastro. Sem ela, quem se descadastrou de
+  "a; b" voltaria a receber na próxima NF-e, que grava "a;b". É um `INSERT`
+  sob `lock_timeout=5s`, numa tabela pequena, que não trava leitura nem
+  descadastro. As linhas do campo inteiro ficam: a imagem anterior ainda as
+  procura.
+- **Rolling deploy.** Réplicas antigas e novas mandam o mesmo `Message-ID` e
+  o mesmo `Resend-Idempotency-Key`, os dois tirados do id da notificação: a
+  Resend continua deduplicando com réplicas misturadas. Durante o rollout (ou
+  depois de um rollback), a réplica antiga ainda grava o e-mail da NF-e e da
+  planilha sem conferência (a nova relê o valor na hora do envio e só escreve
+  para os endereços válidos) e grava o descadastro só com o campo inteiro. O
+  `INSERT` da migration é idempotente: rode-o de novo à mão no banco depois
+  que esta release estiver servindo, para os descadastros desse intervalo.
+- **Antes de promover, meça** em produção, no psql do Database PostgreSQL do
+  Dokploy (só leitura), as entregas em aberto cujo e-mail tem lista ou nome:
+  ```sql
+  SELECT "businessId",
+         count(*) FILTER (WHERE recipient_email LIKE '%<%') AS com_nome,
+         count(*) FILTER (WHERE recipient_email ~ '[;,]') AS com_lista
+  FROM delivery
+  WHERE status IN ('PENDING', 'IN_TRANSIT', 'FAILED')
+    AND recipient_email ~ '[<;,]'
+  GROUP BY "businessId"
+  ORDER BY count(*) DESC;
+  ```
+  As listas separadas por `;` ou `,` continuam recebendo, só nos endereços
+  válidos. O formato "Nome <a@b.com>", que o nodemailer 6 entregava, não
+  passa pela regra do cadastro: depois da subida, essas entregas deixam de
+  mandar o aviso por e-mail, e o único rastro é o motivo `invalid_address` no
+  log `debug` "notification channels suppressed" (ou a mensagem `FAILED`
+  "no valid e-mail address", se já estava na fila). Se `com_nome` não for
+  desprezível, combine com as empresas a correção do e-mail na edição da
+  entrega antes de subir.
+- **Depois de subir no staging**, antes de promover, faça o teste de e-mail
+  real pela Resend:
+  1. Dispare um "esqueci minha senha" e confira no painel da Resend que
+     chegou. Só a chegada: o e-mail transacional não tem linha de
+     notificação, e o `Message-ID` dele é um UUID novo a cada envio.
+  2. Dispare um aviso ao cliente por e-mail (uma entrega com e-mail e o
+     "saiu para entrega" ligado). No painel da Resend, confira que chegou e
+     que o `Message-ID` é o determinístico,
+     `<id-da-notificação@domínio-do-remetente>` (o `id` da linha de
+     `notification_delivery`), e que o webhook de entrega casou com essa
+     notificação (uma linha em `notification_provider_receipt`).
+  3. Nos logs da `trajetto-api`, `e-mail send failed` com `code: "ETLS"` é
+     o STARTTLS recusado (o envio para, sem mandar a chave); `code: "EAUTH"`
+     com "Missing credentials" é a `RESEND_SECRET_KEY` vazia, e `EAUTH` com
+     a resposta 535 é a chave errada. Nenhum deles é reprocessado. O
+     `ENOAUTH` não aparece com este transporte (fica na lista por defesa).
+
+**zod 4.6.7 e fastify-type-provider-zod 7.0.0 (10/11/2026).** Sem
+migration, sem variável nova e sem rota nova. A imagem da API muda (zod
+3.25.1 → 4.6.7, o type provider 4.0.2 → 7.0.0 e sai o `zod-to-json-schema`).
+Fecha o alerta alto GHSA-mrhx-c7xc-m3w5: um pedido autenticado de ~7 MB no
+`POST /delivery/import-xml` estourava o heap de 768 MB e derrubava a réplica.
+A regra está em
+[arquitetura.md (Regras transversais)](./arquitetura.md#regras-transversais).
+
+- **A ordem não importa em produção:** a API sobe sozinha, a web e o app não
+  dependem dela para isto. O corpo da recusa é o mesmo,
+  `{ code: "VALIDATION_ERROR", message, issues: string[] }`, com as mesmas
+  frases em pt-BR. Réplicas antigas e novas convivem no rollout.
+- **No push para a `staging`, em três passos**, porque os dois CIs se leem:
+  o `Validate` da API faz checkout da `staging` da web e o
+  `public-docs-guide-samples` compara o `/integration/docs/openapi.json` ao
+  vivo com `trajetto-ui/tests/unitaires/fixtures/public-openapi.json`
+  (`toEqual`); e o CI da web roda contra a `staging` da API o
+  `occurrence-form-rules` (cópia linha a linha de
+  `src/modules/occurrence-type/form/occurrence-form-rules.ts`, agora na
+  sintaxe do zod 4), que só passa com a API já em zod 4 e a web também, e o
+  `recipient-email-api-parity`, que só passa com a API que já aceita a lista
+  de e-mails do painel (deste mesmo lote, em zod 3 ou em zod 4). Com a API
+  antes, o `Validate` dela fica vermelho (o documento novo tem 8 `pattern`
+  que a cópia da `staging` da web não tem) e não há deploy; com a web em zod
+  4 antes, o CI da web fica vermelho.
+  1. **Web, só a cópia do documento:** um commit com o `public-openapi.json`
+     regenerado (que leva também a rota de cancelamento do L9, que mudou o
+     mesmo arquivo), sozinho no topo do push, sem a migração da web para o
+     zod 4. O CI da web lê a cópia para montar o portal, mas não a compara
+     com a API: passa.
+  2. **API em zod 4:** o `Validate` encontra na `staging` da web a cópia
+     igual ao documento ao vivo.
+  3. **Web e app em zod 4** (o resto dos commits): os testes de paridade
+     encontram a `staging` da API em zod 4.
+
+  Com o CI novo no mesmo lote, o CI da web e o do app também ficam
+  vermelhos contra a `staging` anterior da API por outros testes (o
+  `dokploy-deploy.test.ts` e o `shared-deploy-section.test.ts`), e o da API
+  contra a `staging` anterior do app: vale a ordem da
+  [seção 26, "O CI dos três"](#o-ci-dos-três-desde-10112026) ("Ordem do
+  primeiro push com o CI novo"), em que estes três passos cabem.
+
+- **O que a API passa a recusar** (nenhum cliente nosso manda isso hoje):
+  - um id que não é UUID da RFC 9562 (versão 1 a 8, variante 8/9/a/b; nil e
+    max seguem aceitos). Os ids do Trajetto são v7 e v4, e o app e a web
+    geram v4;
+  - um número infinito (`1e999` numa query) — antes virava `Infinity`;
+  - listas acima do teto, todas novas e acima do uso real: permissões em
+    lote (uma por recurso), reordenação do Kanban (500 colunas, 10.000
+    cards), escopos de uma chave de API (6) e tópicos de um webhook (o
+    catálogo inteiro, cada um uma vez);
+  - um texto curto com emoji: o zod 4 mede um texto em caracteres (code
+    points), e o zod 3 em unidades UTF-16, em que um emoji conta 2. O
+    `.min()` fica mais estrito e o `.max()` mais folgado, só para emoji e
+    outros caracteres fora do BMP; para as colunas `VARCHAR`, que também
+    contam caracteres, é neutro. O login e a senha atual da troca de senha
+    mantêm o piso em unidades (`storedPasswordField`): uma senha como
+    `abc😀😀`, criada antes, continua entrando.
+- **O que muda de texto:** um valor fora do enum, num campo que tem frase
+  própria, sai com ela (antes, a genérica "tem um valor não aceito"). Um
+  número infinito sai como tipo errado (a frase de tipo do campo ou "deve ser
+  um número finito"; na API pública, "esperado número finito, recebido
+  Infinity."), e não mais pela faixa do campo.
+- **O que fica igual de propósito, com código para isso:**
+  - no `POST /integration/v1/deliveries`, um tipo errado e um campo faltando
+    saem com as frases publicadas ("shipper_id: esperado texto, recebido
+    número.", "kind: esperado 'DELIVERY' | 'SERVICE_ORDER', recebido
+    número.", "campo obrigatório."). O zod 4 dá a vez à frase própria do
+    campo, e o parse refaz a frase a partir do valor enviado. Conferido com
+    um probe de 373 corpos rodado no zod 3 e no zod 4: só mudam o UUID
+    estrito, o infinito e a lista de 201 itens, que vira uma recusa só;
+  - uma lista mandada no lugar de um texto (ou um texto no lugar de uma
+    lista) sai só com a frase do tipo: o zod 4 ainda mede o tamanho de
+    qualquer valor que tenha `length`, e o `issues` ganhava "deve ter no
+    mínimo 2 caracteres" junto; o handler corta o que vem depois de um tipo
+    errado no mesmo campo, como o zod 3 parava;
+  - a chave recusada de um `z.record` (`form_answers`) sai em pt-BR, no
+    caminho da chave, e não como o "Invalid key in record" do zod 4;
+  - a edição de permissão (`PATCH /permission/update-permission/:permissionId`)
+    sem `canWrite` continua mantendo a escrita gravada: o `default(false)`,
+    que o zod 3 nunca aplicava (o `.optional()` de fora respondia antes), saiu,
+    porque o zod 4 passaria a aplicá-lo e revogaria a escrita.
+- **O que muda de comportamento, de propósito:** a edição do card do Kanban
+  (`PATCH /kanban/card/update/:cardId`) sem `completed` deixa o card como
+  está (o zod 3 gravava `false`; a web atual manda o campo sempre). A URL do
+  webhook é gravada sem espaço nas pontas. Mais de 50 respostas no
+  `form_answers` de uma ocorrência, ou mais de 20 cabeçalhos num webhook,
+  viram uma recusa só, contada antes de ler cada entrada (já eram recusados,
+  mas com uma frase por entrada inválida: um motorista mandava 1 MiB de
+  entradas recusadas, 110 mil issues e 175 MB de heap por pedido).
+- **A resposta de sucesso continua analisada pelo schema** (default
+  preenchido, campo desconhecido fora): o serializer do type provider 7
+  codifica em vez de analisar e daria 500 em resposta com default; a API usa
+  o seu (`src/shared/http/response-serializer.ts`).
+- **Diff do OpenAPI**, gerado antes e depois, campo a campo:
+  - `/integration/docs/openapi.json` (o público): **8 diferenças**, todas um
+    `pattern` novo que descreve o que a API já validava — o UUID do `{id}`
+    em `GET /integration/v1/deliveries/{id}`, `GET /integration/v1/routes/{id}`
+    e `POST /integration/v1/deliveries/{id}/cancel`, o `shipper_id` e o
+    `recipient_email` do corpo de `POST /integration/v1/deliveries` e o
+    `updated_since` (data-hora ISO com `Z`) das três listas. O resto é
+    idêntico, inclusive `limit` (padrão 50) e as datas `string (date-time)`.
+    A cópia do portal (`trajetto-ui/tests/unitaires/fixtures/public-openapi.json`)
+    foi regenerada, e o portal renderiza o documento novo.
+  - `/docs/json` (o interno): **1.650 diferenças**, todas de forma, nenhuma de
+    significado: `pattern` em UUID, data e e-mail (520); o intervalo do
+    inteiro seguro (±9007199254740991) em cada `.int()` (412 máximos e 394
+    mínimos, quase todos em respostas); `additionalProperties: false` saiu de
+    133 corpos de requisição que nunca recusaram campo desconhecido (a API o
+    descarta; os `.strict()` seguem com `false`); 123 listas `required` de
+    resposta passam a nomear o campo com default (`message`, `success`), que o
+    serializer preenche; os corpos de abastecimento e checklist viraram um
+    objeto só, com os mesmos campos e os mesmos obrigatórios (antes `allOf`);
+    7 recusas mostram o `default` do `message` da rota no lugar da descrição
+    genérica, como outras 16 já mostravam; o mínimo de `amount` (contas) e de
+    `maintenance_interval_km_at_service` (OS) agora é o real (`≥ 1` e
+    `≥ 0,1`; antes `> 1` e `> 0`); união com `null` vira `nullable: true`;
+    duas uniões discriminadas saem como `oneOf`; as contagens por status da
+    lista de rotas listam os cinco status como obrigatórios; a tupla `bbox`
+    da busca de endereço sai como `items` com `anyOf` (o 3.0 não tem tupla);
+    `includeUnscheduled` sai só como booleano (na query string, `true` e
+    `false` são o mesmo texto); `canWrite` perde o `default: false` que nunca
+    valia, `supplierId` ganha o `default: null` que a API já aplicava, e 6
+    listas ganham `maxItems`.
+- **Antes de promover**, no staging: abra o portal `/docs` da web de staging
+  com a API nova e o `/docs` interno da API; mande um cadastro inválido pelo
+  painel e pelo app e confira a frase em pt-BR.
+
+**@fastify/static 10.1.8 e @fastify/swagger-ui 6.1.3 (10/11/2026).** Sem
+migration, sem variável nova e sem rota nova. A imagem da API muda
+(`@fastify/static` 8.3.0 → 10.1.8 e `@fastify/swagger-ui` 5.2.2 → 6.1.3, com
+o `swagger-ui-dist` 5.34). Fecha os quatro alertas do `@fastify/static` que o
+`yarn audit` mostrava (o alto GHSA-83w8-p2f5-377r e os moderados
+GHSA-8pvw-jcv7-9cmj, GHSA-x428-ghpx-8j92 e GHSA-pr96-94w5-mx2h) e os dois que
+só o repositório do pacote publica (o alto GHSA-423g-23ch-w7c6 e o moderado
+GHSA-r799-r9gc-m956). Nenhum é alcançável: em produção ele só serve os
+arquivos públicos da tela do `/docs`, sem trava nossa na frente e sem
+listagem de pasta. A regra está em
+[arquitetura.md (Integrações externas)](./arquitetura.md#integrações-externas).
+
+- **A ordem não importa:** só a API muda, e réplicas antigas e novas convivem
+  no rollout. O `/tmp/*` só existe fora de produção.
+- **Ficam dois moderados**, que vêm pelo `@fastify/static` 10.1.8:
+  GHSA-3g3m-2fjr-6pw4 (`glob` 13) e GHSA-g3hv-75wg-m249 (`minimatch` 10).
+  Também não são alcançáveis: o static só chama o `glob` com
+  `wildcard: false`, que nenhum dos dois registros usa. Saem com o
+  `@fastify/static` 10.1.10 (`glob` 14), que cumpre a carência de 7 dias em
+  11/11/2026 às 17:11 UTC. A carência vale também para cada pacote novo que
+  a troca traz ao `yarn.lock`, e o `yarn install` pega o mais novo de cada
+  intervalo: no registro de 10/11, o `glob` 14.0.4 (06/11), o `minimatch`
+  11.0.7 (10/11 às 23:03 UTC) e o `@isaacs/nonrecursive-glob-match` 1.1.0
+  (05/11). Na troca:
+  1. Troque o `10.1.8` do `package.json` por `10.1.10` e apague do
+     `yarn.lock` a entrada `"@fastify/static@10.1.8", "@fastify/static@^10.1.0"`
+     antes do `yarn install`: sem isso, o `^10.1.0` do swagger-ui fica na
+     10.1.8, numa cópia aninhada, e o `dependency-security-floor` falha.
+  2. Depois do `yarn install`, confira com `npm view <pacote> time` cada
+     versão nova no `git diff yarn.lock`. A que ainda não tem 7 dias é
+     reescrita à mão com a mais nova do intervalo que já tem, como a do
+     `@fastify/static` de hoje: `version`, `resolved` e `integrity` saem de
+     `npm view <pacote>@<versão> dist`, e as dependências dela entram na
+     mesma conferência. De 11/11 em diante, servem o `glob` 14.0.3 (28/10),
+     o `minimatch` 11.0.4 (02/11, pelo `^11.0.2` do glob 14.0.3) e o
+     `@isaacs/nonrecursive-glob-match` 1.0.3 (28/10), já com as correções
+     (`glob` 14.0.2 e `minimatch` 11.0.1); o `path-scurry` 3.0.0 (27/10)
+     entra como o yarn resolver.
+  3. `yarn install --frozen-lockfile` passa, um `yarn install` sem a flag
+     não muda o `yarn.lock` e o `yarn audit --groups dependencies` não
+     mostra mais o `glob` nem o `minimatch`.
+- **Antes de promover**, no staging: abra o `/docs` com o `DOCS_USER` e o
+  `DOCS_PASSWORD` e confira que a tela carrega com o CSS, o logo na barra do
+  topo e a lista de rotas, sem erro de CSP no console do navegador.
+
+**Regras entre motorista, veículo e rota (10/11/2026).** Sem migration, sem
+variável nova e sem rota nova. A regra está em
+[arquitetura.md (Motorista, veículo e rota: o que é aviso e o que é recusa)](./arquitetura.md#motorista-veículo-e-rota-o-que-é-aviso-e-o-que-é-recusa).
+
+- **A ordem não importa**; pelo padrão, API e depois a web. A web anterior
+  mostra no toast a recusa nova da liberação e a mensagem do desbloqueio. A
+  web nova contra a API anterior pede a confirmação pela
+  `GET /route/assignment-preview`, que já existe, e o desbloqueio na rua
+  continua recusado. O app não muda e não precisa de OTA:
+  `409 ROUTE_VEHICLE_BUSY` e `400 ROUTE_VEHICLE_UNAVAILABLE` só mudam de
+  texto, e o reenvio da saída responde como antes.
+- **O que a operação nota:** liberar uma rota com o veículo bloqueado ou
+  inativo passa a ser recusado no escritório (`400 ROUTE_VEHICLE_UNAVAILABLE`,
+  com a placa), e não só no pátio. A planilha deixa de criar rota para o
+  motorista inativo (as entregas entram, com nota por linha) e cria a rota
+  sem veículo quando o veículo está bloqueado ou inativo. Desbloquear um
+  veículo com a rota na rua, antes `409 VEHICLE_IN_ACTIVE_ROUTE`, responde 200
+  e grava "Em rota". Na web, liberar a rota de hoje com o caminhão ou o
+  motorista em outra rota em andamento pede "Liberar mesmo assim".
+- **Durante o rollout**, a réplica anterior ainda cria a rota da planilha para
+  o motorista inativo e recusa o desbloqueio na rua. O estorno feito por ela
+  de uma planilha que esta versão importou mantém a rota e as entregas
+  roteadas (ela conta a linha nova "Adicionada à Rota N" como trabalho do
+  motorista). Para um estorno que importa, espere o rollout terminar.
+- **Fica para a release do índice `route_active_driver_idx`** (uma rota em
+  andamento por motorista, no banco). Antes dela, rode no staging e na
+  produção, no psql do Database PostgreSQL do Dokploy (só leitura):
+  ```sql
+  SELECT "driverId", count(*) FROM route WHERE status = 'IN_PROGRESS' GROUP BY 1 HAVING count(*) > 1;
+  ```
+  Se aparecer alguma linha, encerre com pendências ou cancele as rotas
+  sobrando desse motorista; senão a migration falha e não sobe.
+
+**O ponto de outra entrega na mesma porta (14/11/2026).** Sem variável nova
+e sem rota nova. A regra está em
+[arquitetura.md (Geocerca e coordenadas do endereço)](./arquitetura.md#geocerca-e-coordenadas-do-endereço).
+A migration `20261114120000_delivery_address_key` é só de expansão: a coluna
+`delivery.address_key` (TEXT, nula, sem default, só no catálogo) e o índice
+parcial `delivery_address_key_idx`, sob `lock_timeout=5s`. O índice é criado
+sem `CONCURRENTLY` e lê a tabela inteira uma vez sob o lock `SHARE` (as
+escritas em `delivery` esperam): numa base com volume, construa-o antes à
+mão, pelo roteiro no comentário da migration, e ela não faz nada.
+
+A migration `20261114130000_delivery_geo_copied_from` vem junto e também é
+só de expansão: a coluna `delivery.geo_copied_from` (TEXT, nula, sem default,
+só no catálogo, sem chave estrangeira) e o índice parcial
+`delivery_geo_copied_from_idx`, sob `lock_timeout=5s`. Ele também é criado
+sem `CONCURRENTLY` e lê a tabela inteira uma vez sob o lock `SHARE`: são dois
+índices desse tipo em `delivery` neste deploy, e numa base com volume os dois
+seguem o mesmo roteiro do comentário de cada migration.
+
+- **A ordem é a de sempre: API, depois a web.** A imagem anterior não lê nem
+  grava as duas colunas. Durante o rollout, a entrega criada por uma réplica
+  anterior fica sem chave e não empresta nem recebe ponto até o backfill, e
+  a que ela edita fica com a chave do endereço antigo até o backfill, que
+  recalcula a chave de todas. O pino ou a edição feitos por uma réplica
+  anterior não apagam `geo_copied_from`; isso não move nada errado, porque o
+  acompanhamento só muda a cópia `GEOCODER` que ainda tem exatamente o ponto
+  anterior da origem, e o backfill apaga a raiz de toda chave que corrige. A
+  web e o app não mudam: o ponto copiado chega como `GEOCODER` ("Pelo
+  endereço"), que os dois já mostram e que a geocerca do app já lê como
+  exato no número ou na rua. Sem OTA.
+- **O que a operação nota:** a entrega criada sem ponto num endereço que a
+  empresa já localizou (pino, coordenada na criação ou o geocodificador no
+  número ou na rua) já nasce com o ponto, mesmo com o geocodificador
+  desligado, e não gasta consulta do LocationIQ. Editar o endereço para uma
+  porta já localizada faz o mesmo. Nunca entre empresas, e nunca num
+  endereço sem número (`s/n`, `0` ou vazio): sem número o endereço nomeia
+  uma rua, não uma porta, e a entrega é consultada e fixada sozinha, como
+  antes.
+- **O pino vale para a porta toda.** O "Fixar no mapa" de uma entrega dá o
+  mesmo ponto às outras entregas abertas da empresa no mesmo endereço ainda
+  sem ponto (`propagated` na resposta; a web nova diz no toast quantas, a
+  anterior ignora o campo). Sem versão de plano nova para elas: a página da
+  rota relê pelo `routeStopsLocated`, e o app relê o dia pelo
+  `route-stop.located`, que todo build já trata.
+- **Corrigir o pino corrige as cópias.** Se o despachante mudar o pino da
+  entrega de origem, as cópias abertas dela que ainda estão no mesmo
+  endereço e com o ponto antigo mudam junto, e `propagated` conta também
+  essas. Apagar o pino (`{ clear: true }`, só pela API) apaga o ponto delas
+  e elas voltam para a localização automática. Uma cópia fixada à mão
+  depois, uma com o endereço mudado e uma encerrada ficam como estão. Para
+  testar no staging: fixe uma entrega, crie outra no mesmo endereço (ela
+  nasce com o ponto), mude o pino da primeira e veja a segunda mudar junto.
+- **As entregas de antes** ficam com a chave nula até o backfill único. Depois
+  que a API com esta migration estiver no ar, primeiro no staging e depois na
+  produção, fora do pico, abra o terminal do contêiner da Application
+  `trajetto-api` no Dokploy e rode `node build/backfill-delivery-address-key.js`
+  (no desenvolvimento, `yarn deliveries:address-key`). Ele lê todas as
+  entregas em lotes de 1.000, cada um com `lock_timeout = '5s'`, grava a
+  chave onde ela falta ou está velha e dá uma vez o ponto de cada porta às
+  entregas abertas dela ainda sem ponto, cada porta numa transação com o
+  mesmo `lock_timeout`. A última linha diz quantas chaves e
+  quantas entregas. Se um lote estourar o `lock_timeout`, é só rodar de
+  novo: ele é idempotente e termina o resto.
+- **Rollback para antes desta imagem: rode o backfill de novo** quando a
+  imagem nova voltar a servir. A imagem anterior edita o endereço sem mexer
+  na chave: a entrega editada fica com a chave do endereço antigo e o ponto
+  do novo, e a próxima criada no endereço antigo copiaria esse ponto (a
+  parada e a geocerca na porta errada). O backfill recalcula a chave de toda
+  entrega e corrige as que mudaram; a que ele não corrigir porque foi
+  editada no meio do lote fica para a próxima rodada.
+
+**Contract pendente (release seguinte): o 2FA sem corpo.** `PATCH
+/user/twofactor` sem corpo ainda inverte o estado, sem senha, só para a web
+da release anterior que roda durante o rollout. Cada uso deixa a linha `warn`
+`event: auth.twofactor_legacy_toggle` ("Deprecated contract: two-factor
+toggled without a body"). Quando a web que manda `{ enabled, password }`
+estiver em produção e a linha ficar **14 dias** sem aparecer em todas as
+réplicas: tire o ramo sem corpo do controller e do use case
+(`update-two-factor-authentication`), passe o `body` da rota de
+`config.openapi` para `schema.body`, e apague os testes do modo antigo
+(`user-self-service-usecases.test.ts` e `driver-account-security-http.test.ts`).
+
 **Depois de cada release de produção**, atualize `LAST_MIGRATION_IN_PRODUCTION`
 em `tests/unitaires/lifecycle/migration-safety.test.ts` para a última
 migration que a release levou.
@@ -2181,23 +3992,25 @@ UPDATE "_prisma_migrations" SET checksum = '<sha256 do arquivo>'
 
 ### A promoção
 
-1. Abra o PR `staging → main`; espere os checks (inclusive _The PR head was
-   built on staging_).
+1. Abra o PR `staging → main`; espere os checks (_Secret scan_ e _Staging
+   evidence_).
 2. Merge com **Create a merge commit**.
-3. _Actions_ → o run do push em `main` → job _Promote to production_ →
-   _Review deployments_ → aprovar o environment `production`.
-4. O job resolve o commit (o head do PR), exige o marcador
+3. O run do push em `main` (_Production_) começa pelo _Staging evidence_,
+   sem aprovação: resolve o commit (o head do PR), exige o marcador
    `staged-<7>` das duas imagens no mesmo digest (o staging rodou este
    build; espera até 20 min se o deploy de staging dele ainda estiver em
    andamento, em vez de falhar pedindo um _re-run_), ou usa o build do commit
    mais próximo que o staging rodou, se o merge só muda documentação desde
-   ele (abaixo), compara com o staging, roda as migrations se a produção
-   ainda não aplicou a imagem de migração do build (Application
-   `trajetto-api-migrate`; [seção 15](#15-migrations)), move `stable`
-   das duas imagens, pede o deploy
-   das Applications de produção (IA → API; a IA só se o digest dela mudou) e
-   espera a convergência. Verde = o Swarm roda o digest promovido em todas as
-   réplicas da API. O digest fica no resumo do run.
+   ele (abaixo), confere o `Gate` desse build, compara com o staging e lê os
+   digests a promover. Se algo disso falhar, ninguém chega a ser chamado para
+   aprovar.
+4. _Actions_ → o run → job _Deploy_ → _Review deployments_ → aprovar o
+   environment `production`. A ação de deploy roda as migrations se a
+   produção ainda não aplicou a imagem de migração do build (Application
+   `trajetto-api-migrate`; [seção 15](#15-migrations)), move `stable` e pede
+   o deploy de cada Application de produção (IA → API; a IA só se o digest
+   dela mudou), e espera a convergência. Verde = o Swarm roda o digest
+   promovido em todas as réplicas da API. Os digests ficam no resumo do run.
 5. Depois, o job _Release_ cria a versão.
 
 Conferir à mão:
@@ -2218,10 +4031,24 @@ qualquer coisa em `docs/` — não muda nenhuma imagem (o `.dockerignore` deixa
 os dois de fora, em qualquer profundidade: `**/*.md`; a IA copia só arquivos
 nomeados). Por isso, desde 30/10/2026, ele vai para a produção com o
 build do commit mais próximo que o staging rodou, e **`[skip ci]` só para
-documentação passou a ser seguro**: suba o doc sozinho com `[skip ci]` na
-mensagem (nenhum workflow roda, nenhum minuto de runner), e o check do PR
-`staging → main` e a promoção aceitam o build do commit anterior (com os
-dois cuidados do próprio GitHub listados no fim desta seção).
+documentação passou a ser seguro**: o check do PR `staging → main` e a
+promoção aceitam o build do commit anterior (com os dois cuidados do próprio
+GitHub listados no fim desta seção).
+
+Desde 10/11/2026 a marcação quase não economiza mais: um push só de
+documentação (o `Changes` decide, pela mesma regra) roda só o _Secret scan_
+e o `Docs` — os unitários sem cobertura, porque há testes que leem a
+documentação, mais o Prettier; uns 12 min cobrados — e nenhum build nem
+deploy. Ela continua permitida só em commit de documentação (decisão D11), e
+nunca na ponta de um PR para `main`. Um push de documentação não cancela a
+validação do push de código embaixo dele, que segue até o deploy.
+
+Quando a cabeça do PR (ou o commit mergeado, na promoção) só muda
+documentação desde o build promovido, o _Staging evidence_ confere também o
+`Gate` do run da própria cabeça: o `Docs` dela é a validação daquela
+documentação. Sem isso, um guia que quebrasse os testes de documentação
+chegaria à `main` sem nada que bloqueasse (o PR antigo, que validava tudo
+de novo, barrava).
 
 O que é documentação está num lugar só, `.github/scripts/docs-only.sh`, e é
 a mesma regra da web (`docs-only.mjs`) e do app. A regra de promoção, a
@@ -2240,8 +4067,8 @@ testada em `staged-build.test.ts`):
    `wait-for-version.mjs` espera o commit desse build na liveness.
 
 O doc com `[skip ci]` pode subir a qualquer hora, inclusive enquanto o
-pipeline do commit de código anterior ainda roda (cerca de 1 hora). O
-`deploy-staging` daquele run vê na `staging` uma cabeça mais nova, mas, como
+pipeline do commit de código anterior ainda roda (uns 25 min). O
+`Deploy` daquele run vê na `staging` uma cabeça mais nova, mas, como
 ela só acrescenta documentação ao commit dele (`docs-only.sh`), implanta e
 grava o `staged-<7>` mesmo assim. Antes, ele saía verde sem implantar, o
 commit de documentação não tinha run, e a promoção travava até o próximo
@@ -2252,28 +4079,22 @@ Dois cuidados do próprio GitHub, que nenhuma regra daqui contorna:
 
 - **A ponta do PR `staging → main` com `[skip ci]`**: o GitHub também não
   roda os workflows de `pull_request` quando o commit da ponta do PR tem
-  `[skip ci]` na mensagem, e os quatro checks exigidos em `main`
+  `[skip ci]` na mensagem, e os dois checks exigidos em `main`
   ([seção 13](#13-configurar-o-github), "Proteção das branches") ficam
-  pendentes. Para destravar, rode _Run workflow_ do _Pipeline (staging →
-  produção)_ na branch `staging`: a validação, o build e o deploy de staging
-  daquele commit rodam, e os checks saem no mesmo commit e aparecem no PR
-  (o _The PR head was built on staging_ aparece como pulado, o que o GitHub
-  conta como aprovado). Um commit vazio sem `[skip ci]`
-  (`git commit --allow-empty`) também destrava. Os dois custam um pipeline
-  inteiro: o `[skip ci]` economiza de verdade quando o commit de
-  documentação não vai ser a ponta de um PR para `main` aberto ou
-  atualizado logo depois.
+  pendentes. Para destravar, um commit vazio sem a marcação
+  (`git commit --allow-empty`) na `staging`: o `pr.yml` roda de novo no PR,
+  e o `staging.yml` o classifica como documentação (só o `Docs`, sem build).
 - **O título do PR**: num PR de um commit só, o GitHub preenche o título com
   a mensagem desse commit, e o título vai para o corpo do merge commit. Com
-  `[skip ci]` ali, o push em `main` não roda o `deploy.yml` e nada é
+  `[skip ci]` ali, o push em `main` não roda o `production.yml` e nada é
   promovido. Tire o `[skip ci]` do título antes do merge.
 
 Cuidado: a regra vale só para `*.md` e `docs/`. Um commit que mexe num
 teste, num workflow, num script ou no `.dockerignore` precisa do pipeline
-de staging, mesmo que pareça inofensivo. E os testes que leem a
-documentação (`tests/unitaires/docs`, os guias de agente) só rodam no
-próximo push que roda o pipeline: se eles falharem ali, a correção é no
-doc.
+de staging, mesmo que pareça inofensivo. Os testes que leem a documentação
+(`tests/unitaires/docs`, os guias de agente) rodam no `Docs` do próprio push
+(com a marcação de pular CI, só no próximo push que roda): se eles falharem,
+a correção é no doc.
 
 ## 17. Rollback
 
@@ -2285,11 +4106,13 @@ deles.
 
 ### Caminho normal: promover o build bom
 
-1. Achar a tag boa: o resumo de uma promoção anterior registra
-   `trajetto-api:stable → sha-<7> (sha256:...)`; ou o job _Build and push
-   the images (once)_ do push em `staging` que gerou o build.
-2. _Actions_ → _Pipeline (staging → produção)_ → _Run workflow_ (branch
-   `main`) → `image_tag = sha-<7>` (builds antigos: `main-<sha>`).
+1. Achar a tag boa: o resumo de uma promoção anterior registra o
+   `sha-<7>` promovido e os digests (_Staging evidence_) e
+   `trajetto-api:stable → sha256:...` (_Deploy_); ou o job _Build_ do push
+   em `staging` que gerou o build.
+2. _Actions_ → _Production_ → _Run workflow_ (branch `main`) →
+   `image_tag = sha-<7>` (builds antigos: `main-<sha>`). O campo é
+   obrigatório.
 3. Aprovar o environment `production`.
 4. O job move `stable` de volta para aquele build e pede o deploy das
    Applications. O run só fica verde depois do passo _Wait for the rollout to
@@ -2328,11 +4151,366 @@ já estão no banco (não há o que aplicar), e os seeds dela rodam de novo,
 idempotentes. Um build anterior à imagem de migração pula a etapa
 ([seção 15](#15-migrations)).
 
+### A trilha numa volta para antes da onda 7
+
+Da onda 7 do plano de escala em diante (F2-10), as posições vão para a
+trilha enxuta `driver_position_v2`, e a tela da trilha lê as duas tabelas.
+Uma imagem de antes dela só conhece a `driver_position`: voltar o código
+para ela tira da tela da trilha todo ponto gravado pela imagem nova. O mapa
+da torre não sente (a última posição é a mesma tabela nas duas), e os pontos
+não se perdem: ficam na v2, que a imagem velha não lê nem apaga.
+
+1. Depois de a volta convergir, traga os pontos de volta com
+   `prisma/backfills/driver-position-v2-to-legacy.sql`, no `psql` do
+   Database com o usuário dono (o arquivo copiado para o host, ou colado no
+   `psql`), repetindo até a resposta ser `INSERT 0 0`. Cada rodada copia até
+   100 mil pontos, numa transação própria:
+
+   ```sh
+   docker exec -i $(docker ps -q -f label=com.docker.swarm.service.name=trajetto-postgres-production) \
+     psql -U trajetto -d trajetto -v ON_ERROR_STOP=1 < ./driver-position-v2-to-legacy.sql
+   ```
+
+   Um ponto que já está na legada (o mesmo motorista no mesmo instante,
+   gravado pela imagem velha durante o rolling) fica como está, e um dia que
+   a legada já não tem partição fica de fora. Nada sai da v2: a imagem da
+   onda 7, de volta, lê as duas e conta o ponto uma vez. Um
+   `INSERT … SELECT` direto não serve: o `id` da legada é `TEXT NOT NULL`
+   sem padrão no banco, os ids são `uuid` de um lado e texto do outro, e um
+   dia sem partição na legada derruba o comando inteiro
+   (`tests/E2E/driver-position-rollback.test.ts` roda o arquivo).
+
+2. Na volta para a frente (a imagem da onda 7 de novo), os pontos que a
+   imagem velha gravou já estão na legada, que a tela lê. Mas a imagem velha
+   não conhece a v2 e não cria as partições dela: depois de uma volta mais
+   longa que `DRIVER_POSITION_PARTITION_LOOKAHEAD_DAYS` (7 dias), a v2 não
+   tem a partição de hoje, e nenhuma migration a cria. O job
+   `partition-maintenance` está sem sucesso há mais de 26 h, então a
+   varredura de recuperação dos crons o roda 1 minuto depois do boot
+   (`partitions.driver_position_v2` no `/health/metrics`). Até lá, todo
+   POST de posições responde 5xx (o app guarda os pontos e reenvia; nada se
+   perde) e o mapa da torre para, porque a trilha e a última posição são
+   gravadas na mesma transação. Para não ter esse minuto, faça essa volta
+   para a frente fora do horário das rotas.
+
+3. A retirada da legada (F2-12) conta a retenção a partir da volta para a
+   frente: durante a volta, a legada recebeu pontos de novo.
+
+### As linhas de status da entrega (onda 7)
+
+O F2-06 (plano de escala) faz toda mudança de status deixar a sua linha no
+histórico da entrega: a criação ("Entrega criada", de nada para Pendente) e
+o que a rota move sozinha (a saída, a parada incluída em rota em andamento,
+a volta à base de uma rota cancelada ou encerrada com pendências, a saída em
+lote antiga do app), uma linha `SYSTEM` por entrega. A imagem desta release
+já sabe ler essas linhas; a de antes da onda 7, que ainda atende durante o
+rolling e é o destino de uma volta do código, lê errado:
+
+- o desfazer da importação conta a linha da criação como trabalho e não
+  remove nenhuma entrega da planilha;
+- o `/integration/v1/events` chama a criação de `delivery.pending`, um
+  tópico fora do catálogo, e o integrador passa o cursor por cima dela;
+- a torre conta a linha `SYSTEM` da saída como mudança feita por alguém e
+  não consegue mais aprovar a ocorrência pedida antes dela;
+- o feed da torre mostra uma linha por entrega a cada saída, e os fatos da
+  rua saem do limite da tela.
+
+Por isso a escrita só começa com `DELIVERY_STATUS_TRAIL_ENABLED=true` no
+_Environment_ da `trajetto-api`, desligada por padrão: a release leva os
+leitores, e o dono liga a escrita quando não sobra imagem velha, como a
+regra do enum novo, que só é gravado na release seguinte. Desligada, a
+entrega muda de status e a saída manda o `delivery.in_transit` como
+sempre, só sem essas linhas.
+
+1. Na staging, ligue depois de a release da onda 7 convergir; é o que faz
+   aparecer a linha do tempo nova ("Entrega criada", "Saiu para entrega
+   (Rota N)").
+2. Na produção, ligue só depois de a release estar no ar e de nenhuma volta
+   para antes dela estar prevista.
+3. Antes de voltar o código para antes da onda 7, desligue (**Save** e
+   **Deploy**) para parar as linhas novas. As que já foram gravadas ficam, e
+   a imagem velha as lê como na lista acima: desfaça à mão a importação feita
+   enquanto ela estava ligada, e avise o integrador que um
+   `delivery.pending` sem `status_from` é a criação.
+
+### O feed de eventos pela ordem de commit (onda 10)
+
+O F2-05 (plano de escala) faz o `/integration/v1/events` andar pela ordem
+de commit (`delivery_event.txid`, até a transação mais antiga ainda aberta)
+e devolver o cursor `v2`, com a época do cluster: um evento que confirma
+tarde não fica mais para trás do cursor de quem já passou. A imagem de
+antes do plano de escala só lê o cursor antigo (o id do evento). Com um
+`v2` na mão, ela responde páginas vazias, e o integrador para de receber
+eventos sem erro: durante o rolling, ou para sempre depois de uma volta do
+código para ela.
+
+Por isso a ordem nova só vale com `INTEGRATION_FEED_ORDER=commit` no
+_Environment_ da `trajetto-api`, `id` por padrão (o caminho de sempre, com
+o cursor antigo). As respostas já trazem os campos novos nos dois modos:
+`resume_cursor` no `/events` e `sync_watermark` no `/deliveries` e no
+`/routes`.
+
+1. Na staging, ligue depois de a release da onda 10 convergir (nenhuma
+   task da imagem anterior em `docker service ps`), **Save** e **Deploy**.
+   Confira uma página do `/integration/v1/events` com uma chave de teste:
+   o `next_cursor` e o `resume_cursor` começam com `v2.`.
+2. Na produção, ligue do mesmo jeito, só depois de a release estar no ar e
+   de nenhuma volta para antes dela estar prevista. Desde a virada, **o
+   piso de rollback do código é esta release**: a imagem anterior não lê
+   os cursores que os integradores guardaram.
+3. Para voltar o modo, `INTEGRATION_FEED_ORDER=id`: o cursor `v2` continua
+   aceito e é lido pelo id do evento, como no F2-04. Um cursor antigo que
+   chega com o modo `commit` é convertido (o contador
+   `feed.legacy_conversions` da `ops_sample`), sem pular nada.
+
+Um cursor `v2` de outra época (um PITR, um promote, um restore lógico) é
+convertido pelo piso dele, e os eventos desde então vão de novo: o alerta
+[feed-epoch-conversion](./runbooks/feed-epoch-conversion.md) avisa para
+falar com os clientes, até 7 dias depois de a época mudar. Um cursor com
+uma época que a história do cluster não sustenta (o cursor não é assinado)
+é convertido igual, conta em `feed.stray_epoch_conversions` e não alerta. Um INSERT em `delivery_event` mais de 240 s depois
+do início da transação é recusado (`TJ001`,
+[runbook](./runbooks/delivery-event-writer-bound.md)): é o que mantém o
+piso do feed seguro.
+
+**O feed no standby** (onda 17, F4-43) só existe com a ordem de commit e
+um standby na `DATABASE_REPLICA_URL`: `INTEGRATION_EVENTS_READ_REPLICA=true`
+no _Environment_ da `trajetto-api` manda as páginas ao standby enquanto o
+replica-guard o abona, com o horizonte do próprio standby, e ao primário no
+resto do tempo. `false` por padrão; até o standby do prod-db-2 (onda 23),
+só no ensaio de failover da staging, para medir. Voltar é `false` e
+**Deploy**: os cursores são os mesmos nos dois servidores.
+
+### Contrações que esperam a capability (onda 10)
+
+O plano de escala sai num push só, e a imagem que ainda serve durante o
+rolling, e que volta num rollback, é a de antes do plano. Por isso as
+contrações da onda 10 não vão em migration: cada uma é um passo de
+`prisma/post-deploy` que pergunta antes a `trajetto_capability_ready`
+([README da pasta](../prisma/post-deploy/README.md)) e fica `pending`
+enquanto houver um processo sem a capability, ou uma sessão sem nome no
+banco (a imagem de antes do plano). Num banco sem empresa a migration do
+mesmo item já fez a mudança.
+
+| Passo                                | Item   | O que tira                                                                                                                                                                                                                                                                                                                                                                              | Capability                           |
+| ------------------------------------ | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
+| `03-route-stop-status-index.sql`     | F2-21b | o índice global `route_stop (status, deliveryId)`                                                                                                                                                                                                                                                                                                                                       | `route-stop-open-by-route-v1`        |
+| `05-queue-contract.sql`              | F5-06  | as chaves estrangeiras e os uniques das quatro filas (`domain_outbox_event`, `notification_delivery`, `notification_provider_receipt`, `webhook_delivery`), depois de copiar para `outbox_event_key` a chave de todo evento que não tem a sua; espera também não haver evento ainda não publicado (PENDING, PROCESSING ou FAILED) com entrega gravada pela imagem anterior com outro id | `queue-partition-agnostic-v1`        |
+| `07-notification-contract.sql`       | F5-15  | as chaves estrangeiras do sino (`notification`) para `user` e `business` e o unique de `deliveryId`; espera também não haver entrega IN_APP em voo com notificação gravada pela imagem anterior com outro id                                                                                                                                                                            | `notification-partition-agnostic-v1` |
+| `10-queue-partition-swap.sql`        | F5-09  | as quatro filas comuns: cada uma vira particionada por dia pelo id, com a tabela de hoje anexada como `<fila>_legacy` ([ADR 0014](./adr/0014-filas-particionadas.md)); espera também o `05-queue-contract.sql`                                                                                                                                                                          | `queue-partition-agnostic-v1`        |
+| `20-notification-partition-swap.sql` | F5-15  | o sino comum: vira particionado por mês pelo id, com a tabela de hoje anexada como `notification_legacy`; espera também o `07-notification-contract.sql`                                                                                                                                                                                                                                | `notification-partition-agnostic-v1` |
+
+1. No primeiro deploy desta release a etapa roda com a imagem anterior no
+   ar e os passos ficam `pending` (o `/health/rollout` mostra em
+   `release.pending`). Depois de o rolling convergir, o deploy seguinte
+   roda a etapa de novo sozinho; para não esperar, _Run workflow_ com
+   `force_release`.
+2. Confira no log da `trajetto-api-migrate` o `applied:` de cada passo.
+3. **Desde o `applied`, o piso de rollback do código é esta release**:
+   a imagem anterior não aguenta o que o passo tirou. Para segurar a
+   contração mais tempo (manter a volta possível), deixe
+   `POST_DEPLOY_STEPS=off` na `trajetto-api-migrate` até decidir; tire
+   depois.
+
+A troca das filas (`10-queue-partition-swap.sql`) tem estes cuidados a mais:
+
+- **A trava.** Cada fila fica sob `ACCESS EXCLUSIVE` só por instantes: para
+  pôr a guarda `CHECK ("id" < corte) NOT VALID` e, depois, para a troca, que
+  só mexe no catálogo. A leitura da tabela inteira (o `VALIDATE` da guarda)
+  fica entre as duas, sob `SHARE UPDATE EXCLUSIVE`, com as escritas
+  seguindo. O `NOTICE` do passo diz, por fila trocada, a espera, a trava e
+  a validação (`tempos: …`). Meça na staging antes da produção, num
+  Database descartável com o seed `prod-like`, rodando os passos à mão como
+  diz o
+  [ADR 0014](./adr/0014-filas-particionadas.md#medir-a-trava-antes-da-produção)
+  (o _Run workflow_ rodaria no Database da staging, não no descartável). O
+  aceite é espera mais trava abaixo de 3 s em cada fila.
+- **A guarda que ficou.** Se o passo terminar `pending` com
+  `a restrição <fila>_swap_cutoff ficou em …` (o lock para tirá-la não
+  veio), ou se a etapa morrer no meio da troca (o passo fica `failed`), a
+  guarda fica na tabela comum, e a fila recusa toda gravação a partir do
+  corte dela (a meia-noite UTC de depois de amanhã, para as filas; o
+  primeiro dia de um mês, para o sino; a mensagem e o
+  `pg_get_constraintdef` mostram o id). Antes dele, rode a etapa de novo
+  (_Run workflow_ com `force_release`), que tira a guarda ou termina a
+  troca; ou tire à mão, no `psql` do Database:
+
+  ```sql
+  ALTER TABLE "<fila>" DROP CONSTRAINT "<fila>_swap_cutoff";
+  ```
+
+- **Fila grande demais.** Com mais de 2 M linhas estimadas a fila (ou o
+  sino, F5-15, que na escala alvo passa disso) fica comum e o passo diz
+  `skipped: … exige uma janela própria`. Numa janela com os workers parados
+  (`WORKERS_ENABLED=false` na `trajetto-api`), rode o arquivo à mão no
+  Database, depois de `SET trajetto.swap_window = 'on'` na mesma sessão do
+  `psql`, com o expurgo em dia; ou deixe a tabela comum: o código serve os
+  dois jeitos.
+- **Os planos.** Com as filas trocadas, as reivindicações planejam um mês
+  de partições. Meça na staging o p95 do planejamento delas (o
+  `pg_stat_statements`, `mean_plan_time`, com `pg_stat_statements.track_planning`)
+  e, acima de 2 ms, ligue `QUEUE_CLAIM_ID_FLOOR_ENABLED=true` no
+  _Environment_ da `trajetto-api` (o plano B do F5-13, que poda os dias sem
+  linha em voo); desligar volta às reivindicações de sempre.
+- **A volta.** `prisma/post-deploy/rollback/unpartition-queue.sql`, à mão,
+  copia toda linha de volta para uma tabela comum e marca a fila para a
+  troca não voltar sozinha (o passo a passo no ADR 0014).
+
+### A janela do histórico (onda 11)
+
+`delivery_event` (F2-17) e `activity` (F2-18) viram particionadas por mês
+pelo id numa janela de madrugada aprovada por você, não num deploy
+qualquer: os passos `30-delivery-event-window.sql` e
+`31-activity-window.sql` de `prisma/post-deploy` só rodam dentro do
+intervalo `HISTORY_WINDOW_APPROVED` da `trajetto-api-migrate` (decisões D39
+e D68). Fora dele terminam `skipped: aguardando janela`, e um hotfix
+promovido depois desta release nunca dispara a janela sem aviso. Dentro
+dele, esperam (`pending`) todo processo vivo anunciar
+`history-partition-agnostic-v1`.
+
+| Passo                          | Item  | O que faz                                                                                                                                                                                                                                                    | Capability                      |
+| ------------------------------ | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------- |
+| `30-delivery-event-window.sql` | F2-17 | copia `delivery_event` para a casca `delivery_event_part` com o `txid` como está, recupera as chaves de envio que só estavam na coluna e troca os nomes; a tabela de antes vira `delivery_event_legacy`                                                      | `history-partition-agnostic-v1` |
+| `31-activity-window.sql`       | F2-18 | copia `activity` para a casca `activity_part`, dando a todo id de antes do uuid v7 um v7 do próprio `created_at` (o mesmo em toda rodada, `trajetto_activity_rekey`); a tabela de antes vira `activity_legacy`, e por 14 dias o id antigo se resolve por ela | `history-partition-agnostic-v1` |
+
+O passo a passo (ensaio na staging com o seed `prod-like`, o aviso de 48 h,
+a janela, a conferência e a volta nos 14 dias) está no
+[runbook da janela do histórico](./runbooks/history-window.md). O ensaio
+roda os dois passos à mão, no `psql`, num Database descartável: ali não há
+processo nenhum para anunciar a capability, então o anúncio e a aprovação
+são feitos na sessão (sem eles, os passos ficam `pending` para sempre), e
+o _Run workflow_ rodaria no Database da staging, não no descartável. Valor
+inválido ou intervalo de mais de 24 h não aprova nada (o log da etapa diz
+por quê). Apague a variável depois da janela.
+
+### O trem de releases do plano de escala (as datas das contrações)
+
+O plano de escala sai inteiro numa release só (decisão do dono de
+16/11/2026: um push, API → web → app, e uma promoção para a produção),
+com a imagem anterior servindo durante o rolling. Por isso nada que tira
+alguma coisa vai junto com o que a expande: cada contração espera a sua
+condição, e a ordem abaixo é a do trem. A release é **N**; as datas de
+exemplo supõem N na produção em 30/11/2026 e a janela do histórico em
+06/12/2026 (troque pelas suas e anote na tabela quando cada uma rodar).
+
+| Passo                                                                                                                                                                                               | O que sai                                                                                                                              | Quando, no mais cedo                                                                                                                              | Exemplo    | Como                                                                                                                                                                                              |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Contrações com capability (onda 10): `03-route-stop-status-index.sql`, `05-queue-contract.sql`, `07-notification-contract.sql`, `10-queue-partition-swap.sql`, `20-notification-partition-swap.sql` | o índice global das paradas, as FKs e uniques das filas e do sino, a troca das filas e do sino por tabelas particionadas               | no deploy seguinte ao rolling de N convergir (todo processo vivo anuncia a capability)                                                            | 30/11/2026 | sozinhas, pela etapa de release; para não esperar, _Run workflow_ com `force_release` ([acima](#contrações-que-esperam-a-capability-onda-10))                                                     |
+| Janela do histórico: `30-delivery-event-window.sql` e `31-activity-window.sql` (F2-17, F2-18)                                                                                                       | `delivery_event` e `activity` comuns viram particionadas; as de antes ficam como `*_legacy`                                            | o primeiro domingo, 03:00 BRT, depois de N na produção e do ensaio na staging, com o aviso de 48 h                                                | 06/12/2026 | `HISTORY_WINDOW_APPROVED` na `trajetto-api-migrate` e a etapa sem trocar de build: **Deploy** nela, ou `force_release` com a `image_tag` que está no ar ([runbook](./runbooks/history-window.md)) |
+| U-03                                                                                                                                                                                                | as posições na sala de operações (fica só `positions:<businessId>`)                                                                    | ≥ 1 semana com a web X-32 na produção                                                                                                             | 07/12/2026 | push próprio da onda 20                                                                                                                                                                           |
+| F2-20                                                                                                                                                                                               | `delivery_event_legacy`, `activity_legacy`, a consulta do id antigo (`trajetto_activity_rekey`) e as entradas datadas do gate de drift | ≥ 14 dias depois da janela                                                                                                                        | 20/12/2026 | push próprio da onda 20; o `DO` da migration recusa antes disso                                                                                                                                   |
+| F2-23                                                                                                                                                                                               | os índices sem uso                                                                                                                     | ≥ 30 dias de `pg_stat_statements` na produção                                                                                                     | 30/12/2026 | push próprio da onda 20, pelo relatório de uso                                                                                                                                                    |
+| F2-36                                                                                                                                                                                               | a dupla escrita do orçamento no Redis                                                                                                  | uma release depois do F2-32 na produção                                                                                                           | N+1        | push próprio da onda 20                                                                                                                                                                           |
+| U-10                                                                                                                                                                                                | os caminhos de compatibilidade vencidos e o `warn` do orçamento de memória                                                             | 2 releases depois de N, com os valores da seção 3 do plano aplicados nos dois environments                                                        | N+2        | push próprio da onda 20                                                                                                                                                                           |
+| F2-12                                                                                                                                                                                               | a `driver_position` legada                                                                                                             | ≥ `DRIVER_POSITION_RETENTION_DAYS` (90) depois do F2-10 na produção, e a `driver_position` vazia lá (`SELECT count(*) FROM driver_position` dá 0) | 28/02/2027 | push próprio da onda 20                                                                                                                                                                           |
+| U-09                                                                                                                                                                                                | o dump do Dokploy, trocado pelo pgBackRest                                                                                             | quando o dono decidir, com o PITR conferido                                                                                                       | —          | o texto, a documentação e o teste já prontos                                                                                                                                                      |
+
+Regras do trem:
+
+- **Uma contração nunca vai na mesma release da expansão de que ela
+  depende.** As da onda 20 ficam fora da branch `staging` até a data delas
+  chegar, cada uma num push.
+- **Depois que uma contração roda, o piso de rollback do código é a
+  release dela**: a imagem anterior não aguenta o que ela tirou
+  ([Rollback](#17-rollback)).
+- A janela do histórico é a única que pede aprovação por intervalo: um
+  hotfix promovido depois de N nunca a dispara sem aviso.
+- Antes de cada contração datada, confira a data nesta tabela e anote a do
+  dia em que rodou.
+
+### As branches das contrações
+
+As contrações da onda 20 estão prontas (código, migration ou passo da
+etapa de release, testes e documentação), cada uma numa branch local
+própria do repositório, fora da `staging`: entram só quando a condição
+delas, na tabela acima, estiver cumprida na produção. Cada uma foi
+conferida (typecheck, Prettier, os unitários e os E2E que a cobrem) sobre
+a base abaixo; a réplica completa do CI roda no push da `staging` que a
+leva.
+
+| Branch                         | Base       | Item            | O que faz                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Quando, no mais cedo                                                                                                                                                             |
+| ------------------------------ | ---------- | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `escala/contract-U-03`         | `12561a53` | U-03, passo 1   | `SOCKET_POSITIONS_ON_OPERATIONS_ROOM` passa a `false` por padrão: a posição vai só para `positions:<businessId>`; `true` é a volta, no _Environment_ da `trajetto-api` e, com a `trajetto-ingest` no ar com a Domain `/route/positions`, no dela também: quem emite a posição é o processo do `POST /route/positions`                                                                                                                                                | ≥ 1 semana com a web X-32 na produção                                                                                                                                            |
+| `escala/contract-U-03-remove`  | `69ed92ef` | U-03, passo 2   | sai a variável e a cópia na sala de operações (apague a variável do _Environment_ da `trajetto-api` e da `trajetto-ingest`, se estiver lá); está sobre a `escala/contract-U-03` (o merge dela leva as duas)                                                                                                                                                                                                                                                          | uma release depois do passo 1 na produção, sem ter precisado da volta                                                                                                            |
+| `escala/contract-F2-36`        | `12561a53` | F2-36           | o orçamento do geocodificador (job, busca, comprovante) conta só na `provider_quota_day`; saem a gravação em dobro, a semente pelo maior dos dois e as chaves de contagem do dia no Redis                                                                                                                                                                                                                                                                            | uma release depois do F2-32 na produção                                                                                                                                          |
+| `escala/contract-F2-20`        | `febdd4af` | F2-20           | o passo `prisma/post-deploy/41-history-legacy-drop.sql` apaga a `delivery_event_legacy` e a `activity_legacy` 14 dias depois da janela, contados do instante que a janela grava no comentário de cada uma; antes disso fica `pending` com a data                                                                                                                                                                                                                     | depois da janela do histórico na produção (o próprio passo espera os 14 dias)                                                                                                    |
+| `escala/contract-F2-12`        | `0c97c71e` | F2-12           | a tela da trilha lê só a `driver_position_v2`; o passo `40-driver-position-legacy-drop.sql` apaga a `driver_position` quando todo processo anuncia `driver-position-legacy-free-v1` e a tabela não tem nenhuma linha (com um ponto ainda lá, a etapa de release falha antes do rollout: esta imagem já não tira os dias da legada, e a anterior segue no ar até ela esvaziar); a migration `20270228000000_drop_driver_position_legacy` só age num banco sem empresa | ≥ `DRIVER_POSITION_RETENTION_DAYS` (90) depois do F2-10 na produção, o `partitions.driver_position` sem dia preso e a tabela vazia (`SELECT count(*) FROM driver_position` dá 0) |
+| `escala/contract-U-10-session` | `5be702d1` | U-10, sessão    | sai `SESSION_LOOKUP_MODE=legacy`: a sessão é lida sempre na ida única da F4-05; um _Environment_ que ainda tenha a variável sobe, e ela é ignorada                                                                                                                                                                                                                                                                                                                   | 2 releases depois da F4-05 na produção, sem ter precisado do `legacy`                                                                                                            |
+| `escala/contract-U-10-history` | `5be702d1` | U-10, histórico | o reenvio (chegada, comprovante, "a caminho") lê a chave só em `delivery_event_submission`, e a atividade do aviso é procurada só pelo id; a leitura pelo `deliveryId` fica só no caminho de erro, quando o índice único legado recusa a gravação                                                                                                                                                                                                                    | depois da janela do histórico na produção, como a `F2-20`                                                                                                                        |
+| `escala/contract-U-10-outbox`  | `5be702d1` | U-10, outbox    | a migration `20261120120000_drop_outbox_claim_created_at_idx` apaga o `domain_outbox_event_claim_idx` (`created_at`), com `lock_timeout` de 5 s; a fila particionada não aceita `DROP INDEX CONCURRENTLY`                                                                                                                                                                                                                                                            | uma release depois da F3-11 na produção                                                                                                                                          |
+| `escala/contract-U-10-memory`  | `5be702d1` | U-10, memória   | `MEMORY_BUDGET_MODE` passa a `enforce` por padrão: o processo cujo orçamento de memória não fecha não sobe; `warn` no _Environment_ da Application é a volta                                                                                                                                                                                                                                                                                                         | os valores da seção 3 do plano nas Applications dos dois ambientes, e o alerta `memory-budget` quieto há 7 dias                                                                  |
+
+Os cortes de índice do F2-23 não têm branch: quais índices saem só se sabe
+com 30 dias de `pg_stat_statements` na produção, lidos no `index_usage` do
+`/health/metrics`, e o passo a passo de cada corte está em
+[prisma/concurrent](../prisma/concurrent/README.md#um-índice-que-sai).
+
+O caminho em memória da importação (U-10) também não tem branch ainda: ele
+sai só com `IMPORT_DURABLE_JOBS=true` há 2 releases no _Environment_ da
+`trajetto-api` da produção, e a remoção reescreve as suítes da importação
+que hoje rodam por ele. Ela entra com a sua branch quando essa condição
+estiver perto.
+
+Como levar uma contração para a produção, na data dela:
+
+1. Confira a condição na produção (a tabela do trem) e que a imagem que
+   está no ar é a da release que a contração pressupõe.
+2. Na sua máquina, com a `staging` atualizada:
+   `git switch staging`, `git merge --no-ff escala/contract-<item>` (o
+   `U-03-remove` só depois de o passo 1 estar na produção). Um conflito
+   é a `staging` que andou: resolva mantendo as duas mudanças e rode o
+   typecheck e os testes da área.
+3. Na `F2-12` e na `U-10-outbox`, se a `staging` já tiver migration com
+   data depois da da branch (`20270228000000` e `20261120120000`),
+   renomeie o diretório da migration da branch para o dia do merge (ela
+   tem de ser a mais nova; nenhum banco a aplicou ainda).
+4. Push da `staging`, staging no ar, testes da área na staging, e então
+   a promoção para a produção, como qualquer release. Depois que ela
+   roda, o piso de rollback do código é essa release.
+5. Depois da `U-10-session`, apague `SESSION_LOOKUP_MODE` do
+   _Environment_ de cada Application que a tenha; depois da
+   `U-10-memory`, confira no log do boot de cada Application que o
+   orçamento de memória fecha (`memory budget`), e, se uma não subir,
+   `MEMORY_BUDGET_MODE=warn` no _Environment_ dela é a volta.
+6. Apague a branch local (`git branch -d escala/contract-<item>`) e anote
+   na tabela do trem o dia em que rodou.
+
+As branches são só locais. Um push de uma delas para o GitHub dispara o CI
+de branch de trabalho (`ci.yml`) e gasta minutos do Actions: faça-o só se
+quiser guardá-las no GitHub, com os minutos disponíveis.
+
 ### Quando o Swarm desiste de um serviço
 
 Nenhuma Application tem limite de tentativas (`MaxAttempts: 0`). Se uma
 réplica ainda assim ficar parada, **Deploy** da Application no painel (ou
 `docker service update --force <App Name>`) recria as tasks.
+
+### Duas tasks do worker no mesmo slot
+
+Incidente da staging, 26/11/2026: dois cliques em **Deploy** seguidos na
+`trajetto-worker` (com o _Update Config_ `start-first`) deixaram o Swarm
+com **duas** tasks em execução no mesmo slot, o `.1` com dois ids de task.
+As duas elegeram o cron (no log do Postgres, um `ERROR` de chave duplicada
+em `scheduled_job_execution_jobName_scheduledFor_key`, inofensivo: a
+unicidade barra a segunda execução) e dobraram a memória e as conexões do
+papel.
+
+- **Diagnóstico**: o `process_heartbeat` com duas linhas `worker`
+  atualizadas há pouco, e _Docker → Containers_ no painel (ou
+  `docker ps --filter name=<App Name>`) com dois contêineres
+  `<App Name>.1.<id>`:
+
+  ```sql
+  SELECT replica, role, build_commit, updated_at FROM process_heartbeat
+   WHERE role = 'worker' AND updated_at > now() - interval '2 minutes';
+  ```
+
+- **Correção**: **Stop** na Application, espere o _Stop Grace Period_ (40
+  s), confirme que não sobrou nenhum contêiner dela e dê **Deploy** uma vez
+  só. O `process_heartbeat` volta a ter um `worker` só.
+- **Lição**: um **Deploy** por vez em cada Application, esperando o
+  anterior terminar em _Deployments_. O pipeline já serializa os dele
+  (`deploy-roles.sh`, um papel depois do outro); o risco é o clique à mão.
 
 ## 18. Backup e restauração
 
@@ -2341,15 +4519,26 @@ próprio Database PostgreSQL no Dokploy**, gravado no Cloudflare R2. O antigo
 serviço `trajetto-backup` (imagem própria, `pg_dump` cifrado com age, heartbeat
 de 1 dia) saiu do código e do pipeline; nada no repositório agenda backup.
 
-|                   |                                                                                                                     |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------- |
-| **Quando**        | uma cópia por dia, às 03:00 UTC (antes do primeiro job que apaga dados, 03:17 UTC)                                  |
-| **Retenção**      | as 30 cópias diárias mais recentes, ou seja, 30 dias; não há cópias semanais nem mensais                            |
-| **RPO**           | até 24 h                                                                                                            |
-| **RTO**           | medido no ensaio de 15/09/2026: 10,5 s de restore para 94 MB (cresce com o volume; a parte lenta é recriar índices) |
-| **Cifra**         | as cópias **não** são cifradas por nós; o R2 cifra tudo em repouso (do lado do provedor)                            |
-| **PITR**          | **não existe** (exigiria WAL archiving com wal-g)                                                                   |
-| **Arquivos (R2)** | fora do dump ("O que o dump não cobre", abaixo)                                                                     |
+**Fonte das cópias diárias**: `dokploy`
+
+A linha acima diz de onde vem a cópia diária que a política de privacidade
+e os termos prometem ("diárias, guardadas por 30 dias"), e o teste
+`legal-facts` da web confere o prazo nela: `dokploy` é o backup desta
+seção (o _Keep_ e a agenda abaixo); `pgbackrest` é o PITR da
+[seção 27](#27-pitr-com-pgbackrest), com o prazo de
+`infra/postgres/pgbackrest.conf`. Ela só muda na troca do dump (plano de
+escala, decisão D9 e item U-09), pelo runbook
+[troca-do-dump](./runbooks/troca-do-dump.md).
+
+|                   |                                                                                                                                                                |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Quando**        | uma cópia por dia, às 03:00 UTC (antes do primeiro job que apaga dados, 03:17 UTC)                                                                             |
+| **Retenção**      | as 30 cópias diárias mais recentes, ou seja, 30 dias; não há cópias semanais nem mensais                                                                       |
+| **RPO**           | até 24 h                                                                                                                                                       |
+| **RTO**           | medido no ensaio de 15/09/2026: 10,5 s de restore para 94 MB (cresce com o volume; a parte lenta é recriar índices)                                            |
+| **Cifra**         | as cópias **não** são cifradas por nós; o R2 cifra tudo em repouso (do lado do provedor)                                                                       |
+| **PITR**          | não vem deste dump: é o pgBackRest da imagem `trajetto-postgres`, na staging desde a onda 3 e na produção desde a onda 6 ([seção 27](#27-pitr-com-pgbackrest)) |
+| **Arquivos (R2)** | fora do dump ("O que o dump não cobre", abaixo)                                                                                                                |
 
 ### O backup agendado (Dokploy → Database → Backups)
 
@@ -2411,6 +4600,25 @@ evento de **backup de Database** marcado: o Dokploy avisa quando um backup
 falha. Um backup que simplesmente deixou de rodar não avisa: confira de tempos
 em tempos a data da cópia mais nova no bucket.
 
+### A troca pelo pgBackRest (preparada, não feita)
+
+O dump continua todo dia, em paralelo ao pgBackRest da seção 27, que já
+faz uma cópia por dia (o diferencial de domingo a sexta e o completo no
+sábado) com o WAL do PITR. A troca desliga o dump e deixa o pgBackRest
+como a cópia diária, com 30 dias: o texto da política continua verdadeiro
+e muda só a técnica. Ela só acontece num gatilho medido, com o aval do
+dono para o texto:
+
+- o dump leva mais de 30 min;
+- o `n_dead_tup` das filas sobe durante o dump (ele segura o `xmin`, e o
+  autovacuum não limpa as filas enquanto ele roda);
+- o portão de 1 milhão de entregas por mês do plano de escala.
+
+O passo a passo (a retenção do pgBackRest que mantém os 30 dias, a linha
+**Fonte das cópias diárias** acima, o _Enabled_ do backup desligado, a
+regra de ciclo de vida do R2 para as cópias que ficaram, e a volta) está
+no runbook [troca-do-dump](./runbooks/troca-do-dump.md).
+
 ### Restaurar a partir do R2
 
 **Caminho principal: o restore do Dokploy.** Database PostgreSQL → aba
@@ -2431,17 +4639,29 @@ Num incidente real (banco perdido):
    até o próximo deploy). Desligue o backup agendado (_Enabled_) enquanto
    restaura.
 3. Restaure pela aba _Backups_ (acima) ou pelo caminho manual (abaixo).
-4. Volte as réplicas da API para `2` (**Save** → **Deploy**) e religue o
+   Num Database **novo** (o passo 1, ou outro servidor), confira o txid do
+   feed da integração antes de seguir: o dump traz os txids do cluster
+   antigo, e o novo conta do zero. A consulta, a época e o `pg_resetwal -e`
+   com o Database parado estão no runbook
+   [feed-txid-regressed](./runbooks/feed-txid-regressed.md) (plano de
+   escala, F2-03); o ensaio do `restore-postgres.sh` faz o mesmo sozinho.
+4. **Sempre**, antes de subir o runtime: rode a etapa de release no banco
+   restaurado. **Deploy** na Application `trajetto-api-migrate` do ambiente
+   (ou GitHub → Actions → staging/production → _Run workflow_ com
+   `force_release`, na produção com a `image_tag` que está no ar) e espere
+   a tarefa ficar `Running` (aba _Logs_: "etapa de release concluída").
+5. Volte as réplicas da API para `2` (**Save** → **Deploy**) e religue o
    backup.
 
-Um banco restaurado traz `_prisma_migrations` e passa pela guarda de banco
-vazio. Se o dump é mais velho que o build no ar, a API recusa subir até as
-migrations que faltam rodarem: antes de voltar as réplicas (passo 4), dê
-**Deploy** na Application `trajetto-api-migrate` do ambiente e espere a
-tarefa ficar `Running` (aba _Logs_: "etapa de release concluída"). Não conte
-com o pipeline para isso: a tag `<ambiente>-applied` diz que a imagem de
-migração já rodou **no banco de antes**, e o próximo run pularia a etapa. O
-Deploy manual aplica as migrations que o dump não tem
+Por que o passo 4 é sempre: um banco restaurado traz `_prisma_migrations`
+e passa pela guarda de banco vazio, mas um restore com `--no-owner` perde
+os donos e os grants que o `infra/sql` mantém (e, num cluster novo ou
+depois de um PITR, a época do cluster tem de subir), e só a etapa os
+devolve. Se o dump é mais velho que o build
+no ar, a API ainda recusa subir até as migrations que faltam rodarem. Não
+conte com o pipeline para isso: a tag `<ambiente>-applied` diz que a imagem
+de migração já rodou **no banco de antes**, e a `release_step_state` veio
+do dump, então o próximo run pularia a etapa
 ([seção 15](#15-migrations)).
 
 **Caminho manual** (baixar a cópia e restaurar à mão):
@@ -2499,8 +4719,14 @@ da produção** (`POSTGRES_IMAGE`; a do campo de imagem do Database), restaura
 com `--exit-on-error`, confere o `.sha256` se existir e roda `prisma migrate
 status` contra o banco restaurado — a verificação que importa ("Database
 schema is up to date!"; um dump mais velho que o código falha com "Dump
-anterior ao código: há migrations pendentes"). O contêiner é removido ao
-final (`KEEP_CONTAINER=true` preserva).
+anterior ao código: há migrations pendentes"). Depois confere o txid do
+feed da integração (plano de escala, F2-03): o cluster do ensaio é novo e
+conta do zero, então, quando os txids do dump estão à frente dele, o
+script para o Postgres, roda o `pg_resetwal -e` com a época certa e
+confere de novo, como o runbook
+[feed-txid-regressed](./runbooks/feed-txid-regressed.md) manda fazer num
+Database novo. O contêiner e o volume de dados (`<contêiner>-data`) são
+removidos ao final (`KEEP_CONTAINER=true` preserva).
 
 Ensaios feitos: 14/09/2026 (72 migrations do zero, 49 tabelas, 2 s, os cinco
 índices de SQL cru e o `pg_trgm` sobreviveram) e 15/09/2026 com volume (banco
@@ -2509,14 +4735,23 @@ telas de torre, entregas e dashboard responderam e o smoke do k6 passou 12/12,
 inclusive escrita na tabela particionada). Falta o ensaio mensal com uma cópia
 real do Dokploy (restore pela aba _Backups_ num Database descartável).
 
+O primeiro ensaio do PITR da staging foi em 27/11/2026, pelo
+`trajetto-restore-drill` ([seção 27](#27-pitr-com-pgbackrest)). Ele
+restaurou o full de 26/11 mais o diferencial seguinte (143,9 MB). O RTO foi
+de 496 s, sendo 474 s de restore e 22 s de recuperação, e a perda foi
+nenhuma. As 216 migrations conferiram.
+
 ### O que o dump não cobre
 
 - **Bucket R2** (fotos de checklist e de entrega, assinaturas, anexos,
   avatares): o banco guarda só as chaves. Fotos de entrega e assinaturas são
-  prova documental. O R2 não tem versioning pela API S3: o equivalente é um
-  **Bucket Lock** nos prefixos `deliveryProofs/` e `deliveryPhotos/` com o
-  prazo legal de guarda, e uma cópia periódica (`rclone sync`) para outro
-  bucket com um token que a API não tem.
+  prova documental. O R2 não tem versioning pela API S3: o equivalente é o
+  **Bucket Lock** em `deliveryProofs/` (90 dias; `infra/r2/bucket-locks.md`)
+  e a **cópia semanal dos comprovantes** (`deliveryProofs/` e
+  `deliveryPhotos/`) para um bucket noutra conta Cloudflare, com um token
+  que a API não tem: `rclone copy`, nunca `sync`, com Expiration de 90 dias
+  no destino, para o que a LGPD manda apagar sair também da cópia
+  (`infra/r2/offsite-copy.md`).
 - **Segredos**: as cópias vivas são o _Environment_ de cada Application no
   Dokploy e o seu gerenciador de senhas. Perder `JWT_SECRET_REFRESH_TOKEN`
   desloga todo mundo. Perder `WEBHOOK_SECRETS_KEY` **não é recuperável**: os
@@ -2527,17 +4762,27 @@ real do Dokploy (restore pela aba _Backups_ num Database descartável).
 
 ### Trilha de posição e o backup lógico
 
-`driver_position` (particionada por dia, 90 dias) é a maior tabela em escala
-(~2.400 pontos por motorista num dia de 10 h). O backup do Dokploy leva sempre
+A trilha de GPS é a maior tabela em escala (~2.400 pontos por motorista num
+dia de 10 h), particionada por dia e guardada por
+`DRIVER_POSITION_RETENTION_DAYS` (90 dias). Desde a onda 7 (plano de escala,
+F2-10) as posições vão para a trilha enxuta `driver_position_v2` (uns 204
+bytes por linha, contra uns 565 da legada): sem id, sem `created_at`, com a
+chave primária `(driverId, recorded_at)` e os ids como `uuid`. A legada
+`driver_position` fica, só lida, até passar a retenção e uma release
+seguinte a apagar (F2-12); a tela da trilha lê as duas e conta uma vez o
+ponto que estiver nas duas. Numa volta do código para antes da onda 7, os
+pontos da v2 voltam para a legada pelo passo de
+[A trilha numa volta para antes da onda 7](#a-trilha-numa-volta-para-antes-da-onda-7).
+O backup do Dokploy leva sempre
 a base inteira, trilha inclusive: quando o dump passar a levar tempo demais
 (e a segurar um snapshot que impede o autovacuum das filas), a decisão volta
 para cá. O `backup-postgres.sh` (manual) tem dois controles só dele, passados
 na linha de comando (não são variáveis de Application):
 
-| Variável                    | Efeito                                                                 |
-| --------------------------- | ---------------------------------------------------------------------- |
-| `BACKUP_EXCLUDE_TRAIL=true` | mantém o schema da trilha e deixa as linhas de fora                    |
-| `BACKUP_TRAIL_ONLY=true`    | dump **só** da trilha, num arquivo `<banco>-trail-<data>.dump` à parte |
+| Variável                    | Efeito                                                                        |
+| --------------------------- | ----------------------------------------------------------------------------- |
+| `BACKUP_EXCLUDE_TRAIL=true` | mantém o schema das duas trilhas e deixa as linhas de fora                    |
+| `BACKUP_TRAIL_ONLY=true`    | dump **só** das duas trilhas, num arquivo `<banco>-trail-<data>.dump` à parte |
 
 Restaurar um dump só da trilha:
 `pg_restore -d <banco> --data-only --no-owner --no-privileges --exit-on-error <banco>-trail-<data>.dump`
@@ -2546,75 +4791,941 @@ cria de −1 a +7 dias).
 
 ### Pendências registradas
 
-WAL archiving/PITR (imagem derivada com wal-g e um restart planejado);
-ensaio mensal com uma cópia real do Dokploy; Bucket Lock nos prefixos de
-prova; réplica de leitura/HA; retenção da trilha por plano (gatilho: mais de
-2 mil motoristas ativos/dia ou `driver_position` acima de 50 GB).
+O PITR da produção (F1b, onda 6; [seção 27](#27-pitr-com-pgbackrest));
+ensaio mensal com uma cópia real do Dokploy; as regras de Bucket Lock
+(`infra/r2/bucket-locks.md`), aplicadas pelo dono; réplica de leitura/HA;
+retenção da trilha por plano (gatilho: mais de 2 mil motoristas ativos/dia
+ou `driver_position` acima de 50 GB).
 
-## 19. Réplicas, workers e tempo real
+## 19. Papéis da mesma imagem
 
-Cada réplica da API roda, no mesmo processo e no mesmo pool: o HTTP, o
-Socket.IO com o adapter Redis e — com `WORKERS_ENABLED=true`, o padrão — os
-workers (pipeline de notificações, pipeline de IA, dispatcher de webhooks) e o
-agendador de crons. As filas no Postgres são reivindicadas com
-`FOR UPDATE SKIP LOCKED` e lease, e os crons têm uma execução por horário
-graças a um lease no banco: N réplicas não duplicam nada.
+A imagem `trajetto-api` é uma só e roda em quantas Applications o
+environment tiver, cada uma num papel. O HTTP, o Socket.IO, os workers
+(pipeline de notificações, pipeline de IA, dispatcher de webhooks), o
+agendador de crons e a ingestão de posições vivem juntos num processo (o
+papel `all`, a produção de hoje: uma Application `trajetto-api` faz tudo)
+ou separados, cada um com o próprio _Environment_, teto, réplicas e tag
+(`<tag>-<papel>`). O código de todos os papéis já está na imagem; separar
+é decisão de capacidade, e cada Application nasce quando a régua da
+[seção 23](#23-recursos-da-vps-e-logs) deixa
+([ADR 0012](./adr/0012-papeis-de-processo.md)). Sem a Application de um
+papel, nada muda. Em qualquer papel, as filas no Postgres são
+reivindicadas com `FOR UPDATE SKIP LOCKED` e lease, e os crons têm uma
+execução por horário graças a um lease no banco: N processos não duplicam
+nada. O passo a passo de cada Application está em
+[Criar a Application de um papel](#criar-a-application-de-um-papel).
+
+**O papel de cada processo (`PROCESS_ROLE`, plano de escala F3-01).**
+Cada Application escolhe o seu:
+
+| Papel             | Workers | Cron | Filas (`WORKER_QUEUES`) | Sockets | Varreduras | Rotas que atende                     |
+| ----------------- | ------- | ---- | ----------------------- | ------- | ---------- | ------------------------------------ |
+| `all` (o padrão)  | sim     | sim  | todas                   | sim     | 30 s e 5 s | todas                                |
+| `api`             | não     | não  | nenhuma                 | sim     | —          | todas                                |
+| `worker`          | sim     | sim  | todas                   | não     | 2 s e 2 s  | só `/health*`                        |
+| `scheduler`       | sim     | sim  | `none`                  | não     | —          | só `/health*`                        |
+| `realtime`        | não     | não  | nenhuma                 | sim     | —          | só `/health*` (e o `/socket.io`)     |
+| `worker-external` | sim     | não  | `external`              | não     | 2 s        | só `/health*`                        |
+| `ingest`          | não     | não  | nenhuma                 | não     | —          | `/health*` e `POST /route/positions` |
+
+O papel é um preset: ele preenche `WORKERS_ENABLED`, `CRON_ENABLED`,
+`WORKER_QUEUES`, `SOCKETS_ENABLED`, `PIPELINE_SWEEP_INTERVAL_MS` e
+`WEBHOOK_SWEEP_INTERVAL_MS`, e toda variável dada explicitamente ganha dele. O boot loga
+`process role resolved`, com o que ficou valendo; em aviso, com
+`overrides`, quando uma variável contrariou o preset (um
+`WORKERS_ENABLED=true` copiado do _Environment_ antigo deixaria a API com
+os workers). Sem `PROCESS_ROLE`, tudo fica como antes (`all`; com
+`WORKERS_ENABLED=false`, `api`). As rotas fora do papel respondem o mesmo
+404 de rota inexistente: um contêiner de outro environment na
+`dokploy-network` não alcança as rotas de um worker. O registro dos crons
+existe em todo processo (o `/health/metrics` lista os jobs em qualquer
+réplica); só o `CRON_ENABLED` os agenda. Sem sockets
+(`SOCKETS_ENABLED=false`), o processo recusa o upgrade com
+`SOCKET_UNAVAILABLE`, sem cobrar o endereço, e emite pelo
+`@socket.io/redis-emitter` em vez do adapter (plano de escala U-07): o que
+o worker emite chega ao socket conectado na API ou no realtime, sem ele
+assinar os frames do cluster (`tests/E2E/process-roles-replicas.test.ts`,
+`tests/E2E/socket-emitter-replicas.test.ts`). Cada pool se identifica no
+`pg_stat_activity` pelo papel: `trajetto-<papel>` no principal,
+`-read`, `-batch` e `-probe` nos laterais e na readiness (um
+`application_name` na URL ganha).
+
+**Quem está vivo (`process_heartbeat`, F3-03).** Todo processo, de qualquer
+papel, mantém uma linha na tabela `process_heartbeat`: `replica` (a mesma
+do `ops_sample`), `role`, `app_env`, `build_commit`, `node_hostname` (com
+`SWARM_NODE_HOSTNAME`), `queues`, `cron`, `sockets`, `started_at`,
+`updated_at` e `config_fingerprint`. A linha é gravada no boot e a cada
+30 s ± 5 s com o `now()` do banco, some no SIGTERM e, se a escrita falhar,
+o processo só avisa (`process heartbeat could not be written`, uma vez por
+queda) e segue atendendo. Uma linha sem batida há 90 s é de um processo
+morto sem SIGTERM; o `purge-ops-series` a apaga depois de 7 dias. A
+impressão é o sha256 (16 hex) de `JWT_SECRET`, `JWT_SECRET_REFRESH_TOKEN`,
+`SOCKET_ADAPTER_KEY`, `WEBHOOK_SECRETS_KEY`, `APP_ENV`, `R2_BUCKET_NAME`,
+`MIN_MOBILE_CONTRACT`, da identidade do banco (o `system_identifier` do
+`cluster_epoch` com o `current_database()`) e do `run_id` do Redis dos
+contadores e do Redis do pub/sub (o mesmo dos contadores sem
+`PUBSUB_REDIS_URL`; com ela, o processo lê o `INFO server` dele pela
+conexão das dicas de despertar): uma Application com a variável e outra
+sem dão impressões diferentes, e o deploy não fica verde com os eventos e
+as dicas de cada uma num Redis. Nunca um valor, e nunca o host: o mesmo
+banco visto direto ou pelo PgBouncer, por qualquer login, dá a mesma
+impressão. Ela é recalculada a cada batida (um Redis que reinicia muda o
+`run_id`, e todos convergem em 30 s) e fica nula até o banco e os Redis
+responderem uma vez. Para ver:
+
+```sql
+SELECT replica, role, app_env, build_commit, config_fingerprint, queues,
+       cron, sockets, now() - updated_at AS desde
+FROM process_heartbeat ORDER BY role, replica;
+```
+
+**Despertar entre processos (F3-04).** Quem grava trabalho numa fila que
+não consome (a `api` publica um evento, o `worker` o expande) avisa pelo
+pub/sub do Redis, no canal `<SOCKET_ADAPTER_KEY>:wake:<fila>`, fora dos
+padrões que o adapter do Socket.IO assina; os processos que consomem a
+fila acordam o worker dela na hora (`src/shared/wake/`). Um processo que
+consome a fila também avisa quando há mais de um consumidor vivo no
+`process_heartbeat`, para os outros ajudarem; no papel `all` (a produção de
+hoje) ele já acordou a si mesmo, e não publica nada. Cem milissegundos de
+espera juntam uma rajada num aviso só, e o aviso leva só a réplica de quem
+publicou (e a versão da mensagem). Um aviso perdido (Redis fora) custa a
+varredura: 2 s no `worker`. O despachante de webhooks ganhou o mesmo
+despertar: o fan-out que gravou linhas o acorda meio segundo depois do
+commit, em vez de esperar os 5 s da varredura. Depois de expandir eventos,
+a varredura do outbox encadeia as raias, e as raias que o processo não
+consome (o `external` de um `worker` com `worker-external`) são avisadas.
+Quem escuta acorda todas as filas uma vez quando a assinatura volta depois
+de uma queda do Redis.
+
+**Concorrência das filas (F3-05).** Quantas linhas de cada fila um
+processo trabalha ao mesmo tempo vem do _Environment_:
+`NOTIFICATION_INTERNAL_CONCURRENCY` e `NOTIFICATION_EXTERNAL_CONCURRENCY`
+(5 por raia), `OUTBOX_EXPANSION_CONCURRENCY` (1: um evento depois do
+outro), `WEBHOOK_CONCURRENCY` (5) e `AI_CONCURRENCY` (4, limitado ainda
+por `AI_LOCAL_MAX_CONCURRENCY`). Sem elas, as constantes de antes, número
+por número; cada uma vai de 1 a 32. Um lote precisa terminar dentro do
+lease do seu claim, senão outro processo reivindica o que este ainda
+envia e o destinatário recebe duas vezes: as raias e os webhooks conferem
+isso ao carregar, com o valor dado, e abaixo de 2 o boot para com a
+variável no erro (`... não cabe no lease da fila`). O boot loga os valores
+em `process role resolved` (`concurrency`) e avisa com
+`queue concurrency takes the whole database pool` quando as vagas só de
+banco deste processo (a expansão do outbox mais a raia `internal`) somam o
+`connection_limit` da `DATABASE_URL` ou mais: não sobraria conexão para o
+HTTP, os claims das outras filas e o cron. É aviso, não recusa.
+
+**Expansão do outbox em lote (F5-33).** Com `OUTBOX_EXPANSION_MODE=batch`
+no processo que consome a fila `outbox`, um claim de 50 eventos é
+expandido junto: uma consulta de preferências e uma de celulares para
+todos, um `INSERT` das entregas e uma marca de PUBLISHED com o fencing de
+cada evento, um lote por vez (a `OUTBOX_EXPANSION_CONCURRENCY` não vale).
+As linhas são as mesmas do padrão `per-event`. Staging primeiro; a
+produção só depois de 7 dias de staging e do ABBA do portão (decisão D57).
+Um lote cuja escrita falhou aparece no log como
+`notification events batch write failed; written again event by event`,
+com os ids; para voltar, a variável vazia (ou `per-event`) e **Deploy**.
+
+**Pool contínuo (F3-06 e F3-07).** Desde a onda 13, cada fila é um pool
+contínuo: a vaga que libera reivindica de novo, em vez de esperar o lote
+inteiro terminar. Um valor acima do lote (20 nas raias e nos webhooks, 10
+no outbox) agora vale: o pool reivindica de novo até encher as vagas.
+`WEBHOOK_PER_ENDPOINT_CONCURRENCY` (2, o de antes) é quantas chamadas de um
+mesmo endpoint cada processo faz ao mesmo tempo; um endpoint lento segura
+só essas e as próprias linhas, e os claims seguintes o deixam de fora. Na
+parada, o que foi reivindicado e não começou volta na hora, sem esperar o
+lease.
+
+**Teto global por endpoint (F3-13).** `WEBHOOK_ENDPOINT_GLOBAL_CONCURRENCY`
+(4) é quantas chamadas a um mesmo endpoint todos os despachantes juntos
+fazem ao mesmo tempo: o claim conta as linhas em voo dele, de qualquer
+processo, sob um lock que só dura o claim. Precisa estar no ar **antes** de
+qualquer `worker` ×2: sem ele, cada despachante a mais multiplica o que o
+ERP do cliente recebe. O 4 é o que as duas réplicas da produção já mandam
+hoje; o valor final vem da taxa que a Comprovei/Fusion confirmar (pedido
+comercial da onda 13). `0` volta ao teto só por processo.
+`WEBHOOK_HOST_GLOBAL_CONCURRENCY` (16, F3-14) faz o mesmo por host de
+destino, somando todos os endpoints apontados para ele: o caso do ERP de um
+agregador, que recebe um endpoint por empresa no mesmo host. Só vale com o
+teto por endpoint ligado; `0` o desliga.
+
+**Tetos globais dos provedores (F3-15a).** `WHATSAPP_GLOBAL_CONCURRENCY`,
+`EMAIL_GLOBAL_CONCURRENCY` e `PUSH_GLOBAL_CONCURRENCY` (0, sem teto global,
+por padrão) são os envios em voo à Meta, ao provedor de e-mail e ao Expo
+somando todos os processos que consomem a raia; cada processo fica com o
+teto dividido pelos processos vivos dela (o maior número visto em 10 min,
+nunca abaixo de `ROLE_EXPECTED_CONSUMERS` nem de 1). Ligue-os com os
+números que a Meta e a Resend confirmarem, antes de pôr uma segunda
+réplica na raia `external`, e ponha `ROLE_EXPECTED_CONSUMERS` com o número
+de processos que consomem as raias.
+
+**Balde de taxa dos provedores (F3-15c).** Concorrência não limita taxa:
+`WHATSAPP_SENDS_PER_SECOND`, `EMAIL_REQUESTS_PER_SECOND` e
+`PUSH_NOTIFICATIONS_PER_SECOND` (0, desligado, por padrão) são os envios
+por segundo à Meta, ao provedor de e-mail e ao Expo somando todos os
+processos, num balde GCRA no Redis. Um envio cuja vez está a mais de 1 s
+volta para a fila sem gastar tentativa; um 429 do provedor (o 130429 da
+Meta) segura o provedor para todos os processos pela pausa pedida, e a
+mensagem espera sem gastar tentativa. Sem Redis, cada processo fica com a
+sua parte (a taxa dividida pelos processos vivos da raia). Ligue-os quando
+o alerta `provider-throttled` aparecer, ou quando o pico projetado passar
+de metade do limite do provedor, com o mesmo valor em todas as
+Applications que consomem a raia (propostos: 60, 8 e 500;
+[runbook](./runbooks/provider-throttled.md)).
+
+**Push em lote (U-06).** `PUSH_BATCH_SIZE` (1, uma chamada ao Expo por
+entrega, por padrão) junta várias entregas de push numa chamada. A partir
+de 2, a linha de push que começa com a raia `internal` em atraso (o claim
+que a trouxe veio cheio) reivindica até esse número menos um de outras
+linhas de push vencidas, para a mesma vaga, e o grupo sai em chamadas de
+até 100 mensagens. Cada linha faz as suas conferências, lê os seus
+aparelhos, recebe só os tickets das próprias posições na chamada e fecha
+com o seu cercamento; os recibos seguem pelo `check-push-receipts` como
+antes. Um 5xx do Expo devolve o grupo à fila sem gastar tentativa (a
+espera é o degrau do cronograma pela idade da linha; passadas ~4 h 40, a
+falha volta a gastar tentativa), e um 400 numa chamada de várias entregas
+é reenviado uma entrega por chamada, para só a culpada falhar. Numa parada,
+nenhum grupo reivindica mais, e o que está no ar termina como qualquer
+linha. As linhas de um grupo vão ao banco uma de cada vez (só a chamada
+ao Expo é compartilhada), então o grupo ocupa uma conexão do pool como a
+vaga dele: `20` não pede `connection_limit` maior. Ligue com `20` na
+Application que consome a raia `internal` quando a fila de push crescer;
+`1` desliga.
+
+**Orçamento de memória (U-15).** No boot, cada processo soma o heap
+principal (o `--max-old-space-size` do `NODE_OPTIONS`), as threads da
+planilha (`SPREADSHEET_READS_PER_PROCESS` × `SPREADSHEET_WORKER_MAX_OLD_MB`),
+as do pool de CPU (`CPU_POOL_THREADS` × `CPU_POOL_THREAD_MAX_OLD_MB`, 2 × 64
+por padrão, em todo papel) e a reserva nativa (`NATIVE_RESERVE_MB`, 150) e
+compara com o `memory.max` do cgroup, o _Memory_ da Application:
+
+```
+heap + leituras × planilha + threads do pool × 64 + 150 ≤ Memory (MiB)
+```
+
+Medido na staging em 26/11/2026 (o log do boot, `memory budget fits`): o
+worker com 256 + 1 × 128 + 2 × 64 + 150 = 662 de 768, e a api com
+576 + 0 × 96 + 2 × 64 + 150 = 854 de 1.024 (no papel `all`, antes do corte,
+576 + 1 × 96 + 128 + 150 = 950 de 1.024). Sem `SPREADSHEET_WORKER_MAX_OLD_MB`,
+a thread recebe o que sobra por leitura, entre 256 e 768 MiB. A thread lê o
+.xlsx linha a linha, e a maior planilha que o leitor aceita cabe em 64 MiB:
+os 128 do worker de staging (quem lê as planilhas desde o corte de
+26/11/2026) e os 256 da produção a leem; só uma pasta com
+células mescladas ou links volta à leitura inteira do exceljs (~350 bytes
+por célula), que precisa de mais. Com
+`MEMORY_BUDGET_MODE=warn` (o padrão deste release), a conta que não fecha
+vira o aviso `memory budget does not fit` no log, `memory_budget_ok: false`
+no `/health/metrics` e o alerta `memory-budget`; com `enforce`, o boot é
+recusado. Sem cgroup legível, a conferência é pulada com aviso. O que fazer
+quando não fecha: [runbook memory-budget](./runbooks/memory-budget.md).
 
 - **Tempo real com várias réplicas**: o evento emitido numa réplica chega ao
   cliente conectado em outra pelo pub/sub do Redis
   (`@socket.io/redis-adapter`). Todas as réplicas precisam do mesmo
-  `REDIS_URL` e do mesmo `SOCKET_ADAPTER_KEY`. Provado em
+  `REDIS_URL` e do mesmo `SOCKET_ADAPTER_KEY`. Todo cliente de pub/sub sai
+  de `src/shared/redis/pubsub-redis.ts` (F5-01): com `PUBSUB_REDIS_URL`, o
+  adapter e as dicas entre processos vão juntos para um Redis só deles, e os
+  contadores ficam na `REDIS_URL`; sem ela, nada muda. Ligue em todas as
+  Applications do environment no mesmo deploy (`redis-role-map.test.ts`
+  guarda o mapa dos clientes). Provado em
   `tests/E2E/multi-replica-events.test.ts`. Sem cookie sticky: WebSocket fica
   na réplica por natureza.
 - **Escalar a API**: _Advanced → Cluster Settings → Replicas_ da Application
   `trajetto-api` → **Save** → **Deploy** (ou `docker service scale
 trajetto-api-production=N`, que o próximo deploy desfaz) e refaça o
-  orçamento de conexões (`réplicas × 11 + 2 + ferramentas < max_connections`).
-- **Desligamento ordenado**: SIGTERM → readiness 503 → 12 s para o
-  balanceamento soltar a réplica → fecha tempo real, HTTP, workers e Redis,
-  com teto de 35 s (o _Stop Grace Period_ é 40 s; sem ele, ver a lacuna da
-  [seção 5](#5-applications-em-vez-de-compose-o-que-mudou-e-o-que-ficou-de-fora)).
-  Desde o SIGTERM, a fila de importação recusa planilhas novas (429
-  `IMPORT_BUSY`), fecha na hora as que esperavam ("não iniciada: envie de
-  novo"), dá até 15 s à que está rodando e depois a para entre duas linhas,
-  com o relatório até ali (mais 5 s para ela parar e 2 s para gravar o que a
-  fila fechou: até 22 s); tudo antes dos workers (ADR
-  [0001](./adr/0001-filas-e-mensageria.md)).
+  a conta das conexões
+  ([seção 10](#roles-do-banco-logins-urls-e-conexões); por papel, em
+  [Valores por papel](#valores-por-papel)).
+  O Swarm reparte conexões, não requisições: cada conexão keep-alive atende
+  até `HTTP_MAX_REQUESTS_PER_SOCKET` requisições (1.000 por padrão) e a
+  última resposta sai com `Connection: close`, para a réplica nova receber a
+  parte dela em poucos minutos (`0` desliga).
+- **Desligamento ordenado**: SIGTERM → readiness 503 → o dreno, em que a
+  réplica ainda atende as conexões que o Traefik já tem com ela (o Swarm a
+  tira do endereço virtual uns 2 s antes do SIGTERM, e as conexões novas já
+  vão para a outra) → fecha tempo real, HTTP, workers e Redis. Todos os
+  prazos saem de `STOP_GRACE_PERIOD_MS`, o _Stop Grace Period_ que o Swarm
+  dá ao serviço (`src/shared/lifecycle/shutdown-plan.ts`):
 
-### Separar os workers do HTTP (só por gatilho medido)
+  | Prazo                                           | Fórmula (g = grace)      | Sem a variável (10 s) | Com `40000` |
+  | ----------------------------------------------- | ------------------------ | --------------------- | ----------- |
+  | teto (`SHUTDOWN_TIMEOUT_MS`)                    | g − clamp(g/8, 1 s, 5 s) | 8,75 s                | 35 s        |
+  | dreno (`SHUTDOWN_DRAIN_MS`)                     | 0,3 g                    | 3 s                   | 12 s        |
+  | pedidos em andamento, depois do dreno           | 0,25 g                   | 2,5 s                 | 10 s        |
+  | planilha em andamento (`IMPORT_DRAIN_GRACE_MS`) | 0,375 g                  | 3,75 s                | 15 s        |
+  | para ela parar / para gravar                    | g/8 / g/20               | 1,25 s / 0,5 s        | 5 s / 2 s   |
+  | workers (`SHUTDOWN_WORKERS_MS`)                 | 0,3 g                    | 3 s                   | 12 s        |
 
-Gatilhos (ADR 0001/0004): espera no pool visível em `/health/metrics`
-(`runtime.prisma_pool`) nos horários de dreno; CPU/IO/WAL do Postgres puxados
-por um dreno de backlog enquanto o HTTP sofre; necessidade de publicar o HTTP
-sem reiniciar os workers. Separar é isolamento, não correção de falha.
+  Durante o dreno, toda resposta sai com `Connection: close` e a réplica
+  encerra a conexão logo depois: o Traefik abre a próxima, que o Swarm já
+  manda para outra réplica. As conexões ociosas não são fechadas em laço
+  (uma fechada enquanto o Traefik escreve um POST nela vira 502, que o Go
+  não repete); ficam para o fechamento do HTTP no fim do dreno. Dreno e
+  importação correm juntos desde o SIGTERM. O fechamento do HTTP espera os
+  pedidos ainda em andamento, e nada mais o limita (o corpo pode levar até
+  120 s para chegar): por isso eles têm até 0,25 g depois do dreno, e
+  passado disso a conexão deles é fechada (o cliente vê o pedido falhar e o
+  manda de novo, como faria depois do teto). Sem esse prazo, um upload
+  lento segurava os workers até o teto, que saía com `exit 1` antes de eles
+  pararem. Os workers começam depois do HTTP e da importação, em até
+  0,55 g, e terminam em até 0,85 g, antes do teto; o que sobra até o teto é
+  do `QUIT` do Redis. Cada prazo aceita um valor à mão (as variáveis entre
+  parênteses; o dos pedidos em andamento não tem), e um que não cabe no
+  grace derruba o boot com a mensagem. A linha `shutting down` do log traz o
+  plano, e a `shutdown complete` traz `durationMs`. Desde o SIGTERM, a fila
+  de importação recusa planilhas novas (429 `IMPORT_BUSY`), fecha na hora as
+  que esperavam ("não iniciada: envie de novo"), dá à que está rodando o
+  prazo dela e depois a para entre duas linhas, com o relatório até ali;
+  tudo antes dos workers (ADR [0001](./adr/0001-filas-e-mensageria.md)).
+  Ligar os 40 s: o _Stop Grace Period_ da Application primeiro (conferido no
+  `inspect`, [seção 7.7](#77-trajetto-api-application), passo 8), a
+  variável depois.
 
-1. **Orçamento de conexões antes de tudo**: `réplicas_api × 11 + worker ×
-(limite + 1) + migrations (2) + ferramentas` abaixo do `max_connections`
-   (ou PgBouncer antes).
-2. Crie uma Application `trajetto-worker` (App Name `trajetto-worker-production`)
-   com a **mesma** imagem e o mesmo _Environment_ da API, mudando só:
+### Criar a Application de um papel
+
+Vale para `trajetto-worker`, `trajetto-scheduler`,
+`trajetto-worker-external`, `trajetto-realtime` e `trajetto-ingest`, em
+qualquer environment (plano de escala X-12). O papel `api` não ganha
+Application: é a `trajetto-api` de sempre, com o _Environment_ trocado.
+Antes de criar, confira a coluna da fase em
+[Tetos por Application e por fase](#tetos-por-application-e-por-fase) e a
+soma da [seção 23](#23-recursos-da-vps-e-logs): papel que não cabe na
+régua espera. O que muda em cada papel está em
+[Valores por papel](#valores-por-papel), e a ordem, em
+[Ordem do corte e da reversão](#ordem-do-corte-e-da-reversão).
+
+1. Dokploy → projeto `trajetto-api` → environment (`staging` ou
+   `production`) → **Create Service → Application**. _Name_
+   `trajetto-<papel>`; _App Name_ `trajetto-<papel>-<environment>` (por
+   exemplo `trajetto-worker-production`; seção 7.2). **Create**.
+2. Aba _General_ → _Provider_ → **Docker**: _Docker Image_
+   `ghcr.io/trajetto-organization/trajetto-api:<staging|stable>-<papel>`
+   (por exemplo `:staging-worker`); _Registry URL_ `ghcr.io`; _Username_ e
+   _Password_ do PAT de leitura do GHCR (seção 7.3). **Save**. Não ligue
+   _Autodeploy_: quem decide o deploy é o workflow. A tag do papel existe
+   desde o primeiro run verde com a ação de deploy da onda 12, que a deixa
+   no digest da API (passo _Move the tags of the roles not deployed_ da
+   seção 3).
+3. Aba _Environment_. As chaves que não podem divergir entre os processos
+   do mesmo environment são `JWT_SECRET`, `JWT_SECRET_REFRESH_TOKEN`,
+   `SOCKET_ADAPTER_KEY`, `WEBHOOK_SECRETS_KEY`, `APP_ENV`,
+   `R2_BUCKET_NAME`, `MIN_MOBILE_CONTRACT`, o banco e o Redis. Se o painel
+   tiver variáveis compartilhadas do environment (a conferir na v0.30.10;
+   nas versões que têm, cada Application as lê como
+   `${{environment.NOME}}`), defina-as lá e use a referência; senão, cole o
+   _Environment_ inteiro da `trajetto-api` do mesmo environment. Nos dois
+   casos, quem confere é a impressão da configuração do
+   `process_heartbeat` (acima): uma chave divergente deixa o
+   `/health/rollout` com duas impressões, e o deploy fica vermelho
+   ([seção 14](#os-papéis-da-mesma-imagem-rollout_roles_expected)). Aplique
+   as mudanças da subseção do papel e **tire**, se a cópia trouxer,
+   `WORKERS_ENABLED`, `CRON_ENABLED`, `WORKER_QUEUES`, `SOCKETS_ENABLED`,
+   `PIPELINE_SWEEP_INTERVAL_MS` e `WEBHOOK_SWEEP_INTERVAL_MS`, menos as que
+   a subseção pede: o preset do `PROCESS_ROLE` põe os valores certos, e uma
+   variável explícita ganharia dele (o boot avisa com `overrides`).
+   **Save**.
+4. Aba _Domains_: só no `realtime` e no `ingest`, e só com _Replicas_ ≥ 1.
+   _Host_ igual ao da API (`api.intrajetto.com`; na staging,
+   `api-staging.intrajetto.com`), _Path_ `/socket.io` (realtime) ou
+   `/route/positions` (ingest), _Strip Path_ **desligado**, _Container
+   Port_ `3333`, HTTPS ligado e _Certificate Provider_ `Let's Encrypt`. O
+   Traefik manda o _Path_ mais longo para esta Application: sem task de pé,
+   cada pedido desse caminho recebe o erro do Traefik, em vez de ir para a
+   `trajetto-api`. Depois, no host, confira a regra em
+   `/etc/dokploy/traefik/dynamic/<App Name>.yml`
+   ([runbook roteamento-por-path](./runbooks/roteamento-por-path.md): o
+   formato que o Dokploy escreve, a ordem pelo tamanho da regra e a prova
+   na bancada com `tests/load/roles-routing.sh`).
+5. _Advanced → Resources_: _Memory Limit_ e _CPU Limit_ da tabela de tetos,
+   em bytes e nano-CPU (1 MiB = `1048576`; 1 CPU = `1000000000`; "livre" é
+   o campo vazio). **Save**.
+6. _Advanced → Cluster Settings_: _Replicas_ da tabela de tetos. **Save**.
+7. _Advanced → Swarm Settings_ (tempos em nanossegundos; os campos não
+   citados ficam vazios). Cole cada bloco no campo de mesmo nome.
+
+   _Health Check_: o mesmo da `trajetto-api`
+   ([seção 7.7](#77-trajetto-api-application), passo 8), que é o teste da
+   imagem com 5 tentativas em vez das 3 dela. Nunca a readiness: no Swarm,
+   falhar aqui destrói a task.
+
+   ```json
+   {
+     "Test": [
+       "CMD",
+       "wget",
+       "-q",
+       "-O",
+       "/dev/null",
+       "http://127.0.0.1:3333/health/liveness"
+     ],
+     "Interval": 30000000000,
+     "Timeout": 10000000000,
+     "StartPeriod": 30000000000,
+     "Retries": 5
+   }
    ```
-   WORKERS_ENABLED=true
-   PIPELINE_SWEEP_INTERVAL_MS=2000
-   DATABASE_URL=postgresql://...?schema=public&connection_limit=4&pool_timeout=10&connect_timeout=5&socket_timeout=60&max_idle_connection_lifetime=300&options=...
-   ```
-   Sem domínio, 1 réplica, o mesmo _Swarm Settings_ e _Resources_ da API.
-   **Atenção**: o `deploy.yml` só faz o deploy de `trajetto-ai` e
-   `trajetto-api`. Um worker exige um passo a mais no
-   workflow (outro `DOKPLOY_*_APPLICATION_ID`), senão ele fica na versão
-   antiga a cada promoção.
-3. Suba o worker primeiro e confirme nos logs `workers started` e, em
-   `/health/metrics`, os batimentos dos workers vindos dele.
-4. Só então `WORKERS_ENABLED=false` na API. Cada réplica loga
-   `workers disabled on this replica (WORKERS_ENABLED=false)`.
 
-Voltar: `WORKERS_ENABLED=true` na API primeiro, depois remover o worker. O
-worker roda o mesmo `server.ts`, então também tem Socket.IO com o adapter: os
-emits dos pipelines atravessam o Redis até as réplicas HTTP. Numa réplica
-HTTP-only um publish não drena nada; o evento espera a varredura do worker
-(até 2 s com `PIPELINE_SWEEP_INTERVAL_MS=2000`). Testes:
-`tests/unitaires/lifecycle/workers-role-flag.test.ts` e
-`workers-disabled-boot.test.ts`.
+   _Restart Policy_:
+
+   ```json
+   { "Condition": "any", "Delay": 5000000000, "MaxAttempts": 0 }
+   ```
+
+   _Update Config_ (a task nova antes de derrubar a velha, com rollback
+   automático):
+
+   ```json
+   {
+     "Parallelism": 1,
+     "Delay": 5000000000,
+     "FailureAction": "rollback",
+     "Monitor": 30000000000,
+     "Order": "start-first"
+   }
+   ```
+
+   _Rollback Config_:
+
+   ```json
+   {
+     "Parallelism": 1,
+     "Delay": 5000000000,
+     "Monitor": 30000000000,
+     "Order": "start-first"
+   }
+   ```
+
+   _Stop Grace Period_: `40000000000` (40 s). _Placement_:
+   `{ "Constraints": ["node.labels.trajetto.app==true"] }`, depois dos
+   labels do nó (onda 17,
+   [runbooks/swarm-multi-no.md](./runbooks/swarm-multi-no.md)).
+
+8. **Deploy**. Em _Logs_: `process role resolved` com o papel certo e, nos
+   papéis com filas, `workers started`.
+9. Anote o **applicationId** (está na URL da Application). GitHub →
+   _Settings → Environments_ → `staging` ou `production`: o secret
+   `DOKPLOY_<PAPEL>_APPLICATION_ID` (`WORKER`, `SCHEDULER`,
+   `WORKER_EXTERNAL`, `REALTIME` ou `INGEST`) e a variável
+   `SWARM_<PAPEL>_SERVICE` com o App Name real, copiado da aba _General_ (o
+   marcador mais o sufixo de 6 caracteres, seção 7.2; lida só com
+   `ROLLOUT_VERIFY=ssh`). Atualize
+   `ROLLOUT_ROLES_EXPECTED` com o valor da subseção do papel. Do run
+   seguinte em diante, a ação de deploy implanta o papel na ordem da
+   seção 3: worker, scheduler e worker-external antes da API; ingest e
+   realtime depois dela.
+10. Reinstale o `infra/scripts/verify-rollout.sh` no host quando a onda
+    pedir
+    ([seção 14](#pelo-swarm-por-ssh-padrão-na-produção-rollout_verifyssh-no-staging)).
+
+### Valores por papel
+
+| Papel                      | `PROCESS_ROLE`                                  | O que muda no _Environment_ copiado                                                                                                                 | Banco até a onda 16 (direto)                                                                              |
+| -------------------------- | ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `all` (a produção de hoje) | ausente ou `all`                                | —                                                                                                                                                   | `DATABASE_URL` com `trajetto_http` e `connection_limit=10`; `BATCH_DATABASE_URL` com `trajetto_batch` e 3 |
+| `api`                      | `api`                                           | `SPREADSHEET_READS_PER_PROCESS` (1 até a importação durável, depois 0); `SOCKETS_ENABLED=false` depois do realtime                                  | `trajetto_http` com 6; `DATABASE_READ_URL` com `trajetto_read` e 3                                        |
+| `worker`                   | `worker`                                        | `SHUTDOWN_DRAIN_MS=0`; `CRON_ENABLED=false` quando houver scheduler; `WORKER_QUEUES=outbox,internal,webhooks,ai,jobs` quando houver worker-external | `trajetto_worker` com 8; `BATCH_DATABASE_URL` com `trajetto_batch` e 3                                    |
+| `scheduler`                | `scheduler` (o preset põe `WORKER_QUEUES=none`) | `SHUTDOWN_DRAIN_MS=0`                                                                                                                               | `DATABASE_URL` e `BATCH_DATABASE_URL` com `trajetto_batch` e 3, diretas                                   |
+| `worker-external`          | `worker-external`                               | `SHUTDOWN_DRAIN_MS=0`                                                                                                                               | `trajetto_worker` com 4                                                                                   |
+| `realtime`                 | `realtime`                                      | —                                                                                                                                                   | `trajetto_http` com 3                                                                                     |
+| `ingest`                   | `ingest`                                        | —                                                                                                                                                   | `trajetto_http` com 6                                                                                     |
+| `trajetto-api-migrate`     | imagem própria                                  | `POST_DEPLOY_STEPS` (emergência); `HISTORY_WINDOW_APPROVED` (só na janela)                                                                          | o usuário do Database, direto                                                                             |
+
+As URLs têm o formato de sempre: troque só o usuário, a senha, o host e o
+`connection_limit` (o porquê de cada parâmetro está na
+[seção 7.7](#77-trajetto-api-application)). Por exemplo, as do worker de
+produção:
+
+```
+DATABASE_URL=postgresql://trajetto_worker:<SENHA>@trajetto-postgres-production:5432/trajetto?schema=public&connection_limit=8&pool_timeout=5&connect_timeout=5&socket_timeout=60&max_idle_connection_lifetime=300&options=-c%20statement_timeout%3D30000%20-c%20lock_timeout%3D5000%20-c%20idle_in_transaction_session_timeout%3D60000
+BATCH_DATABASE_URL=postgresql://trajetto_batch:<SENHA>@trajetto-postgres-production:5432/trajetto?schema=public&connection_limit=3
+```
+
+Na staging, `-staging` no lugar de `-production`, com as senhas da
+staging. Os logins são os do
+[corte dos roles](#roles-do-banco-logins-urls-e-conexões). Com o PgBouncer
+(onda 17), as URLs do runtime passam por ele; as do batch, a da
+`trajetto-scheduler` e a da migrate continuam diretas.
+
+**Heap dos papéis pequenos.** O plano fixa o heap da api e do worker; o dos
+outros sai da regra do orçamento de memória (acima): heap + 150 MiB de
+reserva nativa ≤ teto, com `SPREADSHEET_READS_PER_PROCESS=0`, arredondado
+para baixo. Para 320 MiB, `NODE_OPTIONS=--max-old-space-size=160`; para
+384, `224`; para 512, `352`. O boot confere a conta (`memory budget fits`).
+Esses heaps ainda não contam o pool de CPU (2 × 64 = 128 MiB por padrão,
+acima): foi essa conta que deixou o worker de staging fora do teto de 448
+(abaixo). Antes de criar um desses papéis, refaça a soma com o pool, ou com
+`CPU_POOL_THREADS=0` se o papel não faz o parse de NF-e nem a exportação
+(decisão do dono, ainda não tomada).
+
+#### `all` (a produção de hoje)
+
+- **Onde**: a `trajetto-api` de produção até o worker de produção existir
+  (onda 14, se a régua fechar), e a de staging até a onda 12.
+- **_Environment_**: sem `PROCESS_ROLE` (ou `all`) e sem
+  `WORKERS_ENABLED=false`. Na produção, desde a onda 12,
+  `NODE_OPTIONS=--max-old-space-size=576` e
+  `SPREADSHEET_WORKER_MAX_OLD_MB=256` (576 + 256 + 150 = 982 de 1.024, sem
+  o pool de CPU; com ele, 1.110, até o heap baixar a 480: o
+  [runbook](./runbooks/memory-budget.md); com `MEMORY_BUDGET_MODE=warn`, o
+  boot só avisa se a conta não fechar). Na staging, até o corte de
+  26/11/2026: 1024 MiB, heap 576 e `SPREADSHEET_WORKER_MAX_OLD_MB=96`
+  (950 de 1.024).
+- **Teto**: 2 × 1024 MiB (`1073741824`) na produção, CPU livre, com a
+  _Domain_ `/` da seção 7.7.
+- **GitHub**: `ROLLOUT_ROLES_EXPECTED=all` (o `all` vale por api, worker e
+  scheduler).
+
+#### `api`
+
+- **Onde**: a `trajetto-api` de sempre, sem Application nova. Na staging,
+  logo depois do worker (onda 12); na produção, depois do worker de
+  produção (onda 14).
+- **_Environment_**: `PROCESS_ROLE=api`, e tire o que o passo 3 manda
+  tirar (um `WORKERS_ENABLED=true` esquecido deixaria os workers na API).
+  `DATABASE_URL` com `trajetto_http` e `connection_limit=6`, e
+  `DATABASE_READ_URL` com `trajetto_read` e 3.
+- **Staging (fase B)**: `NODE_OPTIONS=--max-old-space-size=576`,
+  `SPREADSHEET_READS_PER_PROCESS=0` (com `IMPORT_DURABLE_JOBS=true`, quem lê
+  as planilhas é o worker) e `SPREADSHEET_WORKER_MAX_OLD_MB=96`, no teto de
+  1024 MiB (`1073741824`): 576 + 0 + 128 + 150 = 854 de 1.024, medido em
+  26/11/2026. O teto de 576 MiB do plano não cabia nem com heap 320
+  (320 + 128 + 150 = 598).
+- **Produção (fase C)**: só com a importação durável (onda 14), que tira a
+  planilha da API: `SPREADSHEET_READS_PER_PROCESS=0`,
+  `NODE_OPTIONS=--max-old-space-size=448` e 2 × 768 MiB (`805306368`).
+  Antes dela, a api da produção não cabe em 768 MiB.
+- **Depois do realtime**: `SOCKETS_ENABLED=false` (ver o corte, abaixo).
+- **Confira**: em _Logs_, `process role resolved` com `role: api` e
+  `workers disabled on this replica (WORKERS_ENABLED=false)`.
+
+#### `worker`
+
+Na staging (fase B, onda 12), nesta ordem:
+
+1. Crie a Application pelos passos acima: _Name_ `trajetto-worker`, _App
+   Name_ `trajetto-worker-staging`, imagem
+   `ghcr.io/trajetto-organization/trajetto-api:staging-worker`.
+2. _Environment_ (a cópia do da `trajetto-api` de staging), mudando:
+   `PROCESS_ROLE=worker`, `SHUTDOWN_DRAIN_MS=0` (sem tráfego, não há o que
+   drenar), `NODE_OPTIONS=--max-old-space-size=256`,
+   `SPREADSHEET_READS_PER_PROCESS=1` e `SPREADSHEET_WORKER_MAX_OLD_MB=128`
+   (com `IMPORT_DURABLE_JOBS=true`, o worker é o processo que lê as
+   planilhas), `DATABASE_URL` com `trajetto_worker` e `connection_limit=8`,
+   e `BATCH_DATABASE_URL` com `trajetto_batch` e 3, direta. A `DATABASE_READ_URL` não vai: o pool de leitura serve rotas
+   HTTP. O `HEALTHCHECK_PING_URL` fica: o ping sai do processo que roda o
+   cron.
+3. Sem _Domain_. _Replicas_ 1. _Memory Limit_ `805306368` (768 MiB) e _CPU
+   Limit_ `1000000000` (1 CPU). O plano dizia 448 MiB e 0,25 CPU, e os dois
+   falharam na staging em 26/11/2026. A memória não fecha:
+   256 + 1 × 128 + 2 × 64 + 150 = 662 MiB, e nem com
+   `SPREADSHEET_READS_PER_PROCESS=0` (534) cabe em 448; com 768, o boot
+   loga `memory budget fits` (662 de 768). Com 0,25 CPU, o boot teve
+   _timeouts_ de conexão com o banco (os logins SCRAM sem CPU) e só
+   estabilizou com 1 CPU.
+4. _Swarm Settings_: os blocos do passo 7 e o _Stop Grace Period_
+   `40000000000`.
+5. **Deploy**. Em _Logs_: `process role resolved` com `role: worker` e
+   `workers started`.
+6. `trajetto-api` de staging → _Environment_: `PROCESS_ROLE=api`,
+   `NODE_OPTIONS=--max-old-space-size=576` (o teto fica em 1024 MiB),
+   `SPREADSHEET_READS_PER_PROCESS=0`,
+   `SPREADSHEET_WORKER_MAX_OLD_MB=96`, `DATABASE_URL` com `trajetto_http`
+   e `connection_limit=6`, e `DATABASE_READ_URL` com `trajetto_read` e 3 →
+   **Deploy**.
+7. GitHub → environment `staging`: o secret `DOKPLOY_WORKER_APPLICATION_ID`
+   e a variável `ROLLOUT_ROLES_EXPECTED=api,worker`. A variável
+   `SWARM_WORKER_SERVICE` leva o App Name real, copiado da aba _General_
+   (`trajetto-worker-staging-<sufixo>`, seção 7.2), e só é lida com
+   `ROLLOUT_VERIFY=ssh`: com `http` (o da staging), o papel é provado pelo
+   `process_heartbeat`, no `/health/rollout`, com o
+   `ROLLOUT_ROLES_EXPECTED` ([seção 14](#os-papéis-da-mesma-imagem-rollout_roles_expected)).
+8. Só com `ROLLOUT_VERIFY=ssh`: reinstale o `verify-rollout.sh` no host
+   (passo 10).
+9. Confira: uma notificação chega em menos de 2 s (o despertar); o SQL de
+   duplicatas da eleição
+   ([Staging com 2 réplicas](#staging-com-2-réplicas-plano-de-02112026-k15-decisão-d53),
+   passo 4) volta vazio; e o `/health/rollout` tem os dois papéis no
+   commit (seção 14), com **um** processo `worker` só (dois são o
+   [incidente de 26/11/2026](#duas-tasks-do-worker-no-mesmo-slot)).
+
+Na produção (fase C, onda 14), só se a régua fechar: a R1 com o Postgres
+de produção em 1.792 MiB (hit ratio > 99% medido) e a web em 2 × 512 MiB;
+senão a R2; senão, o worker espera o 2º VPS. Os mesmos passos, com
+`:stable-worker`, _App Name_ `trajetto-worker-production`, _Memory Limit_
+`1073741824` (1024 MiB), _CPU Limit_ `1500000000` (1,5 CPU),
+`NODE_OPTIONS=--max-old-space-size=416` e, com a importação durável,
+`SPREADSHEET_READS_PER_PROCESS=1` e `SPREADSHEET_WORKER_MAX_OLD_MB=320`
+(416 + 320 + 128 + 150 = 1.014 de 1.024; o heap 512 do plano somava 1.110
+e não cabia); no GitHub, o environment `production`, com
+`SWARM_WORKER_SERVICE` = o App Name real (`trajetto-worker-production-<sufixo>`)
+e `ROLLOUT_ROLES_EXPECTED=api,worker`. Depois, a `trajetto-api` de produção
+passa ao papel `api` (subseção acima).
+
+**Reversão**: `PROCESS_ROLE=all` na `trajetto-api` PRIMEIRO (**Deploy**, e
+`workers started` no log dela), depois _Replicas_ 0 no worker.
+
+#### `scheduler`
+
+- **Quando**: com o worker em 2 réplicas, para o cron e o pool do batch
+  ficarem num processo só: na staging do 2º VPS (onda 18) e na produção
+  do prod-1 (onda 22).
+- **_Environment_**: `PROCESS_ROLE=scheduler` (o preset põe
+  `WORKER_QUEUES=none`: só o cron, nenhuma fila), `SHUTDOWN_DRAIN_MS=0`,
+  `SPREADSHEET_READS_PER_PROCESS=0`,
+  `NODE_OPTIONS=--max-old-space-size=160`, e a `DATABASE_URL` e a
+  `BATCH_DATABASE_URL` com `trajetto_batch` e `connection_limit=3`, as duas
+  diretas mesmo com o PgBouncer.
+- **Teto**: 320 MiB (`335544320`), 0,25 CPU (`250000000`) na staging; 1 ×
+  320 MiB no prod-1. Sem _Domain_.
+- **GitHub**: `DOKPLOY_SCHEDULER_APPLICATION_ID`,
+  `SWARM_SCHEDULER_SERVICE` e `scheduler` no `ROLLOUT_ROLES_EXPECTED`.
+- **Corte**: com ele de pé, `CRON_ENABLED=false` na `trajetto-worker`.
+  **Reversão**: `CRON_ENABLED=true` no worker PRIMEIRO, depois _Replicas_
+  0 no scheduler.
+
+#### `worker-external`
+
+- **Quando**: na staging do 2º VPS (onda 18); na produção, no prod-1,
+  quando a raia `external` (e-mail e WhatsApp) pedir um processo só dela.
+- **_Environment_**: `PROCESS_ROLE=worker-external` (o preset põe
+  `WORKER_QUEUES=external`, sem cron), `SHUTDOWN_DRAIN_MS=0`,
+  `SPREADSHEET_READS_PER_PROCESS=0`, o heap do teto (160 na staging, 224
+  no prod-1) e a `DATABASE_URL` com `trajetto_worker` e
+  `connection_limit=4`.
+- **Teto**: 320 MiB (`335544320`) na staging; 1 × 384 MiB (`402653184`) no
+  prod-1. Sem _Domain_.
+- **GitHub**: `DOKPLOY_WORKER_EXTERNAL_APPLICATION_ID`,
+  `SWARM_WORKER_EXTERNAL_SERVICE` e `worker-external` no
+  `ROLLOUT_ROLES_EXPECTED`.
+- **Corte**: com ele de pé (`workers started`), tire `external` do worker:
+  `WORKER_QUEUES=outbox,internal,webhooks,ai,jobs` na `trajetto-worker`.
+  **Reversão**: devolva `external` ao worker PRIMEIRO (tire a
+  `WORKER_QUEUES` dele), depois _Replicas_ 0.
+
+#### `realtime`
+
+- **Quando**: na staging do 2º VPS (onda 18), validado pela borda com o
+  [LOAD-05](#frota-de-sockets-pela-borda-load-05); na produção, no prod-1.
+- **_Environment_**: `PROCESS_ROLE=realtime` (sockets sem workers nem
+  cron; o Fastify só responde `/health*`), `SPREADSHEET_READS_PER_PROCESS=0`,
+  o heap do teto (224 na staging, 352 no prod-1) e a `DATABASE_URL` com
+  `trajetto_http` e `connection_limit=3`. O dreno fica: os sockets fecham
+  aos poucos ao longo dele.
+- **_Domain_**: _Path_ `/socket.io` (passo 4), só com _Replicas_ ≥ 1.
+- **Teto**: 384 MiB (`402653184`), 0,25 CPU (`250000000`) na staging; 2 ×
+  512 MiB (`536870912`) no prod-1.
+- **GitHub**: `DOKPLOY_REALTIME_APPLICATION_ID`, `SWARM_REALTIME_SERVICE`
+  e `realtime` no `ROLLOUT_ROLES_EXPECTED`. É o último do deploy.
+- **Só quando o código dele muda** (plano de escala F3-31c, decisão D7):
+  o deploy do realtime derruba todos os sockets (eles voltam ao longo do
+  dreno), então ele só é implantado quando o que ele executa mudou. A
+  imagem leva dois labels, calculados no job `Build` por
+  `.github/scripts/realtime-closure.mjs`: `trajetto.realtime-source` (o
+  hash do fecho de imports a partir de `src/websocket.ts`, do boot e da
+  espera pelo Postgres que o entrypoint roda antes dele, listado em
+  `.github/realtime-closure.txt`, mais as dependências, o `schema.prisma`,
+  a configuração do build e a própria imagem: o `Dockerfile`, que fixa por
+  digest o Node e o Alpine em que o socket roda, o `.dockerignore` e o
+  `docker-entrypoint.sh`; uma troca de digest por CVE implanta o realtime
+  junto com o resto) e `trajetto.contract-epoch`
+  (as migrations de contract mais as versões das mensagens entre
+  processos, `src/shared/socket/messages.ts`). O deploy compara com a
+  imagem que a tag `<tag>-realtime` aponta e implanta quando: o _Run
+  workflow_ veio com **force_realtime**; essa imagem não tem os labels
+  (a primeira com eles sempre implanta) ou a tag não existe; a fonte ou
+  a época diferem; ou ela tem mais de 7 dias. Senão o realtime fica no
+  build dele (a tag não anda), o resumo do run diz por quê, e a
+  conferência por papel o aceita no commit anterior. Num rollback
+  (`production.yml` com `image_tag`), ele só volta junto se o código ou a
+  época diferirem; para levá-lo de qualquer jeito, marque
+  **force_realtime**.
+- **Corte**: com a _Domain_ e o LOAD-05 aprovado, `SOCKETS_ENABLED=false`
+  na `trajetto-api`. A partir daí a api emite pelo emissor do Redis, sem
+  assinar nada do adapter (U-07). Meça antes e depois, no console do
+  Redis do Dokploy, `redis-cli INFO stats | grep total_net_output_bytes`
+  duas vezes com 5 minutos entre elas, no mesmo horário de dois dias
+  úteis: a diferença por minuto é a saída do Redis, e ela cai com cada
+  processo que deixa de assinar. Confira também a pausa de template sem
+  esperar a Meta: no mesmo console, publique uma pausa de 1 s de um
+  template que não existe (troque `socket.io` pela `SOCKET_ADAPTER_KEY`
+  do ambiente, se houver) e procure `whatsapp template lane changed` com
+  esse nome no log de cada processo que drena `external`, em até 5 s:
+
+  ```sh
+  redis-cli PUBLISH socket.io:lane '{"v":1,"replica":"teste-do-dono","change":{"template":"teste_inexistente","action":"pause","seconds":1}}'
+  ```
+
+  **Reversão**: `SOCKETS_ENABLED=true` na `trajetto-api` PRIMEIRO, depois
+  apague a _Domain_ e _Replicas_ 0.
+
+#### `ingest`
+
+- **Quando**: na staging do 2º VPS (onda 18), para provar o roteamento;
+  na produção, só pelo gatilho (0 réplicas até lá).
+- **_Environment_**: `PROCESS_ROLE=ingest` (só `/health*` e
+  `POST /route/positions`, sem sockets, workers nem cron),
+  `SPREADSHEET_READS_PER_PROCESS=0`, o heap do teto (224 na staging) e a
+  `DATABASE_URL` com `trajetto_http` e `connection_limit=6`.
+- **_Domain_**: _Path_ `/route/positions` (passo 4), só com _Replicas_ ≥ 1.
+- **Teto**: 384 MiB (`402653184`) na staging.
+- **GitHub**: `DOKPLOY_INGEST_APPLICATION_ID`, `SWARM_INGEST_SERVICE` e
+  `ingest` no `ROLLOUT_ROLES_EXPECTED`. Vai logo depois da API.
+- **Corte**: crie com _Replicas_ ≥ 1 e só então a _Domain_. **Reversão**:
+  apague a _Domain_ PRIMEIRO, depois _Replicas_ 0.
+
+### Ordem do corte e da reversão
+
+Regra: uma fila nunca fica sem processo, e a reversão é sempre na ordem
+inversa, mudando primeiro a Application que fica.
+
+| Corte           | Primeiro                                                                        | Depois                                        | Reversão                                                               |
+| --------------- | ------------------------------------------------------------------------------- | --------------------------------------------- | ---------------------------------------------------------------------- |
+| worker          | criar o `trajetto-worker` e conferir `workers started`                          | `PROCESS_ROLE=api` na api                     | `PROCESS_ROLE=all` na api, depois _Replicas_ 0 no worker               |
+| scheduler       | criar o `trajetto-scheduler`                                                    | `CRON_ENABLED=false` no worker                | `CRON_ENABLED=true` no worker, depois _Replicas_ 0 no scheduler        |
+| worker-external | criar o `trajetto-worker-external`                                              | tirar `external` do `WORKER_QUEUES` do worker | devolver `external` ao worker, depois _Replicas_ 0                     |
+| realtime        | criar o `trajetto-realtime` com a _Domain_ `/socket.io` e validar com o LOAD-05 | `SOCKETS_ENABLED=false` na api                | `SOCKETS_ENABLED=true` na api, depois apagar a _Domain_ e _Replicas_ 0 |
+| ingest          | criar o `trajetto-ingest` com réplica ≥ 1                                       | a _Domain_ `/route/positions`                 | apagar a _Domain_, depois _Replicas_ 0                                 |
+| PgBouncer       | criar o `trajetto-pgbouncer` (onda 17)                                          | as URLs, uma Application por vez              | as URLs de volta ao Postgres direto, uma por vez                       |
+
+### Tetos por Application e por fase
+
+Os valores vão em bytes (_Memory Limit_) e nano-CPU (_CPU Limit_), como o
+Dokploy pede: 1 MiB = `1048576`; 1 CPU = `1000000000`. "Livre" quer dizer
+sem _CPU Limit_, de propósito. "Heap" é o `--max-old-space-size` do
+`NODE_OPTIONS`. Cada célula diz réplicas × MiB.
+
+Fases na VPS única: **A** = ondas 0 a 11; **B** = ondas 12 e 13 (a
+staging ganha o worker); **C** = ondas 14 e 15 (a produção ganha o
+worker); **E** = ondas 16 a 21 (a staging já está no 2º VPS, e a produção
+fica sozinha na VPS 1). **prod-1** = onda 22 em diante, nos servidores
+próprios. Até a troca de imagem da onda 3, o Postgres de produção fica sem
+teto (a imagem oficial usa 128 MB de `shared_buffers`); a soma da fase A
+já conta os 2 GiB dele. Se a produção continuar no papel `all` na fase C
+(a R1 não fechou), a api fica com 2 × 1024 e heap 480.
+
+**Produção**
+
+| Application                  | Imagem                        | Papel                      | _Domain_ / _Path_                                         | A                                                       | B                     | C                                                         | E (VPS 1 sozinha)                                    | prod-1                                 |
+| ---------------------------- | ----------------------------- | -------------------------- | --------------------------------------------------------- | ------------------------------------------------------- | --------------------- | --------------------------------------------------------- | ---------------------------------------------------- | -------------------------------------- |
+| Database `trajetto-postgres` | `trajetto-postgres@sha256`    | —                          | —                                                         | 2048 (`2147483648`), CPU livre                          | 2048                  | 1792 (`1879048192`) se o hit ratio > 99%; senão 2048 e R2 | 3072 (`3221225472`)                                  | no prod-db-1 (12 GiB ou mais, a medir) |
+| `trajetto-api`               | `trajetto-api:stable`         | `all` até C; `api` desde C | `api.intrajetto.com`, `/`                                 | 2 × 1024 (`1073741824`), heap 768 (576 desde a onda 12) | 2 × 1024              | 2 × 768 (`805306368`), heap 448                           | 3 × 768                                              | 3 × 768, depois pela ELU               |
+| `trajetto-worker`            | `:stable-worker`              | `worker`                   | —                                                         | —                                                       | —                     | 1 × 1024, 1,5 CPU (`1500000000`), heap 416                | 1 × 1024                                             | 2 × 1024                               |
+| `trajetto-scheduler`         | `:stable-scheduler`           | `scheduler`                | —                                                         | —                                                       | —                     | —                                                         | —                                                    | 1 × 320 (`335544320`)                  |
+| `trajetto-worker-external`   | `:stable-worker-external`     | `worker-external`          | —                                                         | —                                                       | —                     | —                                                         | —                                                    | 1 × 384 (`402653184`)                  |
+| `trajetto-realtime`          | `:stable-realtime`            | `realtime`                 | `api.intrajetto.com`, `/socket.io`                        | —                                                       | —                     | —                                                         | —                                                    | 2 × 512 (`536870912`)                  |
+| `trajetto-ingest`            | `:stable-ingest`              | `ingest`                   | `api.intrajetto.com`, `/route/positions` (só com réplica) | —                                                       | —                     | —                                                         | —                                                    | 0 (pelo gatilho)                       |
+| `trajetto-pgbouncer`         | `trajetto-pgbouncer:stable`   | —                          | —                                                         | —                                                       | —                     | —                                                         | 1 × 64 (`67108864`), 0,25 CPU (`250000000`), onda 17 | 1, depois 2 em nós diferentes          |
+| `trajetto-ui`                | `trajetto-ui:stable`          | —                          | `www.intrajetto.com`                                      | 2 × 768 (`805306368`); 640 se o RSS de pico < 500       | 2 × 640 (`671088640`) | 2 × 512 (`536870912`) se o RSS de pico < 380              | 2 × 640                                              | 2 × 640                                |
+| `trajetto-ai`                | `trajetto-ai`                 | —                          | —                                                         | 1 × 1024, 2 CPU (`2000000000`)                          | igual                 | igual                                                     | igual                                                | 2 × 1024 se a fila de OCR pedir        |
+| Database `trajetto-redis`    | `redis:7-alpine`              | —                          | —                                                         | 512 (`536870912`), `maxmemory 256mb`                    | igual                 | igual                                                     | igual                                                | 512; ~1 GiB no 1M                      |
+| `trajetto-api-migrate`       | `trajetto-api-migrate:stable` | release                    | —                                                         | 384 (`402653184`), transitório                          | igual                 | igual                                                     | igual                                                | igual                                  |
+| `trajetto-offsite`           | `rclone@sha256`               | —                          | —                                                         | 64 (`67108864`)                                         | igual                 | igual                                                     | igual                                                | igual                                  |
+
+**Staging**
+
+| Application                  | Papel                | A                                                          | B                                                 | C                           | 2º VPS (onda 16 em diante)                      |
+| ---------------------------- | -------------------- | ---------------------------------------------------------- | ------------------------------------------------- | --------------------------- | ----------------------------------------------- |
+| Database `trajetto-postgres` | —                    | 576 (`603979776`), 0,5 CPU (`500000000`)                   | 576, CPU livre (decisão de 26/11/2026)            | igual                       | 1024 (`1073741824`)                             |
+| `trajetto-api`               | `all`; `api` desde B | 576 (`603979776`), 0,5 CPU (`500000000`), heap 400         | 1024 (`1073741824`), CPU livre, heap 576          | 512 (`536870912`), heap 288 | 576                                             |
+| `trajetto-worker`            | `worker`             | —                                                          | 768 (`805306368`), 1 CPU (`1000000000`), heap 256 | 512, heap 224               | 512                                             |
+| `trajetto-scheduler`         | `scheduler`          | —                                                          | —                                                 | —                           | 320 (`335544320`), 0,25 CPU (`250000000`)       |
+| `trajetto-worker-external`   | `worker-external`    | —                                                          | —                                                 | —                           | 320 (`335544320`)                               |
+| `trajetto-realtime`          | `realtime`           | —                                                          | —                                                 | —                           | 384 (`402653184`), 0,25 CPU (`250000000`)       |
+| `trajetto-ingest`            | `ingest`             | —                                                          | —                                                 | —                           | 384 (`402653184`)                               |
+| `trajetto-pgbouncer`         | —                    | —                                                          | —                                                 | —                           | 32 (`33554432`), 0,1 CPU (`100000000`), onda 17 |
+| `trajetto-ui`                | —                    | 320 (`335544320`), 0,25 CPU (`250000000`)                  | 768 (`805306368`), CPU livre, heap 512            | igual                       | 384                                             |
+| `trajetto-ai`, sempre ligada | —                    | 768 (`805306368`), 1 CPU (`1000000000`)                    | 1024 (`1073741824`), 2 CPU (`2000000000`)         | igual                       | 1024                                            |
+| Database `trajetto-redis`    | —                    | 160 (`167772160`), 0,1 CPU (`100000000`), `maxmemory 64mb` | igual                                             | igual                       | 192 (`201326592`)                               |
+| `trajetto-api-migrate`       | release              | 384 (`402653184`), transitório                             | igual                                             | igual                       | 384                                             |
+
+Na staging, a coluna B é o que o painel tem desde 26/11/2026, medido no
+boot de cada Application (subseções `api` e `worker`, acima; a web e a IA
+pelos guias delas, [seção 7.6](#76-trajetto-ai-application) e
+`trajetto-ui/docs/deploy.md`); o Postgres sem _CPU Limit_ é decisão do
+dono ([seção 27](#valores-por-ambiente)). As células da api e do worker da
+staging nas colunas C e 2º VPS são do plano e ainda não contam o pool de
+CPU: com ele, não fecham o orçamento de memória (a api da C,
+288 + 128 + 150 = 566 em 512; o worker da C, com a leitura da planilha,
+224 + 128 + 128 + 150 = 630 em 512). Refaça as duas antes da fase.
+
+As somas por fase, as réguas R1 e R2, a CPU e o disco estão na
+[seção 23](#23-recursos-da-vps-e-logs);
+`tests/unitaires/lifecycle/role-guide.test.ts` confere que elas saem
+destas tabelas e que cada valor em bytes é o MiB da célula.
+
+### Staging com 2 réplicas (plano de 02/11/2026, K15; decisão D53)
+
+O código está pronto para N réplicas, mas o staging roda com 1: os caminhos
+entre réplicas nunca rodam antes da produção. Para a validação (cenário S6):
+
+1. **Antes de subir**: `free -m` na VPS (cada réplica tem até 1 GiB, _Memory
+   Limit_ da [seção 7.7](#77-trajetto-api-application)) e o orçamento de
+   conexões, `réplicas × 11 + migrations (2) + ferramentas < max_connections`
+   (`SHOW max_connections;`, 100 por padrão: com 2 réplicas, 24 + ferramentas).
+2. **Local, antes do staging**: o harness da API com duas réplicas atrás do
+   Traefik, `bash tests/load/multi-replica.sh` (`tests/load/README.md`):
+   balanceamento, rate limit compartilhado, fila sem lease vencido, evento de
+   uma réplica no socket da outra, fila sem duplicata e vazão.
+3. **No Dokploy**: _Advanced → Cluster Settings → Replicas_ `2` e, se a versão
+   tiver, _Stop Grace Period_ `40000000000` (40 s) → **Save** → **Deploy**.
+   Não configure health check no Traefik (ver a lacuna da
+   [seção 5](#5-applications-em-vez-de-compose-o-que-mudou-e-o-que-ficou-de-fora)):
+   o Swarm só põe a réplica no balanceamento depois da liveness.
+4. **No staging, com as duas de pé**: socket conectado numa réplica e evento
+   gerado na outra (a torre recebe a parada resolvida pelo app); os crons
+   novos rodam uma vez por horário:
+   ```sql
+   SELECT "jobName", "scheduledFor", count(*)
+     FROM scheduled_job_execution
+    WHERE "jobName" IN ('alert-routes-left-open', 'geocode-deliveries')
+    GROUP BY 1, 2 HAVING count(*) > 1;   -- tem de voltar vazio
+   ```
+   e uma rota esquecida em andamento gera **um** aviso aos administradores
+   (`route.left_open:<id>` em `domain_outbox_event`), mesmo com as duas
+   réplicas varrendo.
+
+**Estado em memória (auditoria K15, 03/11/2026).** Nada de dado de empresa
+mora num processo, a não ser a foto da torre (plano de escala F4-11), de até
+10 s e com a permissão conferida antes, e a do dashboard (F4-23), de até
+60 s, por empresa e pelo que o perfil pode ver. O resto do que fica em memória é de
+plataforma ou é limite por réplica documentado como tal:
+
+| O quê                                                                                                                   | Onde                                                                                                                   | Por que é seguro com N réplicas                                                                                                                                                                                                                                                                                           |
+| ----------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| rate limit, ticket do socket, limite de handshakes, cota de e-mail                                                      | Redis (janela fixa, falha aberta; o ticket, de uso único, falha fechado)                                               | compartilhado entre as réplicas                                                                                                                                                                                                                                                                                           |
+| orçamento, pausa e vaga do geocodificador; contagens, pausa e cache da busca de endereço                                | Redis (`geocoding:*`, falha fechada)                                                                                   | compartilhado entre as réplicas, sob o mesmo prefixo (`geocoding-keys.ts`); o cache da busca é por empresa, com chave HMAC e valor cifrado                                                                                                                                                                                |
+| filas (outbox, IA, webhooks, geocodificação, importação), crons, aviso de rota esquecida                                | Postgres (`SKIP LOCKED`, lease do cron, carimbo `left_open_alerted_at`, chave única do outbox)                         | cada linha é reivindicada por uma réplica só; provado em `cron-scheduler-lock`, `delivery-geocoding-repository-contract` e `route-close-with-pending-http`                                                                                                                                                                |
+| snapshots de plataforma (prontidão dos provedores, painel do MASTER)                                                    | memória da réplica + Redis (`snapshot-cache.ts`)                                                                       | sem empresa na chave; alguns segundos de defasagem                                                                                                                                                                                                                                                                        |
+| exportações simultâneas, escrita de `last_used_at` da chave de API, contagem de uso da API, pausa de modelo do WhatsApp | memória da réplica (`export-slots.ts`, `last-used-throttle.ts`, `api-usage-recorder.ts`, `meta-cloud-api-provider.ts`) | limites e buffers por réplica, documentados no próprio arquivo: N réplicas = N vezes o teto; o uso da API soma com `increment`                                                                                                                                                                                            |
+| a foto da torre, do resumo e da primeira página do `/route/live`                                                        | memória da réplica (`tenant-snapshot.ts`, `TOWER_SNAPSHOT_TTL_MS`; adendo de 19/11/2026 do ADR 0002)                   | por empresa, com a permissão e a empresa conferidas antes de cada leitura; cada réplica lê a sua, no máximo uma vez por intervalo (10 s); `0` desliga                                                                                                                                                                     |
+| os números da visão geral e as tendências do dashboard                                                                  | memória da réplica (`tenant-snapshot.ts`, `DASHBOARD_SNAPSHOT_TTL_MS`; adendo de 19/11/2026 do ADR 0002)               | por empresa e pelo que o perfil de quem vê pode ver (as séries e cada bloco), com o papel e a sessão conferidos antes de cada leitura; dois perfis só dividem uma cópia quando veriam os mesmos números; as atividades recentes são lidas a cada visita; cada réplica lê a sua, no máximo uma vez por minuto; `0` desliga |
+| formatadores de data, modelos de e-mail compilados, chaves do JWT                                                       | memória da réplica                                                                                                     | derivados do código ou do segredo, iguais em toda réplica                                                                                                                                                                                                                                                                 |
+
+### Ensaio de carga na staging (burn-in)
+
+Curto e limitado, para provar na staging a fiação e o rolling sem 5xx
+(plano de escala LOAD-09), nunca capacidade: a staging divide a VPS com a
+produção. O roteiro é `tests/load/staging-burn-in.sh` (como ele recusa e
+aborta: [`tests/load/README.md`](../tests/load/README.md), "Burn-in na
+staging"); o mesmo rolling já foi ensaiado antes num Swarm local
+(`tests/load/swarm-rolling.sh`).
+
+**Uma vez, antes do primeiro ensaio (dono):**
+
+1. Na web de staging, como MASTER: crie a empresa com a razão social (ou o
+   nome fantasia) exatamente `Carga (staging)`, com o módulo Entregas, e
+   ponha o limite de veículos dela em pelo menos 12 (um por motorista da
+   fixture; `FIXTURE_DRIVERS`, padrão 12). Nas configurações da empresa, o
+   checklist da rota fica "Nenhum". A fixture recusa qualquer empresa com
+   outro nome.
+2. Crie o administrador dela com um e-mail seu, entre uma vez pela web,
+   confirme o e-mail, defina a senha e deixe o segundo fator desligado
+   nesta conta (a fixture entra por e-mail e senha e recusa uma conta que
+   peça código).
+
+**A cada ensaio:**
+
+1. Só de segunda a sábado, das 03:00 às 05:00 BRT (06:00–08:00 UTC, a
+   `load-window` de [`operacao/jobs.md`](./operacao/jobs.md)), nunca no dia 1
+   (ensaio de restauração). O roteiro recusa fora disso.
+2. No host da VPS (precisa de `docker`, `curl` e `vmstat`), com a pasta
+   `tests/load` deste repositório copiada para lá:
+
+   ```bash
+   export FIXTURE_ADMIN_EMAIL='<e-mail do administrador de Carga (staging)>'
+   read -rs FIXTURE_ADMIN_PASSWORD; export FIXTURE_ADMIN_PASSWORD
+   bash tests/load/staging-burn-in.sh            # 20 req/s por 10 min
+   ```
+
+   A senha vai ao contêiner da fixture pelo nome da variável, nunca na
+   linha de comando. Tetos: `BURN_IN_RATE` até 30, `BURN_IN_DURATION` até
+   `10m`, `BURN_IN_MAX_VUS` até 200.
+
+3. Com o k6 rodando, no Dokploy: staging → `trajetto-api` → **Deploy** (o
+   _Redeploy_). O veredito é **zero respostas 5xx** com a troca das
+   réplicas no meio da carga; confira também a linha `shutdown complete`
+   de cada réplica antiga em _Logs_.
+4. Saída 0: aprovado. 1: houve 5xx, sem resposta ou fora do esperado (o
+   resumo do k6 diz em qual superfície). 2: recusou começar (a mensagem diz
+   por quê). 3: uma sonda abortou tudo, a readiness da produção piorou
+   (p95 acima de 2× a base ou 3 falhas) ou o host ficou com iowait acima de
+   20% ou steal acima de 10%: não repita na mesma noite. A base e a sonda
+   são o p95 de 12 amostras, e o limite nunca fica abaixo de 20 ms (o dobro
+   de uma base de poucos ms é ruído): de uma base de 10 ms para cima, vale
+   exatamente o 2×. O piso muda com `BURN_IN_PROBE_FLOOR_MS`, até 50; o
+   roteiro recusa mais que isso, para a sonda nunca ficar desligada.
+
+Os contêineres saem com o roteiro (`--rm`); os dados da empresa de carga
+ficam e são reaproveitados na próxima vez (rotas do dia, veículos e
+motoristas pelo nome e pela placa).
+
+### Frota de sockets pela borda (LOAD-05)
+
+Os sockets da staging pela Cloudflare e pelo Traefik, à mão, para provar a
+conexão, as quedas e a volta depois de um _Redeploy_ (plano de escala
+LOAD-05), nunca capacidade. O roteiro é o `tests/load/socket-fleet.mjs`
+com `--via-edge` (como ele planeja, recusa e julga:
+[`tests/load/README.md`](../tests/load/README.md), "Frota de sockets").
+Os sockets passam pelo Traefik e pelo conntrack que a produção usa, por
+isso os tetos próprios, que o roteiro recusa antes de conectar: rampa de
+até 20 handshakes/s, até 10 minutos, só na `load-window` (06:00–08:00 UTC,
+nunca no dia 1 nem no domingo) e, na VPS única, até **1.000 sockets**
+(5.000 só depois do G-03, com `FLEET_EDGE_TOPOLOGY=second-vps`). As sondas
+são as do burn-in: a readiness da produção (p95 acima de 2× a base ou 3
+falhas) e o iowait ou o steal do host, lidos do `/proc/stat`.
+
+**Uma vez (dono):** a empresa `Carga (staging)` e o administrador dela, do
+burn-in acima, com o limite de veículos em pelo menos 50 (a fixture cria
+um por motorista).
+
+**A cada ensaio**, no host da VPS, com a pasta `tests/load` copiada:
+
+1. Os tokens: a fixture com 50 motoristas, pela borda (51 tokens com o
+   administrador; valem 15 minutos, então rode logo antes):
+
+   ```bash
+   export FIXTURE_ADMIN_EMAIL='<e-mail do administrador de Carga (staging)>'
+   read -rs FIXTURE_ADMIN_PASSWORD; export FIXTURE_ADMIN_PASSWORD
+   NODE_IMAGE=node:22.21.1-alpine3.23@sha256:0340fa682d72068edf603c305bfbc10e23219fb0e40df58d9ea4d6f33a9798bf
+   export FLEET_CONTEXT_JSON="$(docker run --rm -i --network host \
+     --cpus 0.5 --memory 256m -e FIXTURE_ADMIN_EMAIL -e FIXTURE_ADMIN_PASSWORD \
+     -e FIXTURE_BASE_URL=https://api-staging.intrajetto.com -e FIXTURE_DRIVERS=50 \
+     "$NODE_IMAGE" node --input-type=module - < tests/load/staging-fixture.mjs)"
+   ```
+
+2. A frota, num contêiner limitado na rede do host (a origem é o IP da
+   VPS, e a sonda da produção vai ao Traefik do próprio host):
+
+   ```bash
+   FLEET='cd /tmp && npm install --silent --no-save --ignore-scripts socket.io-client@4.8.4 > /dev/null && SOCKET_IO_CLIENT_ENTRY=/tmp/node_modules/socket.io-client/build/esm/index.js node /load/socket-fleet.mjs --via-edge'
+   docker run --rm -i --name trajetto-socket-fleet --network host \
+     --cpus 0.5 --memory 512m -v "$PWD/tests/load:/load:ro" \
+     -e FLEET_CONTEXT_JSON -e FLEET_URL=https://api-staging.intrajetto.com \
+     -e FLEET_SOCKETS=1000 -e FLEET_SOCKETS_PER_TOKEN=20 \
+     "$NODE_IMAGE" sh -c "$FLEET" > fleet.json
+   ```
+
+   De uma origem só, a rampa sobe a 4 handshakes/s (o compassador deixa a
+   origem abaixo de 300 por minuto): 1.000 sockets em uns 250 s.
+
+3. Com restart, troque o tamanho do passo 2 por estas três variáveis (de
+   uma origem, só 240 sockets voltam dentro do minuto do orçamento):
+
+   ```bash
+   -e FLEET_SOCKETS=240 -e FLEET_RESTART_AFTER_S=60 -e FLEET_RESTART_WINDOW_S=240
+   ```
+
+   Na hora que o roteiro imprime (`restart às ...`), no Dokploy: staging →
+   `trajetto-api` → **Deploy**. A janela de 240 s cobre o _Redeploy_ até a
+   réplica antiga sair.
+
+4. Saída 0: aprovado. 1: reprovado (o `fleet.json` diz qual critério). 2:
+   recusou começar (a mensagem diz por quê). 3: uma sonda abortou tudo:
+   não repita na mesma noite.
+
+Depois do G-03 (staging no 2º VPS), os 5.000 sockets pedem
+`FLEET_EDGE_TOPOLOGY=second-vps`, pelo menos 5 origens
+(`FLEET_SOURCE_ADDRESSES`, ou `FLEET_SHARD` em várias máquinas com o mesmo
+`FLEET_START_AT`, e o `merge`) e mais motoristas que os 50 da fixture.
 
 ### Conexões presas
 
@@ -2638,6 +5749,10 @@ trajetto-api-production`) recria as réplicas (start-first) e zera os pools.
 
 O sinal é **empurrado** para fora, não lido por um robô em `/health/metrics`.
 
+Os SLOs propostos, a fonte de cada um e a regra dos alertas (limiares fixos
+até haver 30 dias de `ops_sample`, depois burn rate em duas janelas) estão em
+[slo.md](./slo.md).
+
 ### Dead man's switch (`ops-heartbeat`, a cada minuto)
 
 Uma réplica por minuto lê o estado da operação, aplica as regras de
@@ -2648,24 +5763,50 @@ fora, processo morto, scheduler parado → **nenhum ping** (o silêncio é o
 alerta). Sem `HEALTHCHECK_PING_URL` os motivos só vão para o log
 (`operational check failed`).
 
-| Regra                                       | Dispara quando                                                                                                             |
-| ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| Outbox                                      | evento **devido** esperando > 5 min                                                                                        |
-| Entregas internas (in-app, push, atividade) | entrega devida esperando > 5 min                                                                                           |
-| Entregas externas (e-mail, WhatsApp)        | entrega devida esperando > 15 min                                                                                          |
-| Webhooks                                    | linha devida esperando > 30 min                                                                                            |
-| IA                                          | análise devida esperando > 15 min                                                                                          |
-| Credencial                                  | primeira entrega FAILED nos últimos 10 min com erro de credencial (WhatsApp 401/403/190, SMTP EAUTH/535/530, push 401/403) |
-| Rajada                                      | 50 entregas FAILED do mesmo canal em 10 min                                                                                |
-| IA credencial                               | análise FAILED/PARTIAL com `authentication_error`/401/403                                                                  |
-| Cron                                        | job sem sucesso há 26 h, que rodou e nunca teve sucesso, ou com lease vencido                                              |
-| Partições                                   | `driver_position` com menos de 3 dias de partições à frente                                                                |
-| Worker travado                              | heartbeat sem progresso há 10 min numa réplica viva                                                                        |
-| Postgres                                    | conexões ≥ 80 % de `max_connections`                                                                                       |
-| Redis                                       | sem resposta ao PING em 2 s                                                                                                |
-| Certificado do comprovante                  | vence em 30 dias (aviso) / 7 dias (crítico), vencido ou inválido                                                           |
+| Regra                                       | Dispara quando                                                                                                                                                                                                                                                                                                                                          |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Outbox                                      | evento **devido** esperando > 5 min                                                                                                                                                                                                                                                                                                                     |
+| Entregas internas (in-app, push, atividade) | entrega devida esperando > 5 min                                                                                                                                                                                                                                                                                                                        |
+| Entregas externas (e-mail, WhatsApp)        | entrega devida esperando > 15 min                                                                                                                                                                                                                                                                                                                       |
+| Webhooks                                    | linha devida esperando > 30 min                                                                                                                                                                                                                                                                                                                         |
+| IA                                          | análise devida esperando > 15 min                                                                                                                                                                                                                                                                                                                       |
+| Credencial                                  | primeira entrega FAILED nos últimos 10 min com erro de credencial (WhatsApp 401/403/190, SMTP EAUTH/535/530, push 401/403)                                                                                                                                                                                                                              |
+| Rajada                                      | 50 entregas FAILED do mesmo canal em 10 min                                                                                                                                                                                                                                                                                                             |
+| IA credencial                               | análise FAILED/PARTIAL com `authentication_error`/401/403                                                                                                                                                                                                                                                                                               |
+| Cron                                        | job sem sucesso há 26 h, que rodou e nunca teve sucesso, ou com lease vencido; um expurgo parcial só depois de 26 h só de parciais (a primeira não alerta)                                                                                                                                                                                              |
+| Partições                                   | uma tabela do registro de partições (hoje, `driver_position` e `driver_position_v2`) com menos de 3 dias de partições à frente (`partition-runway-low`) ou, antes, com menos de 5 (`partition-lookahead-low`); uma partição que passou da retenção há mais de 3 dias e continua no banco (`partition-stuck`)                                            |
+| Worker travado                              | heartbeat sem progresso há 10 min numa réplica viva                                                                                                                                                                                                                                                                                                     |
+| Postgres                                    | conexões ≥ 80 % de `max_connections`                                                                                                                                                                                                                                                                                                                    |
+| Sockets por réplica                         | os sockets de uma réplica em 80% ou mais do teto dela (`socket_cap`, o menor entre `SOCKET_MAX_CONNECTIONS` e o limite de descritores menos `SOCKET_FD_RESERVE`), pela linha mais nova do `ops_sample` dela nos últimos 3 min (`socket-cap-high`)                                                                                                       |
+| Orçamento de memória                        | a soma do heap principal, das threads da planilha e da reserva nativa de um processo passa do teto do contêiner (`memory.max`), pela linha mais nova do `ops_sample` dele nos últimos 3 min (`memory-budget`; o boot avisa com `MEMORY_BUDGET_MODE=warn` e recusa com `enforce`)                                                                        |
+| Fila sem consumidor                         | uma fila (outbox, entregas internas ou externas, webhooks, IA) com item devido há mais de 2 min e nenhum processo vivo deste ambiente no `process_heartbeat` que a consuma (`queue-no-consumer`; com a api em `PROCESS_ROLE=api` e o worker fora, chega em até 3 min)                                                                                   |
+| Versões misturadas                          | os processos vivos deste ambiente em dois ou mais commits há mais de 30 min, contados de quando o commit mais novo apareceu; o realtime que o deploy manteve no build dele (mesmos `realtime_source` e `contract_epoch` do commit novo, F3-31c) não conta (`mixed-versions`)                                                                            |
+| Processo de outro ambiente                  | uma linha viva do `process_heartbeat` com outro `APP_ENV` (um processo da staging no banco da produção, ou o contrário) (`foreign-environment`)                                                                                                                                                                                                         |
+| Redis                                       | sem resposta ao PING em 2 s                                                                                                                                                                                                                                                                                                                             |
+| Certificado do comprovante                  | vence em 30 dias (aviso) / 7 dias (crítico), vencido ou inválido                                                                                                                                                                                                                                                                                        |
+| PITR esperado                               | `PITR_EXPECTED=true` e `archive_mode` diferente de `on` (sem a variável, nunca)                                                                                                                                                                                                                                                                         |
+| Arquivamento do WAL                         | com o arquivamento ligado: último segmento arquivado há mais de 300 s, ou a última tentativa falhou (falha mais nova que o último sucesso)                                                                                                                                                                                                              |
+| xid                                         | `age(datfrozenxid)` do cluster acima de 1 bilhão                                                                                                                                                                                                                                                                                                        |
+| Escrita longa                               | transação de escrita aberta há mais de `LONG_WRITE_XACT_ALERT_SECONDS` (120 s), em qualquer banco do cluster                                                                                                                                                                                                                                            |
+| `pg_wal`                                    | acima de `PG_WAL_ALERT_GIB` (12 GiB; 8 na VPS única); só com superusuário ou `pg_monitor`                                                                                                                                                                                                                                                               |
+| Despejo do Redis                            | `evicted_keys` cresceu desde a linha `cluster` do `ops_sample` de 15 a 20 min atrás (sem essa linha, não compara)                                                                                                                                                                                                                                       |
+| Teto do Redis                               | Redis respondendo sem `maxmemory` ou com `maxmemory-policy noeviction`                                                                                                                                                                                                                                                                                  |
+| Métricas do banco                           | a leitura principal (`core`) ou a do `pg_wal` falhou: as regras acima ficam cegas                                                                                                                                                                                                                                                                       |
+| Volume de entregas                          | as entregas dos últimos 7 dias, projetadas para o mês (× 30/7), acima de 70% de `APPROVED_GATE_MONTHLY_DELIVERIES` (10 000); ou as das últimas 24 h acima de `PLATFORM_DAILY_DELIVERY_SOFT_CAP` (vazio = sem teto). Só alerta                                                                                                                           |
+| PgBouncer                                   | só com `PGBOUNCER_STATS_URL` na Application que roda o cron (onda 17, F4-36): uma tarefa sem resposta ao `SHOW` em 2 s ou nenhum endereço (`pgbouncer-down`); um cliente esperando conexão de servidor há 2 s ou mais (`pgbouncer-clients-waiting`); as conexões de servidor de um banco em 80% do `max_db_connections` (`pgbouncer-server-saturation`) |
 
-Limiares em `DEFAULT_ALERT_THRESHOLDS` (`alert-rules.ts`).
+Limiares em `DEFAULT_ALERT_THRESHOLDS` (`alert-rules.ts`); os de escrita
+longa e de `pg_wal` vêm das variáveis. As regras do banco e do Redis leem os
+números da linha `cluster` do minuto, lidos antes do ping (com
+`OPS_SAMPLE_ENABLED=false` elas continuam valendo, menos a do despejo, que
+precisa das linhas para comparar).
+
+Cada motivo tem um código estável e termina com o caminho do runbook dele,
+`(runbook: docs/runbooks/<código>.md)`: o que o alerta significa, a primeira
+ação, como confirmar e quando escalar ([índice dos runbooks](./runbooks/README.md)).
+Os códigos ficam em `ALERT_KINDS` (`alert-rules.ts`), e um código novo sem
+runbook reprova o `runbooks.test.ts`. A tabela "Primeira ação por motivo",
+mais abaixo, é o resumo.
 
 ### Ligar (uma vez)
 
@@ -2690,22 +5831,218 @@ Limiares em `DEFAULT_ALERT_THRESHOLDS` (`alert-rules.ts`).
 
 ### Primeira ação por motivo
 
-| Motivo começa com                                     | Primeiro passo                                                                                                                                                                      |
-| ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Canal WHATSAPP: falha de credencial`                 | token da Meta vencido/revogado: gerar token de sistema novo no Business Manager e atualizar `META_WHATSAPP_ACCESS_TOKEN`; as falhas estão em `/health/dead-letter?channel=WHATSAPP` |
-| `Canal EMAIL: falha de credencial`                    | chave do Resend revogada ou domínio desverificado                                                                                                                                   |
-| `Canal PUSH: falha de credencial`                     | a credencial FCM V1 do projeto no EAS (`eas credentials`), ou o _Enhanced Security for Push Notifications_ ligado no projeto Expo: a API não envia token de acesso da Expo          |
-| `Canal X: N entregas falharam de vez`                 | abrir o dead letter do canal e ler o prefixo `[... code=...]` mais comum                                                                                                            |
-| `Outbox` / `Entregas` / `Webhooks` / `Análises de IA` | `workers` em `/health/metrics` e o log da réplica; reiniciar a task travada                                                                                                         |
-| `Cron X`                                              | `cron_jobs` em `/health/metrics` traz `last_error`; o catch-up refaz jobs diários a cada hora                                                                                       |
-| `driver_position`                                     | rodar o job de partições (idempotente) e ver por que falhou                                                                                                                         |
-| `Postgres`                                            | `runtime.prisma_pool` em `/health/metrics`; réplicas × `connection_limit`                                                                                                           |
-| `Redis`                                               | a API segue (fail-open), mas o rate limit fica local e o Socket.IO não cruza réplicas                                                                                               |
-| `Certificado ICP do comprovante vence em`             | renovar o A1 antes da data e trocar `PROOF_SIGNING_PFX_*`; `proof_signing` em `/health/metrics` mostra `not_after` e `days_left`                                                    |
-| `Certificado ICP ... vencido` / `inválido`            | os comprovantes saem sem assinatura (e dizem isso); `PFX_UNREADABLE` = senha errada ou arquivo corrompido, `PFX_FILE_UNREADABLE` = o arquivo não montou                             |
+| Motivo começa com                                        | Primeiro passo                                                                                                                                                                                                                      |
+| -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Canal WHATSAPP: falha de credencial`                    | token da Meta vencido/revogado: gerar token de sistema novo no Business Manager e atualizar `META_WHATSAPP_ACCESS_TOKEN`; as falhas estão em `/health/dead-letter?channel=WHATSAPP`                                                 |
+| `Canal EMAIL: falha de credencial`                       | chave do Resend revogada ou domínio desverificado                                                                                                                                                                                   |
+| `Canal PUSH: falha de credencial`                        | a credencial FCM V1 do projeto no EAS (`eas credentials`), ou o _Enhanced Security for Push Notifications_ ligado no projeto Expo: a API não envia token de acesso da Expo                                                          |
+| `Canal X: N entregas falharam de vez`                    | abrir o dead letter do canal e ler o prefixo `[... code=...]` mais comum                                                                                                                                                            |
+| `Outbox` / `Entregas` / `Webhooks` / `Análises de IA`    | `workers` em `/health/metrics` e o log da réplica; reiniciar a task travada                                                                                                                                                         |
+| `... nenhum processo vivo deste ambiente consome a fila` | o worker caiu ou não existe: `process_heartbeat` vivo e a Application `trajetto-worker` no Dokploy; para voltar a como era, `PROCESS_ROLE=all` na `trajetto-api` ([runbook](./runbooks/queue-no-consumer.md))                       |
+| `Processos deste ambiente em N commits`                  | um papel ficou no build anterior: o último deploy da Application dele e o secret `DOKPLOY_<PAPEL>_APPLICATION_ID` ([runbook](./runbooks/mixed-versions.md))                                                                         |
+| `N processo(s) de APP_ENV=`                              | uma Application do outro ambiente com a `DATABASE_URL` deste: pare-a primeiro, depois corrija a URL ([runbook](./runbooks/foreign-environment.md))                                                                                  |
+| `Cron X`                                                 | `cron_jobs` em `/health/metrics` traz `last_error`; o catch-up refaz jobs diários a cada hora. `Cron X: só execuções parciais` = o expurgo não dá conta do que entra: ver [Expurgos parciais](#expurgos-parciais)                   |
+| `driver_position` (ou outra tabela do registro)          | `partitions.<tabela>` em `/health/metrics` (`lookahead_days`, `stuck`, `owner_ok`); rodar o job `partition-maintenance` (idempotente) e ver por que falhou no log                                                                   |
+| `Postgres`                                               | `runtime.prisma_pool` em `/health/metrics`; réplicas × `connection_limit`                                                                                                                                                           |
+| `Redis`                                                  | a API segue (fail-open), mas o rate limit fica local e o Socket.IO não cruza réplicas                                                                                                                                               |
+| `Certificado ICP do comprovante vence em`                | renovar o A1 antes da data e trocar `PROOF_SIGNING_PFX_*`; `proof_signing` em `/health/metrics` mostra `not_after` e `days_left`                                                                                                    |
+| `Certificado ICP ... vencido` / `inválido`               | os comprovantes saem sem assinatura (e dizem isso); `PFX_UNREADABLE` = senha errada ou arquivo corrompido, `PFX_FILE_UNREADABLE` = o arquivo não montou                                                                             |
+| `PITR esperado`                                          | o Database perdeu o `PITR_ARCHIVE=on` ou ganhou um _Command_/_Args_ que apaga o `CMD` da imagem; `SHOW archive_mode` no banco                                                                                                       |
+| `Arquivamento do WAL`                                    | `SELECT * FROM pg_stat_archiver` e o log do Database (o `archive-push` diz por que falhou); R2 fora ou chave errada fazem o `pg_wal` crescer                                                                                        |
+| `Postgres: idade do xid`                                 | `SELECT datname, age(datfrozenxid) FROM pg_database ORDER BY 2 DESC` e o autovacuum da tabela mais velha                                                                                                                            |
+| `Postgres: transação de escrita aberta`                  | `SELECT pid, now() - xact_start, state, left(query, 80) FROM pg_stat_activity WHERE backend_xid IS NOT NULL ORDER BY 2 DESC`; uma sessão esquecida no `psql` termina com `pg_terminate_backend(pid)`                                |
+| `Postgres: pg_wal com`                                   | o arquivamento primeiro (se parado, o WAL não sai), depois um slot de replicação abandonado (`pg_replication_slots`)                                                                                                                |
+| `Redis despejou` / `Redis sem teto` / `noeviction`       | os _Args_ do Database Redis ([seção 7.5](#75-redis-database)): `--maxmemory 256mb` (`64mb` na staging) e `--maxmemory-policy allkeys-lru`; despejo com o teto certo = memória no limite, ver `used_memory_mb` em `/health/metrics`  |
+| `Verificação incompleta: métricas do banco`              | o SQLSTATE diz quem recusou (`57014` = `statement_timeout`, `42501` = permissão)                                                                                                                                                    |
+| `Volume de entregas`                                     | segurar a próxima coorte da rampa; subir `APPROVED_GATE_MONTHLY_DELIVERIES` só com um relatório de portão novo em `docs/desempenho` ([runbook](./runbooks/volume-near-gate.md))                                                     |
+| `Geocodificação: N consultas hoje`                       | ver o gasto do dia por escopo em `provider_quota_day` e corrigir `LOCATIONIQ_DAILY_QUOTA` ou os orçamentos pela tabela da decisão D40 ([runbook](./runbooks/geocoding-quota-high.md))                                               |
+| `Provedores recusaram por taxa`                          | ligar o balde de taxa do provedor (`WHATSAPP_SENDS_PER_SECOND`, `EMAIL_REQUESTS_PER_SECOND`, `PUSH_NOTIFICATIONS_PER_SECOND`) abaixo do contrato, ou baixar o valor se já está ligado ([runbook](./runbooks/provider-throttled.md)) |
+| `Feed da integração: o maior txid`                       | um restore lógico num cluster novo sem o `pg_resetwal -e`: API em 0 réplicas, a época certa e o `pg_resetwal` com o Database parado ([runbook](./runbooks/feed-txid-regressed.md))                                                  |
+| `Época do cluster`                                       | um PITR, um promote ou um cluster novo que a etapa de release ainda não viu: **Deploy** na `trajetto-api-migrate` (ou _Run workflow_ com `force_release`) ([runbook](./runbooks/cluster-epoch-stale.md))                            |
+| `Feed da integração: N cursor(es) de outra época`        | esperado logo depois de um PITR, promote ou restore: avisar os clientes de polling que um trecho de eventos veio de novo e deve ser deduplicado pelo `id` ([runbook](./runbooks/feed-epoch-conversion.md))                          |
+| `PgBouncer sem resposta` / `sem endereço`                | `pgbouncer.instances[].error` em `/health/metrics`: a tarefa fora, a senha de estatística diferente nos dois lados ou o nome de `PGBOUNCER_STATS_HOSTS` ([runbook](./runbooks/pgbouncer-down.md))                                   |
+| `PgBouncer com cliente esperando`                        | o pool cheio: o Postgres lento ou um `PAUSE` esquecido; aos 5 s a API responde 503 `SERVICE_BUSY` ([runbook](./runbooks/pgbouncer-clients-waiting.md))                                                                              |
+| `PgBouncer usando N% das conexões de servidor`           | o banco perto do `max_db_connections`: quais logins ocupam em `pgbouncer.instances[].pools` ([runbook](./runbooks/pgbouncer-server-saturation.md))                                                                                  |
 
 Para trocar uma variável: _Environment_ da Application → **Save** →
 **Deploy** (salvar sozinho não reinicia o contêiner).
+
+### Séries de operação (`ops_sample`)
+
+A régua do plano de escala: cada processo da API grava **uma linha por
+minuto** na tabela `ops_sample`, de 0 a 15 s depois do fim do minuto (um
+timer local com sorteio, nunca um cron, para que toda réplica grave), com os
+mesmos números da linha de log `runtime metrics`: laço de eventos, threadpool,
+memória, CPU por requisição (`cpu.ms_per_request`: a CPU do processo no
+minuto dividida pelas requisições fora de `/health`, `null` sem requisição;
+`cpu.includes_workers` diz se o trabalho das filas está junto), pool do Prisma, provedores chamados no minuto, sockets e o portão
+do bcrypt (`src/shared/health/ops-sample.ts`), mais a seção `http`: as
+respostas do minuto por classe de status e o histograma de latência de cada
+grupo de rota, só dos grupos com requisição, e os `contract=` do app nos
+`POST /route/positions` dos últimos 10 minutos, só das sessões de motorista
+e do 426 do portão de versão, nunca de um 401
+(`src/shared/health/http-metrics.ts`), e a seção `deliveries`: as entregas
+que o processo criou no minuto (`created`), contadas depois de cada commit
+(criação no painel, pela integração, planilha e XML;
+`src/shared/health/volume-gauge.ts`), e a seção `shedding`: as requisições
+que chegaram com a réplica ocupada (`under_pressure`, e o que estava ocupado
+em `reasons`) e, por grupo de rota, o que o descarte de carga recusou
+(`shed`) ou recusaria no `SHED_MODE=observe` (`would_shed`;
+`src/shared/http/load-shedding.ts`), e a seção `panel_budget`: o que o
+orçamento do painel por empresa cobrou, recusou ou recusaria no
+`TENANT_PANEL_BUDGET_MODE=observe`, na fatia da pessoa (`user`) e na
+empresa (`tenant`; `src/shared/integration/panel-budget.ts`). As colunas dizem de quem é a
+linha: `role` (o `PROCESS_ROLE` do processo: `all`, `api`, `worker`…; as
+linhas de antes da onda 12 dizem `http` para uma réplica sem workers),
+`replica` (o hostname do contêiner, mais `/<slot>` com `SWARM_TASK_SLOT`) e
+`commit`. Com as variáveis de identidade do Swarm no _Environment_ da
+`trajetto-api`, digitadas como os modelos do próprio Swarm
+(`SWARM_NODE_HOSTNAME={{.Node.Hostname}}`, `SWARM_TASK_SLOT={{.Task.Slot}}`,
+`SWARM_SERVICE_NAME={{.Service.Name}}`), a linha leva também
+`metrics.swarm` (`node`, `task_slot`, `service`) e as linhas de log levam
+`swarm_node`, `swarm_task_slot` e `swarm_service`; sem elas, nada muda. Só
+números de infraestrutura: nunca empresa, IP nem id de pessoa. São cerca de 1.440
+linhas por processo por dia, guardadas por `OPS_SAMPLE_RETENTION_DAYS` (30)
+dias: o cron `purge-ops-series` (04:40 UTC) apaga as mais velhas em lotes,
+com a execução parcial dos [expurgos](#expurgos-parciais). Uma gravação que falha vira um aviso
+(`ops sample write failed`) e o processo segue servindo; `OPS_SAMPLE_ENABLED=false`
+desliga a gravação sem tirar a linha de log. Não há rota: a leitura é pelo
+`psql`.
+
+Além das linhas de cada processo, há **uma linha `cluster` por minuto**, de
+todo o ambiente: a réplica que vence a eleição do `ops-heartbeat` a grava
+depois do ping, com o `ts` do minuto eleito (duas réplicas no mesmo minuto
+deixam uma linha só). Ela leva a latência das filas (outbox, as duas faixas
+de entregas, webhooks, IA), os workers travados e a folga das partições, os
+números do próprio banco (uso de conexões, idade do xid, escrita e snapshot
+mais antigos, `archive_mode` e o `pg_stat_archiver`, `pg_wal`, os contadores
+do cache, `pg_stat_statements`) e o Redis inteiro de `/health/metrics`; a
+cada 15 minutos (:00, :15, :30, :45), também os tamanhos e as tabelas
+quentes. Ela soma, em `deliveries.created`, as entregas que as linhas dos
+processos contaram desde a linha `cluster` anterior (um minuto atrás delas,
+para a gravação de cada processo já ter chegado), e nos quartos de hora traz
+também as somas das últimas 24 h e dos últimos 7 dias (`last_24h`,
+`last_7d`, e `since`, o minuto mais antigo contado): é a régua de rampa do
+alerta de volume. É a linha-marcador do ensaio de PITR: uma restauração até T tem a
+linha `cluster` do minuto de T. Os números do banco e do Redis são lidos uma
+vez, antes do ping, porque as regras de alerta também os julgam; uma leitura
+que falha vira `null` (e, nas partes do banco que as regras leem, um motivo
+`Verificação incompleta`). Uma gravação que falha vira o aviso
+`cluster ops sample write failed`, sem atrasar o ping. `OPS_SAMPLE_ENABLED=false`
+desliga a gravação; as leituras continuam, para os alertas.
+
+```sql
+-- utilização do laço e espera no pool por réplica, na última hora
+SELECT replica, ts,
+       (metrics->'event_loop'->>'utilization')::float8 AS elu,
+       (metrics->'prisma_pool'->>'waiting')::int AS pool_waiting
+FROM ops_sample
+WHERE ts > now() - interval '1 hour'
+ORDER BY replica, ts;
+
+-- a escrita aberta mais antiga e o pg_wal, minuto a minuto, na última hora
+SELECT ts,
+       (metrics->'database'->>'oldest_write_xact_seconds')::float8 AS escrita_s,
+       (metrics->'database'->'pg_wal'->>'bytes')::float8 / 1048576 AS pg_wal_mb
+FROM ops_sample
+WHERE role = 'cluster' AND ts > now() - interval '1 hour'
+ORDER BY ts;
+
+-- respostas 5xx por minuto, somando as réplicas, nas últimas 24 h
+SELECT date_trunc('minute', ts) AS minuto,
+       sum((metrics->'http'->'classes'->>'5xx')::int) AS erros_5xx,
+       sum((metrics->'http'->>'requests')::int) AS requisicoes
+FROM ops_sample
+WHERE ts > now() - interval '24 hours' AND role <> 'cluster'
+GROUP BY 1
+ORDER BY 1;
+```
+
+### Custo das consultas (`pgss_snapshot`)
+
+De hora em hora (:13), a réplica que vence a eleição do cron
+`snapshot-query-stats` lê o `pg_stat_statements` deste banco e grava em
+`pgss_snapshot` o que cada uma das `PGSS_SNAPSHOT_TOP` (200) consultas mais
+caras da hora custou, por role (`userid`): chamadas, tempo de execução e de
+planejamento, linhas, blocos e WAL. A view é acumulada, então cada linha é a
+diferença contra a leitura anterior (guardada em `pgss_baseline`; o que a
+última leitura viu da extensão fica em `pgss_state`). A coluna `basis` diz
+como a diferença foi tirada: `previous` (contra a hora anterior), `new` (a
+consulta entrou na view na hora), `recreated` (voltou depois de um despejo:
+um contador abaixo da leitura anterior) ou `reset` (a primeira execução, ou
+as estatísticas foram zeradas: o `period_start` é o `stats_reset`). O
+`max_exec_time_ms` é o máximo acumulado da entrada, como o PG16 guarda. Um
+despejo (`dealloc` subindo) vira o aviso `pg_stat_statements evicted
+entries since the last snapshot`: as consultas que voltaram contam menos na
+hora, e o caminho é um `pg_stat_statements.max` maior. Enquanto o servidor
+não pré-carrega a biblioteca (a produção até a imagem nova do Postgres), o
+cron não faz nada e avisa `query stats snapshot skipped`, sem falhar. O
+texto das consultas pode ter literais: fica só no banco, e a leitura é pelo
+`psql`. As linhas ficam `PGSS_SNAPSHOT_RETENTION_DAYS` (30) dias: o mesmo
+`purge-ops-series` das 04:40 UTC as apaga, antes das do `ops_sample`
+(e, antes de tudo, as linhas do `process_heartbeat` sem batida há 7
+dias).
+
+```sql
+-- as 10 consultas que mais custaram nas últimas 24 h, por role
+SELECT userid, queryid, sum(calls) AS chamadas,
+       round(sum(total_exec_time_ms)::numeric, 1) AS exec_ms,
+       max(max_exec_time_ms) AS maximo_ms, min(left(query, 80)) AS consulta
+FROM pgss_snapshot
+WHERE taken_at > now() - interval '24 hours'
+GROUP BY 1, 2
+ORDER BY exec_ms DESC
+LIMIT 10;
+```
+
+**O custo de planejar (plano de escala, F2-22).** O alvo de estatística
+1000 deixa as listas do planejador maiores, e o plano pede planejamento
+p95 abaixo de 2 ms nas consultas quentes. O `pg_stat_statements` só mede o
+planejamento com `track_planning`, que custa um pouco em toda consulta: ligue
+por 7 dias depois da release com as estatísticas por empresa e desligue
+depois. Fica no catálogo do banco, e não no `postgresql.auto.conf`; rode no
+`psql` do Database com o usuário dono (o superusuário do contêiner):
+
+```sql
+ALTER DATABASE trajetto SET pg_stat_statements.track_planning = on;
+-- sete dias depois
+ALTER DATABASE trajetto RESET pg_stat_statements.track_planning;
+```
+
+Vale para as conexões novas: o pool troca as dele aos poucos, e um Deploy
+da `trajetto-api` acelera. Nesses dias, `total_plan_time_ms / calls` no
+`pgss_snapshot` dá o planejamento médio de cada consulta; acima de 2 ms
+numa consulta quente, o caminho é baixar o alvo daquela coluna (um arquivo
+novo em `prisma/concurrent` e a migration de mesmo nome).
+
+### Expurgos parciais
+
+Os expurgos noturnos (`cleanup-*` e `purge-ops-series`, 03:17–04:50 UTC,
+os `refresh_token` vencidos inclusive) apagam em lotes e param no orçamento da execução (`CRON_PURGE_RUN_BUDGET_MS`, 5 min) ou no
+teto de linhas de cada tabela. Se ainda houver linha vencida quando param
+(uma sonda confere, para um teto batido junto com a última linha não contar),
+a execução termina **FAILED com `last_error` começando por `[partial]`**,
+com o nome do que sobrou, e não mais SUCCEEDED; o log diz `cron job partial:
+stopped with work left` (aviso, não erro). Os passos seguintes do job rodam
+mesmo assim, e os expurgos pequenos vão primeiro, para o grande não gastar o
+orçamento deles.
+
+O catch-up de hora em hora (:07) repete uma execução parcial **só dentro de
+`CRON_PARTIAL_RETRY_WINDOW_UTC`** (06:00–09:00 UTC, depois dos backups das
+05:00 e antes da manhã) e no máximo `CRON_PARTIAL_RETRIES_PER_DAY` vezes no
+dia (3: às 06:07, 07:07 e 08:07); fora dela, a sobra espera a noite
+seguinte. Uma falha que não é parcial segue a regra de antes (sem sucesso em
+26 h, roda na próxima varredura, a qualquer hora). Em `/health/metrics`,
+`cron_jobs[].last_partial` e `partial_since` mostram o estado; o alerta só
+vem com 26 h só de parciais: aí o expurgo perde para o que entra, e o
+caminho é olhar o volume da tabela e o tempo de cada lote antes de subir
+o orçamento (que já está no máximo) ou o teto. A folga vale só enquanto
+tudo o que rodou desde o último sucesso foi parcial: se uma falha de
+verdade (um _statement timeout_, um lease vencido) veio no meio,
+`partial_since` vem `null` e o job é julgado pelo último sucesso, como
+qualquer falha; senão uma parcial depois de duas noites de erro calaria por
+mais 26 h um job parado havia três dias. A imagem anterior, durante um
+rolling deploy, lê a linha como um FAILED comum.
 
 ### Falhas que só o cliente vê
 
@@ -2732,8 +6069,10 @@ segredo ficar de fora). Os logs de cada Application ficam na aba _Logs_ dela
 ### Prontidão dos provedores (`GET /health/providers`, só MASTER)
 
 Sem enviar nada a ninguém e sem devolver segredo: Resend (`GET /domains`),
-Meta (`GET /{phone_number_id}` e os templates, com
-`META_WHATSAPP_BUSINESS_ACCOUNT_ID`), Expo, R2 (`HeadBucket`; `local` em
+Meta (`GET /{phone_number_id}` e uma listagem só dos modelos, com
+`META_WHATSAPP_BUSINESS_ACCOUNT_ID`: os 21 do código, cada um aprovado, em
+pt_BR, UTILITY e com as variáveis e os botões que o código envia; MARKETING é
+erro), Expo (avisa sem `EXPO_ACCESS_TOKEN`), R2 (`HeadBucket`; `local` em
 produção é erro), trajetto-ai (`/health` e um `POST /v1/read` vazio), o
 certificado e o heartbeat. `not_configured` traz `missing_env` com os nomes que
 faltam. As sondas rodam em paralelo (o número da Meta junto com os
@@ -2751,6 +6090,36 @@ passageira: falha de uma tentativa, 429 ou resposta lenta, acima de 2 s) e
 veio da foto); `refresh=true` sonda de novo no máximo a cada 5 s. Na web, a
 aba Sistema mostra "Instável" para um `warning` transitório e, depois de um
 resultado transitório, relê sozinha uma única vez.
+
+Desde 14/11/2026, duas entradas do LocationIQ, **sem sonda**: cada chamada ao
+provedor gasta um crédito do dia, e uma recusa já pausa todas as réplicas com
+o HTTP no Redis, então a pausa faz o papel da sonda (e não há consulta de
+saldo, decisão D-28). As duas leem as variáveis e um `MGET` das chaves do
+geocodificador (a pausa da conta, a da busca e as contagens do dia), com
+prazo de 1 s e falha aberta: sem Redis, a mensagem é "Estado do dia não
+lido", `transient`, nunca `error`.
+
+- `geocoding`, "Localização das entregas (LocationIQ)": `not_configured`
+  sem `REVERSE_GEOCODER_URL`, ou sem `REVERSE_GEOCODER_KEY` com o host do
+  LocationIQ; `disabled` com `DELIVERY_GEOCODING_DAILY_BUDGET=0`; `error`
+  enquanto uma recusa segura as consultas, com o que o HTTP quer dizer (401
+  a chave, 403 o token sem o Search ou com restrição, 404 a URL que não é a
+  raiz da API) e até quando (horário de Brasília); `warning` com a cota do
+  dia do provedor ou o orçamento do dia gasto; `ok` com "Hoje: N de M
+  consultas". O pico de um minuto não conta.
+- `address_search`, "Busca do 'Fixar no mapa'": `not_configured` sem
+  `ADDRESS_SEARCH_URL`, ou sem chave nenhuma (`ADDRESS_SEARCH_KEY` e
+  `REVERSE_GEOCODER_KEY` vazias) no LocationIQ; `disabled` com
+  `ADDRESS_SEARCH_DAILY_BUDGET=0`; `warning` com o host do LocationIQ e
+  `ADDRESS_SEARCH_PROTOCOL=nominatim-search` (o padrão, que chama o
+  `/search` em vez do `/autocomplete`); `error` enquanto a recusa da própria
+  busca a segura (403: o token sem o Autocomplete); `warning` com a cota do
+  dia ou as buscas do dia gastas. A recusa da localização das entregas não
+  segura a busca.
+
+Os `details` não levam segredo: `protocol`, `key_source` (o nome da
+variável da chave, nunca o valor), `today_used`, `daily_budget`,
+`business_daily_limit`, `paused_reason`, `paused_until` e `refused_status`.
 
 Cada tentativa que falha vira uma linha `warn` com
 `component=provider-readiness` e `msg="provider probe attempt failed"`, com
@@ -2771,18 +6140,35 @@ acima de 80 % (node-exporter); restarts de contêiner (cAdvisor). O Dokploy tem
 uma aba _Monitoring_ por serviço que ajuda no dia a dia, mas não alerta
 ninguém.
 
+### Pilha de métricas (onda 23)
+
+A configuração já está versionada em `infra/monitoring/` (plano de escala
+F5-30, decisão D56), mas **nada sobe na VPS única**: a pilha custaria
+400–600 MB e cairia junto com o host. Na onda 23 (E-02), um vmagent por
+ambiente lê o `/metrics` de cada réplica (`METRICS_PORT=9464`, sempre com o
+`METRICS_TOKEN`, achando as réplicas por `tasks.<App Name>`) e grava numa
+VictoriaMetrics no Remote Server `trajetto-monitor`, com o vmalert e o
+Grafana ao lado. O vmalert tem uma regra por código do `ALERT_KINDS`, que lê
+o veredito do `ops-heartbeat` (nunca refaz a conta), mais as regras do que só
+o scrape vê, e começa sem paginar ninguém: o healthchecks.io continua sendo
+quem acorda e o dead man's switch de fora. O guia das Applications, as
+imagens por digest e a conferência estão em
+[infra/monitoring/README.md](../infra/monitoring/README.md); os arquivos são
+gerados por `yarn monitoring:render`, e o `monitoring-config.test.ts` os
+confere contra o código.
+
 ## 21. Cadeia de suprimentos e segredos
 
-| Controle                                                             | Onde                                                                                                                  | Quando falha                                                                                                                                                |
-| -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Dependabot (npm, actions, imagens base, pip da IA, compose de carga) | `.github/dependabot.yml`, PRs contra `staging`                                                                        | não falha: abre PRs toda segunda; majors de Node e o motor de OCR ficam de fora de propósito                                                                |
-| Actions fixadas por commit                                           | todo `uses:` dos workflows, com `# vX.Y.Z`                                                                            | `supply-chain.test.ts` recusa um `uses:` por tag                                                                                                            |
-| Imagens base por digest                                              | `Dockerfile`, `infra/ai-ocr/Dockerfile`; nos workflows, os serviços, o smoke test, o BuildKit, gitleaks e Trivy       | `supply-chain.test.ts` e `ci-stability.test.ts`                                                                                                             |
-| Serviço de IA                                                        | rodas Python com `--require-hashes`, modelos versionados em `infra/ai-ocr/models` e conferidos contra `models.sha256` | o build falha num hash diferente; o pytest roda dentro da imagem                                                                                            |
-| Gate de audit                                                        | `.github/scripts/audit-gate.sh` (o `audit-ci` fixado) no `ci.yml` e no `deploy.yml`, config em `audit-ci.jsonc`       | advisory CRITICAL numa dependência de produção sem entrada na allowlist, num push ou PR que muda dependência (ou o `audit-ci.jsonc`); nos outros, só relata |
-| SBOM e proveniência                                                  | `build-push-action` (`sbom: true`, `provenance: mode=max`)                                                            | não falha: anexa as atestações à imagem no GHCR                                                                                                             |
-| Scan da imagem (Trivy)                                               | depois do push, por digest, com o banco de vulnerabilidades baixado uma vez e guardado no cache do Actions            | só um achado, e só com `IMAGE_SCAN_ENFORCE=true`; falha no download ou erro do Trivy viram aviso                                                            |
-| Varredura de segredos (gitleaks)                                     | job `secrets` do `ci.yml` e do `deploy.yml`                                                                           | um segredo novo em qualquer commit do histórico                                                                                                             |
+| Controle                                                             | Onde                                                                                                                                         | Quando falha                                                                                                                                                                                                                                        |
+| -------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Dependabot (npm, actions, imagens base, pip da IA, compose de carga) | `.github/dependabot.yml`, PRs contra `staging`                                                                                               | não falha: abre PRs no dia 1º de cada mês, só de versões publicadas há 7 dias (30 para major), com as majors num PR só, que é lista de tarefas; majors de Node, do Prisma, do `pg` e do `dotenv-expand` e o motor de OCR ficam de fora de propósito |
+| Actions fixadas por commit                                           | todo `uses:` dos workflows, com `# vX.Y.Z`                                                                                                   | `supply-chain.test.ts` recusa um `uses:` por tag                                                                                                                                                                                                    |
+| Imagens base por digest                                              | `Dockerfile`, `infra/ai-ocr/Dockerfile`; nos workflows, os serviços, o smoke test, o BuildKit, gitleaks e Trivy                              | `supply-chain.test.ts` e `ci-stability.test.ts`                                                                                                                                                                                                     |
+| Serviço de IA                                                        | rodas Python com `--require-hashes`, modelos versionados em `infra/ai-ocr/models` e conferidos contra `models.sha256`                        | o build falha num hash diferente; o pytest roda dentro da imagem                                                                                                                                                                                    |
+| Gate de audit                                                        | `.github/scripts/audit-gate.sh` (o `audit-ci` fixado) no job `Validate` do `validate.yml` (branches e `staging`), config em `audit-ci.jsonc` | advisory CRITICAL numa dependência de produção sem entrada na allowlist, num run cujo intervalo muda dependência (ou o `audit-ci.jsonc`) desde o último build servido pela staging; nos outros, só relata                                           |
+| SBOM e proveniência                                                  | `build-push-action` (`sbom: true`, `provenance: mode=max`)                                                                                   | não falha: anexa as atestações à imagem no GHCR                                                                                                                                                                                                     |
+| Scan da imagem (Trivy)                                               | depois do push, por digest, com o banco de vulnerabilidades baixado uma vez e guardado no cache do Actions                                   | só um achado, e só com `IMAGE_SCAN_ENFORCE=true`; falha no download ou erro do Trivy viram aviso                                                                                                                                                    |
+| Varredura de segredos (gitleaks)                                     | job `Secret scan` do `ci.yml`, do `staging.yml` e do `pr.yml`                                                                                | um segredo novo em qualquer commit do histórico                                                                                                                                                                                                     |
 
 As imagens do Postgres e do Redis não passam pelo Dependabot (são campos do
 Dokploy, não arquivos do repositório): atualize o digest do Postgres à mão,
@@ -2803,9 +6189,10 @@ O audit só **bloqueia** o push ou PR que muda o que ele lê: `package.json`,
 com a base do PR ou com o `before` do push; sem base (branch nova,
 _Run workflow_, base fora do checkout), bloqueia. Num push que não mexe em
 dependência, um aviso novo aparece como `::warning::` e com o relatório no
-resumo do job, sem reprovar: o aviso já está na árvore que roda, quem abre a
-correção é o Dependabot (_alerts_ e _security updates_), e a próxima mudança
-de dependência passa pelo portão de verdade. Um aviso que aparece assim é
+resumo do job, sem reprovar: o aviso já está na árvore que roda, o alerta do
+Dependabot avisa e a correção vai numa branch de trabalho a partir da
+`staging` (os _security updates_ ficam desligados: o GitHub só os abre contra
+a `main`), e a próxima mudança de dependência passa pelo portão de verdade. Um aviso que aparece assim é
 tarefa do dia, não do próximo push.
 
 Um audit que **não rodou** é outra coisa, e o portão diz qual foi. O
@@ -2835,9 +6222,19 @@ repete 3 vezes e vira aviso.
 
 **O gitleaks falhou**: trate como vazamento. Revogue/rotacione na origem
 primeiro; remova do código (reescreva a branch se ainda não foi mergeada; em
-`main`/`staging`, não reescreva — já foi rotacionado). Só entra no
-`.gitleaksignore`, pela fingerprint (`commit:arquivo:regra:linha`), um falso
-positivo ou um segredo já rotacionado. O job varre o histórico de **todas** as
+`main`/`staging`, não reescreva — já foi rotacionado). Um valor público por
+design que a regra genérica confunde com chave (hoje só o
+`ACCESS_CODE_ALPHABET` de `src/modules/user/services/driver-enrollment.ts`,
+cuja linha serve de modelo) leva o comentário de liberação inline do gitleaks
+**na própria linha que dispara**, com o motivo escrito logo acima: o
+comentário anda junto com a linha. Cada um fica listado, com a linha inteira,
+no `tests/unitaires/lifecycle/secrets-hygiene.test.ts`, que reprova um novo
+que ninguém revisou em qualquer arquivo, Markdown inclusive (o gitleaks
+respeita o comentário em toda linha que varre, até contra as regras de
+provedor). Segredo de verdade nunca leva o comentário. O `.gitleaksignore`
+fica só com o que já está preso num commit do histórico — a baseline e os
+segredos já rotacionados —, pela impressão digital completa
+(`commit:arquivo:regra:linha`). O job varre o histórico de **todas** as
 branches do remoto. O `.gitleaks.toml` mantém todas as regras padrão e
 silencia só a `generic-api-key` em `tests/` e no `.env.example`. A baseline
 guarda o que o histórico tinha quando a varredura foi ligada — entre eles uma
@@ -2850,9 +6247,11 @@ Databases; qualquer usuário do painel com acesso ao projeto os vê. Dê acesso
 ao Dokploy só a quem pode ver produção, e renove o token do GHCR
 (`read:packages`) antes de vencer — vencido, todo deploy falha no pull.
 
-Configuração fora do repositório: _Dependabot alerts_ e _security updates_
-ligados; _CodeQL default setup_ ligado; política da organização exigindo
-actions fixadas por SHA.
+Configuração fora do repositório: _Dependabot alerts_ ligados e _security
+updates_ desligados (abririam PRs contra a `main`, que não os promove; decisão
+de 04/11/2026, [`infraestrutura.md` → 7.7](./infraestrutura.md#77-dependabot-e-varredura-de-segredos));
+_CodeQL default setup_ ligado; política da organização exigindo actions
+fixadas por SHA.
 
 ## 22. Bucket R2 e retenção no GHCR
 
@@ -2889,22 +6288,134 @@ migração dele), e não apague as versões que `staging-applied`,
 `stable-applied` e a `src-<hash>` mais recente apontam. Na `trajetto-ai`, não apague a versão que a tag `src-<hash>` mais recente
 aponta: sem ela, o próximo push reconstrói a IA (e a reimplanta).
 
+Na `trajetto-postgres` (publicada só quando `infra/postgres` muda, com
+`src-<hash>` e `sha-<7>`; a promoção move `stable` só como referência), não
+apague a versão que o Database de cada ambiente roda (o digest anotado na
+troca, [seção 27](#27-pitr-com-pgbackrest)), nem a da `src-<hash>` mais
+recente, nem a anterior a ela (o alvo da reversão). O pacote é público, e o
+armazenamento de pacotes públicos não conta na cota do GitHub Packages; os
+três privados, sim: limpe-os antes de a cota encher, porque um push que
+não cabe derruba o `Build`.
+
 ## 23. Recursos da VPS e logs
 
-| Serviço     | Limite (onde)                                                         |
-| ----------- | --------------------------------------------------------------------- |
-| API         | 2 × 1 GiB (_Resources_ da Application; heap 768 MB no `NODE_OPTIONS`) |
-| Web         | 768 MiB (limite da Application; ver `trajetto-ui/docs/deploy.md`)     |
-| Redis       | 512 MiB (_Resources_ do Database; dados 256 MB pelo comando)          |
-| trajetto-ai | 1 GiB e 2 CPUs                                                        |
-| Postgres    | sem teto (dimensionado pelo tuning)                                   |
+**A VPS única não recebe o primeiro cliente de escala.** Mesmo sozinha
+nela, a produção tem ~1,5–2 vCPU para o HTTP: ~130–170 req/s (ESTIMADO a
+partir dos 8,14 ms MEDIDOS de CPU por requisição), abaixo dos 200 req/s do
+portão do 100k. Esse cliente só entra depois da virada para os servidores
+próprios (o prod-1, com 12 núcleos dedicados, e o prod-db-1), com os
+portões aprovados nos dois (plano de escala, onda 22), e o volume dele
+sobe por coortes até o portão aprovado. Até lá, a VPS de hoje (6 vCPU
+compartilhadas, 12 GB de RAM e 100 GB NVMe) divide a produção e a staging
+pelas réguas abaixo (plano de escala X-18). Os tetos de cada Application,
+fase a fase, estão em
+[Tetos por Application e por fase](#tetos-por-application-e-por-fase).
 
-Mais o Dokploy e o Traefik. Só a produção passa de 3,5 GB sem contar o
-Postgres; **com staging no mesmo host, o dobro** (ou staging com 1 réplica,
-limites menores e sem a IA, `AI_PROVIDER=none`). Os números reais saem de
-`docker stats` sob o harness de carga (`tests/load/README.md`). Sem limite de
-CPU na API de propósito (o throttling do CFS piora o p99); com limite na IA,
-porque o OCR satura todo núcleo que recebe.
+### Memória: a reserva do host, a R1 e a R2
+
+- **Reserva do host:** 1.280 MiB (ESTIMADO): o sistema, o `dockerd`, o
+  Dokploy, o Traefik, o `dokploy-postgres`, o `dokploy-redis` e o agente do
+  Beszel. A RAM visível é de ~11.980 MiB (ESTIMADO; a medição do F0-09
+  confirma com `free -m`).
+- **R1 (tetos):** a soma dos tetos estáveis mais o maior transitório fica
+  em até 11.500 MiB. Os transitórios são uma `trajetto-api-migrate` (384
+  MiB; a de um environment espera a do outro), o k6 do burn-in (256 MiB)
+  ou uma janela de ensaio de 1 GiB, feita com a api e a web da staging em
+  0 réplicas (devolvem 896 MiB) e sem deploy durante ela.
+- **R2 (uso medido):** se a R1 não fechar por até 1.024 MiB, a fase só
+  segue com o p95 da RAM usada no pico em até 70% em 7 dias no Beszel, o
+  earlyoom ativo (abaixo) e nenhum OOM kill de contêiner da produção no
+  `dmesg` em 7 dias. Se nem a R2 fechar, a fase espera o 2º VPS (G-03).
+- Os monitores (o Uptime Kuma e o hub do Beszel), se estiverem no host,
+  somam ~192 MiB (ESTIMADO) e tiram a folga das fases B e C.
+- Os papéis usam a mesma imagem e não gastam disco a mais.
+
+A soma por fase (MiB), da coluna de cada fase nas tabelas de tetos, sem a
+migrate, que é o transitório:
+
+| Fase                          | Produção | Staging | Host  | Soma estável | Com o transitório       | Régua                                                                                        |
+| ----------------------------- | -------- | ------- | ----- | ------------ | ----------------------- | -------------------------------------------------------------------------------------------- |
+| A (web de produção em 768)    | 7.232    | 2.400   | 1.280 | 10.912       | 11.296                  | R1 cabe (com os monitores no host, 11.488)                                                   |
+| B (web em 640)                | 6.976    | 4.320   | 1.280 | 12.576       | 12.960                  | R1 não cabe com a staging de 26/11/2026 (1.460 acima, além da margem da R2): decisão do dono |
+| C (Postgres 1.792, web 512)   | 6.976    | 3.552   | 1.280 | 11.808       | 12.192                  | R1 não cabe (692 acima); R2 ou G-03, depois de refazer a api e o worker da staging           |
+| E (produção sozinha na VPS 1) | 9.344    | —       | 1.280 | 10.624       | 11.008                  | R1 cabe; o limite passa a ser a CPU                                                          |
+| 2º VPS (staging sozinha)      | —        | 5.152   | 1.280 | 6.432        | 7.456 (janela de 1 GiB) | folga para os ensaios e o standby temporário                                                 |
+
+### CPU na VPS única
+
+Na fase A, os tetos da staging somam 2,35 vCPU (3,1 na B, como ficou em
+26/11/2026: o worker com 1 e a IA com 2, e o Postgres, a api e a web da
+staging sem teto). Na A, mesmo com a staging e a IA de produção no teto,
+sobram pelo menos 1,65 vCPU para a api e o Postgres da produção; na B, os
+tetos deixam 0,9 vCPU, que os três sem teto da staging disputam com a
+produção. Na fase E, com o Postgres (~1,5), a IA (2), o
+worker (0,5) e o sistema (0,5), sobram ~1,5–2 vCPU para o HTTP: é o número
+do topo desta seção, e o motivo de o prod-1 vir antes do cliente de
+escala. A api fica sem _CPU Limit_ de propósito (o throttling do CFS
+piora o p99); a IA tem limite, porque o OCR satura todo núcleo que
+recebe. Os números reais saem do `docker stats` sob o harness de carga
+(`tests/load/README.md`), com a pilha presa a 6 núcleos.
+
+### Disco na VPS única
+
+ESTIMADO, no NVMe de 100 GB dividido:
+
+| Item                                                                                               | Hoje → 10k/mês     | 100k/mês                            |
+| -------------------------------------------------------------------------------------------------- | ------------------ | ----------------------------------- |
+| sistema, Docker, Dokploy e `dokploy-postgres`                                                      | ~10 GB             | ~10 GB                              |
+| imagens (com a limpeza diária)                                                                     | ~8 GB              | ~8 GB                               |
+| logs dos contêineres (json-file, 50 MB × 5 × ~20)                                                  | ≤ 5 GB             | ≤ 5 GB                              |
+| banco de produção (dados e índices)                                                                | ~3–5 GB            | ~15–25 GB (trilha de 30 dias ~5 GB) |
+| `pg_wal` da produção (uso normal; com o bucket R2 fora do ar, mais a fila de arquivamento de 4 GB) | 1–2 GB (até 12 GB) | 2–8 GB (até 12 GB)                  |
+| staging (banco, WAL e fila)                                                                        | ≤ 3 GB             | ≤ 3 GB                              |
+| ensaio de restore ou seed descartável (só na janela)                                               | ≤ 50% do livre     | ≤ 50% do livre                      |
+| **Total estável**                                                                                  | ~30–35 GB          | ~45–60 GB                           |
+
+O gatilho de disco é 60%: ele chega perto do 100k, outro motivo para o
+prod-db-1 vir antes do cliente de escala. O alerta de 80% vai por e-mail,
+e o de 85%, pelo Telegram (Beszel).
+
+### Sem swap: o earlyoom no lugar
+
+Com swap no host, o Docker dá a cada contêiner sem `MemorySwap` explícito
+um swap igual ao próprio teto, e o Dokploy não expõe o `--memory-swap`: o
+teto deixaria de matar o processo e passaria a trocar página no NVMe que o
+Postgres da produção usa. Por isso o host fica **sem arquivo de swap**
+(plano de escala F0-11), e a guarda contra o OOM global do kernel é o
+`earlyoom`: com a memória livre abaixo de 4%, ele mata o maior processo,
+evitando `postgres`, `dockerd`, `containerd`, `traefik` e o Dokploy. Um
+processo Node morto volta pelo Swarm em segundos; o Postgres não entra em
+recuperação. O earlyoom escolhe pelo nome do processo: o painel do
+Dokploy roda como `node`, e o que o protege é ser dos menores (o earlyoom
+mata o de maior `oom_score`) e voltar pelo Swarm. Por SSH, fora do
+horário (dono):
+
+1. `swapon --show`. Se houver swap: `swapoff -a` e tire a linha dele do
+   `/etc/fstab`.
+2. `apt install earlyoom`.
+3. Em `/etc/default/earlyoom`:
+
+   ```sh
+   EARLYOOM_ARGS="-m 4 -r 3600 --avoid '^(postgres|dockerd|containerd|traefik|dokploy)$' --prefer '^(node|python3?)$'"
+   ```
+
+4. `systemctl enable --now earlyoom` e `journalctl -u earlyoom -n 20`: o
+   log de partida mostra a lista de exclusão.
+5. Dokploy → _Settings_ → ligue a limpeza diária de imagens.
+
+Aceite: `swapon --show` vazio e `systemctl is-active earlyoom` = `active`.
+Sem swap, um pico real acima da RAM mata uma réplica Node, que volta
+sozinha.
+
+### Quando a VPS única deixa de bastar
+
+- **A RAM não fecha nem pela R2**: a fase espera o 2º VPS (G-03, onda
+  16), que leva a staging para fora; a produção passa à coluna E.
+- **A CPU**: na fase E, o HTTP da produção tem ~1,5–2 vCPU, abaixo do
+  portão do 100k. O prod-1 vem antes do cliente de escala (onda 22).
+- **O disco** passa de 60%, perto do 100k: o banco vai para o prod-db-1.
+- **O steal** medido no F0-09 passa de 5%: a produção precisa de CPU
+  dedicada (VDS), não de mais réplicas.
 
 **Logs**: a rotação é a do `/etc/docker/daemon.json`
 ([seção 6](#6-preparar-o-servidor-uma-vez), passo 3): 50 MB × 5 arquivos por
@@ -3094,16 +6605,16 @@ Na ordem:
 
 ### Quem é quem
 
-|                             | API (`Trajetto-Organization/trajetto-api`)                                                                                                                                                                                                                                                                                                                                                                                                                               | Web (`Trajetto-Organization/trajetto-ui`)                                                                                                                                                                       | App (`Trajetto-Organization/trajetto-mobile`)                                                                   |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| Artefato                    | imagens `trajetto-api`, `trajetto-api-migrate` e `trajetto-ai` em `ghcr.io/trajetto-organization/`                                                                                                                                                                                                                                                                                                                                                                       | imagem `ghcr.io/trajetto-organization/trajetto-ui`                                                                                                                                                              | APK/AAB (EAS Build) e OTA (EAS Update)                                                                          |
-| Onde roda                   | Dokploy, projeto `trajetto-api` de cada environment (`staging` e `production`): as Applications `trajetto-api` (2 réplicas, com domínio), `trajetto-api-migrate` (as migrations, antes do deploy que as muda) e `trajetto-ai` (sem domínio), puxando as imagens do GHCR, e os Databases PostgreSQL (com o backup diário do próprio Dokploy para o Cloudflare R2) e Redis                                                                                                 | Dokploy, projeto `trajetto-ui` de cada environment: a Application `trajetto-ui`, puxando a imagem do GHCR                                                                                                       | no celular do motorista (APK interno em staging, Play Store em produção)                                        |
-| Nome no Dokploy / EAS       | App Names `trajetto-api-staging` e `trajetto-api-production` (e `trajetto-api-migrate-*`, `trajetto-ai-*`, `trajetto-postgres-*`, `trajetto-redis-*`)                                                                                                                                                                                                                                                                                                                    | Application `trajetto-ui` no projeto `trajetto-ui` de cada environment (App Names `trajetto-ui-staging` e `trajetto-ui-production`)                                                                             | perfis, ambientes e canais `staging` e `production`                                                             |
-| Como o pipeline publica     | API do Dokploy (`.github/scripts/dokploy-deploy.mjs`): quando as migrations mudaram, primeiro a `trajetto-api-migrate`, esperando a etapa terminar (`dokploy-release.mjs`); depois `application.deploy` de cada Application, na ordem IA → API, a IA só quando o digest muda, acompanhando cada deployment até o fim e disparando de novo, até 6 vezes e com espera crescente, o que termina em erro; depois espera a `/health/liveness` pública responder o commit novo | API do Dokploy com o **mesmo** `.github/scripts/dokploy-deploy.mjs` (cópia comparada por teste): `application.deploy` da Application `trajetto-ui`, acompanhando o deployment, depois espera o `/build-id.json` | `eas update` e `eas build`                                                                                      |
-| Secrets de deploy no GitHub | environments `staging` e `production`: `DOKPLOY_URL`, `DOKPLOY_API_KEY`, `DOKPLOY_API_APPLICATION_ID`, `DOKPLOY_MIGRATE_APPLICATION_ID` (obrigatórios) e `DOKPLOY_AI_APPLICATION_ID` (opcional); variáveis `API_PUBLIC_URL` (a conferência pela liveness) e `SWARM_API_SERVICE` (a conferência por SSH)                                                                                                                                                                  | environments `staging` e `production`: `DOKPLOY_URL`, `DOKPLOY_API_KEY` e `DOKPLOY_UI_APPLICATION_ID`                                                                                                           | `EXPO_TOKEN` (repositório) e `EXPO_UPDATE_PRIVATE_KEY` (environments `staging` e `production`)                  |
-| Sem os secrets              | move as tags e pula o deploy com `::notice::`                                                                                                                                                                                                                                                                                                                                                                                                                            | move as tags e pula o deploy com aviso                                                                                                                                                                          | termina verde com aviso, sem publicar                                                                           |
-| De staging para produção    | promove por digest a imagem `sha-<7 do commit>` (tag `staging` → `stable`), sem rebuild, e exige o marcador `staged-<7 do commit>` no mesmo digest                                                                                                                                                                                                                                                                                                                       | igual à API, e exige o marcador `staged-<7 do commit>` no mesmo digest                                                                                                                                          | promove o **commit** verde em staging (a URL da API é embutida no build, então o artefato não pode ser o mesmo) |
-| Rollback                    | _Run workflow_ do `deploy.yml` com `image_tag=sha-<7>`                                                                                                                                                                                                                                                                                                                                                                                                                   | _Run workflow_ do `deploy.yml` com `image_tag=sha-<7>`                                                                                                                                                          | `ota-rollback.yml` (republica um grupo de OTA)                                                                  |
+|                             | API (`Trajetto-Organization/trajetto-api`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | Web (`Trajetto-Organization/trajetto-ui`)                                                                                                                                                                       | App (`Trajetto-Organization/trajetto-mobile`)                                                                   |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| Artefato                    | imagens `trajetto-api` (que também roda os papéis de processo, cada um na tag `<tag>-<papel>`), `trajetto-api-migrate`, `trajetto-ai` e `trajetto-pgbouncer` (o PgBouncer, de `infra/pgbouncer`) em `ghcr.io/trajetto-organization/`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | imagem `ghcr.io/trajetto-organization/trajetto-ui`                                                                                                                                                              | APK/AAB (EAS Build) e OTA (EAS Update)                                                                          |
+| Onde roda                   | Dokploy, projeto `trajetto-api` de cada environment (`staging` e `production`): as Applications `trajetto-api` (com domínio), `trajetto-api-migrate` (as migrations, antes do deploy que as muda), `trajetto-ai` (sem domínio) e, depois de o dono criá-las, a `trajetto-pgbouncer` (o PgBouncer, entre as Applications e o Postgres, sem domínio; manual da API, seção 10) e as de papel da mesma imagem (`trajetto-worker`, `trajetto-scheduler`, `trajetto-worker-external`, `trajetto-ingest` e `trajetto-realtime`; manual da API, seção 19), puxando as imagens do GHCR, e os Databases PostgreSQL (com o backup diário do próprio Dokploy para o Cloudflare R2) e Redis                                                                                                                          | Dokploy, projeto `trajetto-ui` de cada environment: a Application `trajetto-ui`, puxando a imagem do GHCR                                                                                                       | no celular do motorista (APK interno em staging, Play Store em produção)                                        |
+| Nome no Dokploy / EAS       | App Names `trajetto-api-staging` e `trajetto-api-production` (e `trajetto-api-migrate-*`, `trajetto-ai-*`, `trajetto-pgbouncer-*`, `trajetto-<papel>-*`, `trajetto-postgres-*`, `trajetto-redis-*`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | Application `trajetto-ui` no projeto `trajetto-ui` de cada environment (App Names `trajetto-ui-staging` e `trajetto-ui-production`)                                                                             | perfis, ambientes e canais `staging` e `production`                                                             |
+| Como o pipeline publica     | API do Dokploy (`.github/scripts/dokploy-deploy.mjs`), na ordem de "Ordem de cada release" (abaixo): primeiro a `trajetto-pgbouncer`, só quando o digest dela muda e com o secret dela, conferida pelo Swarm quando a conferência é por SSH; depois, quando as migrations mudaram, a `trajetto-api-migrate`, esperando a etapa terminar (`dokploy-release.mjs`); depois `application.deploy` de cada Application, a IA só quando o digest muda e cada papel só com o secret dele (`.github/scripts/deploy-roles.sh`), acompanhando cada deployment até o fim e disparando de novo, até 6 vezes e com espera crescente, o que termina em erro; depois da API, confere a convergência (a `/health/liveness` pública respondendo o commit novo, ou o Swarm por SSH) e só então implanta os papéis de borda | API do Dokploy com o **mesmo** `.github/scripts/dokploy-deploy.mjs` (cópia comparada por teste): `application.deploy` da Application `trajetto-ui`, acompanhando o deployment, depois espera o `/build-id.json` | `eas update` (OTA) e, quando o canal não tem binário para o runtime do commit (fingerprint), `eas build`        |
+| Secrets de deploy no GitHub | environments `staging` e `production`: `DOKPLOY_URL`, `DOKPLOY_API_KEY`, `DOKPLOY_API_APPLICATION_ID`, `DOKPLOY_MIGRATE_APPLICATION_ID` (obrigatórios), `DOKPLOY_AI_APPLICATION_ID`, `DOKPLOY_PGBOUNCER_APPLICATION_ID` (a `trajetto-pgbouncer`, depois de o dono criá-la) e um `DOKPLOY_<PAPEL>_APPLICATION_ID` por Application de papel (opcionais); variáveis `API_PUBLIC_URL` (a conferência pela liveness), `SWARM_API_SERVICE`, `SWARM_PGBOUNCER_SERVICE` e `SWARM_<PAPEL>_SERVICE` (a conferência por SSH) e `ROLLOUT_ROLES_EXPECTED` (os papéis esperados no commit novo)                                                                                                                                                                                                                       | environments `staging` e `production`: `DOKPLOY_URL`, `DOKPLOY_API_KEY` e `DOKPLOY_UI_APPLICATION_ID`                                                                                                           | `EXPO_TOKEN` (repositório) e `EXPO_UPDATE_PRIVATE_KEY` (environments `staging` e `production`)                  |
+| Sem os secrets              | move as tags e pula o deploy com `::notice::`; sem o secret de um papel, só ele fica de fora, com aviso, e a tag dele segue a da API; sem o do PgBouncer, só a tag dele anda, e sem a variável `SWARM_PGBOUNCER_SERVICE` a conferência dele por SSH é pulada, com aviso                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | move as tags e pula o deploy com aviso                                                                                                                                                                          | termina verde com aviso, sem publicar                                                                           |
+| De staging para produção    | promove por digest a imagem `sha-<7 do commit>` (tag `staging` → `stable`), sem rebuild, e exige o marcador `staged-<7 do commit>` no mesmo digest                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | igual à API, e exige o marcador `staged-<7 do commit>` no mesmo digest                                                                                                                                          | promove o **commit** verde em staging (a URL da API é embutida no build, então o artefato não pode ser o mesmo) |
+| Rollback                    | _Run workflow_ do `production.yml` com `image_tag=sha-<7>`; a API e os papéis voltam juntos, porque rodam o mesmo digest                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | _Run workflow_ do `production.yml` com `image_tag=sha-<7>`                                                                                                                                                      | `ota-rollback.yml` (republica um grupo de OTA)                                                                  |
 
 Regras comuns aos três: a branch `staging` recebe o trabalho (push direto do
 dono ou merge de PR) e todo push nela roda a validação completa e publica o
@@ -3111,7 +6622,8 @@ staging; `main` só recebe PR **de `staging`**, com **merge commit** (squash e
 rebase criam um commit que o staging nunca validou, e a promoção recusa); o
 environment `production` do GitHub tem **Required reviewers** e
 _Deployment branches_ restrito a `main`, então nada chega à produção sem
-aprovação. No Dokploy, as imagens privadas do GHCR são puxadas com um token
+aprovação (no plano gratuito, ainda não: o merge é a aprovação, ver a
+[seção 13](#13-configurar-o-github)). No Dokploy, as imagens privadas do GHCR são puxadas com um token
 _classic_ `read:packages`, informado no provider Docker de cada Application.
 
 ### Endereços
@@ -3124,23 +6636,259 @@ _classic_ `read:packages`, informado no provider Docker de cada Application.
 
 ### O que precisa casar entre os repositórios
 
-| Valor                             | API (Environment das Applications do projeto `trajetto-api`)                                                                                    | Web (Environment da Application)                                                         | App (ambiente EAS)                                                                    |
-| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| URL pública da API                | o host na aba _Domains_ da Application `trajetto-api` e `API_HTTP_REQUEST` (a URL; dela sai o logo dos e-mails)                                 | `HTTP_REQUEST` (chamadas do servidor da web) e `PUBLIC_API_URL` (chamadas do navegador)  | `EXPO_PUBLIC_API_URL`                                                                 |
-| Socket.IO                         | o mesmo host da API, com WebSocket liberado na borda                                                                                            | `PUBLIC_API_URL` (o socket roda na própria API; não há variável própria)                 | o socket usa `EXPO_PUBLIC_API_URL`                                                    |
-| Origem da web                     | `HTTP_REQUEST` = a origem da web do ambiente (única origem do CORS e do Socket.IO, base dos links)                                              | `METADATA_BASE`                                                                          | `EXPO_PUBLIC_WEB_APPLICATION_URL` (links de Privacidade e Termos)                     |
-| Limite de tentativas por IP       | `RATE_LIMIT_FORWARDER_SECRET`                                                                                                                   | `RATE_LIMIT_FORWARDER_SECRET`, **o mesmo valor**                                         | —                                                                                     |
-| Captcha (Turnstile)               | `TURNSTILE_SECRET_KEY` (o mesmo widget da web; definida, exige o token)                                                                         | `TURNSTILE_SITE_KEY` e `TURNSTILE_SECRET_KEY`                                            | —                                                                                     |
-| Fotos no R2                       | `R2_*` (um bucket por ambiente)                                                                                                                 | `CSP_STORAGE_ORIGINS` libera a origem do bucket; o CORS do bucket libera a origem da web | envia direto à URL pré-assinada que a API devolve (sem configuração)                  |
-| IA (leitura de fotos)             | `AI_LOCAL_TOKEN` na `trajetto-api` = `AI_TOKEN` na `trajetto-ai` (o mesmo valor, um por ambiente) e `AI_LOCAL_URL=http://<App Name da IA>:8080` | nenhuma variável: a IA chega pela API                                                    | nenhuma variável                                                                      |
-| Push (FCM)                        | nenhuma: a API chama a Expo Push API                                                                                                            | —                                                                                        | `GOOGLE_SERVICES_JSON` (arquivo secreto no EAS) e a chave FCM V1 em `eas credentials` |
-| Rastreamento em segundo plano     | —                                                                                                                                               | `BACKGROUND_TRACKING`                                                                    | `EXPO_PUBLIC_BACKGROUND_TRACKING` (as duas ligam juntas)                              |
-| Versão do app                     | `MIN_MOBILE_CONTRACT` e `MOBILE_STORE_URL`                                                                                                      | —                                                                                        | `CLIENT_CONTRACT` em `utils/client-version.ts`                                        |
-| Gate de rotas da web              | `/docs/json` com `DOCS_USER` e `DOCS_PASSWORD`                                                                                                  | secrets `API_DOCS_URL`, `DOCS_USER`, `DOCS_PASSWORD` no environment `production`         | —                                                                                     |
-| Checkout entre repositórios no CI | `CLIENT_REPOS_READ_TOKEN` (lê a web e o app)                                                                                                    | `API_REPO_READ_TOKEN` (lê a API)                                                         | `API_REPO_READ_TOKEN` (lê a API)                                                      |
+| Valor                             | API (Environment das Applications do projeto `trajetto-api`)                                                                                                                                                                                                                                                                                                    | Web (Environment da Application)                                                                                          | App (ambiente EAS)                                                                                                                                                                                                        |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| URL pública da API                | o host na aba _Domains_ da Application `trajetto-api` e `API_HTTP_REQUEST` (a URL; dela sai o logo dos e-mails)                                                                                                                                                                                                                                                 | `HTTP_REQUEST` (chamadas do servidor da web) e `PUBLIC_API_URL` (chamadas do navegador)                                   | `EXPO_PUBLIC_API_URL`                                                                                                                                                                                                     |
+| Socket.IO                         | o mesmo host da API, com WebSocket liberado na borda                                                                                                                                                                                                                                                                                                            | `PUBLIC_API_URL` (o socket roda na própria API; não há variável própria)                                                  | o socket usa `EXPO_PUBLIC_API_URL`                                                                                                                                                                                        |
+| Origem da web                     | `HTTP_REQUEST` = a origem da web do ambiente (única origem do CORS e do Socket.IO, base dos links)                                                                                                                                                                                                                                                              | `METADATA_BASE`                                                                                                           | `EXPO_PUBLIC_WEB_APPLICATION_URL` (links de Privacidade e Termos; é também a origem sob a qual a página do mapa ao vivo carrega, para os tiles levarem o `Referer` que a restrição de origem da chave do provedor aceita) |
+| Limite de tentativas por IP       | `RATE_LIMIT_FORWARDER_SECRET`                                                                                                                                                                                                                                                                                                                                   | `RATE_LIMIT_FORWARDER_SECRET`, **o mesmo valor**                                                                          | —                                                                                                                                                                                                                         |
+| Captcha (Turnstile)               | `TURNSTILE_SECRET_KEY` (o mesmo widget da web; definida, exige o token)                                                                                                                                                                                                                                                                                         | `TURNSTILE_SITE_KEY` e `TURNSTILE_SECRET_KEY`                                                                             | —                                                                                                                                                                                                                         |
+| Fotos no R2                       | `R2_*` (um bucket por ambiente)                                                                                                                                                                                                                                                                                                                                 | `CSP_STORAGE_ORIGINS` libera a origem do bucket; o CORS do bucket libera a origem da web                                  | envia direto à URL pré-assinada que a API devolve (sem configuração)                                                                                                                                                      |
+| Mapa de fundo (tiles)             | `MAP_TILE_URL`, `MAP_TILE_ATTRIBUTION`, `MAP_TILE_URL_DARK` e `MAP_TILE_ATTRIBUTION_DARK` na `trajetto-api` (opcionais), definidas pelo dono em staging e produção com **os mesmos valores** da web do ambiente: a API as entrega ao app em `GET /config/map`; um modelo que o app recusaria (host que o CSP dele não nomeia como uma origem só) derruba o boot | as mesmas quatro `MAP_TILE_*`; a chave do provedor na URL é restrita às origens da web (MapTiler, _Allowed HTTP Origins_) | nenhuma variável: lê o mapa de fundo de `GET /config/map` e carrega a página do mapa sob `EXPO_PUBLIC_WEB_APPLICATION_URL`; sem as `MAP_TILE_*` na API, o mapa ao vivo mostra "Mapa de fundo não configurado"             |
+| IA (leitura de fotos)             | `AI_LOCAL_TOKEN` na `trajetto-api` = `AI_TOKEN` na `trajetto-ai` (o mesmo valor, um por ambiente) e `AI_LOCAL_URL=http://<App Name da IA>:8080`                                                                                                                                                                                                                 | nenhuma variável: a IA chega pela API                                                                                     | nenhuma variável                                                                                                                                                                                                          |
+| Push (FCM)                        | nenhuma: a API chama a Expo Push API                                                                                                                                                                                                                                                                                                                            | —                                                                                                                         | `GOOGLE_SERVICES_JSON` (arquivo secreto no EAS) e a chave FCM V1 em `eas credentials`                                                                                                                                     |
+| Rastreamento em segundo plano     | —                                                                                                                                                                                                                                                                                                                                                               | `BACKGROUND_TRACKING`                                                                                                     | `EXPO_PUBLIC_BACKGROUND_TRACKING` (mesma regra: ausente é ligado, só `false` desliga)                                                                                                                                     |
+| Versão do app                     | `MIN_MOBILE_CONTRACT` e `MOBILE_STORE_URL`                                                                                                                                                                                                                                                                                                                      | —                                                                                                                         | `CLIENT_CONTRACT` em `utils/client-version.ts`                                                                                                                                                                            |
+| QR Code de acesso do motorista    | `APP_ENV`, que vai dentro do QR Code: `trajetto-enroll:1:<APP_ENV>:<token>`                                                                                                                                                                                                                                                                                     | nenhuma variável: o diálogo mostra o QR Code que a API gerou                                                              | `extra.appEnvironment` do build, tirado de `EAS_BUILD_PROFILE` ou `APP_ENV` (`preview` e `staging` viram `staging`), **igual ao `APP_ENV` da API**; diferente, o app recusa o QR Code e só o código de acesso funciona    |
+| Gate de rotas da web              | `/docs/json` com `DOCS_USER` e `DOCS_PASSWORD`                                                                                                                                                                                                                                                                                                                  | secrets `API_DOCS_URL`, `DOCS_USER`, `DOCS_PASSWORD` no environment `production`                                          | —                                                                                                                                                                                                                         |
+| Checkout entre repositórios no CI | `CLIENT_REPOS_READ_TOKEN` (lê a web e o app)                                                                                                                                                                                                                                                                                                                    | `API_REPO_READ_TOKEN` (lê a API)                                                                                          | `API_REPO_READ_TOKEN` (lê a API)                                                                                                                                                                                          |
 
 Segredos nunca são compartilhados entre staging e produção. Cada variável
 está detalhada no `docs/variaveis-de-ambiente.md` do repositório que a lê.
+
+### O CI dos três (desde 10/11/2026)
+
+Os três repositórios têm a mesma forma: um workflow por gatilho, a validação
+num workflow reutilizável só (`validate.yml`) e o deploy numa ação composta,
+com os mesmos nomes de arquivo, de job e de passo quando é a mesma coisa. Os
+nomes são curtos, em inglês e nunca uma pergunta: um teste em cada
+repositório recusa `?` em nome de job ou de passo. O detalhe de cada job fica
+no manual do repositório.
+
+| Arquivo          | Gatilho                                                      | API                                                                                                                      | Web                                                                                                                                     | App                                                                                               |
+| ---------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `ci.yml`         | push em branch de trabalho; _Run workflow_                   | `Changes`, `Secret scan`, `Validate`                                                                                     | `Changes`, `Secret scan`, `Validate` (no _Run workflow_ com `image_tag`, também `Browser suites`)                                       | `Changes`, `Secret scan`, `Validate`                                                              |
+| `validate.yml`   | chamado pelos outros (`workflow_call`)                       | `Validate`, `E2E (1/3)`, `E2E (2/3)`, `E2E (3/3)`, `AI OCR`; num push de documentação, `Docs`; depois de todos, `Result` | `Validate`, `Browser suites (1/2)`, `Browser suites (2/2)`; num push de documentação, `Docs`; depois de todos, `Result`                 | `Validate`; num push de documentação, `Docs`                                                      |
+| `staging.yml`    | push em `staging`                                            | `Changes`, `Secret scan`, `Validate` → `Gate` → `Build` → `Image scan` → `Deploy`                                        | `Changes`, `Secret scan` → `Build` (`candidate-<7>`) → `Image scan`, `Browser suites`; `Validate` desde o `Changes` → `Gate` → `Deploy` | `Changes`, `Secret scan`, `Validate` → `Gate` → `Publish` (OTA; o binário pelo fingerprint)       |
+| `pr.yml`         | PR para `main` (no app, também para `staging`)               | `Secret scan`, `Staging evidence`                                                                                        | `Secret scan`, `Staging evidence`                                                                                                       | `Secret scan`, `Staging evidence` (para `staging`: `Changes`, `Secret scan`, `Validate`)          |
+| `production.yml` | push em `main`; na API e na web, _Run workflow_ é o rollback | `Staging evidence` → `Deploy` (aprovação) → `Release`                                                                    | `Staging evidence` → `Deploy` (aprovação) → `Release`                                                                                   | `Changes`, `Secret scan`, `Staging evidence`, `Dependency audit` → `Gate` → `Publish` (aprovação) |
+| ações compostas  | —                                                            | `.github/actions/setup`, `deploy` e `siblings`                                                                           | `.github/actions/setup`, `secret-scan` e `deploy`                                                                                       | `.github/actions/setup`, `secret-scan` e `publish`                                                |
+
+Além desses, a API tem o `cloudflare-ranges.yml` (semanal) e o app, o
+`native-build.yml` (build manual) e o `ota-rollback.yml`. Na tela do GitHub,
+um job do `validate.yml` aparece com o nome de quem o chamou na frente:
+`Validate / Validate`, `Validate / E2E (1/3)`, `Browser suites / Browser
+suites (1/2)`, `Validate / Docs`, `Validate / Result`.
+
+Regras comuns:
+
+- **Push só de documentação** (todo arquivo em `*.md` ou `docs/**`): roda o
+  `Secret scan` e o `Docs` (os unitários sem cobertura, porque há testes que
+  leem a documentação). Nada de build, deploy ou OTA, e um vermelho cai no
+  commit que o causou. A marcação de pular CI continua permitida só em
+  commit de documentação, e nunca na ponta do PR para `main`.
+- **Cancelamento**: um push novo na `staging` cancela só a **validação** do
+  run anterior; build, deploy e publicação nunca são cancelados, e só o run
+  da cabeça da branch implanta (`Check run is branch head`). Na `main`, nada
+  é cancelado.
+- **Base do audit**: o último build que a `staging` serviu (`staged-<7>` na
+  API e na web; no app, o último run verde da `staging`), não o push
+  anterior. O audit só bloqueia quando muda `package.json`, o lockfile ou o
+  `audit-ci.jsonc`, e repete 3 vezes uma falha de rede.
+- **`Gate`**: junta tudo o que bloqueia o deploy num check só, e é ele que
+  o `Staging evidence` confere no commit promovido. Todo job depois do
+  `Gate` (ou de um job que chama o `validate.yml`) declara a própria função
+  de status: `!cancelled()` e o resultado, ou uma saída, de cada job de que
+  precisa. Sem ela, o `success()` implícito do GitHub vê os jobs pulados
+  dentro do `validate.yml` e pula o deploy mesmo com o `Gate` verde
+  ([actions/runner#2205](https://github.com/actions/runner/issues/2205));
+  só com o `!cancelled()`, o job rodaria depois de um `Gate` vermelho. Um
+  teste em cada repositório recusa as duas coisas.
+- **O veredito do `validate.yml`**: o `Gate` lê a saída do `validate.yml`,
+  nunca o `needs.<job que o chama>.result`. Em toda chamada algum job lá
+  dentro é pulado (o `Docs` num push de código, as suítes sem imagem), um
+  job pulado dentro de um workflow reutilizável vaza para quem o chama
+  ([community/discussions/189172](https://github.com/orgs/community/discussions/189172)),
+  e o valor que isso deixa no resultado do chamador não é contrato: se
+  fosse `skipped`, o `Gate` ficaria vermelho em todo push. Dentro do
+  `validate.yml` o resultado de cada job é confiável. Na API e na web, o
+  job `Result`, depois de todos, confere cada um contra o que a chamada
+  pediu (verde se pedido, pulado se não) e publica `passed`; com o E2E e as
+  suítes em matriz, a saída de um job não serviria (fica a do último shard
+  que escreve). No app, sem matriz, o último passo de cada job grava a
+  saída dele (`validate-passed`, `docs-passed`). A única leitura do
+  resultado de quem chama é a da web, para conferir que as suítes que o
+  `Changes` deixou de fora nem começaram (pulada pelo próprio `if`, sem
+  nada dentro que vaze). Um teste em cada repositório recusa outra.
+
+**Mudança que atravessa repositórios: branches com o mesmo nome.** Uma
+mudança que mexe em mais de um repositório (uma rota nova que a web chama, um
+evento de socket que o app ouve, uma regra compartilhada) vai numa branch
+com **o mesmo nome** em cada um (por exemplo `feat/entregas-x` na API, na web
+e no app). O passo `Pick the sibling branches` (id `refs`, o mesmo texto nos
+três) procura no irmão a branch de mesmo nome e faz o checkout dela; só a
+resposta "essa branch não existe" (código 2 do `git ls-remote`) cai na
+`staging` do irmão, com aviso, e um erro de rede ou de credencial repete (3
+vezes na API e no app, 4 na web) e depois falha, nunca cai na `staging` por
+engano. Na API, o passo está na ação `.github/actions/siblings`, chamada pelo
+`Validate` e pelo `Docs` do `validate.yml`, e lê a web e o app; na web, nos
+jobs `Validate` e `Browser suites` do `validate.yml`; no app, no `Validate`
+do `validate.yml`; os dois leem a API. Por isso o `ci.yml` existe nos três:
+o push na branch de trabalho testa cada lado contra a sua contraparte, e na
+`staging` a sonda acha a `staging` do irmão. O `compose-ci-siblings.test.ts`
+da API executa todas as sondas dos três repositórios, exige que todo
+checkout de irmão use a resposta dela e que todo checkout de outro
+repositório escreva por extenso a organização e o nome (sem expressão,
+em qualquer caixa). Suba primeiro o lado que o outro consome (em geral a
+API) e mantenha os nomes iguais até o merge. Na `staging`, quando os dois
+lados dependem um do outro, vale a ordem do primeiro push, abaixo.
+
+**Esta seção é uma só.** O `shared-deploy-section.test.ts` da web e o do
+app comparam a cópia deles com a da API ao lado (a branch de mesmo nome ou
+a `staging` dela), byte a byte, e também os nomes dos cinco workflows e dos
+jobs que os dois têm em comum, como o `dokploy-deploy.test.ts` da web
+compara o script de deploy. A cópia da API é a referência: mude primeiro a
+dela e depois a da web e a do app, e suba nessa ordem, como em todo
+release.
+
+**Checks exigidos nos Rulesets.** Na `main` dos três, exija só
+**`Secret scan`** e **`Staging evidence`**, os dois do `pr.yml`: o _Staging
+evidence_ já prova que o staging rodou o commit e que o `Gate` dele está
+verde, então a validação não é exigida de novo. Troque o Ruleset no primeiro
+PR `staging → main` de cada repositório depois da virada; antes disso, não
+tire os nomes antigos, ou o PR fica sem check nenhum. Os nomes antigos
+deixaram de existir:
+
+| Repositório       | Checks antigos a tirar da `main`                                                                                                                                                                                                                                                                                                                                                                                 |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `trajetto-api`    | `Lint, type-check, unit (coverage floor) and E2E`, `AI OCR service (image + pytest)`, `Secret scan (gitleaks)` e `The PR head was built on staging`                                                                                                                                                                                                                                                              |
+| `trajetto-ui`     | `Validate (audit, lint, types, unit and rule tests)`, `Secret scan (gitleaks)` e `UI, a11y and responsive against a running stack`                                                                                                                                                                                                                                                                               |
+| `trajetto-mobile` | nenhum, pelo guia do desenvolvedor (a `main` do app não exigia check: um commit marcado para pular CI na ponta prendia o PR); se algum destes estiver lá, tire: `Lint, type-check, unit tests and Expo doctor`, `Secret scan (gitleaks)`, `Checks / ...`, `What this push ships`, `Was this commit green on staging?`, `Staging (OTA and internal APK)`, `Production (OTA and store build)` e `Manual EAS build` |
+
+Na `staging`, PR não é exigido (o dono faz push direto). Quem quiser exigir
+PR ali marca `Validate / Validate`, `Validate / Docs` e `Secret scan` (no
+app, no lugar dos antigos `Lint, type-check, unit tests and Expo doctor` e
+`Secret scan (gitleaks)`).
+
+**Minutos do Actions, os três somados.** A cota do plano Free da
+organização é de 2.000 min por mês, dividida pelos três repositórios, e cada
+job é cobrado arredondado para cima, em minutos. Um push de código na
+`staging` custa uns 61 min na API, 54 na web e 14 no app: uns 129 min quando
+a mesma mudança vai aos três (antes da troca, 75 + 51 + 13 = 139). Um push só
+de documentação custa 12 + 15 + 8 = 35 min, e um release (o PR `staging →
+main` e o merge) 13 + 8 + 10 = 31 min. O `Result` da API e o da web somam 1
+min por chamada do `validate.yml` (2 num push de código da web, que o chama
+duas vezes): é o preço de o `Gate` não depender do resultado de quem chama.
+No ritmo de novembro de 2026, o mês fica em uns 1.750 min na API, 1.350 na
+web e 335 no app: uns 3.400 min, contra uns 4.500 antes da troca, ainda
+acima da cota. Por isso o orçamento com teto (abaixo) não é opcional: sem
+minutos, nenhum job começa, nem um de aviso, e o run só diz _failed_.
+
+**Ações do dono na virada**, nos três:
+
+1. **Rulesets**: a troca acima, no primeiro PR para `main` de cada
+   repositório.
+2. **Orçamento do Actions** (organização → _Settings → Billing and
+   licensing_): uma forma de pagamento com orçamento limitado (US$ 10–15 por
+   mês) e alertas em 75, 90 e 100 %, com bloqueio no limite. Run _failed_
+   sem nenhum job vermelho é a cota: veja _Summary → Annotations_.
+3. **Limpeza do GHCR**: `candidate-*` e `suites-*` são só da web (o pacote
+   `trajetto-ui`); a API não publica `candidate-*`, e o app não publica
+   imagem. A retenção está no manual da web, seção 17.
+4. **Runs antigos**: antes do push de cada repositório, nenhum run do
+   workflow antigo rodando ou esperando aprovação (o `deploy.yml` da API e da
+   web, o "Release (EAS)" do app); não faça merge em `main` com um deles em
+   andamento. No app, despache antes do merge na `main` qualquer release que
+   dependa de commits antigos da `staging`: o `Staging evidence` só
+   reconhece runs do `staging.yml`.
+5. **Nomes dos runs** (os e-mails do GitHub, os filtros e o vigia): o
+   `validate.yml` não vira run próprio, os jobs dele aparecem dentro do run
+   de quem o chama.
+
+   | Repositório       | Antes                                                                                                              | Depois                                                                                                                           |
+   | ----------------- | ------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
+   | `trajetto-api`    | `CI (branches)`; `Pipeline (staging → produção)` (push em `staging` e em `main`, e o PR para `main`)               | `CI`; `Staging`, `Pull request` e `Production`                                                                                   |
+   | `trajetto-ui`     | `CI` (também no PR para `main`); `Browser suites` (o PR para `main`); `Deploy` (push em `staging` e em `main`)     | `CI` (só branch de trabalho); `Pull request`; `Staging` (as suítes de navegador viram jobs dele) e `Production`                  |
+   | `trajetto-mobile` | `CI` (também nos PRs para `staging` e `main`); `Release (EAS)` (push em `staging` e em `main`, e o _Run workflow_) | `CI` (só branch de trabalho); `Pull request`; `Staging`, `Production` e `Native build` (o build manual); `OTA rollback` não muda |
+
+6. **Na máquina**: depois de puxar a API, `yarn install --force` antes do
+   E2E local (o ambiente do E2E é uma dependência `file:`).
+
+**Ordem do primeiro push com o CI novo: web e app, API, web e app de
+novo**, um passo de cada vez, acompanhando o run de cada um antes do
+seguinte. Desde a troca, o CI de cada repositório lê o irmão também no push
+em `staging` (o `Validate` faz o checkout da `staging` dele; antes, isso era
+pulado ali), e neste lote os dois lados mudaram arquivos que o outro lê:
+
+- **A web e o app leem a `staging` da API**: o `dokploy-deploy.test.ts` da
+  web exige a cópia do `.github/scripts/dokploy-deploy.mjs` igual à da API;
+  os testes de paridade (`cpf-field-api-parity`, `recipient-email-api-parity`
+  e os outros) comparam com o código dela; e o
+  `shared-deploy-section.test.ts` dos dois compara esta seção com a da API.
+- **A API lê a `staging` da web e a do app**: o
+  `public-docs-guide-samples.test.ts` exige no guia de erros da web
+  (`src/content/docs/erros.mdx`) todo código que o documento público
+  publica, como os `DELIVERY_NOT_CANCELLABLE` e `DELIVERY_STATUS_CONFLICT`
+  do cancelamento de entrega, e a cópia do documento na web
+  (`tests/unitaires/fixtures/public-openapi.json`) igual ao documento ao
+  vivo; e o `app-reading-windows.test.ts` exige no app os números da API,
+  como o mínimo do motivo da pausa (`PAUSE_NOTE_MIN_LENGTH`, de
+  `features/pauses/pause-rules.ts`), que o app da `staging` ainda não tem.
+
+Numa réplica Linux de 11/11/2026, a API deste lote contra a `staging` antiga
+da web e do app ficou vermelha nesses dois arquivos; a web e o app
+contra a `staging` antiga da API ficam vermelhos nos deles. Nenhuma ordem
+fica verde de primeira. A que mantém o deploy da API antes do da web, e o
+do app por último:
+
+1. **Web e app**: o push dos dois. O run de cada um fica vermelho só nos
+   testes que leem a `staging` da API, e um run vermelho não implanta nada
+   no staging nem publica OTA.
+2. **API**, logo depois: o `Validate` dela lê a `staging` nova da web e do
+   app e passa. Espere o `Deploy` dela.
+3. **Web de novo**: reexecute o run mais novo da `staging` da web
+   (_Re-run all jobs_). Ele lê a API nova e implanta. Espere o `Deploy`.
+4. **App de novo**: reexecute o run mais novo da `staging` do app. Ele
+   publica a OTA.
+
+Os passos 3 e 4 não são teste instável rodado de novo: o vermelho do passo 1
+é o irmão ainda na versão anterior, e o mesmo run fica verde, e sempre, com
+o irmão já na `staging`. Os três passos do zod 4 (manual da API, seção 15,
+"zod 4.6.7 e fastify-type-provider-zod 7.0.0") cabem nesta ordem: a cópia
+do documento e o zod 4 da web e do app vão no passo 1, e a API em zod 4 no
+passo 2. Fora de um lote assim, vale a regra das branches de
+mesmo nome (acima): suba primeiro o lado que o outro consome. O
+`compose-ci-siblings.test.ts` da API lê as sondas da web e do app no formato
+antigo e no novo, e o `compose-rollout-verify.test.ts` lê o deploy da web
+nos dois formatos: nenhum dos dois prende a ordem.
+
+O que acompanhar no primeiro run de cada um (o que só um run de verdade
+confirma):
+
+- os nomes dos checks como os Rulesets vão vê-los, inclusive os que vêm do
+  reutilizável (`Validate / Validate`, `Validate / E2E (1/3)`, `Browser
+suites / Browser suites (1/2)`), e o `Gate` com esse nome exato (o
+  _Staging evidence_ da API e da web o procura por ele);
+- que o job depois do `Gate` **rodou**, e não ficou _Skipped_: o `Build` na
+  API e na web, o `Publish` no app;
+- que o `Gate` leu o veredito pela saída do `validate.yml`: na API e na
+  web, o `Validate / Result` verde (e o `Browser suites / Result`, na web)
+  com o `Docs` pulado e o `Gate` verde; no app, o `Gate` verde lendo
+  `validate-passed`. Um `Gate` vermelho dizendo `Validate (Validate /
+Result)` com o `Result` verde seria a saída que não chegou ao chamador:
+  um defeito do workflow, não do código;
+- o tempo de cada job, contra a tabela de minutos do manual de cada um;
+- as tags e a publicação: na API, `sha-<7>` das três imagens e `staged-<7>` da API e da IA;
+  na web, `candidate-<7>`, `sha-<7>`, `suites-<7>` e `staged-<7>` no mesmo
+  digest, com os dois shards das suítes; no app, a OTA no canal `staging` e
+  o passo `Check native binary` dizendo que o binário do runtime existe
+  (nenhum build enfileirado);
+- um segundo push de código em menos de 10 min: a validação do run anterior
+  fica cancelada (cinza) e nada é implantado por ele; depois, um push só de
+  documentação sobre um build já servido, que roda só o `Secret scan` e o
+  `Docs`;
+- no primeiro PR para `main`: os dois checks novos chegando, e a troca do
+  Ruleset.
 
 ### Ordem do primeiro deploy
 
@@ -3176,7 +6924,10 @@ está detalhada no `docs/variaveis-de-ambiente.md` do repositório que a lê.
    workflow_ na `staging`): ele roda as migrations e só então faz o deploy
    da IA e da API. Confira `/health/readiness` e, como MASTER na web,
    _Sistema → Provedores_. Por fim, o **backup** na aba _Backups_ do
-   Database PostgreSQL (destino S3 no R2, diário).
+   Database PostgreSQL (destino S3 no R2, diário). As Applications de papel
+   (`trajetto-worker` e as outras) não entram no primeiro deploy: o dono
+   cria cada uma depois, quando o plano de escala pede (manual da API,
+   seção 19).
 5. **Web de staging** (Application `trajetto-ui` do projeto `trajetto-ui` no
    environment `staging`, manual da web): imagem
    `:staging`, `HTTP_REQUEST` e `PUBLIC_API_URL` apontando para a API de
@@ -3191,7 +6942,7 @@ está detalhada no `docs/variaveis-de-ambiente.md` do repositório que a lê.
    `EXPO_PUBLIC_WEB_APPLICATION_URL` = web de staging; `EXPO_TOKEN` no
    GitHub; um push em `staging` gera o APK de staging.
 7. **Produção, na mesma ordem:** a tag `stable` da API criada antes (_Run
-   workflow_ do `deploy.yml` da API com `image_tag=sha-<7>`, enquanto o
+   workflow_ do `production.yml` da API com `image_tag=sha-<7>`, enquanto o
    environment `production` ainda não tem os secrets do Dokploy); as mesmas
    peças (Databases com o backup, IA, migrations e API, esta sem Deploy) no
    projeto `trajetto-api` do environment `production`, já em `:stable`; os
@@ -3209,7 +6960,24 @@ está detalhada no `docs/variaveis-de-ambiente.md` do repositório que a lê.
 
 1. **API:** merge `staging → main`, aprovação, convergência das réplicas.
    Mudanças de rota seguem expandir e depois contrair: a API nunca tira uma
-   rota que a web ou o app em produção ainda chamam.
+   rota que a web ou o app em produção ainda chamam. Dentro do deploy da
+   API, as Applications vão numa ordem fixa (manual da API, seções 3 e 19):
+   `trajetto-pgbouncer` → `trajetto-api-migrate` → `trajetto-ai` →
+   `trajetto-worker` → `trajetto-scheduler` → `trajetto-worker-external` →
+   `trajetto-api` → `trajetto-ingest` → `trajetto-realtime`. O PgBouncer
+   (onda 17 do plano de escala) só é implantado quando o digest dele mudou
+   (um push que não muda `infra/pgbouncer` não o reimplanta) e com a
+   Application criada e o secret `DOKPLOY_PGBOUNCER_APPLICATION_ID`; sem
+   eles, só a tag dele anda. A etapa de release (a
+   migrate) só roda quando as migrations mudaram, e a IA só quando o digest
+   dela mudou. Os papéis de fila (worker, scheduler e worker-external) vão
+   antes da API; os de borda (ingest e realtime), só depois de a
+   conferência da API passar. Cada papel puxa a própria tag,
+   `<tag>-<papel>`, que anda para o digest da API logo antes do deploy
+   dele, e só é implantado com a Application criada e o secret
+   `DOKPLOY_<PAPEL>_APPLICATION_ID`: sem nenhum, o deploy é migrate → IA →
+   API, como antes do plano de escala. Um papel que falha para tudo o que
+   vem depois, a API inclusive.
 2. **Web:** só depois. O gate de rotas do promote falha se a API de
    produção ainda não serve alguma rota que o build da web chama.
 3. **App:** por último. Se o app passou a enviar algo novo, o
@@ -3217,3 +6985,703 @@ está detalhada no `docs/variaveis-de-ambiente.md` do repositório que a lê.
    precisa estar em produção; `MIN_MOBILE_CONTRACT` só sobe depois que a OTA
    (ou o binário) com o contrato novo estiver publicada e os contratos
    antigos sumirem dos logs da API.
+
+**Compatibilidade: duas versões ficam no ar juntas.** O rolling sobe a
+réplica nova antes de tirar a anterior, um papel de fila sobe antes da API,
+e um rollback devolve a imagem anterior: por alguns minutos (ou até o
+rollback seguinte), a versão nova e a anterior servem juntas, contra o
+mesmo banco e o mesmo Redis. O worker novo trabalha o que a API anterior
+enfileirou, e a API anterior lê o que o worker novo gravou. Por isso:
+
+- **Expandir antes, contrair depois.** Primeiro vai o release que aceita o
+  novo (a coluna, a rota, o campo, o evento, a mensagem entre processos) e
+  continua aceitando o antigo; a contração, que tira o antigo, só num
+  release seguinte, com a expansão já em produção e, quando o manual da API
+  marca uma data, depois dela. A expansão e a contração que depende dela
+  nunca vão no mesmo release: a imagem anterior, que serve durante o
+  rolling e volta num rollback, ainda usa o que a contração tira. Quando um
+  lote sai num push só, a contração dele vai como passo de
+  `prisma/post-deploy`, que espera todo processo ter a capability (manual
+  da API, seção 17, "Contrações que esperam a capability"), ou fica fora da
+  `staging` até o release seguinte.
+- **A web, do mesmo jeito:** não tira uma Server Action ou rota no mesmo
+  release em que deixa de usá-la, e lê como opcional o campo novo que a API
+  anterior ainda não manda.
+- **O app, por contrato.** Um build antigo fica meses nas ruas (OTA
+  atrasada, aparelho sem rede), e a API aceita todo contrato desde o
+  `MIN_MOBILE_CONTRACT`. O app que passa a enviar algo novo sobe o
+  `CLIENT_CONTRACT`, e a OTA (ou o binário) só sai com a API que aceita o
+  novo já em produção. O `MIN_MOBILE_CONTRACT` só sobe com o aval do dono,
+  depois de a adoção do contrato novo aparecer na conta que a API faz dos
+  envios de posição (`/health/metrics` e o `ops_sample`); no contrato 8,
+  seis semanas depois de pelo menos 95% deles virem do 8.
+
+**O lote das ondas 2 a 5 (contrato 6 do app)**, nesta ordem:
+
+1. **API**, com as três migrations só de expansão
+   (`20261106120000_user_must_change_password`,
+   `20261106120100_driver_trusted_device` e
+   `20261106120200_driver_trusted_device_backfill`) e a de dados
+   `20261109120000_kanban_service_order_card_without_amount`, que o pipeline
+   roda pela `trajetto-api-migrate` antes do deploy. Depois do rollout, rode
+   de novo à mão o `UPDATE` dessa última ("Card automático da ordem de
+   serviço sem valor", na seção 15). Antes do
+   deploy, o dono define as quatro `MAP_TILE_*` no _Environment_ da
+   Application `trajetto-api`, em staging e em produção, com os valores da
+   web do mesmo ambiente. Já com esta API, o login por CPF passa a valer só
+   num aparelho confiável para aquele login, em todos os builds do app
+   (manual da API, seção 15, "Conta e acesso do motorista, onda 2").
+2. **Web:** logo depois da API. Até ela subir, a web anterior mostra ao
+   motorista "R$ 0,00" e "N/A" no histórico de ordens de serviço do veículo
+   ("Ordens de serviço sem valores para o motorista", na seção 15).
+3. **App:** por OTA, sem binário novo, com o contrato 6, e só com a API do
+   passo 1 em produção. Antes da OTA de produção, confira num aparelho com
+   o build de staging que os tiles do MapTiler aparecem no mapa ao vivo (a
+   página carrega sob a origem da web do build). `MIN_MOBILE_CONTRACT` fica
+   como está até o contrato 5 sumir dos logs da API.
+
+**O lote de 09 e 10/11/2026 (contrato 7 do app)**, nesta ordem:
+
+1. **API**, com a migration só de expansão
+   `20261110120000_delivery_event_api_key` e a de dados
+   `20261110130000_customer_message_suppression_email_entries`, que o
+   pipeline roda pela `trajetto-api-migrate` antes do deploy. Antes do
+   deploy, o dono define `ADDRESS_SEARCH_URL` e `ADDRESS_SEARCH_PROTOCOL` no
+   _Environment_ da Application `trajetto-api`, em staging e em produção
+   (sem elas, a busca do "Fixar no mapa" responde 503 e nada quebra), e
+   roda em produção as duas contagens só de leitura: motoristas com CPF
+   inválido e entregas em aberto com lista ou nome no e-mail. No staging,
+   antes de promover, faz o teste de e-mail real pela Resend
+   (nodemailer 10) e abre o `/docs` interno com o `DOCS_USER` e o
+   `DOCS_PASSWORD` (CSS, logo, lista de rotas, sem erro de CSP no console).
+   Depois do rollout, roda de novo à mão o `INSERT` da migration de dados.
+   Tudo no manual da API, seção 15 ("CPF conferido no cadastro do
+   motorista", "Busca de endereço do 'Fixar no mapa'", "nodemailer 10.3.1 e
+   o e-mail do destinatário das importações e do painel" e "@fastify/static
+   10.1.8 e @fastify/swagger-ui 6.1.3"). No push para a
+   `staging`, este lote segue a "Ordem do primeiro push com o CI novo"
+   (acima): a web e o app vão antes e ficam vermelhos só nos testes que
+   leem a `staging` da API (o CI da web roda o `cpf-field-api-parity` e o
+   `recipient-email-api-parity` contra ela), a API sobe depois, lendo a
+   web e o app novos, e os runs mais novos da web e do app são
+   reexecutados.
+2. **Web:** só com a API do passo 1 em produção. A web nova chama
+   `GET /address-search/:businessId` e `POST /user/session/revoke` (na API
+   desde 04/11/2026, ainda fora da `v1.3.0`), oferece o escopo
+   `deliveries:cancel`, que a API anterior recusa com 400, e manda a lista
+   de e-mails do destinatário no cadastro e na edição da entrega, que a API
+   anterior recusa com 400. O gate de rotas
+   do promote só cobra as rotas com `API_DOCS_URL` (e `DOCS_USER` e
+   `DOCS_PASSWORD`) no _environment_ de produção da web; sem ela, confira
+   as duas no `/docs/json` da API de produção antes de promover (manual da
+   web, seção 13).
+3. **App:** por último, por OTA, sem binário novo, com o contrato 7 (o
+   motivo na pausa por outro motivo e o "Novo assunto" do chat) e a troca
+   de tema mais leve. Nada é recusado por contrato: o app 7 funciona sobre
+   a API anterior. `MIN_MOBILE_CONTRACT` não muda.
+   O **zod 4 do app** (zod 3.25.76 → 4.6.7) vai nessa mesma OTA, sem
+   binário novo (manual do app, "Canais, branches e runtime") e sem mexer
+   no `CLIENT_CONTRACT`, e em produção não depende do zod da API (manual
+   da API, seção 15, "zod 4.6.7 e fastify-type-provider-zod 7.0.0"): o
+   zod 4 mede um texto em caracteres, com o emoji contando 1, e o zod 3 em
+   unidades UTF-16, com o emoji contando 2, e os textos livres que o app
+   põe na fila ("Quem recebeu", a descrição da ocorrência e as observações
+   do checklist e do abastecimento) conferem o teto em unidades, que
+   nenhuma das duas recusa pelo tamanho. Um rollback da API para o zod 3
+   não pede o da OTA. No push para a `staging` deste lote, o app em zod 4
+   vai no passo 1 da "Ordem do primeiro push com o CI novo" (acima), com a
+   web em zod 4, e fica vermelho nos testes que leem a `staging` da API,
+   entre eles o `occurrence-form-rules.test.ts`, que compara a cópia do
+   app, linha a linha, com o arquivo da `staging` da API; a API em zod 4
+   sobe no passo 2, e o run do app reexecutado no passo 4 publica a OTA.
+   Fora de um lote assim, o app em zod 4 sobe depois da API em zod 4 (o
+   passo 3 da ordem do manual da API).
+
+**O lote do plano de escala (contrato 8 do app)**, nesta ordem:
+
+1. **API**, com todas as ondas de código do plano num release só. Sem as
+   Applications de papel, o run implanta migrate → IA → API, como hoje, e
+   cada réplica da API segue fazendo tudo (`PROCESS_ROLE` ausente vale
+   `all`). A imagem que serve durante o rolling, e que volta num rollback,
+   é a de antes do plano: por isso as contrações do plano esperam a
+   capability (manual da API, seção 17) ou ficam para depois (onda 20 do
+   plano). O `trajetto-worker` de staging é criado depois deste deploy
+   (manual da API, seção 19); o de produção, só na onda 14 do plano.
+2. **Web:** só com a API do passo 1 em produção.
+3. **App:** por último, por OTA, sem binário novo, com o contrato 8 (as
+   posições recuam quando a API falha ou pede calma; manual do app,
+   "Versão do contrato e gate com a API"), e só com a API do passo 1 em
+   produção. Nada é recusado por contrato: o app 8 funciona sobre a API
+   anterior, e a API continua aceitando o 7. `MIN_MOBILE_CONTRACT` não
+   muda.
+
+No push para a `staging`, este lote segue a "Ordem do primeiro push com o
+CI novo" (acima): esta seção mudou nos três, e o
+`shared-deploy-section.test.ts` da web e do app a compara com a da
+`staging` da API. A web e o app vão antes e ficam vermelhos nos testes que
+leem a `staging` da API, a API sobe depois, lendo a web e o app novos, e
+os runs mais novos da web e do app são reexecutados.
+
+## 27. PITR com pgBackRest
+
+> Plano de escala, itens F1-01 a F1-03, F1-19 e F1-26. O PITR (restaurar o
+> banco até o minuto) liga em etapas: na staging, o F1a (onda 3); na
+> produção, primeiro a troca da imagem **sem** arquivamento (onda 3) e só no
+> fim da onda 6 o F1b, depois que a API deixar de conectar como
+> superusuário (decisão D61: uma injeção de SQL com superusuário leria as
+> chaves do PITR no ambiente do contêiner). O backup do Dokploy
+> ([seção 18](#18-backup-e-restauração)) continua nos dois ambientes, com a
+> mesma agenda e as mesmas 30 cópias.
+
+O Database PostgreSQL passa a rodar a imagem `trajetto-postgres`
+(`infra/postgres`): a `postgres:16-alpine` pelo mesmo digest da CI (o mesmo
+Postgres 16, a mesma musl e a mesma colação, então a troca serve no volume de
+hoje), mais o pgBackRest compilado da fonte, o `gosu` recompilado com um Go
+corrigido (abaixo), os parâmetros de produção
+(`infra/postgres/postgres.params`), toda a memória derivada do teto e os
+scripts `trajetto-backup` e `trajetto-restore-drill`. O porquê de cada valor
+está nos comentários do `infra/postgres/trajetto-entrypoint.sh`; as travas
+dos buckets, em `infra/r2/bucket-locks.md`; o ensaio, em
+[`runbooks/restore-drill.md`](./runbooks/restore-drill.md).
+
+### O gosu recompilado
+
+O entrypoint oficial desce de root para o usuário `postgres` com o
+`/usr/local/bin/gosu` da base (o `trajetto-backup` e o ensaio também). Esse
+binário é o release do upstream, compilado com Go 1.24.6, e o `Image scan`
+apontava nele a CVE-2025-68121 (CRITICAL; `crypto/tls`, retomada de sessão
+inesperada; corrigida no Go 1.24.13 e no 1.25.7), mais duas dezenas de HIGH
+da biblioteca padrão. O `gosu` nunca usa `crypto/tls`, e o upstream não
+recompila por CVE de código que ele não chama (o `SECURITY.md` do `gosu`);
+mas nenhuma `postgres:16-alpine` oficial traz um Go mais novo: a de
+18/11/2026 (16.16), a base desde 25/11/2026, ainda vem com o `gosu` 1.20 de
+Go 1.24.6.
+
+Por isso o `infra/postgres/Dockerfile` tem o stage `gosu`: a fonte do
+release (`GOSU_VERSION`, conferida pelo `GOSU_SHA256` antes de abrir), os
+módulos conferidos pelo `go.sum` dele, e a compilação sem rede e sem cgo,
+como o upstream compila, com o Go de uma `golang:<versão>-alpine3.24` fixada
+por digest. O binário entra no stage `app` (o que o stage `test` sobe como
+root e o que vai para o ar) por cima do da base, no mesmo caminho e com o
+mesmo modo. O stage `wrapper` (a fase infra do E2E) fica com o da base: o
+CI o constrói sem cache, e o código do `gosu` é o mesmo. O
+`postgres-image.test.ts` recusa um Go anterior às versões corrigidas.
+
+Medido em 25/11/2026 com o Trivy do CI (0.74.0, as mesmas opções do passo
+"Scan the images"): antes, `usr/local/bin/gosu` com 1 CRITICAL e 25 HIGH
+corrigíveis e saída 3 (achado); depois, `gosu` 1.20 de Go 1.27.4, nenhum
+achado nele e saída 0. Sobravam 20 HIGH da Alpine 3.24.3 da base 16.15
+(`krb5-libs`, `libxml2`, `libxslt`), nenhum CRITICAL.
+
+No mesmo dia a base subiu para a 16.16 (`sha256:f2f98726…`, Alpine 3.24.4),
+nos quatro lugares de uma vez ("Versões fixas", acima). Com o mesmo Trivy,
+em HIGH e CRITICAL: nenhum CRITICAL e 1 HIGH, o `libxml2` 2.13.9-r2
+(CVE-2026-86144, corrigida no r3, que a base ainda não traz). O `gosu`
+continua sem achado. A 16.16 é uma versão menor do mesmo 16, e a musl
+(1.2.6-r3) e a ICU (78.1) são as mesmas da 16.15, então a colação não muda
+e a troca continua servindo no volume de hoje.
+
+Só vale onde o Database roda a `trajetto-postgres`: enquanto ele estiver na
+`postgres:16-alpine` oficial (o `/health/rollout` mostra
+`database.imageRevision` nulo), o `gosu` dele é o de Go 1.24.6. A correção
+chega com a troca da imagem (a F1a abaixo, na staging; a troca da onda 3,
+na produção), pelo digest que o `Build` publicar a partir deste
+`infra/postgres`, depois de conferir no resumo do `Image scan` a linha
+"trajetto-postgres sem CRITICAL corrigível".
+
+Para subir: troque o digest da `golang` (`docker buildx imagetools inspect
+golang:<versão>-alpine3.24`, a linha `Digest:`) e, se for o caso,
+`GOSU_VERSION` com o `GOSU_SHA256` novo (o SHA-256 de
+`https://github.com/tianon/gosu/archive/refs/tags/<versão>.tar.gz`). O
+build confere que o binário diz a versão do `gosu` e o Go do builder.
+
+### Regras do Database
+
+- **Imagem sempre por digest**, copiado do resumo do run que a publicou (o
+  `Build` do `staging.yml` escreve o digest e "troca no Database: ação do
+  dono"):
+  `ghcr.io/trajetto-organization/trajetto-postgres@sha256:<digest>`. O
+  pacote é público, então o Database não precisa de credencial do GHCR.
+  Nenhum passo da CI implanta o Database.
+- **_Command_ e _Args_ do Database ficam VAZIOS.** O _Command_ troca o
+  entrypoint da imagem e o wrapper (`trajetto-entrypoint.sh`) deixa de
+  rodar; os _Args_ trocam o `CMD`, e um valor como o antigo
+  `docker-entrypoint.sh postgres -c …` também pula o wrapper. Sem ele, a
+  memória volta aos padrões do Postgres e o arquivamento desliga sem erro
+  (o alerta `pitr-archive-off` avisa quando `PITR_EXPECTED=true`). Um
+  parâmetro novo vai no `infra/postgres/postgres.params`, versionado, que
+  vai e volta com a imagem; nunca por `ALTER SYSTEM`, que fica no volume e
+  sobrevive à volta do digest.
+- **`CHECKPOINT` antes de cada _Deploy_ do Database**, entre 00h e 05h BRT,
+  com aviso. Cada mudança (imagem, _Environment_, _Resources_) recria o
+  contêiner: junte tudo num _Deploy_ só.
+- **`POSTGRES_MEMORY_LIMIT_MB` igual ao _Memory Limit_**, em MiB. Se o
+  teto do contêiner for menor, o wrapper usa o teto e avisa no log.
+- Nos comandos abaixo, `trajetto-postgres-staging` e
+  `trajetto-postgres-production` são os marcadores dos App Names
+  ([seção 7.2](#72-nomes-name-e-app-name)); o usuário e o banco são os do
+  Database (`trajetto`).
+
+### Valores por ambiente
+
+As variáveis vão no _Environment_ do Database PostgreSQL (não no da API);
+o passo a passo de cada etapa vem a seguir. "—" = não definir. O que cada
+variável faz:
+[`variaveis-de-ambiente.md`, seção 14](./variaveis-de-ambiente.md#14-backup-do-banco).
+
+| Variável ou campo                                                               | Staging (F1a)                                   | Produção, troca (onda 3)            | Produção, F1b (onda 6)                  |
+| ------------------------------------------------------------------------------- | ----------------------------------------------- | ----------------------------------- | --------------------------------------- |
+| _Docker Image_                                                                  | `trajetto-postgres@sha256:<digest>`             | `trajetto-postgres@sha256:<digest>` | `trajetto-postgres@sha256:<digest>`     |
+| _Memory Limit_                                                                  | `603979776`                                     | `2147483648`                        | `2147483648`                            |
+| _CPU Limit_                                                                     | vazio (decisão de 26/11/2026; abaixo)           | vazio                               | vazio                                   |
+| _Command_ e _Args_                                                              | vazios                                          | vazios                              | vazios                                  |
+| `POSTGRES_MEMORY_LIMIT_MB`                                                      | `576`                                           | `2048`                              | `2048`                                  |
+| `POSTGRES_MAX_WAL_SIZE`                                                         | `1GB`                                           | `8GB`                               | `8GB`                                   |
+| `POSTGRES_MAX_SLOT_WAL_KEEP_SIZE`                                               | `2GB`                                           | —                                   | `4GB`                                   |
+| `PGBACKREST_ARCHIVE_PUSH_QUEUE_MAX`                                             | `1GB`                                           | —                                   | `4GB`                                   |
+| `PGBACKREST_REPO1_S3_ENDPOINT`                                                  | `<ACCOUNT_ID>.r2.cloudflarestorage.com`         | —                                   | `<ACCOUNT_ID>.r2.cloudflarestorage.com` |
+| `PGBACKREST_REPO1_S3_BUCKET`                                                    | `trajetto-pitr-staging`                         | —                                   | `trajetto-pitr-prod`                    |
+| `PGBACKREST_REPO1_S3_KEY`, `PGBACKREST_REPO1_S3_KEY_SECRET`                     | o token de escrita do bucket                    | —                                   | o token de escrita do bucket            |
+| `PGBACKREST_REPO1_CIPHER_PASS`                                                  | `openssl rand -base64 48`, duas cópias no cofre | —                                   | outra, gerada do mesmo jeito            |
+| `PITR_DRILL_REPO1_S3_KEY`, `PITR_DRILL_REPO1_S3_KEY_SECRET`                     | o token só de leitura do bucket                 | —                                   | o token só de leitura do bucket         |
+| `PITR_BACKUP_FULL_PING_URL`, `PITR_BACKUP_DIFF_PING_URL`, `PITR_DRILL_PING_URL` | os três checks do healthchecks.io               | —                                   | os três checks do healthchecks.io       |
+| `PITR_ARCHIVE`                                                                  | `on`, só no passo 7                             | —                                   | `on`, só no passo 3                     |
+| `SHOW shared_buffers` esperado                                                  | `108MB`                                         | `448MB`                             | `448MB`                                 |
+| `SHOW archive_mode` esperado                                                    | `off`, e `on` depois do passo 7                 | `off`                               | `on`                                    |
+| `PITR_EXPECTED` (na `trajetto-api` e no papel do cron)                          | `true`, no passo 10                             | —                                   | `true`, no passo 7                      |
+
+**A staging em 26/11/2026** (passos 1 a 5 do F1a, sem PITR): a imagem
+`trajetto-postgres@sha256:<digest>`, `POSTGRES_MEMORY_LIMIT_MB=576`,
+`POSTGRES_MAX_WAL_SIZE=1GB`, `POSTGRES_MAX_SLOT_WAL_KEEP_SIZE=2GB` e
+_Memory Limit_ `603979776`, ainda sem as `PGBACKREST_*` (os buckets não
+existem). Conferido: `SHOW shared_buffers` = `108MB`, o
+`pg_stat_statements` carregado, `archive_mode` = `off` e a colação igual à
+anotada. O _CPU Limit_ ficou **vazio de propósito**, por decisão do dono, e
+não por medição: os `500000000` do plano não foram testados; depois de o
+worker com 0,25 CPU não conseguir fazer os logins SCRAM no prazo
+([seção 19](#19-papéis-da-mesma-imagem), worker), o dono preferiu não
+limitar a CPU do banco que atende todo login.
+
+**O PITR da staging em 26–27/11/2026** (passos 6 a 10, sem SSH: os
+comandos no terminal do Database e o ensaio pelo _Schedule_, como diz cada
+passo):
+
+- **O primeiro full** terminou às 23:19:21 UTC de 26/11, e o aceite de 7
+  dias conta dali. Os 143,7 MB do banco viraram 20,2 MB no R2, em 569 s,
+  sem `archive_gap`. O primeiro diff, pelo _Schedule_, levou 22 s, sem
+  segmento faltando.
+- **O ensaio**, feito com a api e a web paradas, passou:
+  - `rto_seconds` 496: o restore levou 474 s e a recuperação, 22 s;
+  - `loss_seconds` −448, ou seja, nenhuma perda (o
+    [runbook](./runbooks/restore-drill.md) diz por que sai negativo);
+  - as 216 migrations e as contagens conferiram.
+- **`PITR_EXPECTED=true`** está na `trajetto-api` e no worker.
+- **A trava do bucket**, provada em 27/11 (os passos 3 a 5 do
+  [`bucket-locks.md`](../infra/r2/bucket-locks.md#o-que-as-provas-deram-na-staging-27112026)):
+  o WAL não sai, mesmo com o aviso verde do painel no **Delete**; um diff
+  interrompido, o `expire` e o diff seguinte terminam bem; e a regra de
+  `backup/` faz o diff falhar (`ObjectLockedByBucketPolicy`), por isso saiu
+  e não vai para a produção.
+- **O que domina o tempo** do full (569 s) e do restore (474 s) não é o
+  volume: é uma requisição ao R2 por arquivo do cluster, um de cada vez,
+  com `process-max=1`. O `repo-bundle` do pgBackRest junta os arquivos
+  pequenos num objeto só. Ele **não foi aplicado**: fica para medir antes
+  de o banco da produção crescer, com um ensaio depois. Ele muda só a forma
+  como os backups novos são guardados.
+
+O teto muda por fase (seção 3.2 do plano de escala): a produção vai a 1792
+MiB (`1879048192`) na fase C se o hit ratio passar de 99%, e a 3072 MiB
+(`3221225472`) quando a staging sair da VPS; a staging vai a 1024 MiB no
+2º VPS. Mude o _Memory Limit_ e o `POSTGRES_MEMORY_LIMIT_MB` juntos, no
+mesmo _Deploy_.
+
+### F1a: a staging (onda 3), nesta ordem
+
+A ordem importa: ligar o arquivamento antes da stanza faria todo
+`archive-push` falhar e sujaria o aceite de 7 dias. Antes: os buckets
+`trajetto-pitr-staging` e `trajetto-pitr-prod`, cada um com um token de
+escrita e outro só de leitura, e a senha da cifra no cofre.
+
+1. Anote a colação e a imagem de hoje (para conferir no passo 5 e para a
+   reversão):
+
+   ```sh
+   c=$(docker ps -q -f label=com.docker.swarm.service.name=trajetto-postgres-staging)
+   docker exec "$c" psql -U trajetto -d trajetto -c "SELECT datname, datcollate, datctype, datlocprovider FROM pg_database ORDER BY 1"
+   docker service inspect trajetto-postgres-staging --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}'
+   ```
+
+2. Database → _Environment_: as variáveis da coluna da staging na tabela
+   acima, **sem** `PITR_ARCHIVE`. **Save**.
+3. _Advanced → Resources_: _Memory Limit_ `603979776` e _CPU Limit_
+   vazio (a decisão acima). Confira que _Command_ e _Args_ estão vazios.
+   **Save**.
+4. `CHECKPOINT`, depois _General → Docker Image_ com o digest → **Save** →
+   **Deploy**:
+
+   ```sh
+   docker exec "$c" psql -U trajetto -d trajetto -c 'CHECKPOINT'
+   ```
+
+5. Confira, com o contêiner novo:
+
+   ```sh
+   c=$(docker ps -q -f label=com.docker.swarm.service.name=trajetto-postgres-staging)
+   docker exec "$c" psql -U trajetto -d trajetto -Atc 'SHOW shared_buffers'           # 108MB
+   docker exec "$c" psql -U trajetto -d trajetto -Atc 'SHOW shared_preload_libraries' # pg_stat_statements
+   docker exec "$c" psql -U trajetto -d trajetto -Atc 'SHOW archive_mode'             # off
+   docker exec "$c" psql -U trajetto -d trajetto -Atc 'SHOW trajetto.image_revision'  # o commit da imagem
+   docker exec "$c" psql -U trajetto -d trajetto -c "SELECT datname, datcollate, datctype, datlocprovider FROM pg_database ORDER BY 1"
+   curl -s -o /dev/null -w '%{http_code}\n' https://api-staging.intrajetto.com/health/readiness   # 200
+   ```
+
+   A colação tem de ser a do passo 1, linha por linha. O
+   `pg_stat_statements` aparece como `ready` no `/health/metrics`.
+
+6. R2 → `trajetto-pitr-staging` → _Settings → Bucket Lock_: a regra de
+   `archive/trajetto/1`, 14 dias (`infra/r2/bucket-locks.md`). Depois, a
+   stanza, e logo em seguida a cópia crua do `backup.info` e do
+   `archive.info` para o cofre (o mesmo documento diz por quê):
+
+   ```sh
+   docker exec -u postgres "$c" pgbackrest --stanza=trajetto stanza-create
+   docker exec -u postgres "$c" pgbackrest --stanza=trajetto repo-get --raw backup/trajetto/backup.info > backup.info.stanza
+   docker exec -u postgres "$c" pgbackrest --stanza=trajetto repo-get --raw archive/trajetto/archive.info > archive.info.stanza
+   ```
+
+7. Database → _Environment_: `PITR_ARCHIVE=on` → **Save** → `CHECKPOINT` →
+   **Deploy**. No log do Database: "arquivamento ligado".
+8. A prova do repositório, um full, um `archive-get` e as estatísticas do
+   archiver zeradas (para o aceite contar só daqui em diante):
+
+   ```sh
+   c=$(docker ps -q -f label=com.docker.swarm.service.name=trajetto-postgres-staging)
+   docker exec -u postgres "$c" pgbackrest --stanza=trajetto check
+   docker exec -u postgres "$c" trajetto-backup full
+   docker exec -u postgres "$c" pgbackrest --stanza=trajetto info
+   seg=$(docker exec "$c" psql -U trajetto -d trajetto -Atc 'SELECT last_archived_wal FROM pg_stat_archiver')
+   docker exec -u postgres "$c" pgbackrest --stanza=trajetto archive-get "$seg" /tmp/archive-get-teste
+   docker exec "$c" rm -f /tmp/archive-get-teste
+   docker exec "$c" psql -U trajetto -d trajetto -c "SELECT pg_stat_reset_shared('archiver')"
+   ```
+
+   O `trajetto-backup full` termina com uma linha
+   `{"result":"ok","type":"full",…}`. Anote a hora do fim dele: o aceite
+   conta 7 dias a partir dela.
+
+   Sem SSH, os mesmos comandos vão no terminal do Database (_Open
+   Terminal_, `/bin/sh`). Confira primeiro que é o contêiner certo: o
+   `/usr/local/bin/pgbackrest` existe nele, e num Postgres de outra imagem
+   não. Cada linha acima entra sem o `docker exec -u postgres "$c"` da
+   frente, entre aspas, depois de `su postgres -c`; as de `psql` e de `rm`
+   entram sem o `docker exec "$c"`. O terminal web perde a conexão num
+   comando que passa minutos sem escrever nada, e o `trajetto-backup full`
+   só escreve no fim. Se o prompt não voltar, a linha final está no corpo
+   do ping do check do full, no healthchecks.io, e o `info` mostra o
+   backup.
+
+9. O ensaio, à mão, na janela, com a api e a web da staging em 0 réplicas
+   ([runbooks/restore-drill.md](./runbooks/restore-drill.md)):
+
+   ```sh
+   docker exec "$c" cat /usr/local/bin/trajetto-restore-drill | bash -s -- --from "$c"
+   ```
+
+   Anote o `rto_seconds` e o `loss_seconds` do resumo.
+
+   Sem SSH, o comando acima não tem onde rodar: o terminal do Database é o
+   do contêiner, e o ensaio cria outro contêiner pelo `docker` do servidor.
+   Crie antes o _Schedule_ do ensaio ([abaixo](#os-schedule-jobs-do-servidor))
+   e use o botão de rodar agora dele. A saída fica no histórico de
+   execuções do _Schedule_.
+
+10. `PITR_EXPECTED=true` → **Save** → **Deploy**, uma Application de cada
+    vez:
+    - na `trajetto-api` da staging, que mostra o valor no `/health/metrics`;
+    - na Application do papel que roda o cron, se houver uma (o
+      `trajetto-worker`, ou o `trajetto-scheduler` depois dele), porque o
+      alerta `pitr-archive-off` é julgado pelo `ops-heartbeat`, um cron.
+
+    Uma Application de papel copia o _Environment_ da `trajetto-api` só
+    quando nasce, e uma variável posta depois na `trajetto-api` não chega
+    até ela. Se a api estiver parada desde o passo 9, o **Deploy** dela já
+    a religa.
+
+Depois, os Schedule Jobs (abaixo) e a prova do Bucket Lock
+(`infra/r2/bucket-locks.md`, "Primeiro na staging").
+
+### Troca da imagem na produção, sem arquivamento (onda 3)
+
+A produção ganha o `pg_stat_statements` e a memória certa, e continua sem
+PITR: nenhuma `PGBACKREST_*` e nenhum `PITR_ARCHIVE`. O dump do Dokploy
+segue sendo o backup dela (RPO de 24 h).
+
+1. Os mesmos passos 1 a 5 do F1a, com `trajetto-postgres-production`, a
+   coluna "Produção, troca" da tabela (`POSTGRES_MEMORY_LIMIT_MB=2048`,
+   `POSTGRES_MAX_WAL_SIZE=8GB`), _Memory Limit_ `2147483648` e _CPU Limit_
+   vazio.
+2. Esperado: `SHOW shared_buffers` = `448MB`, `SHOW archive_mode` = `off`,
+   o `pg_stat_statements` em `ready` no `/health/metrics`, a colação igual
+   à anotada e a readiness de `https://api.intrajetto.com` em 200.
+
+### F1b: o PITR na produção (fim da onda 6)
+
+Pré-condições: `DATABASE_REQUIRE_RUNTIME_ROLE=true` na produção há 7 dias
+ou mais; o F1a com 7 dias verdes; no `trajetto-pitr-prod`, a regra de
+Bucket Lock de `archive/trajetto/1` (a de `backup/trajetto/2` não: a
+prova da staging falhou em 27/11/2026). Até o F1b, o RPO da produção é o do dump do
+Dokploy, 24 h; o dump continua depois dele.
+
+O passo 1 põe a chave de escrita e a cifra do repositório no ambiente do
+contêiner do banco. Um login que rode um programa ou leia um arquivo do
+servidor (um superusuário, ou um membro de `pg_execute_server_program`,
+`pg_read_server_files` ou `pg_write_server_files`) as leria ali, com um
+`COPY … FROM PROGRAM 'env'`, e apagaria os backups (decisão D61). O corte
+dos roles tira esse poder do runtime, e a trava guarda os últimos 14 dias
+mesmo de quem tiver a chave. Por isso, na noite do F1b, antes do passo 1,
+confira:
+
+- **O runtime no próprio role há 7 dias.** No histórico de deploys da
+  `trajetto-api` de produção, o _Deploy_ com
+  `DATABASE_REQUIRE_RUNTIME_ROLE=true` tem 7 dias ou mais; desde ele,
+  nenhum `permission denied` (42501) no log, e o boot de cada réplica
+  escreveu `database role checked` com `superuser: false` e
+  `tablesOwner: false`. Toda Application de runtime que já existir (as das
+  ondas seguintes) entra na mesma conta. A `trajetto-api-migrate` continua
+  com o usuário do Database: ela não atende requisição.
+
+- **Nenhum login, além do usuário do Database, com o poder de ler o
+  servidor, e nenhuma conexão do runtime como ele.** No `psql` do Database
+  de produção:
+
+  ```sh
+  docker exec -it $(docker ps -q -f label=com.docker.swarm.service.name=trajetto-postgres-production) psql -U trajetto -d trajetto
+  ```
+
+  ```sql
+  SELECT rolname FROM pg_roles
+   WHERE rolcanlogin AND rolname <> current_user
+     AND (rolsuper
+          OR pg_has_role(oid, 'pg_execute_server_program', 'MEMBER')
+          OR pg_has_role(oid, 'pg_read_server_files', 'MEMBER')
+          OR pg_has_role(oid, 'pg_write_server_files', 'MEMBER'));
+  SELECT usename, application_name, count(*) FROM pg_stat_activity
+   WHERE backend_type = 'client backend' GROUP BY 1, 2 ORDER BY 1, 2;
+  ```
+
+  A primeira volta vazia (a membresia indireta conta). Na segunda, o
+  usuário do Database (`trajetto`) aparece só no próprio `psql` (e no
+  `pg_dump` do backup do Dokploy, se for a hora dele); o runtime conecta
+  como `trajetto_http` e `trajetto_batch`. Qualquer outra linha: pare
+  aqui, sem as chaves, e tire o poder ou o login
+  (`ALTER ROLE <role> NOLOGIN;`) antes de voltar a este passo. A etapa de
+  release nunca dá esses poderes: o `infra-sql-rules.test.ts` recusa um
+  `infra/sql` que os conceda.
+
+- **Nenhum código no schema de quem não é o dono.** O `trajetto_batch` é
+  membro do `trajetto_partitions`, que tem CREATE no schema para as
+  partições; uma função ou um operador criado ali com as credenciais do
+  batch rodaria como superusuário na release seguinte (CVE-2018-1058). No
+  mesmo `psql`:
+
+  ```sql
+  SELECT evtenabled FROM pg_event_trigger
+   WHERE evtname = 'trajetto_untrusted_code';
+  SELECT 'função' AS tipo, p.oid::regprocedure::text AS nome,
+         pg_get_userbyid(p.proowner) AS dono
+    FROM pg_proc p JOIN pg_roles r ON r.oid = p.proowner
+   WHERE p.pronamespace = 'public'::regnamespace AND NOT r.rolsuper
+  UNION ALL
+  SELECT 'operador', o.oid::regoperator::text, pg_get_userbyid(o.oprowner)
+    FROM pg_operator o JOIN pg_roles r ON r.oid = o.oprowner
+   WHERE o.oprnamespace = 'public'::regnamespace AND NOT r.rolsuper;
+  ```
+
+  A primeira devolve `O` (ligado); a segunda volta vazia. Sem a linha do
+  event trigger, rode a etapa de release (`infra/sql/15-untrusted-code.sql`);
+  com uma função ou um operador na segunda, pare aqui, sem as chaves:
+  descubra quem criou, apague e troque a senha do login dele antes de
+  voltar.
+
+- **A trava no bucket.** R2 → `trajetto-pitr-prod` →
+  _Settings → Bucket Lock_: a regra de `archive/trajetto/1`, 14 dias, já
+  salva, antes do `stanza-create` (`infra/r2/bucket-locks.md`, "Na
+  produção"). A prova do **Delete** recusado é a da staging: na produção,
+  sem a regra, ela apagaria um WAL de verdade.
+
+- **O F1a verde.** A consulta do aceite (abaixo) na staging, com os 7 dias
+  contados do full dela, e o ensaio da staging anotado.
+
+1. Database de produção → _Environment_: acrescente as variáveis da coluna
+   "Produção, F1b", **sem** `PITR_ARCHIVE` → **Save** → `CHECKPOINT` →
+   **Deploy**.
+2. A stanza e a cópia para o cofre, como no passo 6 do F1a, com
+   `trajetto-postgres-production`.
+3. `PITR_ARCHIVE=on` → **Save** → `CHECKPOINT` → **Deploy**.
+4. O passo 8 do F1a (`check`, `trajetto-backup full`, `info`, um
+   `archive-get` e o `pg_stat_reset_shared('archiver')`).
+5. Os Schedule Jobs da produção (abaixo).
+6. O ensaio à mão, na janela e com teto (passo 9 do F1a).
+7. `PITR_EXPECTED=true` → **Deploy** na `trajetto-api` de produção e, se o
+   cron já tiver saído dela, na Application do papel que o roda (passo 10
+   do F1a).
+
+### Os Schedule Jobs do servidor
+
+Dokploy → _Schedules_ do servidor (tipo _Server_), um por linha, cada um
+com o seu check no healthchecks.io (a URL do check vai no _Environment_ do
+Database, nas variáveis da tabela acima). O script vem dentro da imagem do
+banco, na mesma versão do pgBackRest. A staging tem os três desde 26/11/2026;
+a produção ganha os seus no passo 5 do F1b, com
+`trajetto-postgres-production`.
+
+No painel:
+
+- **Onde fica.** É o item _Schedules_ do menu lateral, que roda no servidor,
+  onde está o `docker`. A aba _Schedules_ de uma Application rodaria dentro
+  do contêiner dela, sem `docker`.
+- **Os campos.** _Name_ (`pitr-staging-diff`, `pitr-staging-full`,
+  `pitr-staging-drill`), _Description_, a agenda (_custom_), _Timezone_
+  `UTC` e _Script_. Nesse tipo não há _Command_ nem _Shell Type_: o
+  comando vai no _Script_.
+- **O App Name real.** O `trajetto-postgres-staging` do script é o marcador
+  ([seção 7.2](#72-nomes-name-e-app-name)). Troque pelo App Name do
+  Database, com o sufixo que o Dokploy acrescenta: com o marcador, a busca
+  pelo contêiner não acha nada e o job falha toda noite.
+
+O _Script_ do diferencial é o abaixo. O do completo é igual, com `full` no
+lugar de `diff`:
+
+```sh
+#!/usr/bin/env bash
+set -euo pipefail
+c=$(docker ps -q -f label=com.docker.swarm.service.name=trajetto-postgres-staging)
+if [ -z "$c" ]; then
+  echo "pitr: contêiner do Database não encontrado" >&2
+  exit 1
+fi
+docker exec -u postgres "$c" trajetto-backup diff
+```
+
+E o do ensaio:
+
+```sh
+#!/usr/bin/env bash
+set -euo pipefail
+c=$(docker ps -q -f label=com.docker.swarm.service.name=trajetto-postgres-staging)
+if [ -z "$c" ]; then
+  echo "pitr: contêiner do Database não encontrado" >&2
+  exit 1
+fi
+docker exec "$c" cat /usr/local/bin/trajetto-restore-drill | bash -s -- --from "$c"
+```
+
+O teste se o contêiner foi achado transforma num erro claro o que seria um
+`docker exec` sem contêiner. Mesmo sem ele, a falha não passa despercebida:
+sem o ping de sucesso, o check alerta depois da _grace_.
+
+Depois de salvar, use o botão de rodar agora no **diferencial**. Ele prova o
+caminho inteiro: o `docker exec` pelo servidor, o _Environment_ do Database
+e o ping. O resumo `{"result":"ok","type":"diff",…}` aparece no histórico
+de execuções, e o check passa a _up_. Não rode o completo à mão: seria só
+um full a mais.
+
+| Job                   | Agenda (UTC)  | Comando (staging)                                                                                                                                                          | Check                                                                         |
+| --------------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| backup diferencial    | `0 5 * * 0-5` | `docker exec -u postgres $(docker ps -q -f label=com.docker.swarm.service.name=trajetto-postgres-staging) trajetto-backup diff`                                            | `PITR_BACKUP_DIFF_PING_URL`, check _Cron_ `0 5 * * 0-5` (UTC), _grace_ de 2 h |
+| backup completo       | `0 5 * * 6`   | `docker exec -u postgres $(docker ps -q -f label=com.docker.swarm.service.name=trajetto-postgres-staging) trajetto-backup full`                                            | `PITR_BACKUP_FULL_PING_URL`, check _Cron_ `0 5 * * 6` (UTC), _grace_ de 3 h   |
+| ensaio de restauração | `45 5 1 * *`  | `c=$(docker ps -q -f label=com.docker.swarm.service.name=trajetto-postgres-staging); docker exec "$c" cat /usr/local/bin/trajetto-restore-drill \| bash -s -- --from "$c"` | `PITR_DRILL_PING_URL`, check _Cron_ `45 5 1 * *` (UTC), _grace_ de 3 h        |
+
+Cada check do healthchecks.io é do tipo _Cron_, com a mesma agenda do job e
+o fuso UTC, e não de período simples: o diferencial não roda no sábado (dia
+do full), e um período de 26 h alertaria todo sábado, com 48 h entre o diff
+de sexta e o de domingo.
+
+Os horários seguem o mapa do plano (decisão D28): o dump do Dokploy às
+03:00, os expurgos até 04:50, o pgBackRest às 05:00 com o full no sábado e
+o ensaio no dia 1 às 05:45. Estas agendas não são diárias e por isso ficam
+fora da [seção 18](#18-backup-e-restauração): o teste `legal-facts` da web
+lê toda agenda das seções que falam do Keep do dump como a agenda dele. Um
+`/fail` do backup traz o motivo (`archive-gap` pede um full:
+[runbooks/wal-archive-stalled.md](./runbooks/wal-archive-stalled.md)); um
+`/fail` do ensaio, o motivo do
+[runbook do ensaio](./runbooks/restore-drill.md).
+
+### Aceite: 7 dias no `ops_sample`
+
+Contados do fim do primeiro full (o passo 8 do F1a; o passo 4 do F1b), na
+linha `cluster` de cada minuto: `failed_count` = 0 e o último segmento
+arquivado há menos de 120 s em pelo menos 99% das linhas. O `ts` é UTC,
+sem fuso:
+
+```sql
+WITH janela AS (
+  SELECT ts,
+         metrics->'database'->>'archive_mode' AS archive_mode,
+         (metrics->'database'->'archiver'->>'failed_count')::bigint AS falhas,
+         (metrics->'database'->'archiver'->>'last_archived_age_seconds')::float8 AS lag_s
+  FROM ops_sample
+  WHERE role = 'cluster'
+    AND ts >= '<fim do full, UTC>'::timestamp
+    AND ts < '<fim do full, UTC>'::timestamp + interval '7 days'
+)
+SELECT count(*) AS linhas,                                         -- perto de 10080
+       count(*) FILTER (WHERE archive_mode = 'on') AS com_arquivo,  -- todas
+       max(falhas) AS falhas,                                       -- 0
+       round(100.0 * count(*) FILTER (WHERE lag_s < 120) / nullif(count(*), 0), 2) AS pct_lag_ok -- >= 99
+FROM janela;
+```
+
+Uma linha sem leitura do archiver (`null`) conta contra. Depois do aceite,
+o ensaio anota o RTO e a perda, e esse é o portão da onda: o
+`rto_seconds` abaixo de 3600 (1 h) e o `loss_seconds` de até 120 (2 min),
+os alvos do [`slo.md`](./slo.md). Anote os dois em
+[Ensaiar a restauração](#ensaiar-a-restauração).
+
+### Reversão
+
+- **Do arquivamento**, na ordem inversa: `PITR_EXPECTED` fora da
+  `trajetto-api` e do papel do cron (**Deploy** em cada uma), depois
+  `PITR_ARCHIVE` fora do Database →
+  `CHECKPOINT` → **Deploy**. O wrapper grava `archive_mode=off` explícito.
+- **Da imagem**: o digest anotado no passo 1, com `CHECKPOINT` antes. Os
+  parâmetros entram como `-c` (nada no `postgresql.auto.conf`), então
+  voltar o digest volta a configuração junto. Se algo foi por
+  `ALTER SYSTEM` numa emergência, desfaça antes, ou a imagem antiga, sem o
+  pgBackRest, falharia em todo arquivamento e encheria o `pg_wal`:
+
+  ```sql
+  ALTER SYSTEM RESET archive_command;
+  ALTER SYSTEM SET archive_mode = off;
+  ```
+
+- As `PGBACKREST_*` podem ficar no _Environment_ depois da volta: a imagem
+  antiga não as lê.
+
+### Grace e placement do Database
+
+- **Grace**: o Dokploy v0.30.10 cria o serviço do Database com um _Stop
+  Grace Period_ de 30 s (não os 10 s do Docker puro), com o update
+  stop-first. Onde o painel tiver o campo, o F0-01 põe `120000000000` (120
+  s). Confira; o valor sai em nanossegundos (`null` = 10 s):
+
+  ```sh
+  docker service inspect trajetto-postgres-production --format '{{json .Spec.TaskTemplate.ContainerSpec.StopGracePeriod}}'
+  ```
+
+  O `CHECKPOINT` antes de cada parada continua: ele encurta o desligamento,
+  qualquer que seja o grace.
+
+- **Placement**: o Dokploy v0.30.10 põe `node.role==manager` em todo
+  serviço com volume, e o Database tem o dele. Com um nó só, nada muda.
+  Com mais de um manager, o Swarm poderia subir o banco noutro manager, sem
+  o volume local. Por isso, desde a onda 17 (F4-52), o Placement do
+  Database é
+  `{ "Constraints": ["node.labels.trajetto.db==true", "node.hostname==<nó do volume>"] }`,
+  aplicado no _Deploy_ da janela do Postgres, depois dos labels do nó e
+  antes de qualquer nó novo
+  ([runbooks/swarm-multi-no.md](./runbooks/swarm-multi-no.md)). Confira:
+
+  ```sh
+  docker service inspect trajetto-postgres-production --format '{{json .Spec.TaskTemplate.Placement}}'
+  ```

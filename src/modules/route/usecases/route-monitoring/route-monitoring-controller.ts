@@ -8,9 +8,8 @@ class RouteMonitoringController {
   async handle(request: FastifyRequest, reply: FastifyReply): Promise<void> {
     const { id } = request.user;
 
-    const { businessId, day, page, pageSize } = routeMonitoringSchema.parse(
-      request.query,
-    );
+    const { businessId, day, period, from, to, page, pageSize } =
+      routeMonitoringSchema.parse(request.query);
 
     const useCase = container.resolve(RouteMonitoringUseCase);
 
@@ -18,6 +17,9 @@ class RouteMonitoringController {
       userId: id,
       businessId,
       day,
+      period,
+      from,
+      to,
       page,
       pageSize,
     });

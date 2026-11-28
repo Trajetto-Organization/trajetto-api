@@ -8,12 +8,18 @@ import { UserTokensRepository } from "@/modules/user/repositories/user-tokens-re
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
 import { InMemoryUserTokensRepository } from "@/modules/user/repositories/in-memory/in-memory-user-tokens-repository";
 
-import type { IUserRepository } from "@/modules/user/repositories/IUser-repository";
+import {
+  KeptSessionEndedError,
+  type IUserRepository,
+} from "@/modules/user/repositories/IUser-repository";
+import { hashDeviceId } from "@/modules/user/services/session-service";
 import type { IUsersTokensRepository } from "@/modules/user/repositories/IUsers-tokens-repository";
 import type { UserRole } from "@/modules/user/dtos/user-dto";
 
 import { summarizeUserList } from "@/modules/user/usecases/list-users/user-list";
+import { NO_USER_HISTORY } from "@/modules/user/user-history-rules";
 import { createPrismaClient } from "@/shared/database/database-client";
+import { isForeignKeyViolation } from "@/shared/errors/prisma-error-meta";
 
 /**
  * One suite, two implementations (decision 13.2, TEST-PAR-3): the Prisma
@@ -30,6 +36,9 @@ const A = randomUUID();
 const B = randomUUID();
 const RUN = randomUUID().slice(0, 8);
 
+/** The one driver's CPF; the repository stores and compares 11 digits. */
+const DRIVER_CPF = `6${RUN.replace(/\D/g, "0").padEnd(9, "1")}0`;
+
 let cnpj = 53000000000100 + Math.floor(Math.random() * 1_000_000);
 
 async function seedBusiness(id: string) {
@@ -38,7 +47,7 @@ async function seedBusiness(id: string) {
   await prisma.business.create({
     data: {
       id,
-      corporate_reason: `Transportadora ${id.slice(0, 4)}`,
+      corporate_reason: `Transportadora ${id}`,
       cep: "01001000",
       city: "São Paulo",
       uf: "SP",
@@ -73,6 +82,25 @@ interface Harness {
     status: "PENDING" | "PROCESSING" | "DELIVERED",
   ) => Promise<void>;
   deliveryStatuses: (userId: string) => Promise<string[]>;
+  /** A row that names the user on a RESTRICT key (countUserHistory). */
+  addHistory: (
+    userId: string,
+    kind: "imports" | "chatMessages",
+  ) => Promise<void>;
+  clearHistory: (userId: string) => Promise<void>;
+}
+
+/** The chat thread the Prisma history rows hang on (one per driver). */
+let chatThreadId: string | null = null;
+
+async function chatThread(): Promise<string> {
+  chatThreadId ??= (
+    await prisma.chatThread.create({
+      data: { businessId: A, driverId: DRIVER },
+    })
+  ).id;
+
+  return chatThreadId;
 }
 
 const prismaTokens = new UserTokensRepository();
@@ -138,6 +166,33 @@ const harnesses: Harness[] = [
       )
         .map((row) => row.status)
         .sort(),
+    addHistory: async (userId, kind) => {
+      if (kind === "imports") {
+        await prisma.import.create({
+          data: {
+            source: "SPREADSHEET",
+            filename: "entregas.xlsx",
+            report: [],
+            businessId: A,
+            performedById: userId,
+          },
+        });
+        return;
+      }
+
+      await prisma.chatMessage.create({
+        data: {
+          kind: "TEXT",
+          body: "Mensagem",
+          threadId: await chatThread(),
+          senderId: userId,
+        },
+      });
+    },
+    clearHistory: async (userId) => {
+      await prisma.import.deleteMany({ where: { performedById: userId } });
+      await prisma.chatMessage.deleteMany({ where: { senderId: userId } });
+    },
   },
   {
     name: "in-memory",
@@ -168,6 +223,14 @@ const harnesses: Harness[] = [
         .filter((row) => row.userId === userId)
         .map((row) => row.status)
         .sort(),
+    addHistory: async (userId, kind) => {
+      memory.authoredRows.push({ userId, kind });
+    },
+    clearHistory: async (userId) => {
+      memory.authoredRows = memory.authoredRows.filter(
+        (row) => row.userId !== userId,
+      );
+    },
   },
 ];
 
@@ -319,7 +382,7 @@ beforeAll(async () => {
         name: "Motorista Ferreira",
         birth_date: new Date("1990-01-01T03:00:00.000Z"),
         cnh: `7${RUN.replace(/\D/g, "0").padEnd(9, "1")}0`,
-        cpf: `6${RUN.replace(/\D/g, "0").padEnd(9, "1")}0`,
+        cpf: DRIVER_CPF,
         rg: "123456789",
         cep: "01001000",
         city: "São Paulo",
@@ -360,6 +423,9 @@ beforeAll(async () => {
   memory.businesses.set(A, {
     is_active: true,
     entitlements: [{ module: "DELIVERIES", enabled: true }],
+    // As seedBusiness writes it: no trade name.
+    fantasy_name: null,
+    corporate_reason: `Transportadora ${A}`,
   });
 
   memory.profiles.set(OPS, { name: "Operação", businessId: A });
@@ -371,6 +437,7 @@ beforeAll(async () => {
     businessId: A,
     branchId: null,
     branch: null,
+    cpf: DRIVER_CPF,
   });
 
   for (const harness of harnesses) {
@@ -702,8 +769,11 @@ describe.each(harnesses.map((harness) => [harness.name, harness] as const))(
           },
         ],
       });
+      // The company's zone rides along: the request's "today" reads it from
+      // the session instead of reading the company again.
       expect(carla.business).toEqual({
         is_active: true,
+        timezone: "America/Sao_Paulo",
         entitlements: [{ module: "DELIVERIES", enabled: true }],
       });
       expect(carla.driver).toBeNull();
@@ -720,6 +790,188 @@ describe.each(harnesses.map((harness) => [harness.name, harness] as const))(
         branch: null,
       });
       expect(fabio.profileAccess).toBeNull();
+    });
+
+    // Plan of 02/11/2026, D8: the CPF login finds the driver's logins in
+    // every company, with what the session check reads already loaded and
+    // the name the company picker shows.
+    it("finds a driver's login by the driver's CPF, with the company name", async () => {
+      const logins = await harness.repo.findDriverLoginsByCpf(DRIVER_CPF);
+
+      expect(logins.map((login) => keyOf(harness, login.id))).toEqual([
+        "driver-1",
+      ]);
+      expect(logins[0]).toMatchObject({
+        companyName: `Transportadora ${A}`,
+        business: { is_active: true },
+        driver: {
+          id: DRIVER,
+          status: "ACTIVE",
+          businessId: A,
+          branchId: null,
+          branch: null,
+        },
+        profileAccess: null,
+      });
+      expect(logins[0].password).toEqual(expect.any(String));
+
+      expect(await harness.repo.findDriverLoginsByCpf("00000000191")).toEqual(
+        [],
+      );
+    });
+
+    // Plan of 02/11/2026, D7: the phones a driver is signed in on, and
+    // ending every session of one of them.
+    it("lists the phones with a live session, and ends one phone's sessions", async () => {
+      const userId = idOf(harness, "driver-1");
+      const phone = `${RUN.replace(/\W/g, "0").padEnd(8, "0")}aaaaaaaa`;
+      const other = `${RUN.replace(/\W/g, "0").padEnd(8, "0")}bbbbbbbb`;
+      const [phoneFamily, otherFamily, mailFamily] = [
+        randomUUID(),
+        randomUUID(),
+        randomUUID(),
+      ];
+      const future = new Date(Date.now() + 60_000);
+
+      for (const [family, deviceId] of [
+        [phoneFamily, phone],
+        [otherFamily, other],
+        [mailFamily, null],
+      ] as const) {
+        await harness.tokens.createUserRefreshToken({
+          userId,
+          token_hash: randomUUID(),
+          jti: randomUUID(),
+          family_id: family,
+          expires_in: future,
+          device_id: deviceId,
+        });
+      }
+
+      // An expired session on the phone is not "signed in".
+      await harness.tokens.createUserRefreshToken({
+        userId,
+        token_hash: randomUUID(),
+        jti: randomUUID(),
+        family_id: randomUUID(),
+        expires_in: new Date(Date.now() - 60_000),
+        device_id: phone,
+      });
+
+      const listed = await harness.tokens.listUserDeviceSessions(userId);
+
+      // By the phone's hash only (wave 2): the id is the CPF login's check.
+      expect(listed.map((device) => device.device_hash).sort()).toEqual(
+        [hashDeviceId(other), hashDeviceId(phone)].sort(),
+      );
+      expect(JSON.stringify(listed)).not.toContain(phone);
+      expect(listed.every((device) => device.sessions === 1)).toBe(true);
+
+      const ended = await harness.tokens.revokeUserDeviceSessions(
+        userId,
+        hashDeviceId(phone),
+      );
+
+      expect(ended).toHaveLength(2);
+      expect(ended).toContain(phoneFamily);
+      expect(
+        (await harness.tokens.listUserDeviceSessions(userId)).map(
+          (device) => device.device_hash,
+        ),
+      ).toEqual([hashDeviceId(other)]);
+      expect(
+        await harness.tokens.hasActiveRefreshTokenFamily(userId, mailFamily),
+      ).toBe(true);
+
+      expect(
+        await harness.tokens.revokeUserDeviceSessions(
+          userId,
+          hashDeviceId(phone),
+        ),
+      ).toEqual([]);
+
+      await harness.tokens.revokeAllUserRefreshTokens(userId);
+    });
+
+    // Wave 2: the CPF login trusts a phone the login holds a live session
+    // on (the phones the previous image signed in during the rollout).
+    it("says which logins hold a live session on a phone", async () => {
+      const driver = idOf(harness, "driver-1");
+      const other = idOf(harness, "tie-1");
+      const phone = `${RUN.replace(/\W/g, "0").padEnd(8, "0")}cccccccc`;
+      const elsewhere = `${RUN.replace(/\W/g, "0").padEnd(8, "0")}dddddddd`;
+      const at = (offsetMs: number) => new Date(Date.now() + offsetMs);
+
+      const row = (userId: string, deviceId: string, expiresIn: Date) =>
+        harness.tokens.createUserRefreshToken({
+          userId,
+          token_hash: randomUUID(),
+          jti: randomUUID(),
+          family_id: randomUUID(),
+          expires_in: expiresIn,
+          device_id: deviceId,
+        });
+
+      await row(driver, phone, at(60_000));
+      await row(driver, phone, at(60_000));
+      // Another login: live, but on another phone; then expired on this one.
+      await row(other, elsewhere, at(60_000));
+      await row(other, phone, at(-60_000));
+
+      expect(
+        await harness.tokens.findLoginsSignedInOnDevice([driver, other], phone),
+      ).toEqual([driver]);
+      expect(
+        await harness.tokens.findLoginsSignedInOnDevice([other], phone),
+      ).toEqual([]);
+      expect(
+        await harness.tokens.findLoginsSignedInOnDevice([], phone),
+      ).toEqual([]);
+
+      await harness.tokens.revokeAllUserRefreshTokens(driver);
+      await harness.tokens.revokeAllUserRefreshTokens(other);
+    });
+
+    // Wave 2: the password change that keeps the caller's session must not
+    // bring it back when it ended after the caller checked it.
+    it("refuses to keep a session that is no longer live, writing nothing", async () => {
+      const userId = idOf(harness, "tie-2");
+      const ended = randomUUID();
+
+      await harness.tokens.createUserRefreshToken({
+        userId,
+        token_hash: randomUUID(),
+        jti: randomUUID(),
+        family_id: ended,
+        expires_in: new Date(Date.now() - 60_000),
+      });
+
+      const versionBefore = (await harness.repo.findUserById(userId))
+        ?.session_version;
+
+      await expect(
+        harness.repo.updateUserPasswordKeepingSession({
+          userId,
+          password: "hash-que-nao-fica",
+          keepFamilyId: ended,
+          replacement: () => ({
+            userId,
+            token_hash: randomUUID(),
+            jti: randomUUID(),
+            family_id: ended,
+            expires_in: new Date(Date.now() + 60_000),
+          }),
+        }),
+      ).rejects.toBeInstanceOf(KeptSessionEndedError);
+
+      expect((await harness.repo.findUserById(userId))?.session_version).toBe(
+        versionBefore,
+      );
+      expect(
+        await harness.tokens.hasActiveRefreshTokenFamily(userId, ended),
+      ).toBe(false);
+
+      await harness.tokens.revokeAllUserRefreshTokens(userId);
     });
 
     it("a new password and a revocation end the sessions too", async () => {
@@ -751,6 +1003,39 @@ describe.each(harnesses.map((harness) => [harness.name, harness] as const))(
       }
     });
 
+    // Batch of 14/11/2026: the delete guard counts every RESTRICT key in one
+    // statement. The twin used to delete a user whatever pointed at them, so
+    // no unit test reached the refusal.
+    it("counts the rows that name a user on a RESTRICT key, and the delete fails while they exist", async () => {
+      const author = idOf(harness, "fin-1");
+      const other = idOf(harness, "ops-1");
+
+      await harness.addHistory(author, "imports");
+      await harness.addHistory(author, "chatMessages");
+      await harness.addHistory(author, "chatMessages");
+      await harness.addHistory(other, "imports");
+
+      try {
+        expect(await harness.repo.countUserHistory(author)).toEqual({
+          ...NO_USER_HISTORY,
+          imports: 1,
+          chatMessages: 2,
+        });
+
+        await expect(harness.repo.deleteUser(author)).rejects.toSatisfy(
+          isForeignKeyViolation,
+        );
+        expect(await harness.repo.findUserById(author)).not.toBeNull();
+      } finally {
+        await harness.clearHistory(author);
+        await harness.clearHistory(other);
+      }
+
+      expect(await harness.repo.countUserHistory(author)).toEqual(
+        NO_USER_HISTORY,
+      );
+    });
+
     it("never offers a revoked person as a recipient", async () => {
       const admins = await harness.repo.findBusinessAdminsByBusinessId(A);
       const masters = await harness.repo.findOtherMasters(
@@ -766,7 +1051,9 @@ describe.each(harnesses.map((harness) => [harness.name, harness] as const))(
       ]);
     });
 
-    it("searches the picker by name or e-mail, newest first, without the hash", async () => {
+    // Audit of 11/2026: every consumer is an assignment picker, so the
+    // revoked ops-2 is not offered (it was, newest first).
+    it("searches the picker by name or e-mail, newest first, without the hash or a revoked login", async () => {
       const result = await harness.repo.searchUserWithCursor({
         limit: 10,
         businessId: A,
@@ -774,10 +1061,29 @@ describe.each(harnesses.map((harness) => [harness.name, harness] as const))(
       });
 
       expect(result.data.map((row) => keyOf(harness, row.id))).toEqual([
-        "ops-2",
         "ops-1",
       ]);
       expect(result.data.every((row) => !("password" in row))).toBe(true);
+    });
+
+    it("never offers a removed (anonymized) login in the picker", async () => {
+      const removed = idOf(harness, "fin-1");
+
+      await harness.set(removed, { anonymized_at: new Date() });
+
+      try {
+        const result = await harness.repo.searchUserWithCursor({
+          limit: 50,
+          businessId: A,
+        });
+        const offered = result.data.map((row) => keyOf(harness, row.id));
+
+        expect(offered).not.toContain("fin-1");
+        expect(offered).not.toContain("ops-2");
+        expect(offered).toContain("ops-1");
+      } finally {
+        await harness.set(removed, { anonymized_at: null });
+      }
     });
 
     it("lists the masters without the asker and without the hash", async () => {

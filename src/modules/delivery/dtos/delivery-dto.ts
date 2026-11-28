@@ -1,3 +1,5 @@
+import type { Prisma } from "@prisma/client";
+
 import { DeliveryStatus } from "@/shared/delivery/delivery-rules";
 import type { DeliveryKind } from "@/shared/delivery/delivery-kind";
 import type { SortOrder } from "@/shared/pagination/list-query";
@@ -56,6 +58,35 @@ interface Delivery {
    * origin INTEGRATION (decision 5.10). Null for the panel and the imports.
    */
   apiKeyId?: string | null;
+  /**
+   * The ADDRESS point (decision 14.7): pinned by the dispatcher or given at
+   * the create (MANUAL), or found by the geocoder (GEOCODER, plan of
+   * 02/11/2026 E1, with the level it reached in geo_precision). What the
+   * geofence measures from (E2/E4).
+   */
+  latitude?: number | null;
+  longitude?: number | null;
+  geo_source?: "MANUAL" | "GEOCODER" | null;
+  geo_updated_at?: Date | null;
+  geo_precision?: "ADDRESS" | "STREET" | "NEIGHBORHOOD" | "CITY" | null;
+  /**
+   * Which deliveries of the company stand at the same door (address-key.ts):
+   * a hash, for the point reuse only. Null for a row written before it, or
+   * without a street, a house number or a city. No screen reads it, but it
+   * rides along wherever the whole row goes out: the driver's day and the
+   * detail (pass-through bodies, so deliveryRowEntity documents it) and the
+   * panel's NDJSON list (no response schema to drop it). The SHA-256 of the
+   * company's own address, nothing the row does not already say.
+   */
+  address_key?: string | null;
+  /**
+   * The root delivery a copied point came from (address-point-reuse.ts;
+   * migration 20261114130000): null on a point of the delivery's own. No
+   * screen reads it; it rides along with the whole row like address_key,
+   * so deliveryRowEntity documents it — the id of another delivery of the
+   * same company, nothing more.
+   */
+  geo_copied_from?: string | null;
   created_at?: Date | string;
   updated_at?: Date | string;
 }
@@ -75,6 +106,17 @@ interface CreateDeliveryProps {
   address_number?: string | null;
   complement?: string | null;
   neighborhood?: string | null;
+
+  /**
+   * The address point given at the create — the panel's form, the
+   * spreadsheet, the public API (plan of 02/11/2026, E1). The repository
+   * stores a whole pair as the point with geo_source MANUAL
+   * (manualAddressPoint) and nothing otherwise, so the geocoder's queue
+   * keeps a row created without one.
+   */
+  latitude?: number | null;
+  longitude?: number | null;
+
   scheduled_date?: Date | null;
   notes?: string | null;
   /** Absent = DELIVERY (the column default). */
@@ -127,11 +169,22 @@ interface UpdateDeliveryProps {
   // No driverId/vehicleId (DLV-EDIT-4): assignment builds the route.
 
   // Never from the request: the use case clears the address point when the
-  // address changes (decision 14.7, design §4.11).
-  latitude?: null;
-  longitude?: null;
-  geo_source?: null;
-  geo_updated_at?: null;
+  // address changes (decision 14.7, design §4.11) — and the geocoder's
+  // bookkeeping with it (plan of 02/11/2026, E1) — or writes the point
+  // another delivery of the company has at the new address
+  // (address-point-reuse.ts, always GEOCODER), with the new address key
+  // and the root it came from (geo_copied_from).
+  latitude?: number | null;
+  longitude?: number | null;
+  geo_source?: "GEOCODER" | null;
+  geo_updated_at?: Date | null;
+  geo_precision?: "ADDRESS" | "STREET" | null;
+  geocode_status?: "RESOLVED" | null;
+  geocode_attempted_at?: null;
+  geocode_attempts?: 0;
+  geocode_verdict_at?: null;
+  address_key?: string | null;
+  geo_copied_from?: string | null;
 }
 
 interface ListDeliveriesProps extends DeliveryListFilters {
@@ -139,6 +192,20 @@ interface ListDeliveriesProps extends DeliveryListFilters {
   pageSize: number;
   sort?: DeliverySortKey;
   order?: SortOrder;
+
+  /**
+   * leftOpenStartedBefore for the company's zone and now (plan of
+   * 02/11/2026, H3): when given, the page also counts, per route left open,
+   * the open stops of the documents the "Em Rota" card counts.
+   */
+  leftOpenBefore?: Date;
+
+  /**
+   * `facets=skip` (plano-escala F2-30): the page only. No count, no facet,
+   * no left-open share — a client turning pages under the same filters
+   * already has them. The rows are the same as without it.
+   */
+  skipFacets?: boolean;
 }
 
 /** A catalog facet's options, labelled from the company's own records. */
@@ -163,6 +230,23 @@ interface ListDeliveriesPage {
   statusCounts: GroupCount[];
   shipperOptions: DeliveryFacetOption[];
   driverOptions: DeliveryFacetOption[];
+
+  /**
+   * With `leftOpenBefore`: each route left open (IN_PROGRESS, started
+   * before it) holding open stops (PENDING/ARRIVED) of IN_TRANSIT documents
+   * that match every filter but the status — the card's own set — and how
+   * many. Routes holding none are left out. Absent without `leftOpenBefore`.
+   */
+  leftOpenRoutes?: Array<{ started_at: Date | null; open: number }>;
+
+  /** With `skipFacets`: nothing was counted, the counts above are empty. */
+  facetsSkipped?: boolean;
+}
+
+/** The meta line of a page read with `facets=skip`: no count at all. */
+interface SkippedDeliveryListMeta {
+  facetsSkipped: true;
+  period: DeliveryListSearchMeta["period"];
 }
 
 interface ListDeliveriesResult {
@@ -170,6 +254,12 @@ interface ListDeliveriesResult {
   total: number;
   /** Rides along in the NDJSON meta line — the cards and the filters. */
   meta?: DeliveryListSearchMeta;
+}
+
+/** A page read with `facets=skip`: no total, nothing counted. */
+interface SkippedListDeliveriesResult {
+  data: Delivery[];
+  meta: SkippedDeliveryListMeta;
 }
 
 interface CreateOccurrenceProps {
@@ -209,15 +299,27 @@ interface CreateOccurrenceProps {
   signature?: string | null;
   /** DELIVERED only: who received it. */
   received_by?: string | null;
+
+  /**
+   * The geofence record of the report (plan of 02/11/2026, E3/E4): metres
+   * to the address point, the phone's accuracy and the verdict. An
+   * occurrence is never refused for the radius; OUTSIDE flags it for review.
+   * Absent = not evaluated by this server (null in the row).
+   */
+  distance_m?: number | null;
+  accuracy_m?: number | null;
+  geofence_outcome?: GeofenceOutcome | null;
 }
+
+/**
+ * Where an action at the customer's address was made, relative to the
+ * company's radius (plan of 02/11/2026, E2): the GeofenceOutcome enum.
+ */
+type GeofenceOutcome = "INSIDE" | "OUTSIDE" | "NOT_EVALUATED";
 
 /** DeliveryOccurrence.authorization_status (decision 6.3). */
 type OccurrenceAuthorizationStatus =
-  | "NOT_REQUIRED"
-  | "PENDING"
-  | "APPROVED"
-  | "DENIED"
-  | "SUPERSEDED";
+  "NOT_REQUIRED" | "PENDING" | "APPROVED" | "DENIED" | "SUPERSEDED";
 
 interface ListOccurrencesProps extends OccurrenceFeedFilters {
   page: number;
@@ -298,6 +400,12 @@ interface CreateDeliveryEventProps {
 
   actor?: DeliveryEventActor;
 
+  /**
+   * INTEGRATION only: the API key that acted (L9), so the trail names it
+   * instead of a bare "integração". Null for every other actor.
+   */
+  apiKeyId?: string | null;
+
   /** DRIVER_APP only: which phone sent it. */
   device?: string | null;
 
@@ -346,6 +454,15 @@ interface CreateDeliveryEventProps {
 
   /** PROOF from the app: when the receipt photo was taken (server clock). */
   photo_taken_at?: Date | null;
+
+  /**
+   * ARRIVAL and PROOF (plan of 02/11/2026, E2/E4): metres to the address
+   * point and the phone's accuracy, as the server computed them, and the
+   * verdict. OUTSIDE is the "fora do raio" flag. Absent = not evaluated.
+   */
+  distance_m?: number | null;
+  accuracy_m?: number | null;
+  geofence_outcome?: GeofenceOutcome | null;
 }
 
 interface DeliveryEventRecord {
@@ -355,6 +472,31 @@ interface DeliveryEventRecord {
   client_submission_id: string | null;
 }
 
+/**
+ * A delivery a departure just put on the street (plano-escala F2-06): what
+ * its `delivery.in_transit` webhook carries (deliveryEventPayload).
+ */
+interface DepartedDelivery {
+  id: string;
+  businessId: string;
+  code: string | null;
+  invoice_key: string | null;
+  invoice_number: string | null;
+  recipient_name: string;
+  city: string;
+  uf: string;
+  status: string;
+}
+
+/**
+ * Called inside the departure's transaction with what moved, so its
+ * webhooks commit with it (the import's undo hands its removals the same way).
+ */
+type DepartureHook = (
+  departed: DepartedDelivery[],
+  tx: Prisma.TransactionClient,
+) => Promise<void>;
+
 export {
   Delivery,
   DeliveryItemInput,
@@ -363,8 +505,10 @@ export {
   ListDeliveriesProps,
   ListDeliveriesPage,
   ListDeliveriesResult,
+  SkippedListDeliveriesResult,
   DeliveryFacetOption,
   CreateOccurrenceProps,
+  GeofenceOutcome,
   OccurrenceAuthorizationStatus,
   ListOccurrencesProps,
   ListOccurrencesResult,
@@ -374,4 +518,6 @@ export {
   DeliveryEventActor,
   CreateDeliveryEventProps,
   DeliveryEventRecord,
+  DepartedDelivery,
+  DepartureHook,
 };

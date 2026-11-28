@@ -1,3 +1,6 @@
+import type { GeofenceOutcome } from "@/shared/delivery/geofence/geofence-rules";
+import type { RoutePeriodDays } from "@/shared/route/route-period";
+
 /**
  * The operation of one company's day, read in one place (decision 7.1).
  *
@@ -21,18 +24,10 @@
  */
 
 type DeliveryStatusName =
-  | "PENDING"
-  | "IN_TRANSIT"
-  | "DELIVERED"
-  | "FAILED"
-  | "CANCELLED";
+  "PENDING" | "IN_TRANSIT" | "DELIVERED" | "FAILED" | "CANCELLED";
 
 type RouteStatusName =
-  | "PLANNED"
-  | "RELEASED"
-  | "IN_PROGRESS"
-  | "COMPLETED"
-  | "CANCELLED";
+  "PLANNED" | "RELEASED" | "IN_PROGRESS" | "COMPLETED" | "CANCELLED";
 
 interface OperationDay {
   /** "YYYY-MM-DD", the company's civil day. */
@@ -116,6 +111,16 @@ interface FeedEntry {
   /** A blocking occurrence that applied, or a move to FAILED. */
   failure: boolean;
 
+  /**
+   * The geofence record of an arrival, proof or occurrence (plan of
+   * 02/11/2026, E4/E5), with the column names the delivery detail uses:
+   * OUTSIDE is the web's "Fora do raio (820 m)" flag. Absent (or null) on a
+   * route move and on a record from before the geofence.
+   */
+  geofence_outcome?: GeofenceOutcome | null;
+  distance_m?: number | null;
+  accuracy_m?: number | null;
+
   /** When it happened (device time for the app's facts). */
   occurredAt: Date;
 
@@ -141,6 +146,47 @@ interface MonitoringRoute extends TowerRoute {
   stops: MonitoringStop[];
 }
 
+/**
+ * One row of the live list (wave 4, GET /route/live): a route on the street
+ * or released for today, with what a manager's phone and the map need and
+ * nothing else — no stops, no deliveries, no funnel.
+ */
+interface LiveRoute {
+  id: string;
+  code: number;
+  name: string | null;
+  status: "IN_PROGRESS" | "RELEASED";
+
+  /** The civil day, "YYYY-MM-DD" (read as text: no zone can shift it). */
+  scheduled_date: string;
+  started_at: Date | null;
+
+  driverId: string;
+  driverName: string | null;
+  vehiclePlate: string | null;
+
+  /** Stops without the cancelled ones, and the delivered or failed among them. */
+  stopsTotal: number;
+  stopsResolved: number;
+
+  /** The driver's last point (driver_last_position), however old; null if never. */
+  lastPosition: {
+    latitude: number;
+    longitude: number;
+    recorded_at: Date;
+  } | null;
+}
+
+/**
+ * Where a page of the live list ends: running routes first (rank 0), then
+ * the released ones (rank 1), each by code — unique per company, so the key
+ * is total and a page never repeats or skips a row.
+ */
+interface LiveRouteKey {
+  rank: 0 | 1;
+  code: number;
+}
+
 interface IOperationDayRepository {
   /** The company's zone, or null when the company does not exist. */
   timeZoneOf: (businessId: string) => Promise<string | null>;
@@ -162,6 +208,17 @@ interface IOperationDayRepository {
     endedSince: Date,
   ) => Promise<TowerRouteWithStops[]>;
 
+  /**
+   * The company's running routes that left before `startedBefore`
+   * (leftOpenStartedBefore) with their open stops (PENDING or ARRIVED)
+   * counted; routes holding none are left out (H3). What the operation
+   * summary inherited, without reading the tower's whole day.
+   */
+  listRoutesLeftOpen: (
+    businessId: string,
+    startedBefore: Date,
+  ) => Promise<Array<{ started_at: Date | null; open: number }>>;
+
   /** The newest facts that reached the server in the day, newest first. */
   listFeed: (
     businessId: string,
@@ -179,14 +236,29 @@ interface IOperationDayRepository {
   ) => Promise<Array<{ id: string; name: string; cnh: string }>>;
 
   /**
-   * Routes of the day (and running ones, today), not cancelled, with every
-   * stop: running first, then released, planned and finished.
+   * Routes of the days (and running ones, when the days reach today), not
+   * cancelled, with every stop: running first, then released, planned and
+   * finished — over several days, the latest day first inside each group.
+   * One day (routeDaysOfOperationDay) is the tower's board of that day.
    */
   listMonitoringRoutes: (
     businessId: string,
-    day: OperationDay,
+    days: RoutePeriodDays,
     page: { skip: number; take: number },
   ) => Promise<{ total: number; routes: MonitoringRoute[] }>;
+
+  /**
+   * The company's routes running now (any day: one left open included) and
+   * the ones released for `date` and not yet started, running first and then
+   * by code, after `after` when given, at most `take` — in one statement:
+   * the routes by (businessId, status, scheduled_date), each one's stop
+   * counts by route_stop (routeId, status), the driver, the plate and the
+   * driver's last point by primary key.
+   */
+  listLiveRoutes: (
+    businessId: string,
+    query: { date: string; take: number; after?: LiveRouteKey },
+  ) => Promise<LiveRoute[]>;
 
   /**
    * The pauses still open for these drivers, only the company's: the tower
@@ -204,6 +276,8 @@ export type {
   FeedEntry,
   FeedSource,
   IOperationDayRepository,
+  LiveRoute,
+  LiveRouteKey,
   MonitoringRoute,
   MonitoringStop,
   OperationDay,

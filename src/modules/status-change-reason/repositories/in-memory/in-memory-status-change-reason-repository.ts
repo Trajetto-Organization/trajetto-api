@@ -14,6 +14,7 @@ import {
   compareForOrder,
 } from "@/shared/pagination/in-memory-order";
 import {
+  foreignKeyViolation,
   requireIndex,
   uniqueViolation,
 } from "@/shared/in-memory/prisma-errors";
@@ -23,9 +24,7 @@ import {
   type StatusReasonGroup,
 } from "../../usecases/list-status-change-reason/status-change-reason-list";
 
-class InMemoryStatusChangeReasonRepository
-  implements IStatusChangeReasonRepository
-{
+class InMemoryStatusChangeReasonRepository implements IStatusChangeReasonRepository {
   public statusChangeReasons: StatusChangeReason[] = [];
 
   /**
@@ -169,9 +168,12 @@ class InMemoryStatusChangeReasonRepository
     businessId: string,
     name: string,
   ): Promise<StatusChangeReason | null> {
+    // As the real one: the name whatever its case (insensitiveEquals).
     return (
       this.statusChangeReasons.find(
-        (reason) => reason.businessId === businessId && reason.name === name,
+        (reason) =>
+          reason.businessId === businessId &&
+          reason.name.toLowerCase() === name.toLowerCase(),
       ) ?? null
     );
   }
@@ -214,6 +216,12 @@ class InMemoryStatusChangeReasonRepository
       (reason) => reason.id === reasonId,
       "delete",
     );
+
+    // delivery_event.reasonId is RESTRICT: Postgres refuses a reason the
+    // history cites, whatever the use case counted before.
+    if ((this.eventCountByReasonId.get(reasonId) ?? 0) > 0) {
+      throw foreignKeyViolation("delivery_event_reasonId_fkey");
+    }
 
     const [removed] = this.statusChangeReasons.splice(index, 1);
 

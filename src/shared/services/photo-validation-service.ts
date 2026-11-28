@@ -3,10 +3,7 @@ interface PhotoRequirement {
   required: "always" | "if_not_ok" | "never";
   reason: string;
   category:
-    | "critical_safety"
-    | "legal_protection"
-    | "equipment"
-    | "documentation";
+    "critical_safety" | "legal_protection" | "equipment" | "documentation";
 }
 
 interface ChecklistPhotoValidationResult {

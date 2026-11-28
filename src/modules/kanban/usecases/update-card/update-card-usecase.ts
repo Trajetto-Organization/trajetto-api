@@ -8,6 +8,7 @@ import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-n
 
 import { UserAssignedUserNotFoundError } from "@/modules/user/usecases/errors/user-assigned-user-not-found-error";
 import { UserNotBelongBusinessError } from "@/modules/user/usecases/errors/user-not-belong-business-error";
+import { assertAssignableUser } from "@/modules/user/user-assignable-rules";
 
 import { KanbanCardColumnNotFoundError } from "../errors/kanban-card-column-not-found-error";
 
@@ -86,6 +87,10 @@ class UpdateKanbanCardUseCase {
       if (assignedUser.businessId !== findColumn.businessId) {
         throw new UserNotBelongBusinessError();
       }
+
+      // A new assignee must still sign in (they are paged); keeping the one
+      // the card already names is fine, so an old card stays editable.
+      assertAssignableUser(assignedUser, findCard.assignedUserId);
     }
 
     // Read before the transaction: the message prints the due day in the

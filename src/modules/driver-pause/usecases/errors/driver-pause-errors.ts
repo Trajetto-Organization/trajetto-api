@@ -1,5 +1,12 @@
 import { AppError } from "@/shared/errors/AppError";
 
+import {
+  PAUSE_NOTE_MIN_LENGTH,
+  pauseCooldownMessage,
+  pauseCooldownView,
+  type PauseCooldownView,
+} from "../../rules/pause-rules";
+
 /**
  * The refusals of the pause routes, each with its own code (decision 11.3):
  * the app's outbox decides from the code whether an item is done, retried or
@@ -77,16 +84,56 @@ class PauseReportRangeError extends AppError {
 }
 
 /**
- * Decision 14.4: a pause only exists inside a journey — a route of the
- * driver RELEASED or IN_PROGRESS that day, judged at the tap. Nothing is
- * written. Ending a pause that exists is never refused for this.
+ * Decision 14.4, revised 12/11/2026: a pause only starts inside a journey —
+ * a route of the driver's already STARTED (IN_PROGRESS) and not finished,
+ * judged at the tap; a route only released is none. Nothing is written.
+ * Ending a pause that exists is never refused for this. The same 409 code
+ * as before: every app since contract 3 drops it from its queue as settled,
+ * where a new code would be a red card on the installed builds.
  */
 class PauseRequiresRouteError extends AppError {
   constructor() {
     super(
-      "Pausas só podem ser iniciadas durante uma rota liberada ou em andamento.",
+      "Pausas só podem ser iniciadas com uma rota em andamento. Inicie a rota antes de pausar.",
       409,
       "PAUSE_REQUIRES_ROUTE",
+    );
+  }
+}
+
+/**
+ * Owner, 05/11/2026: a NEW pause tapped less than PAUSE_COOLDOWN_MINUTES
+ * after the driver's previous one ended (pause-rules.ts pauseCooldown),
+ * sent now by a build that holds the wait itself (enforcesPauseCooldown).
+ * Nothing written. 409, like the other refusals the app's outbox files on
+ * the merits; the cooldown rides along (the start controller sends it as
+ * `last_ended_at`, `next_pause_allowed_at` and `next_pause_in_seconds`; the
+ * global handler would send code and message only), so the app can count
+ * down on its own clock. Never raised by an end: ending is never blocked.
+ */
+class PauseCooldownError extends AppError {
+  readonly cooldown: PauseCooldownView;
+
+  constructor(lastEndedAt: Date, timeZone: string, now: Date = new Date()) {
+    super(pauseCooldownMessage(lastEndedAt, timeZone), 409, "PAUSE_COOLDOWN");
+    this.name = "PauseCooldownError";
+    this.cooldown = pauseCooldownView(lastEndedAt, now);
+  }
+}
+
+/**
+ * Owner, 09/11/2026: a NEW pause of the generic "Outra pausa"
+ * (pauseTypeRequiresNote) without a reason of PAUSE_NOTE_MIN_LENGTH
+ * non-space characters, sent now by a build whose form asks for it
+ * (enforcesPauseNote). Nothing written. A 400 the app never meets in its
+ * queue: the queue's resends are recorded as before.
+ */
+class PauseNoteRequiredError extends AppError {
+  constructor() {
+    super(
+      `Para uma pausa por outro motivo, escreva o motivo na observação, com pelo menos ${PAUSE_NOTE_MIN_LENGTH} letras.`,
+      400,
+      "PAUSE_NOTE_REQUIRED",
     );
   }
 }
@@ -119,6 +166,8 @@ export {
   PauseTypeWrongCategoryError,
   PauseAlreadyEndedError,
   PauseAlreadyOpenError,
+  PauseCooldownError,
+  PauseNoteRequiredError,
   PauseNotFoundError,
   PauseReportRangeError,
   PauseSubmissionReusedError,

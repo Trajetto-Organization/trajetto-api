@@ -12,6 +12,7 @@ import { OutboxService } from "@/shared/notifications/outbox-service";
 import database from "@/../infra/database";
 
 import { AppError } from "@/shared/errors/AppError";
+import { conflictFromPrisma } from "@/shared/errors/prisma-conflict";
 import { User } from "../../dtos/user-dto";
 
 import { ResourceNotFoundError } from "../errors/resource-not-found-error";
@@ -27,6 +28,7 @@ import {
   unusablePassword,
 } from "../../services/password-setup-link";
 import { emailLogoUrl } from "@/shared/providers/mail-provider/email-logo";
+import { requireMailbox } from "../../services/user-mailbox";
 
 const log = logger.child({ component: "user" });
 
@@ -51,37 +53,40 @@ class CreateMasterUserUseCase {
    */
   private async sendCredentialEmails(masterCreated: User): Promise<void> {
     try {
+      // Created a moment ago with the address typed (D2: only a driver's
+      // login may have none).
+      const mailbox = requireMailbox(masterCreated);
       const token = uuidV4();
       const expires = new Date(new Date().getTime() + 3600 * 1000); // 1 hour
 
       // The link carries the local token: the row only holds its hash.
       await this.usersTokens.createEmailVerificationToken({
-        email: masterCreated.email,
+        email: mailbox,
         token,
         expires,
       });
 
       const setupUrl = await issuePasswordSetupLink(
         this.usersTokens,
-        masterCreated.email,
+        mailbox,
         NEW_ACCOUNT_LINK_TTL_MS,
       );
 
       await Promise.all([
         sendTransactionalMail({
-          email: masterCreated.email,
+          email: mailbox,
           name: masterCreated.name,
           subject: "Sua conta Master foi criada com sucesso",
           templateName: "user-created-successfully.hbs",
           moduleName: "user",
           additionalVariablesProperties: {
-            email: masterCreated.email,
+            email: mailbox,
             url: setupUrl,
             logo: emailLogoUrl(),
           },
         }),
         sendTransactionalMail({
-          email: masterCreated.email,
+          email: mailbox,
           name: masterCreated.name,
           subject: "Verificação de e-mail",
           templateName: "email-verification.hbs",
@@ -142,7 +147,7 @@ class CreateMasterUserUseCase {
           payload: {
             masterUserId: created.id,
             masterName: created.name,
-            masterEmail: created.email,
+            masterEmail: email,
             actorUserId: performedById,
           },
         });
@@ -155,7 +160,7 @@ class CreateMasterUserUseCase {
           payload: {
             masterUserId: created.id,
             performingUserName: performingUser.name,
-            performingUserEmail: performingUser.email,
+            performingUserEmail: requireMailbox(performingUser),
           },
         });
 
@@ -167,9 +172,15 @@ class CreateMasterUserUseCase {
 
       return masterCreated;
     } catch (error) {
-      throw new AppError(
-        "Houve um erro ao tentar criar o usuário Master! Por favor, tente novamente.",
-        500,
+      // The e-mail taken between the lookup and the insert: the same 409.
+      throw (
+        (await conflictFromPrisma(error, {
+          unique: { email: () => new UserAlreadyExistsError() },
+        })) ??
+        new AppError(
+          "Houve um erro ao tentar criar o usuário Master! Por favor, tente novamente.",
+          500,
+        )
       );
     }
   }

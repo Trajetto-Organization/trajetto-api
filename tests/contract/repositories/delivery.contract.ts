@@ -6,8 +6,11 @@ import type {
   CreateOccurrenceProps,
 } from "@/modules/delivery/dtos/delivery-dto";
 import { DeliveryStatusConflictError } from "@/modules/delivery/usecases/errors/delivery-errors";
+import { deliveryAddressKey } from "@/shared/delivery/address-key";
+import { CLEARED_ADDRESS_POINT } from "@/shared/delivery/address-point";
 
 import { expectPrismaCode, fixedId, minute, type Kind } from "../support";
+import { withoutCreationLine } from "../../support/status-trail";
 
 /**
  * The delivery repository's contract (decision 13.2): the listing, the
@@ -20,13 +23,20 @@ import { expectPrismaCode, fixedId, minute, type Kind } from "../support";
 
 const A = fixedId("0d0a", 1);
 const B = fixedId("0d0a", 2);
+/** The point reuse's two companies, apart from the listing's seed. */
+const C = fixedId("0d0a", 3);
+const D = fixedId("0d0a", 4);
 
 const FIXTURE = {
   A,
   B,
+  C,
+  D,
   shipperA: fixedId("0d5a", 1),
   shipperA2: fixedId("0d5a", 2),
   shipperB: fixedId("0d5b", 1),
+  shipperC: fixedId("0d5c", 1),
+  shipperD: fixedId("0d5d", 1),
   driverA: fixedId("0dd0", 1),
   vehicleA: fixedId("0dfe", 1),
   userA: fixedId("0dee", 1),
@@ -106,7 +116,16 @@ const SEED: Array<{ key: string; minute: number; data: CreateDeliveryProps }> =
     {
       key: "d5",
       minute: 4,
-      data: base({ recipient_name: "Zebra Atacado", invoice_number: "" }),
+      data: base({
+        recipient_name: "Zebra Atacado",
+        invoice_number: "",
+        // A door of its own: at the others' they would take its point
+        // (address-point-reuse.ts, 14/11/2026).
+        address_number: "500",
+        // Plan of 02/11/2026, E1: a point given at the create.
+        latitude: -23.5505,
+        longitude: -46.6333,
+      }),
     },
     // Another company, with the same NF-e key and submission key as A's rows.
     {
@@ -228,6 +247,28 @@ function deliveryRepositoryContract(harness: () => DeliveryHarness): void {
       expect(d5).toMatchObject({ invoice_number: null });
     });
 
+    it("stores a point given at the create as the MANUAL address point, and none otherwise", async () => {
+      // Plan of 02/11/2026, E1: the geocoder's queue skips a row with a
+      // point, so the source and the pair must be written together.
+      const h = harness();
+      const d4 = await h.repo.findDeliveryById(h.id("d4"));
+      const d5 = await h.repo.findDeliveryById(h.id("d5"));
+
+      expect(d5).toMatchObject({
+        latitude: -23.5505,
+        longitude: -46.6333,
+        geo_source: "MANUAL",
+        geo_precision: null,
+      });
+      expect(d5?.geo_updated_at).toBeInstanceOf(Date);
+      expect(d4).toMatchObject({
+        latitude: null,
+        longitude: null,
+        geo_source: null,
+        geo_updated_at: null,
+      });
+    });
+
     it("refuses the same NF-e key or submission key twice in a company (P2002), not across companies", async () => {
       const { repo } = harness();
 
@@ -239,6 +280,199 @@ function deliveryRepositoryContract(harness: () => DeliveryHarness): void {
         repo.createDelivery(base({ client_submission_id: "sub-d2" })),
         "P2002",
       );
+    });
+
+    it("takes the point another delivery of the company has at the same door, as GEOCODER, never another company's", async () => {
+      // Owner's report of 14/11/2026: the second delivery at an address the
+      // company had located read "Sem localização".
+      const { repo } = harness();
+      const lipold = {
+        recipient_name: "Destinatário",
+        street: "Rua Doutor Lipold",
+        address_number: "10",
+        neighborhood: "Carangola",
+        city: "Petrópolis",
+        uf: "RJ",
+        businessId: C,
+        shipperId: FIXTURE.shipperC,
+      };
+
+      const pinned = await repo.createDelivery({
+        ...lipold,
+        latitude: -22.4561,
+        longitude: -43.1702,
+      });
+      const second = await repo.createDelivery({
+        ...lipold,
+        street: "R. Dr. Lipold",
+        cep: "25715000",
+      });
+      const elsewhere = await repo.createDelivery({
+        ...lipold,
+        businessId: D,
+        shipperId: FIXTURE.shipperD,
+      });
+
+      expect(pinned).toMatchObject({
+        geo_source: "MANUAL",
+        address_key: deliveryAddressKey(lipold),
+      });
+      expect(await repo.findDeliveryById(second.id!)).toMatchObject({
+        latitude: -22.4561,
+        longitude: -43.1702,
+        geo_source: "GEOCODER",
+        geo_precision: "ADDRESS",
+        geocode_status: "RESOLVED",
+        address_key: deliveryAddressKey(lipold),
+        // Where it came from: the pin's later changes reach it.
+        geo_copied_from: pinned.id,
+      });
+      expect(pinned).toMatchObject({ geo_copied_from: null });
+      expect(await repo.findDeliveryById(elsewhere.id!)).toMatchObject({
+        latitude: null,
+        geo_source: null,
+        address_key: deliveryAddressKey(lipold),
+      });
+    });
+
+    it("picks a pin over a newer point of the geocoder, leaves out the delivery being edited and never crosses companies", async () => {
+      const { repo } = harness();
+      const teresa = {
+        recipient_name: "Destinatário",
+        street: "Rua Teresa",
+        address_number: "200",
+        neighborhood: "Alto da Serra",
+        city: "Petrópolis",
+        uf: "RJ",
+        businessId: C,
+        shipperId: FIXTURE.shipperC,
+      };
+      const key = deliveryAddressKey(teresa)!;
+
+      expect(await repo.findReusablePoint(C, key)).toBeNull();
+
+      const found = await repo.createDelivery(teresa);
+
+      await repo.updateDelivery(found.id!, {
+        latitude: -22.5201,
+        longitude: -43.1801,
+        geo_source: "GEOCODER",
+        geo_precision: "STREET",
+        geocode_status: "RESOLVED",
+        geo_updated_at: new Date("2030-01-01T00:00:00.000Z"),
+      });
+
+      expect(await repo.findReusablePoint(C, key)).toMatchObject({
+        latitude: -22.5201,
+        geo_source: "GEOCODER",
+        geo_precision: "STREET",
+        geocode_status: "RESOLVED",
+      });
+
+      const pinned = await repo.createDelivery({
+        ...teresa,
+        latitude: -22.5205,
+        longitude: -43.1805,
+      });
+
+      expect(await repo.findReusablePoint(C, key)).toMatchObject({
+        latitude: -22.5205,
+        longitude: -43.1805,
+        geo_source: "GEOCODER",
+        geo_precision: "ADDRESS",
+      });
+      expect(await repo.findReusablePoint(C, key, pinned.id)).toMatchObject({
+        latitude: -22.5201,
+      });
+      expect(await repo.findReusablePoint(D, key)).toBeNull();
+    });
+
+    it("names the root of a copy of a copy, takes its own point back as its own, and lends nothing its root dropped", async () => {
+      // Pre-push review of the batch of 14/11/2026: a copy tied to nothing
+      // stayed wrong for good once its source's pin moved or went.
+      const { repo } = harness();
+      const senna = {
+        recipient_name: "Destinatário",
+        street: "Avenida Ayrton Senna",
+        address_number: "300",
+        neighborhood: "Quitandinha",
+        city: "Petrópolis",
+        uf: "RJ",
+        businessId: C,
+        shipperId: FIXTURE.shipperC,
+      };
+      const key = deliveryAddressKey(senna)!;
+      const found = {
+        latitude: -22.5301,
+        longitude: -43.2101,
+        geo_source: "GEOCODER" as const,
+        geo_precision: "STREET" as const,
+        geocode_status: "RESOLVED" as const,
+      };
+
+      // The geocoder's own answer, older than the copies made from it.
+      const root = await repo.createDelivery(senna);
+
+      await repo.updateDelivery(root.id!, {
+        ...found,
+        geo_updated_at: new Date("2020-01-01T00:00:00.000Z"),
+      });
+
+      const copy = await repo.createDelivery(senna);
+      // The newest point of the door is the copy's: still named by its root.
+      const copyOfCopy = await repo.createDelivery(senna);
+
+      for (const taken of [copy, copyOfCopy]) {
+        expect(await repo.findDeliveryById(taken.id!)).toMatchObject({
+          latitude: -22.5301,
+          geo_source: "GEOCODER",
+          geo_copied_from: root.id,
+        });
+      }
+
+      // The root's address edited back to this door takes its own point.
+      expect(await repo.findReusablePoint(C, key, root.id)).toMatchObject({
+        latitude: -22.5301,
+        geo_copied_from: null,
+      });
+
+      // The root's point gone: its copies lend nothing, and a write of one
+      // of them as a copy is refused at the write.
+      await repo.updateDelivery(root.id!, {
+        latitude: null,
+        longitude: null,
+        geo_source: null,
+      });
+
+      expect(await repo.findReusablePoint(C, key)).toBeNull();
+      expect(await repo.findReusablePoint(D, key)).toBeNull();
+
+      const stale = await repo.createDelivery({
+        ...senna,
+        address_number: "302",
+      });
+      const asCopy = {
+        ...CLEARED_ADDRESS_POINT,
+        ...found,
+        geo_precision: "ADDRESS" as const,
+        geo_updated_at: new Date(),
+        geo_copied_from: root.id!,
+      };
+
+      expect(await repo.updateDelivery(stale.id!, asCopy)).toMatchObject({
+        latitude: null,
+        geo_source: null,
+        geo_copied_from: null,
+      });
+
+      // Back again: the write takes it, with its root.
+      await repo.updateDelivery(root.id!, found);
+
+      expect(await repo.updateDelivery(stale.id!, asCopy)).toMatchObject({
+        latitude: -22.5301,
+        geo_source: "GEOCODER",
+        geo_copied_from: root.id,
+      });
     });
 
     it("finds by submission key and by NF-e key inside the company only", async () => {
@@ -262,7 +496,54 @@ function deliveryRepositoryContract(harness: () => DeliveryHarness): void {
     });
   });
 
+  describe("the import's batch of identities", () => {
+    // Plano-escala F3-23c: the duplicate check of a batch of rows in one
+    // read, the same answer the one-row lookups give.
+    it("finds which NF-e keys and orders of a batch the company already has, never another company's", async () => {
+      const { repo } = harness();
+      const key = SEED[0].data.invoice_key!;
+
+      expect(
+        await repo.findExistingInvoiceKeys(A, [key, "99999999999999999999"]),
+      ).toEqual(new Set([key]));
+      expect(await repo.findExistingInvoiceKeys(C, [key])).toEqual(new Set());
+      expect(await repo.findExistingInvoiceKeys(A, [])).toEqual(new Set());
+
+      expect(
+        await repo.findExistingOrderCodes(A, FIXTURE.shipperA, [
+          "PED-1",
+          "PED-NOVO",
+        ]),
+      ).toEqual(new Set(["PED-1"]));
+      // Another shipper of the same company: another order.
+      expect(
+        await repo.findExistingOrderCodes(A, FIXTURE.shipperA2, ["PED-1"]),
+      ).toEqual(new Set());
+      expect(
+        await repo.findExistingOrderCodes(B, FIXTURE.shipperB, ["PED-1"]),
+      ).toEqual(new Set());
+    });
+  });
+
   describe("listDeliveries", () => {
+    // facets=skip (plano-escala F2-30): the same rows, nothing counted.
+    it("with skipFacets returns the same page and no count", async () => {
+      const counted = await list({ page: 2, pageSize: 2 });
+      const skipped = await list({ page: 2, pageSize: 2, skipFacets: true });
+
+      expect(skipped.data.map((row) => row.id)).toEqual(
+        counted.data.map((row) => row.id),
+      );
+      expect(skipped).toMatchObject({
+        statusCounts: [],
+        shipperOptions: [],
+        driverOptions: [],
+        facetsSkipped: true,
+      });
+      expect(counted.facetsSkipped).toBeUndefined();
+      expect(counted.statusCounts.length).toBeGreaterThan(0);
+    });
+
     it("lists one company, newest first, the id breaking a created_at tie, and pages", async () => {
       const h = harness();
       const tie = [h.id("d4"), h.id("d5")].sort().reverse();
@@ -428,6 +709,15 @@ function deliveryRepositoryContract(harness: () => DeliveryHarness): void {
         city: "São Paulo",
       });
     });
+
+    it("reads back the item list as stored, and none for a delivery without items (K9)", async () => {
+      const h = harness();
+
+      expect(await h.repo.findDeliveryItems(h.id("d1"))).toEqual([
+        { description: "Caixa", quantity: 2, unit: null, unit_value: 10.5 },
+      ]);
+      expect(await h.repo.findDeliveryItems(MISSING)).toEqual([]);
+    });
   });
 
   describe("the detail", () => {
@@ -443,6 +733,8 @@ function deliveryRepositoryContract(harness: () => DeliveryHarness): void {
         import: unknown;
         events: Array<{
           type: string;
+          status_from: string | null;
+          status_to: string | null;
           reason: { name: string } | null;
           reportedBy: { name: string } | null;
         }>;
@@ -477,8 +769,17 @@ function deliveryRepositoryContract(harness: () => DeliveryHarness): void {
         license_plate: FIXTURE.plate,
       });
 
+      // The creation line (F2-06), and the status change with its reason.
       expect(
-        detail.events.map((event) => [
+        detail.events.filter(
+          (event) =>
+            event.type === "STATUS_CHANGE" &&
+            event.status_from === null &&
+            event.status_to === "PENDING",
+        ),
+      ).toHaveLength(1);
+      expect(
+        withoutCreationLine(detail.events).map((event) => [
           event.type,
           event.reason?.name,
           event.reportedBy?.name,
@@ -571,6 +872,7 @@ function deliveryRepositoryContract(harness: () => DeliveryHarness): void {
       expect(await h.repo.findOccurrenceBySubmissionId("occ-sub-1", A)).toEqual(
         {
           id: h.occurrence("o-new"),
+          deliveryId: h.id("d1"),
           authorization_status: "APPROVED",
           category: "NOT_DELIVERED",
         },
@@ -578,6 +880,22 @@ function deliveryRepositoryContract(harness: () => DeliveryHarness): void {
       expect(
         await h.repo.findOccurrenceBySubmissionId("occ-sub-1", B),
       ).toBeNull();
+    });
+
+    // plano-escala F2-14: the Prisma side answers from
+    // delivery_event_submission, the twin from its own list; same answer.
+    it("find an event by its submission key in its company only", async () => {
+      const h = harness();
+
+      expect(
+        await h.repo.findEventBySubmissionId("evt-sub-1", A),
+      ).toMatchObject({
+        type: "STATUS_CHANGE",
+        deliveryId: h.id("d1"),
+        client_submission_id: "evt-sub-1",
+      });
+      expect(await h.repo.findEventBySubmissionId("evt-sub-1", B)).toBeNull();
+      expect(await h.repo.findEventBySubmissionId("nope", A)).toBeNull();
     });
   });
 

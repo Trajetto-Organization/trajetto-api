@@ -55,7 +55,9 @@ class ResendTwoFactorCodeUseCase {
     const findUser = await this.user.findUserByEmail(email);
 
     // Nothing to send, and nothing to say about why.
-    if (!findUser || !findUser.two_factor_enabled) return NEUTRAL_ANSWER;
+    if (!findUser || !findUser.two_factor_enabled || !findUser.email) {
+      return NEUTRAL_ANSWER;
+    }
 
     // A code only for whoever just proved this account's password (WEB-07):
     // otherwise the e-mail alone was enough to have codes issued and guess

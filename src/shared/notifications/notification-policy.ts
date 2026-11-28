@@ -6,6 +6,7 @@ import {
 
 import { fineCreatedPolicy } from "./policies/fine-created-policy";
 import { vehicleChecklistCreatedPolicy } from "./policies/vehicle-checklist-created-policy";
+import { vehicleChecklistDefectsFoundPolicy } from "./policies/vehicle-checklist-defects-policy";
 import { fuelCreatedPolicy } from "./policies/fuel-created-policy";
 import { aiVerificationIssuePolicy } from "./policies/ai-verification-issue-policy";
 import { serviceOrderCreatedPolicy } from "./policies/service-order-created-policy";
@@ -21,6 +22,7 @@ import {
   businessLimitChangedPolicy,
   businessModuleChangedPolicy,
 } from "./policies/business-plan-policies";
+import { businessSettingsChangedPolicy } from "./policies/business-settings-policy";
 import {
   deliveryOccurrenceAuthorizationDecidedPolicy,
   deliveryOccurrenceAuthorizationEscalatedPolicy,
@@ -38,7 +40,9 @@ import {
 
 import {
   routeCancelledPolicy,
+  routeLeftOpenPolicy,
   routePlanChangedPolicy,
+  routeRecordBranchMissingPolicy,
   routeReleasedPolicy,
 } from "./policies/route-policies";
 import {
@@ -48,7 +52,12 @@ import {
   masterUserWelcomedPolicy,
 } from "./policies/master-user-policies";
 import { webhookEndpointDisabledPolicy } from "./policies/webhook-endpoint-policies";
+import { whatsAppQuotaReachedPolicy } from "./policies/whatsapp-quota-policy";
 import { proofAIFeedbackPolicy } from "./policies/proof-ai-feedback-policy";
+import {
+  driverAccessNewDevicePolicy,
+  driverAccessPasswordCreatedPolicy,
+} from "./policies/driver-access-policies";
 
 /**
  * Everything the system notifies, in one place.
@@ -57,12 +66,29 @@ import { proofAIFeedbackPolicy } from "./policies/proof-ai-feedback-policy";
  * makes the event fail visibly in the pipeline (never silently), so adding a
  * feature's notification is: define the payload type, write the policy file,
  * register it here.
+ *
+ * Nobody is notified of what they just did (14/11/2026): the user whose
+ * action published an event (the outbox row's `actorId`, which every publish
+ * caused by a person carries) is left out of its recipients on every channel,
+ * whatever the policy resolved. The exceptions say why in `notifiesActor`,
+ * and are only these:
+ * - "security": master-user.created and master-user.updated (the record of a
+ *   privileged account the reader created or changed, decision D-49) and
+ *   master-user.account-updated (about the reader's own account);
+ * - "verdict": delivery-proof.ai-flagged (the AI's reading of the receipt the
+ *   driver sent, for that driver) and ai-verification.issue (the AI's alert
+ *   on a fuelling or checklist, for the admin who registered it: the reading
+ *   ends in the background, and the company may have no other admin).
+ * tests/unitaires/notifications/actor-notice.test.ts holds the list and the
+ * actor on every publish.
  */
 const notificationPolicies: {
   [T in NotificationTopic]: NotificationPolicyEntry<TopicPayloadMap[T]>;
 } = {
   "fine.created": fineCreatedPolicy,
   "vehicle-checklist.created": vehicleChecklistCreatedPolicy,
+  // Plan of 02/11/2026 (F2): only a checklist with a defect publishes it.
+  "vehicle-checklist.defects_found": vehicleChecklistDefectsFoundPolicy,
   "fuel.created": fuelCreatedPolicy,
   "ai-verification.issue": aiVerificationIssuePolicy,
   "service-order.created": serviceOrderCreatedPolicy,
@@ -82,6 +108,7 @@ const notificationPolicies: {
   "master-user.account-updated": masterUserAccountUpdatedPolicy,
   "business-module.changed": businessModuleChangedPolicy,
   "business-limit.changed": businessLimitChangedPolicy,
+  "business-settings.changed": businessSettingsChangedPolicy,
   "delivery-occurrence.reported": deliveryOccurrenceReportedPolicy,
   "delivery-occurrence.authorization_requested":
     deliveryOccurrenceAuthorizationRequestedPolicy,
@@ -93,6 +120,11 @@ const notificationPolicies: {
   "route.released": routeReleasedPolicy,
   "route.cancelled": routeCancelledPolicy,
   "route.plan_changed": routePlanChangedPolicy,
+  // Plan of 02/11/2026, K11 (D26): a route left open, to the admins, once.
+  "route.left_open": routeLeftOpenPolicy,
+  // Wave 3.7: a driver's route record with no active branch, to the people
+  // who run the deliveries, once per route and moment.
+  "route.record_branch_missing": routeRecordBranchMissingPolicy,
   "delivery.status_overridden": deliveryStatusOverriddenPolicy,
 
   "delivery.dispatched": deliveryDispatchedPolicy,
@@ -102,7 +134,13 @@ const notificationPolicies: {
 
   "webhook-endpoint.disabled": webhookEndpointDisabledPolicy,
 
+  "whatsapp-quota.reached": whatsAppQuotaReachedPolicy,
+
   "delivery-proof.ai-flagged": proofAIFeedbackPolicy,
+
+  // Wave 2: a driver's login on a new phone, a password created after a QR.
+  "driver-access.new_device": driverAccessNewDevicePolicy,
+  "driver-access.password_created": driverAccessPasswordCreatedPolicy,
 };
 
 function getNotificationPolicy(

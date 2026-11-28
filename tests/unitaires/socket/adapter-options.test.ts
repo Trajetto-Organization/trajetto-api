@@ -38,6 +38,18 @@ describe("the adapter options", () => {
     ).toBe("socket.io-e2e-x");
   });
 
+  /**
+   * With N replicas and no affinity (plano-escala F4-51), every presence
+   * read asks all of them, and a slow one holds the HTTP request for this
+   * long: an operator may tighten it without a release.
+   */
+  it("takes the cluster-wide wait from the environment", () => {
+    expect(
+      socketAdapterOptions({ SOCKET_ADAPTER_REQUESTS_TIMEOUT_MS: 1_500 })
+        .requestsTimeout,
+    ).toBe(1_500);
+  });
+
   it("defaults SOCKET_ADAPTER_KEY in the env schema", () => {
     // The minimum a development boot needs, and no adapter key.
     const parsed = envSchema.safeParse({
@@ -52,6 +64,11 @@ describe("the adapter options", () => {
 
     expect(parsed.success).toBe(true);
     expect(parsed.success && parsed.data.SOCKET_ADAPTER_KEY).toBe("socket.io");
+
+    // And the wait at 2 s, the figure a rolling deploy already runs with.
+    expect(
+      parsed.success && parsed.data.SOCKET_ADAPTER_REQUESTS_TIMEOUT_MS,
+    ).toBe(2_000);
   });
 });
 

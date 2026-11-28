@@ -6,6 +6,7 @@ import pino from "pino";
 import { sign } from "jsonwebtoken";
 import auth from "@/config/auth";
 import { createPrismaClient } from "@/shared/database/database-client";
+import { v7 as uuidV7 } from "uuid";
 
 /**
  * Contract §32/§33 on the real app and the real database:
@@ -28,7 +29,8 @@ const OTHER_CARRIER = "018fda00-0000-7000-8000-0000000000b2";
 const STAFF = "018fda00-0000-7000-8000-0000000000c1";
 const OTHER_STAFF = "018fda00-0000-7000-8000-0000000000c2";
 
-const EVENT = randomUUID();
+// A v7, as every queue id: the queues are partitioned by it (F5-09).
+const EVENT = uuidV7();
 const CORRELATION = "web-ops-correlation-0001";
 
 let masterToken = "";
@@ -270,6 +272,9 @@ describe("the providers' readiness, for the MASTER", () => {
       "push",
       "storage",
       "ai_ocr",
+      // LocationIQ's two (14/11/2026), from the geocoder's Redis state.
+      "geocoding",
+      "address_search",
       "proof_certificate",
       "heartbeat",
     ]);
@@ -304,6 +309,8 @@ describe("the providers' readiness, for the MASTER", () => {
       "META_WHATSAPP_ACCESS_TOKEN",
       "R2_SECRET_ACCESS_KEY",
       "HEALTHCHECK_PING_URL",
+      "REVERSE_GEOCODER_KEY",
+      "ADDRESS_SEARCH_KEY",
     ]) {
       const value = process.env[key];
       if (value && value.length >= 8) expect(text).not.toContain(value);
@@ -336,8 +343,55 @@ describe("the operational metrics", () => {
       body.providers.channels.map((c: { channel: string }) => c.channel),
     ).toEqual(["EMAIL", "WHATSAPP", "PUSH", "AI_OCR", "WEBHOOK"]);
     expect(typeof body.realtime.local_connections).toBe("number");
+
+    // The socket admission (plano-escala U-01) and the replica's real
+    // ceiling (F5-31) reach the response through its schema.
+    expect(body.realtime.socket_cap).toBeGreaterThan(0);
+    expect(body.realtime).toHaveProperty("fd_limit");
+    expect(body.realtime.handshakes_in_flight).toBe(0);
+    expect(body.realtime.handshakes.refused).toMatchObject({
+      connections: 0,
+      inflight: 0,
+      credential: 0,
+    });
     expect(body.redis.status).toBe("up");
     expect(body.redis.latency_ms).not.toBeNull();
+
+    // The scale plan's Redis measures (F1-07) reach the response through
+    // its schema, from the real server's INFO.
+    expect(body.redis).toMatchObject({
+      ops_per_sec: expect.any(Number),
+      used_cpu_sys_seconds: expect.any(Number),
+      used_cpu_user_seconds: expect.any(Number),
+      pubsub_channels: expect.any(Number),
+      pubsub_patterns: expect.any(Number),
+      total_net_output_bytes: expect.any(Number),
+      output_kbps: expect.any(Number),
+      mem_clients_normal_bytes: expect.any(Number),
+      client_recent_max_output_buffer_bytes: expect.any(Number),
+      maxmemory_policy: expect.any(String),
+      evicted_clients: expect.any(Number),
+    });
+
+    // The replica's HTTP counters (F1-09), through the schema: the
+    // /health/providers reads of the tests above are already in them.
+    expect(Object.keys(body.http.groups)).toHaveLength(12);
+    expect(body.http.requests).toBeGreaterThan(0);
+    expect(body.http.groups.other.requests).toBeGreaterThan(0);
+    expect(body.http.latency_buckets_ms).toHaveLength(9);
+    expect(body.http.positions_contracts.window_minutes).toBe(10);
+
+    // CPU per request of this replica (F4-01): a number or null, never NaN.
+    expect(body.runtime.cpu).toMatchObject({
+      user_ms: expect.any(Number),
+      system_ms: expect.any(Number),
+      requests: expect.any(Number),
+      includes_workers: expect.any(Boolean),
+    });
+    expect(
+      body.runtime.cpu.ms_per_request === null ||
+        Number.isFinite(body.runtime.cpu.ms_per_request),
+    ).toBe(true);
   });
 });
 
@@ -379,12 +433,10 @@ describe("a webhook event published inside a request", () => {
       },
     });
 
-    const { enterRequestContext } = await import(
-      "@/shared/http/request-context"
-    );
-    const { fanOutWebhookEvent } = await import(
-      "@/shared/integration/webhook-dispatch-service"
-    );
+    const { enterRequestContext } =
+      await import("@/shared/http/request-context");
+    const { fanOutWebhookEvent } =
+      await import("@/shared/integration/webhook-dispatch-service");
     const database = (await import("@/../infra/database")).default;
 
     enterRequestContext({ requestId: "req-ops-webhook-0001" });

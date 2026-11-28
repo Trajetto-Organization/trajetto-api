@@ -37,12 +37,7 @@ const CLOSED_QUOTE = "018fe0b0-0000-7000-8000-0000000000c2";
 const SHARED_PHONE = "11987650001";
 
 type Key =
-  | "admin"
-  | "colleague"
-  | "otherAdmin"
-  | "master"
-  | "otherDriver2"
-  | "member";
+  "admin" | "colleague" | "otherAdmin" | "master" | "otherDriver2" | "member";
 
 const tokens = {} as Record<Key, string>;
 const userIds = {} as Record<Key, string>;

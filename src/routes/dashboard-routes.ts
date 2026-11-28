@@ -28,7 +28,7 @@ async function dashboardRoutes(app: FastifyInstance) {
         tags: ["dashboard"],
         summary: "Visão geral do painel",
         description:
-          "Contagens do mês, tendência de seis meses, situação da frota, custos de manutenção, operação de hoje e atividades recentes. Meses e 'hoje' seguem o fuso da empresa (Business.timezone); o MASTER vê o total da plataforma no fuso padrão. Séries e custos só aparecem para o perfil que pode lê-los e para a empresa que contratou o módulo.",
+          "Contagens do mês, tendência de seis meses, situação da frota, custos de manutenção, operação de hoje e atividades recentes. Meses e 'hoje' seguem o fuso da empresa (Business.timezone); o MASTER vê o total da plataforma no fuso padrão. Séries e custos só aparecem para o perfil que pode lê-los e para a empresa que contratou o módulo. Os números (tudo menos as atividades recentes, lidas a cada visita) podem ter até 60 s: saem de uma foto da empresa por aquilo que o perfil pode ver (DASHBOARD_SNAPSHOT_TTL_MS), e dois perfis só dividem a mesma cópia quando veriam os mesmos números. O cabeçalho `x-trajetto-refresh: 1` (o Atualizar do painel) pede uma leitura nova, feita só se a cópia tiver 2 s ou mais.",
         response: {
           200: dashboardResponses.dashboardOverview,
           401: errorResponse,
@@ -52,7 +52,7 @@ async function dashboardRoutes(app: FastifyInstance) {
         tags: ["dashboard"],
         summary: "Tendências do painel por período",
         description:
-          "Série de cadastros e custos de manutenção nos últimos 7 ou 30 dias (por dia) ou 3, 6 ou 12 meses (por mês), no calendário da empresa (Business.timezone). Mesmas regras de visibilidade da visão geral.",
+          "Série de cadastros e custos de manutenção nos últimos 7 ou 30 dias (por dia) ou 3, 6 ou 12 meses (por mês), no calendário da empresa (Business.timezone). Mesmas regras de visibilidade da visão geral. A série pode ter até 60 s: sai da foto da empresa por período e por aquilo que o perfil pode ver (DASHBOARD_SNAPSHOT_TTL_MS). O cabeçalho `x-trajetto-refresh: 1` pede uma leitura nova, feita só se a cópia tiver 2 s ou mais.",
         querystring: dashboardSchemas.trendsQuery,
         response: {
           200: dashboardResponses.dashboardTrends,

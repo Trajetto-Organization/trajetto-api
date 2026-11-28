@@ -15,13 +15,27 @@ import {
   type RouteProgress,
 } from "@/shared/route/control-tower-rules";
 import { operationDay } from "@/shared/route/operation-day-rules";
-import { dateOnlyKey, resolveTimeZone } from "@/shared/time/business-day";
+import { isRouteLeftOpen } from "@/shared/route/route-left-open";
+import {
+  routeDaysOfOperationDay,
+  routePeriodDays,
+  type RoutePeriodDays,
+} from "@/shared/route/route-period";
+import {
+  businessDateKey,
+  dateOnlyKey,
+  resolveTimeZone,
+} from "@/shared/time/business-day";
+import type { ListPeriodInput } from "@/shared/time/list-period";
 
-interface RouteMonitoringRequest {
+interface RouteMonitoringRequest extends ListPeriodInput {
   userId: string;
   businessId?: string;
 
-  /** "YYYY-MM-DD" in the company's zone. Defaults to the company's today. */
+  /**
+   * "YYYY-MM-DD" in the company's zone. Defaults to the company's today.
+   * The board's first question, kept for its callers; never with a period.
+   */
   day?: string;
 
   page: number;
@@ -64,10 +78,25 @@ interface MonitoredRoute {
 
   progress: RouteProgress;
   stops: MonitoredStop[];
+
+  /**
+   * A running route left open (decision D26, H3): the same flag and date
+   * the tower shows, so both boards say "Aberta desde dd/mm".
+   */
+  stale: boolean;
+  openSince: string | null;
 }
 
 interface RouteMonitoring {
+  /**
+   * The day the board reads its hours against: the one asked with `day`,
+   * else the company's today — with a period too, so a time on another
+   * day prints its date.
+   */
   day: string;
+
+  /** The period's days, when one was asked; null for a single day. */
+  period: { from: string; to: string } | null;
 
   /** The company's zone: the board shows every hour in it, like the tower. */
   timeZone: string;
@@ -82,6 +111,10 @@ const iso = (value: Date | null): string | null => value?.toISOString() ?? null;
  * The monitoring board by route (decision 6.6, DLVP-MON-1): every route of
  * the company's day — and every route still running, today — with its
  * completion and one entry per stop, in the route's order.
+ *
+ * Or of a period (plan of 09/11/2026): the routes of those days, and the
+ * running ones when it reaches today (shared/route/route-period, the list's
+ * rule). `today` is exactly the board without a period.
  *
  * Manager surface, like the tower: a driver token is refused rather than
  * shown everybody's day.
@@ -99,6 +132,9 @@ class RouteMonitoringUseCase {
     userId,
     businessId,
     day,
+    period,
+    from,
+    to,
     page,
     pageSize,
     now = new Date(),
@@ -113,54 +149,93 @@ class RouteMonitoringUseCase {
       await this.operation.timeZoneOf(resolvedBusinessId),
     );
 
-    let window;
-
-    try {
-      window = operationDay(timeZone, now, day);
-    } catch {
-      throw new AppError("Data inválida.", 400, "INVALID_DAY");
-    }
+    const board = this.boardDays(timeZone, now, { day, period, from, to });
 
     const { total, routes } = await this.operation.listMonitoringRoutes(
       resolvedBusinessId,
-      window,
+      board.days,
       { skip: (page - 1) * pageSize, take: pageSize },
     );
 
     return {
-      day: window.date,
+      day: board.day,
+      period: board.period,
       timeZone,
       meta: { total, page, pageSize },
-      routes: routes.map((route) => ({
-        id: route.id,
-        code: route.code,
-        name: route.name,
-        destination: route.destination,
-        status: route.status,
+      routes: routes.map((route) => {
+        const stale =
+          route.status === "IN_PROGRESS" &&
+          isRouteLeftOpen(route.started_at, timeZone, now);
 
-        scheduledDate: dateOnlyKey(route.scheduled_date),
+        return {
+          id: route.id,
+          code: route.code,
+          name: route.name,
+          destination: route.destination,
+          status: route.status,
 
-        plannedDepartureAt: iso(route.planned_departure_at),
-        startedAt: iso(route.started_at),
-        completedAt: iso(route.completed_at),
+          scheduledDate: dateOnlyKey(route.scheduled_date),
 
-        driver: { id: route.driverId, name: route.driverName },
-        vehiclePlate: route.vehiclePlate,
+          plannedDepartureAt: iso(route.planned_departure_at),
+          startedAt: iso(route.started_at),
+          completedAt: iso(route.completed_at),
 
-        progress: routeProgress(route.stops),
+          driver: { id: route.driverId, name: route.driverName },
+          vehiclePlate: route.vehiclePlate,
 
-        stops: route.stops.map((stop) => ({
-          id: stop.id,
-          sequence: stop.sequence,
-          status: stop.status,
-          deliveryId: stop.deliveryId,
-          recipientName: stop.recipientName,
-          city: stop.city,
-          onTheWayAt: iso(stop.on_the_way_at),
-          arrivedAt: iso(stop.arrived_at),
-          completedAt: iso(stop.completed_at),
-        })),
-      })),
+          progress: routeProgress(route.stops),
+
+          stops: route.stops.map((stop) => ({
+            id: stop.id,
+            sequence: stop.sequence,
+            status: stop.status,
+            deliveryId: stop.deliveryId,
+            recipientName: stop.recipientName,
+            city: stop.city,
+            onTheWayAt: iso(stop.on_the_way_at),
+            arrivedAt: iso(stop.arrived_at),
+            completedAt: iso(stop.completed_at),
+          })),
+
+          stale,
+          openSince: stale ? iso(route.started_at) : null,
+        };
+      }),
+    };
+  }
+
+  /** The days the board covers, and the day and period it answers with. */
+  private boardDays(
+    timeZone: string,
+    now: Date,
+    asked: ListPeriodInput & { day?: string },
+  ): {
+    days: RoutePeriodDays;
+    day: string;
+    period: RouteMonitoring["period"];
+  } {
+    const days = routePeriodDays(asked, timeZone, now);
+
+    if (days) {
+      return {
+        days,
+        day: businessDateKey(now, timeZone),
+        period: { from: days.from, to: days.to },
+      };
+    }
+
+    let window;
+
+    try {
+      window = operationDay(timeZone, now, asked.day);
+    } catch {
+      throw new AppError("Data inválida.", 400, "INVALID_DAY");
+    }
+
+    return {
+      days: routeDaysOfOperationDay(window),
+      day: window.date,
+      period: null,
     };
   }
 }

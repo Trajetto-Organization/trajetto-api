@@ -5,10 +5,11 @@ import {
   hasConsecutiveSpaces,
   hasSpaceAtEdges,
 } from "@/shared/utils/zod-schema-helpers";
+import { fieldError } from "@/shared/validation/field-error";
 
 const updateMasterUserParamsSchema = z.object({
   masterUserId: z
-    .string({ required_error: "ID do usuário master é obrigatório!" })
+    .string(fieldError({ required: "ID do usuário master é obrigatório!" }))
     .uuid("ID do usuário master é inválido."),
 });
 
@@ -82,7 +83,7 @@ const updateMasterUserSchema = z
     // Decision 4.9: nobody types another master's password, and no
     // password is mailed. A single-use link is sent instead.
     sendPasswordSetupLink: z
-      .boolean({ invalid_type_error: "Envio do link de senha inválido." })
+      .boolean(fieldError({ invalid: "Envio do link de senha inválido." }))
       .optional()
       .describe(
         "Envia ao master um link de uso único (24 h) para definir uma nova senha.",

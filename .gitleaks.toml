@@ -6,8 +6,11 @@
 # fixtures (fake passwords and tokens) and on .env.example's empty
 # assignments. Without it the job fails on every new test fixture. Only that
 # rule, only those paths: a provider key (Anthropic, GitHub, AWS, Google, ...)
-# committed in a test still fails the job. Any other false positive goes in
-# .gitleaksignore, by fingerprint.
+# committed in a test still fails the job. A value that is public by design
+# takes gitleaks' inline allow comment on the very line that fires, and the
+# secrets-hygiene test lists each one; .gitleaksignore only holds a finding
+# already in a pushed commit (the history's baseline, a rotated secret), by
+# its full fingerprint (commit:file:rule:line).
 
 [extend]
 useDefault = true

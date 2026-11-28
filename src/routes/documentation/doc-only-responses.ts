@@ -1,4 +1,4 @@
-import { z, type ZodTypeAny } from "zod";
+import { z, type ZodType } from "zod";
 
 /**
  * Responses whose runtime schema cannot be the shape the document shows.
@@ -24,14 +24,14 @@ interface FileDoc {
 }
 
 const FILE_DOCS = new WeakMap<object, FileDoc>();
-const DOCUMENTED_AS = new WeakMap<object, ZodTypeAny>();
+const DOCUMENTED_AS = new WeakMap<object, ZodType>();
 
 const CSV = "text/csv";
 const XLSX =
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
 /** A download. The returned schema is a marker the serializer never runs. */
-function fileResponse(doc: FileDoc): ZodTypeAny {
+function fileResponse(doc: FileDoc): ZodType {
   const runtime = z.any();
 
   FILE_DOCS.set(runtime, doc);
@@ -40,7 +40,7 @@ function fileResponse(doc: FileDoc): ZodTypeAny {
 }
 
 /** The reports behind `?format=csv|excel`, all written by export-pipeline. */
-function exportFileResponse(filename: string): ZodTypeAny {
+function exportFileResponse(filename: string): ZodType {
   return fileResponse({
     contentTypes: [CSV, XLSX],
     filename: `${filename}.csv | ${filename}.xlsx`,
@@ -55,10 +55,7 @@ function exportFileResponse(filename: string): ZodTypeAny {
  * `.describe()` clones the runtime schema without changing what it accepts,
  * so a schema shared by two routes is never marked for both.
  */
-function documentedAs<T extends ZodTypeAny>(
-  runtime: T,
-  documented: ZodTypeAny,
-): T {
+function documentedAs<T extends ZodType>(runtime: T, documented: ZodType): T {
   const marked = runtime.describe(runtime.description ?? "") as T;
 
   DOCUMENTED_AS.set(marked, documented);
@@ -72,7 +69,7 @@ function fileDocFor(schema: unknown): FileDoc | undefined {
     : undefined;
 }
 
-function documentedDocFor(schema: unknown): ZodTypeAny | undefined {
+function documentedDocFor(schema: unknown): ZodType | undefined {
   return schema && typeof schema === "object"
     ? DOCUMENTED_AS.get(schema)
     : undefined;

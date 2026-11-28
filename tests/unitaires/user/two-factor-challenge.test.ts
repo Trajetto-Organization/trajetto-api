@@ -1,8 +1,7 @@
 import fastify from "fastify";
-import {
-  serializerCompiler,
-  validatorCompiler,
-} from "fastify-type-provider-zod";
+import { validatorCompiler } from "fastify-type-provider-zod";
+
+import { parsingSerializerCompiler } from "@/shared/http/response-serializer";
 import { hash } from "bcrypt";
 import { verify } from "jsonwebtoken";
 import { container } from "tsyringe";
@@ -60,6 +59,7 @@ import {
   userResponses,
   userSchemas,
 } from "@/routes/documentation/user-documentation";
+import { InMemoryDriverTrustedDeviceRepository } from "@/modules/user/repositories/in-memory/in-memory-driver-trusted-device-repository";
 
 const VICTIM = "vitima@exemplo.com.br";
 const ATTACKER = "atacante@exemplo.com.br";
@@ -111,6 +111,7 @@ beforeEach(async () => {
     users as never,
     tokens as never,
     drivers as never,
+    new InMemoryDriverTrustedDeviceRepository(),
   );
   verification = new TwoFactorVerificationUseCase(
     users as never,
@@ -219,7 +220,7 @@ describe("over HTTP", () => {
   ) {
     const app = fastify();
     app.setValidatorCompiler(validatorCompiler);
-    app.setSerializerCompiler(serializerCompiler);
+    app.setSerializerCompiler(parsingSerializerCompiler);
     app.post(
       route,
       {

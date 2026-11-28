@@ -8,6 +8,7 @@ import { ExportAccountPayableController } from "@/modules/account-payable/usecas
 
 import { UpdateAccountPayableController } from "@/modules/account-payable/usecases/update-account-payable/update-account-payable-controller";
 import { DeleteAccountPayableController } from "@/modules/account-payable/usecases/delete-account-payable/delete-account-payable-controller";
+import { GetAccountPayableController } from "@/modules/account-payable/usecases/get-account-payable/get-account-payable-controller";
 
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
 import { requireModuleForPlugin } from "@/modules/middlewares/verify-module-enabled";
@@ -38,6 +39,7 @@ const exportAccountPayableController = new ExportAccountPayableController();
 
 const updateAccountPayableController = new UpdateAccountPayableController();
 const deleteAccountPayableController = new DeleteAccountPayableController();
+const getAccountPayableController = new GetAccountPayableController();
 
 async function accountPayableRoutes(app: FastifyInstance) {
   // Fleet operation: gated by the FLEET module for the whole plugin (runs
@@ -157,6 +159,33 @@ async function accountPayableRoutes(app: FastifyInstance) {
       },
     },
     searchAccountPayableCursorController.handle,
+  );
+
+  app.get(
+    "/:accountPayableId",
+    {
+      onRequest: [ensureAuthenticated],
+      // No profile key on the route, like "minhas contas": the responsible
+      // reads their own bill without one (a driver included, decision 4.5),
+      // and the use case asks account_payable_manage:read for any other.
+      preHandler: [verifyBusinessActive],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["account-payable"],
+        summary: "Uma conta a pagar pelo ID",
+        description:
+          'O que o aviso de conta abre no app (onda 3). O administrador da empresa, o perfil com leitura de contas a pagar e o MASTER na empresa escolhida (`businessId`, obrigatório para ele: sem ele, 400 BUSINESS_NOT_IDENTIFIED) leem qualquer conta da empresa; os demais — o motorista inclusive — só uma conta em que são o RESPONSÁVEL, como em "minhas contas". A conta vem como nas listagens, com a situação calculada pelo dia de negócio da empresa. Inexistente, de outra empresa ou fora do alcance: 404 ACCOUNT_PAYABLE_NOT_FOUND, sempre com o mesmo corpo.',
+        params: accountPayableSchemas.accountPayableIdParam,
+        querystring: accountPayableSchemas.selectedCompanyQuery,
+        response: {
+          200: accountPayableResponses.accountPayableRead,
+          400: accountPayableResponses.readErrors,
+          404: accountPayableResponses.readNotFound,
+          500: accountPayableResponses.internalServerError,
+        },
+      },
+    },
+    getAccountPayableController.handle,
   );
 
   app.patch(

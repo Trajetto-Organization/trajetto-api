@@ -1,19 +1,33 @@
 import { randomUUID } from "node:crypto";
-import { writeFileSync, mkdirSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { basename, dirname, resolve } from "node:path";
 
 import { hash } from "bcrypt";
 import { sign } from "jsonwebtoken";
+import pg from "pg";
 
 import auth from "../../src/config/auth";
+import { issueSessionTokenPair } from "../../src/modules/user/services/session-service";
 import { ensureDefaultOccurrenceTypes } from "../../src/shared/delivery/default-occurrence-types";
 import { generateApiKey } from "../../src/shared/integration/api-key-rules";
 import {
+  DEFAULT_BUSINESS_TIMEZONE,
   businessDateKey,
   dateOnlyFromKey,
 } from "../../src/shared/time/business-day";
-import { assertDisposableDatabase } from "./lib/disposable-database";
+import {
+  assertDisposableDatabase,
+  assertSeedTargetEmpty,
+} from "./lib/disposable-database";
+import {
+  loadTierFromEnv,
+  seedTierFiles,
+  tierSettings,
+  type LoadTierCounts,
+  type LoadTierName,
+} from "./lib/load-tiers";
 import { createPrismaClient } from "@/shared/database/database-client";
+import { poolSettingsFrom } from "@/shared/database/pool-config";
 
 /**
  * The dataset the load scripts run against.
@@ -71,6 +85,29 @@ const MANAGERS = Number(process.env.LOAD_MANAGERS ?? 50);
  * load points at, spread over the LOAD_PRIMARY_HISTORY_DAYS before today, with
  * two events each and an occurrence on one in twenty: a carrier after a season.
  */
+/**
+ * Panel sessions of OTHER companies (plano-escala LOAD-03): tower.js reads
+ * the Torre of 500 companies, two tabs each, and noisy-tenant.js needs
+ * twenty normal companies beside the noisy one. One BUSINESS_ADMIN per
+ * company, the first LOAD_PANEL_TENANTS companies with Entregas other than
+ * the primary, whether they came from this seed or from a tier's SQL.
+ */
+const PANEL_TENANTS = Math.max(
+  0,
+  Math.floor(Number(process.env.LOAD_PANEL_TENANTS ?? 20)),
+);
+
+/**
+ * Sessions with a REAL refresh token, for write-mix.js's refresh: each
+ * rotates on every refresh and belongs to one VU (the reuse detection ends
+ * a session refreshed twice with the same token). One user of the primary
+ * company, one family per session.
+ */
+const REFRESH_SESSIONS = Math.max(
+  0,
+  Math.floor(Number(process.env.LOAD_REFRESH_SESSIONS ?? 200)),
+);
+
 const PRIMARY_HISTORY = Math.max(
   0,
   Math.floor(Number(process.env.LOAD_PRIMARY_DELIVERIES ?? 0)),
@@ -99,6 +136,15 @@ interface LoadContext {
   deliveryIds: string[];
   driverIds: string[];
   routeIds: string[];
+
+  /** The primary company's shipper, for write-mix.js's delivery. */
+  shipperId: string;
+
+  /** One admin session per other company (LOAD_PANEL_TENANTS). */
+  panelTenants: Array<{ businessId: string; token: string }>;
+
+  /** Real refresh tokens, one family each (LOAD_REFRESH_SESSIONS). */
+  refreshSessions: string[];
 }
 
 /**
@@ -180,12 +226,21 @@ async function seedHistory(
   await prisma.$executeRawUnsafe(
     `
     INSERT INTO "delivery_event" ("id", "type", "deliveryId", "businessId", "created_at")
-    SELECT gen_random_uuid()::text, step.type::"DeliveryEventType", d."id",
-           d."businessId", d."created_at" + step.after
+    SELECT substr(k.h, 1, 8) || '-' || substr(k.h, 9, 4) || '-7' ||
+             substr(k.r, 1, 3) || '-8' || substr(k.r, 4, 3) || '-' || substr(k.r, 7, 12),
+           step.type::"DeliveryEventType", d."id", d."businessId", k.at
     FROM "delivery" d
     CROSS JOIN (
       VALUES ('ARRIVAL', interval '90 minutes'), ('PROOF', interval '2 hours')
     ) AS step(type, after)
+    -- A uuid v7 minted from the event's own instant, as Prisma's uuid(7)
+    -- does: the trail is partitioned by month on its id (plano-escala
+    -- F2-16), and a random v4 id would land in no month at all.
+    CROSS JOIN LATERAL (
+      SELECT d."created_at" + step.after AS at,
+             lpad(to_hex((extract(epoch FROM d."created_at" + step.after) * 1000)::bigint), 12, '0') AS h,
+             md5(random()::text) AS r
+    ) AS k
     WHERE d."businessId" = $1 AND d."code" LIKE 'HIS-%'
     `,
     businessId,
@@ -310,7 +365,12 @@ async function seedTenant(index: number, primary: boolean) {
         code: index * 1000 + n,
         name: `Rota ${index}-${n}`,
         status: "IN_PROGRESS",
-        scheduled_date: new Date(),
+        // The company's day (its zone is the schema's default), not the UTC
+        // date: from 21h in São Paulo that is already tomorrow, and the routes
+        // period orders by the route's day, so tomorrow's would head "Hoje".
+        scheduled_date: dateOnlyFromKey(
+          businessDateKey(new Date(), DEFAULT_BUSINESS_TIMEZONE),
+        ),
         planned_departure_at: new Date(Date.now() - 2 * 60 * 60 * 1000),
         started_at: new Date(Date.now() - 100 * 60 * 1000),
         businessId,
@@ -465,7 +525,112 @@ async function seedTenant(index: number, primary: boolean) {
     deliveryIds: deliveries.slice(0, 200).map((delivery) => delivery.id),
     driverIds,
     routeIds,
+    shipperId: shipper.id,
   };
+}
+
+/**
+ * One BUSINESS_ADMIN session in each of the first `count` companies with
+ * Entregas other than `primaryId` (LOAD_PANEL_TENANTS). Users and families
+ * in two batches: 500 companies one round trip at a time is minutes.
+ */
+async function seedPanelTenants(
+  primaryId: string,
+  count: number,
+): Promise<Array<{ businessId: string; token: string }>> {
+  if (count === 0) return [];
+
+  const companies = await prisma.$queryRaw<Array<{ id: string }>>`
+    SELECT b."id"
+    FROM "business" b
+    JOIN "business_entitlement" e
+      ON e."businessId" = b."id" AND e."module" = 'DELIVERIES' AND e."enabled"
+    WHERE b."id" <> ${primaryId}
+    ORDER BY b."id"
+    LIMIT ${count}
+  `;
+
+  const sessions = companies.map((company, index) => ({
+    businessId: company.id,
+    userId: randomUUID(),
+    familyId: randomUUID(),
+    index,
+  }));
+
+  await prisma.user.createMany({
+    data: sessions.map((session) => ({
+      id: session.userId,
+      name: `Gestora vizinha ${session.index}`,
+      email: `vizinha-${session.index}-${randomUUID()}@exemplo.com.br`,
+      password: "nao-usado",
+      role: "BUSINESS_ADMIN" as const,
+      businessId: session.businessId,
+    })),
+  });
+
+  await prisma.refreshToken.createMany({
+    data: sessions.map((session) => ({
+      userId: session.userId,
+      token_hash: randomUUID(),
+      jti: randomUUID(),
+      family_id: session.familyId,
+      expires_in: new Date(Date.now() + 12 * 60 * 60 * 1000),
+    })),
+  });
+
+  if (sessions.length < count) {
+    console.warn(
+      `[Load] LOAD_PANEL_TENANTS=${count}, mas só há ${sessions.length} outras empresas com Entregas: suba LOAD_TENANTS ou use um LOAD_TIER.`,
+    );
+  }
+
+  return sessions.map((session) => ({
+    businessId: session.businessId,
+    token: tokenFor(session.userId, session.familyId, {
+      role: "BUSINESS_ADMIN",
+      businessId: session.businessId,
+      driverId: null,
+    }),
+  }));
+}
+
+/**
+ * `count` sessions of one admin of the primary company, each with a real
+ * refresh token: signed and hashed the way a login stores it
+ * (issueSessionTokenPair), so POST /user/refresh-token rotates it.
+ */
+async function seedRefreshSessions(
+  businessId: string,
+  count: number,
+): Promise<string[]> {
+  if (count === 0) return [];
+
+  const user = await prisma.user.create({
+    data: {
+      id: randomUUID(),
+      name: "Gestora da renovação",
+      email: `renovacao-${randomUUID()}@exemplo.com.br`,
+      password: "nao-usado",
+      role: "BUSINESS_ADMIN",
+      businessId,
+    },
+  });
+
+  const pairs = Array.from({ length: count }, () =>
+    issueSessionTokenPair(user as never),
+  );
+
+  await prisma.refreshToken.createMany({
+    data: pairs.map((pair) => ({
+      userId: user.id,
+      token_hash: pair.refreshTokenHash,
+      jti: pair.refreshJti,
+      family_id: pair.familyId,
+      expires_in: pair.expiresAt,
+    })),
+  });
+
+  return pairs.map((pair) => pair.refresh_token);
 }
 
 /**
@@ -474,7 +639,11 @@ async function seedTenant(index: number, primary: boolean) {
  * company with Frota and Entregas, a route RELEASED for the company's business
  * day with three stops, and a second driver whose company has no Frota (the
  * module gating flow), plus a third driver with two-factor on (the code flow).
- * Same disposable container, a database of its own.
+ * Then one company per setting the app obeys (plan of 02/11/2026): the
+ * departure and arrival checklists required (C4), and the geofence at the
+ * customer's address under BLOCK and under ALERT (E3), with stops pinned on
+ * the map and one address without a point. Same disposable container, a
+ * database of its own.
  */
 const MOBILE_E2E = process.env.LOAD_MOBILE_E2E === "1";
 const MOBILE_E2E_PASSWORD =
@@ -483,6 +652,23 @@ const MOBILE_E2E_PASSWORD =
 const MOBILE_E2E_OUT = process.env.LOAD_CONTEXT_OUT
   ? resolve(process.env.LOAD_CONTEXT_OUT)
   : resolve(__dirname, "fixtures", "mobile-e2e.json");
+
+interface GeoPoint {
+  latitude: number;
+  longitude: number;
+}
+
+/**
+ * Where the geofence flow's first stop is pinned: on Avenida Paulista, the
+ * seeded street, and the spot trajetto-mobile/.maestro/subflows/gps.yaml
+ * puts the emulator. The flow moves the phone ~800 m and ~300 m north of it
+ * (0.0072 and 0.0027 degrees of latitude).
+ */
+const GEOFENCE_STOP: GeoPoint = { latitude: -23.5614, longitude: -46.6565 };
+const GEOFENCE_SECOND_STOP: GeoPoint = {
+  latitude: -23.563,
+  longitude: -46.6543,
+};
 
 async function seedMobileCompany(options: {
   label: string;
@@ -494,6 +680,23 @@ async function seedMobileCompany(options: {
   plate: string;
   /** Login stops at the e-mailed code (the two-factor flow). */
   twoFactor?: boolean;
+  /**
+   * The company's own settings (business_settings, item M1); absent = the
+   * defaults (no checklist, geofence off).
+   */
+  settings?: {
+    checklist_requirement?:
+      "NONE" | "ROUTE_START" | "ROUTE_END" | "ROUTE_START_AND_END";
+    arrival_geofence_mode?: "DISABLED" | "ALERT" | "BLOCK";
+    arrival_geofence_radius_m?: number;
+  };
+  /**
+   * The address points of the deliveries, by position: a point is pinned by
+   * hand (geo_source MANUAL, exact); null is an address the geocoder could
+   * not place (NOT_FOUND), so the geocoding job never gives it one. Beyond
+   * the list, deliveries keep no point and no geocoding state, as before.
+   */
+  points?: ReadonlyArray<GeoPoint | null>;
 }): Promise<{ businessId: string; driverId: string; routeId: string }> {
   const businessId = randomUUID();
   const timeZone = "America/Sao_Paulo";
@@ -525,6 +728,12 @@ async function seedMobileCompany(options: {
         : []),
     ],
   });
+
+  if (options.settings) {
+    await prisma.businessSettings.create({
+      data: { businessId, ...options.settings },
+    });
+  }
 
   // Delivered, pause and the other default types, as a company created through
   // the API gets them (the list would seed them lazily anyway).
@@ -666,19 +875,33 @@ async function seedMobileCompany(options: {
     },
   });
 
-  const deliveries = Array.from({ length: options.deliveries }, (_, n) => ({
-    id: randomUUID(),
-    recipient_name: `Cliente E2E ${n + 1}`,
-    code: `E2E-${n + 1}`,
-    city: "São Paulo",
-    uf: "SP",
-    street: "Avenida Paulista",
-    address_number: String(1000 + n),
-    businessId,
-    shipperId: shipper.id,
-    driverId: driver.id,
-    status: "PENDING" as const,
-  }));
+  const deliveries = Array.from({ length: options.deliveries }, (_, n) => {
+    const point = options.points?.[n];
+
+    return {
+      id: randomUUID(),
+      recipient_name: `Cliente E2E ${n + 1}`,
+      code: `E2E-${n + 1}`,
+      city: "São Paulo",
+      uf: "SP",
+      street: "Avenida Paulista",
+      address_number: String(1000 + n),
+      businessId,
+      shipperId: shipper.id,
+      driverId: driver.id,
+      status: "PENDING" as const,
+      ...(point
+        ? {
+            latitude: point.latitude,
+            longitude: point.longitude,
+            geo_source: "MANUAL" as const,
+            geo_updated_at: new Date(),
+          }
+        : point === null
+          ? { geocode_status: "NOT_FOUND" as const }
+          : {}),
+    };
+  });
 
   await prisma.delivery.createMany({ data: deliveries });
 
@@ -726,21 +949,207 @@ async function seedMobileE2E(): Promise<void> {
     twoFactor: true,
   });
 
+  // Both checklists required (C4; flow 12): "Iniciar rota" waits for the
+  // departure checklist, and the arrival one is asked for once the only stop
+  // is proven. Frota and Entregas, since the setting needs both (M6).
+  const checklist = await seedMobileCompany({
+    label: "E2E Checklist",
+    cnpj: "22333444000181",
+    email:
+      process.env.MOBILE_E2E_CHECKLIST_EMAIL ??
+      "motorista.checklist@trajetto.test",
+    fleet: true,
+    deliveries: 1,
+    plate: "E2E3C33",
+    settings: { checklist_requirement: "ROUTE_START_AND_END" },
+  });
+
+  // The geofence at the address (E3; flow 13), radius 500 m. BLOCK refuses an
+  // arrival or a proof outside the radius: two stops pinned by hand, and a
+  // third whose address has no point, which is never blocked.
+  const geofenceBlock = await seedMobileCompany({
+    label: "E2E Geocerca Bloquear",
+    cnpj: "55666777000181",
+    email:
+      process.env.MOBILE_E2E_GEOFENCE_BLOCK_EMAIL ??
+      "motorista.bloquear@trajetto.test",
+    fleet: false,
+    deliveries: 3,
+    plate: "E2E4B44",
+    settings: {
+      arrival_geofence_mode: "BLOCK",
+      arrival_geofence_radius_m: 500,
+    },
+    points: [GEOFENCE_STOP, GEOFENCE_SECOND_STOP, null],
+  });
+
+  // ALERT asks "Registrar mesmo assim?" outside the radius and flags the
+  // record (OUTSIDE).
+  const geofenceAlert = await seedMobileCompany({
+    label: "E2E Geocerca Alertar",
+    cnpj: "88999000000181",
+    email:
+      process.env.MOBILE_E2E_GEOFENCE_ALERT_EMAIL ??
+      "motorista.alertar@trajetto.test",
+    fleet: false,
+    deliveries: 1,
+    plate: "E2E5A55",
+    settings: {
+      arrival_geofence_mode: "ALERT",
+      arrival_geofence_radius_m: 500,
+    },
+    points: [GEOFENCE_STOP],
+  });
+
   mkdirSync(dirname(MOBILE_E2E_OUT), { recursive: true });
 
   // Ids only: the password is the one this process was given (or the default
   // documented in trajetto-mobile/docs/testes.md), never written to disk.
   writeFileSync(
     MOBILE_E2E_OUT,
-    JSON.stringify({ fleet, deliveriesOnly, twoFactor }, null, 2),
+    JSON.stringify(
+      {
+        fleet,
+        deliveriesOnly,
+        twoFactor,
+        checklist,
+        geofenceBlock,
+        geofenceAlert,
+      },
+      null,
+      2,
+    ),
     "utf8",
   );
 
   console.log(`[Mobile E2E] Fixture escrita em ${MOBILE_E2E_OUT}`);
 }
 
+/**
+ * The tier's population, in SQL (plano-escala LOAD-02): the files of
+ * tests/load/seed-tiers, in order, on one session that holds the tier's
+ * counts as settings (load.<name>) and their temporary tables. Row by row
+ * through Prisma, the 1m rung would take a day; with generate_series it is
+ * minutes, each file timed in the output.
+ *
+ * Its own pg client, not Prisma's pool: a file is many statements, which
+ * only the simple query protocol runs in one call, and the session's temp
+ * tables must outlive each file. synchronous_commit off: a disposable
+ * database that crashes mid-seed is seeded again, and every commit waiting
+ * for its WAL flush is minutes of nothing. The bulk load also drops the
+ * secondary indexes (05-indexes-off.sql, rebuilt by 85-indexes-on.sql) and
+ * skips the row-by-row foreign key checks (95-references.sql checks them
+ * at the end): measured at the 100k rung, the deliveries went from 4,6
+ * thousand rows a second to 39 thousand.
+ */
+async function seedTier(
+  tier: {
+    name: LoadTierName;
+    counts: LoadTierCounts;
+  },
+  businessId: string,
+): Promise<void> {
+  const settings = poolSettingsFrom(process.env.DATABASE_URL as string);
+  const client = new pg.Client({
+    connectionString: settings.connectionString,
+    application_name: "trajetto-load-seed",
+  });
+  const started = Date.now();
+
+  console.log(`[Load] Degrau ${tier.name}: ${JSON.stringify(tier.counts)}`);
+
+  await client.connect();
+
+  try {
+    if (settings.schema) {
+      await client.query(
+        `SET search_path TO "${settings.schema.replace(/"/g, '""')}"`,
+      );
+    }
+
+    await client.query("SET TimeZone = 'UTC'");
+    await client.query("SET synchronous_commit = off");
+
+    // The foreign keys unchecked row by row while the tier loads: most of
+    // its time, measured (95-references.sql checks them once at the end).
+    // Only a superuser may; anyone else loads with the checks, slower.
+    const replica = await client
+      .query("SET session_replication_role = replica")
+      .then(() => true)
+      .catch(() => false);
+
+    if (!replica) {
+      console.warn(
+        "[Load] Sem superusuário: as chaves estrangeiras são conferidas linha a linha, e o degrau leva mais tempo.",
+      );
+    }
+
+    await client.query("SET statement_timeout = 0");
+    await client.query("SET work_mem = '256MB'");
+
+    for (const [name, value] of Object.entries(tierSettings(tier.counts))) {
+      await client.query("SELECT set_config($1, $2, false)", [name, value]);
+    }
+
+    // Again on this session, right before 05-indexes-off.sql: the only
+    // company may be the tenant main() just wrote (`businessId`). The check
+    // in main() ran on Prisma's pool; this is the connection that drops
+    // the indexes and turns the foreign key checks off.
+    await assertSeedTargetEmpty(
+      (sql, values) => client.query(sql, values).then((result) => result.rows),
+      businessId,
+    );
+
+    const files = seedTierFiles();
+
+    // 05-indexes-off.sql drops the secondary indexes for the bulk load: a
+    // file that fails after it must not leave the database without them.
+    const indexesOn = files.find(
+      (file) => basename(file) === "85-indexes-on.sql",
+    );
+
+    for (const file of files) {
+      const fileStarted = Date.now();
+
+      try {
+        await client.query(readFileSync(file, "utf8"));
+      } catch (error) {
+        if (indexesOn && file !== indexesOn) {
+          console.error(
+            `[Load] ${basename(file)} falhou; reconstruindo os índices antes de sair…`,
+          );
+          await client
+            .query(readFileSync(indexesOn, "utf8"))
+            .catch((restore) =>
+              console.error(
+                "[Load] Os índices não voltaram: rode o 85-indexes-on.sql à mão ou recrie o banco.",
+                restore,
+              ),
+            );
+        }
+
+        throw error;
+      }
+
+      console.log(
+        `[Load] ${basename(file)}: ${((Date.now() - fileStarted) / 1000).toFixed(1)} s`,
+      );
+    }
+  } finally {
+    await client.end();
+  }
+
+  console.log(
+    `[Load] Degrau ${tier.name} semeado em ${((Date.now() - started) / 60_000).toFixed(1)} min`,
+  );
+}
+
 async function main(): Promise<void> {
   assertDisposableDatabase();
+
+  // Read before anything is written: an unknown tier or a prod-like without
+  // its counts stops here, with nothing half-seeded.
+  const tier = loadTierFromEnv();
 
   if (MOBILE_E2E) {
     await seedMobileE2E();
@@ -765,13 +1174,25 @@ async function main(): Promise<void> {
     );
   }
 
+  // The port check above says where the connection goes, not what is
+  // there: a tunnel on LOAD_PG_PORT to the wrong Database passes it. A
+  // database with any company is not the empty one this seed is for, and
+  // nothing has been written yet (lib/disposable-database.ts).
+  await assertSeedTargetEmpty((sql, values) =>
+    prisma.$queryRawUnsafe(sql, ...values),
+  );
+
+  // With a tier, Prisma seeds only the tenant the load points at (its
+  // users and tokens need bcrypt and JWT); the population is the tier's SQL.
+  const tenants = tier ? 1 : TENANTS;
+
   console.log(
-    `[Load] Semeando ${TENANTS} tenants × ${DELIVERIES_PER_TENANT} entregas…`,
+    `[Load] Semeando ${tenants} tenants × ${DELIVERIES_PER_TENANT} entregas…`,
   );
 
   let primary: Awaited<ReturnType<typeof seedTenant>> = null;
 
-  for (let index = 0; index < TENANTS; index += 1) {
+  for (let index = 0; index < tenants; index += 1) {
     const result = await seedTenant(index, index === 0);
 
     if (result) primary = result;
@@ -783,9 +1204,23 @@ async function main(): Promise<void> {
 
   if (!primary) throw new Error("O tenant principal não foi semeado.");
 
+  if (tier) await seedTier(tier, primary.businessId);
+
+  // After the tier: its companies count for the panel sessions too.
+  const panelTenants = await seedPanelTenants(
+    primary.businessId,
+    PANEL_TENANTS,
+  );
+  const refreshSessions = await seedRefreshSessions(
+    primary.businessId,
+    REFRESH_SESSIONS,
+  );
+
   const context: LoadContext = {
     baseUrl: process.env.LOAD_BASE_URL ?? "http://host.docker.internal:3334",
     ...primary,
+    panelTenants,
+    refreshSessions,
   };
 
   mkdirSync(dirname(OUT), { recursive: true });

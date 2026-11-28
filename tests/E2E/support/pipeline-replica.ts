@@ -79,9 +79,8 @@ globalThis.fetch = ((
 
 async function main(): Promise<void> {
   const { app } = await import("@/http");
-  const { MailDeliveryError } = await import(
-    "@/shared/providers/mail-provider/errors/mail-delivery-error"
-  );
+  const { MailDeliveryError } =
+    await import("@/shared/providers/mail-provider/errors/mail-delivery-error");
 
   await app.ready();
 
@@ -137,9 +136,8 @@ async function main(): Promise<void> {
   const stops: Array<() => Promise<void>> = [];
 
   if (WORKERS.has("notifications")) {
-    const { NotificationPipelineService } = await import(
-      "@/shared/notifications/notification-pipeline-service"
-    );
+    const { NotificationPipelineService } =
+      await import("@/shared/notifications/notification-pipeline-service");
     const pipeline = NotificationPipelineService.getInstance();
 
     // REPLICA_EXPAND_FIRST=1: every queued event is expanded before any
@@ -158,9 +156,8 @@ async function main(): Promise<void> {
   }
 
   if (WORKERS.has("webhooks")) {
-    const { WebhookDispatchService } = await import(
-      "@/shared/integration/webhook-dispatch-service"
-    );
+    const { WebhookDispatchService } =
+      await import("@/shared/integration/webhook-dispatch-service");
 
     // The receiver is on loopback, which the production verifier refuses —
     // rightly. The claim, the send and the settling writes are the real ones.

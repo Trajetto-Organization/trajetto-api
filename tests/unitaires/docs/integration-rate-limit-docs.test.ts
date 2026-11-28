@@ -56,9 +56,11 @@ const keyGated = () =>
     );
 
 describe("the public API's 429", () => {
-  it("covers the six key-gated routes", () => {
-    // Five reads and the create (decision 5.10), which spends the same budget.
-    expect(keyGated()).toHaveLength(6);
+  it("covers the eight key-gated routes", () => {
+    // Five reads, the create (decision 5.10), the batch (plano-escala U-04,
+    // one unit per delivery) and the cancel (L9), which spend the same
+    // budget.
+    expect(keyGated()).toHaveLength(8);
   });
 
   it("tells the integrator how long to back off", () => {

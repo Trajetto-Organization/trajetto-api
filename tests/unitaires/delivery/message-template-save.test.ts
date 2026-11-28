@@ -80,7 +80,7 @@ describe("writing a message", () => {
     const saved = await save({
       channel: "WHATSAPP",
       subject: "assunto que não existe no WhatsApp",
-      body: "Entregue! {{link}} — para parar: {{link_descadastro}}",
+      body: undefined,
     });
 
     expect(saved.subject).toBeNull();
@@ -115,21 +115,71 @@ describe("the two refusals that matter", () => {
     ).rejects.toMatchObject({ code: "UNKNOWN_TEMPLATE_VARIABLE" });
   });
 
-  it("refuses a WhatsApp message with no way out", async () => {
-    // A message without an opt-out is a spam complaint, and the company that
-    // wrote it is not the one Meta suspends first.
-    await expect(
-      save({ channel: "WHATSAPP", body: "Sua entrega chegou! {{link}}" }),
-    ).rejects.toMatchObject({
-      statusCode: 400,
-      code: "MISSING_OPT_OUT_LINK",
-    });
-  });
-
   it("does not demand the opt-out link on e-mail", async () => {
     // The mail template already carries one in its own footer; demanding it in
     // the body would be asking the company to print it twice.
     await expect(save({ channel: "EMAIL" })).resolves.toBeDefined();
+  });
+});
+
+/**
+ * Plan of 02/11/2026, B3. A WhatsApp moment goes out as Meta's fixed
+ * template, with the "Parar de receber" button built in: the company only
+ * switches it on or off. The text the previous web still sends is ignored —
+ * never refused, so that web keeps saving during the rolling deploy — and the
+ * column is never written NULL in this release (nullable-expand: the image
+ * before this one still reads a WhatsApp row's body as a string).
+ */
+describe("a WhatsApp moment is an on/off switch", () => {
+  it("saves the switch with no text at all", async () => {
+    const saved = await save({
+      channel: "WHATSAPP",
+      subject: null,
+      body: undefined,
+      is_active: false,
+    });
+
+    expect(saved.is_active).toBe(false);
+    expect(saved.subject).toBeNull();
+
+    // Never NULL in this release.
+    expect(templates.templates[0].body).toBe("");
+  });
+
+  it("ignores the text the previous web still sends, opt-out link or not", async () => {
+    await expect(
+      save({
+        channel: "WHATSAPP",
+        body: "Sua entrega chegou! {{link}} {{motorista}}",
+      }),
+    ).resolves.toMatchObject({ is_active: true });
+
+    expect(templates.templates[0].body).toBe("");
+  });
+
+  it("keeps the text a WhatsApp row already had", async () => {
+    await save({ channel: "WHATSAPP", body: undefined });
+
+    templates.templates[0].body = "texto antigo {{link_descadastro}}";
+
+    await save({ channel: "WHATSAPP", body: "outro", is_active: false });
+
+    expect(templates.templates).toHaveLength(1);
+    expect(templates.templates[0].body).toBe(
+      "texto antigo {{link_descadastro}}",
+    );
+    expect(templates.templates[0].is_active).toBe(false);
+  });
+
+  it("still demands the text of an e-mail", async () => {
+    await expect(
+      save({ channel: "EMAIL", body: undefined }),
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: "TEMPLATE_BODY_REQUIRED",
+    });
+
+    expect(templates.templates).toEqual([]);
   });
 });
 

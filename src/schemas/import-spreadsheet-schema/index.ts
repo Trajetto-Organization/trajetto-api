@@ -8,6 +8,7 @@ import {
   IMPORT_SOURCES,
   IMPORT_STATUSES,
 } from "@/modules/import/usecases/list-imports/import-list";
+import { fieldError } from "@/shared/validation/field-error";
 
 /**
  * One file per request, and a cap that is not arbitrary.
@@ -21,7 +22,7 @@ const MAX_SPREADSHEET_BASE64 = 8 * 1024 * 1024;
 
 const importSpreadsheetSchema = z.object({
   filename: z
-    .string({ required_error: "O nome do arquivo é obrigatório." })
+    .string(fieldError({ required: "O nome do arquivo é obrigatório." }))
     .max(255, "O nome do arquivo deve ter no máximo 255 caracteres.")
     .refine(
       (value) => /\.(xlsx|csv)$/i.test(value),
@@ -30,7 +31,7 @@ const importSpreadsheetSchema = z.object({
     .describe("Decide como o arquivo é lido, e aparece no relatório."),
 
   content: z
-    .string({ required_error: "O conteúdo do arquivo é obrigatório." })
+    .string(fieldError({ required: "O conteúdo do arquivo é obrigatório." }))
     .min(1, "O arquivo está vazio.")
     .max(
       MAX_SPREADSHEET_BASE64,
@@ -39,7 +40,7 @@ const importSpreadsheetSchema = z.object({
     .describe("O arquivo em base64."),
 
   shipperId: z
-    .string({ required_error: "O embarcador é obrigatório." })
+    .string(fieldError({ required: "O embarcador é obrigatório." }))
     .uuid("O embarcador deve ter um identificador válido.")
     .describe(
       "Um upload é a carga de um embarcador. Uma planilha que mistura embarcadores são dois uploads.",
@@ -74,7 +75,7 @@ const listImportsSchema = z.object({
 
 const importIdParamSchema = z.object({
   importId: z
-    .string({ required_error: "ID da importação é obrigatório!" })
+    .string(fieldError({ required: "ID da importação é obrigatório!" }))
     .uuid("ID da importação é inválido."),
 });
 

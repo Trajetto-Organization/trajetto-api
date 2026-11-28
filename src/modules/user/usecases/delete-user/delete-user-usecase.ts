@@ -7,23 +7,22 @@ import { NotificationService } from "@/shared/services/notification-service";
 import { sendSecurityEventToUser } from "@/websocket";
 
 import { UserCannotBeDeletedByHimselfError } from "../errors/user-cannot-be-deleted-by-himself-error";
-import { IServiceOrderRepository } from "@/modules/service-order/repositories/IService-order-repository";
-
-import { UserHasAssociatedServiceOrdersError } from "../errors/user-has-associated-service-orders-error";
-import { UserHasAssociatedAccountPayablesError } from "../errors/user-has-associated-account-payables-error";
 import { UserHasRecordsError } from "../errors/user-has-records-error";
 
-import { IAccountPayableRepository } from "@/modules/account-payable/repositories/IAccount-payable-repository";
+import type { IDriverRepository } from "@/modules/driver/repositories/IDriver-repository";
+import { totalOpenRoutes } from "@/modules/driver/driver-rules";
+import { DriverHasOpenRoutesError } from "@/modules/driver/usecases/errors/driver-has-open-routes-error";
 
 import { AppError } from "@/shared/errors/AppError";
 import { permissionDenied } from "@/shared/errors/access-errors";
+import { isForeignKeyViolation } from "@/shared/errors/prisma-error-meta";
 import { User, UserRole } from "../../dtos/user-dto";
 import { assertTenantAccessToRecord } from "@/modules/middlewares/tenant-authorization";
 
 import { announceDriverLoginChange } from "../../services/driver-login-catalog";
+import { userHistoryRefusal } from "../../user-history-rules";
 
 import database from "@/../infra/database";
-import { Prisma } from "@prisma/client";
 
 interface DeleteUserProps {
   userId: string;
@@ -49,10 +48,8 @@ class DeleteUserUseCase {
   constructor(
     @inject("UserRepository")
     private user: IUserRepository,
-    @inject("ServiceOrderRepository")
-    private serviceOrder: IServiceOrderRepository,
-    @inject("AccountPayableRepository")
-    private accountPayable: IAccountPayableRepository,
+    @inject("DriverRepository")
+    private driver: IDriverRepository,
     @inject("NotificationService")
     private notificationService: NotificationService,
   ) {}
@@ -103,23 +100,30 @@ class DeleteUserUseCase {
       );
     }
 
-    const associatedServiceOrders =
-      await this.serviceOrder.findServiceOrdersByResponsibleUserId(userId);
-
-    if (associatedServiceOrders.length > 0) {
-      throw new UserHasAssociatedServiceOrdersError(
-        associatedServiceOrders.length,
+    // A driver's login whose route still needs it: deleted, the route would
+    // wait for someone who can no longer sign in, and the phone's outbox
+    // stalls on "auth" (the revocation's rule, K10). Starting a route writes
+    // no row that names the login, so no foreign key held this back. Read
+    // before the delete, like the revocation's count.
+    if (findDeletedUser.driverId) {
+      const openRoutes = await this.driver.countOpenRoutes(
+        findDeletedUser.driverId,
       );
+
+      if (totalOpenRoutes(openRoutes) > 0) {
+        throw new DriverHasOpenRoutesError(openRoutes, "DELETE_LOGIN");
+      }
     }
 
-    const associatedAccountPayables =
-      await this.accountPayable.findAccountPayablesByRegistrationUserId(userId);
+    // Deleting is for a login made by mistake; whoever worked keeps the
+    // history and has the access revoked (docs/arquitetura.md, "Excluir x
+    // inativar/revogar"). One count for every RESTRICT key, so the answer
+    // names what holds the login instead of a generic "por exemplo".
+    const refusal = userHistoryRefusal(
+      await this.user.countUserHistory(userId),
+    );
 
-    if (associatedAccountPayables.length > 0) {
-      throw new UserHasAssociatedAccountPayablesError(
-        associatedAccountPayables.length,
-      );
-    }
+    if (refusal) throw refusal;
 
     try {
       // The deletion and its audit entry commit together (OUTBOX-10).
@@ -131,7 +135,10 @@ class DeleteUserUseCase {
             type: "Usuário",
             action: "delete",
             entityId: deleted.id,
-            description: `Usuário ${deleted.name} | ${deleted.email} deletado | ID: ${deleted.id}`,
+            // A driver's login may have no e-mail (plan of 02/11/2026, D2).
+            description: deleted.email
+              ? `Usuário ${deleted.name} | ${deleted.email} deletado | ID: ${deleted.id}`
+              : `Usuário ${deleted.name} (sem e-mail) deletado | ID: ${deleted.id}`,
             status: "Deletado",
             performedBy: id,
             businessId: deleted.businessId as string,
@@ -150,14 +157,14 @@ class DeleteUserUseCase {
 
       return userDeleted;
     } catch (error) {
-      // A RESTRICT foreign key (an event, an import, a review, a message the
-      // user authored) refused the delete: a conflict the operator can act
-      // on, not a failure to retry.
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === "P2003"
-      ) {
-        throw new UserHasRecordsError();
+      // A row committed between the count and the delete met its RESTRICT
+      // key: counted again, it gets the answer the count would have given. A
+      // key the count does not know keeps the generic sentence.
+      if (isForeignKeyViolation(error)) {
+        throw (
+          userHistoryRefusal(await this.user.countUserHistory(userId)) ??
+          new UserHasRecordsError()
+        );
       }
 
       throw new AppError(

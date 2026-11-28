@@ -150,6 +150,60 @@ describe("openRoutesRefusal speaks of one route or of several", () => {
   });
 });
 
+describe("openRoutesRefusal for the other acts that take a driver off the road (K10)", () => {
+  // Revoking the login and deactivating the branch lock the driver out of
+  // the app exactly like the deactivation: same counts, same steps.
+  it("speaks of the account when the access is revoked", () => {
+    expect(
+      openRoutesRefusal(
+        { PLANNED: 0, RELEASED: 0, IN_PROGRESS: 1 },
+        "REVOKE_ACCESS",
+      ),
+    ).toBe(
+      "Não é possível revogar o acesso deste usuário: o motorista vinculado tem 1 rota em andamento. " +
+        "Antes de revogar o acesso, conclua ou cancele a rota em andamento.",
+    );
+  });
+
+  it("speaks of the branch's drivers when the branch is deactivated", () => {
+    expect(
+      openRoutesRefusal(
+        { PLANNED: 1, RELEASED: 1, IN_PROGRESS: 0 },
+        "DEACTIVATE_BRANCH",
+      ),
+    ).toBe(
+      "Não é possível desativar esta filial: os motoristas dela têm 2 rotas planejadas ou liberadas. " +
+        "Antes de desativá-la, designe outro motorista ou cancele as rotas que ainda não saíram.",
+    );
+  });
+
+  // Batch of 14/11/2026: deleting the login, or taking it off the driver,
+  // left a route waiting for someone who could no longer sign in.
+  it("speaks of the user when the driver's login is deleted", () => {
+    expect(
+      openRoutesRefusal(
+        { PLANNED: 0, RELEASED: 1, IN_PROGRESS: 0 },
+        "DELETE_LOGIN",
+      ),
+    ).toBe(
+      "Não é possível excluir este usuário: o motorista vinculado tem 1 rota planejada ou liberada. " +
+        "Antes de excluí-lo, designe outro motorista ou cancele a rota que ainda não saiu.",
+    );
+  });
+
+  it("speaks of the link when the login leaves its driver", () => {
+    expect(
+      openRoutesRefusal(
+        { PLANNED: 1, RELEASED: 0, IN_PROGRESS: 1 },
+        "MOVE_LOGIN",
+      ),
+    ).toBe(
+      "Não é possível desvincular este login do motorista: o motorista vinculado tem 1 rota em andamento e 1 rota planejada ou liberada. " +
+        "Antes de desvinculá-lo, conclua ou cancele a rota em andamento e designe outro motorista ou cancele a rota que ainda não saiu.",
+    );
+  });
+});
+
 describe("birthDateKeyOf", () => {
   it("takes a YYYY-MM-DD as the day itself", () => {
     expect(birthDateKeyOf("1990-05-10")).toBe("1990-05-10");
@@ -221,24 +275,61 @@ describe("driverHistoryRefusal", () => {
     expect(refusal?.message).toContain("2 registro(s) de abastecimento");
   });
 
-  it("puts an app account before everything, and deliveries and routes together", () => {
+  // Batch of 14/11/2026: the app account used to come first, so a driver who
+  // had worked heard "remove the login", the login then refused with
+  // USER_HAS_RECORDS ("revoke"), and only the third try said "deactivate" —
+  // which also locks the login out. The work answers first now.
+  it("puts the work before the app account, and deliveries and routes together", () => {
     expect(
       driverHistoryRefusal({ ...NO_DRIVER_HISTORY, users: 1, fines: 3 })?.code,
-    ).toBe("DRIVER_HAS_USER");
+    ).toBe("DRIVER_HAS_FINES");
 
     const operation = driverHistoryRefusal({
       ...NO_DRIVER_HISTORY,
-      deliveries: 4,
-      routes: 1,
+      users: 1,
+      routes: 2,
     });
 
     expect(operation?.code).toBe("DRIVER_HAS_OPERATION");
-    expect(operation?.message).toContain("4 entrega(s) e 1 rota(s)");
+    expect(operation?.message).toContain("2 rota(s)");
+    expect(operation?.message).toContain("o login dele deixa de entrar no app");
+
+    expect(
+      driverHistoryRefusal({ ...NO_DRIVER_HISTORY, deliveries: 4, routes: 1 })
+        ?.message,
+    ).toContain("4 entrega(s) e 1 rota(s)");
   });
 
-  it("refuses pauses last, as the legal record of the workday", () => {
+  it("answers the app account only when it is all there is, and says where it lives", () => {
+    const login = driverHistoryRefusal({ ...NO_DRIVER_HISTORY, users: 1 });
+
+    expect(login?.code).toBe("DRIVER_HAS_USER");
+    expect(login?.message).toBe(
+      "Este motorista tem um login do app. Exclua esse login na tela Usuários antes de excluir o motorista.",
+    );
+  });
+
+  // Decision D-39: the chat thread is CASCADE, so the conversation went with
+  // the driver without a word.
+  it("counts the conversation as operation history", () => {
+    const refusal = driverHistoryRefusal({
+      ...NO_DRIVER_HISTORY,
+      chatMessages: 12,
+      supportTickets: 1,
+    });
+
+    expect(refusal?.code).toBe("DRIVER_HAS_OPERATION");
+    expect(refusal?.message).toContain(
+      "12 mensagem(ns) no chat e 1 atendimento(s)",
+    );
+  });
+
+  it("refuses pauses after the rest of the work, before the app account", () => {
     expect(
       driverHistoryRefusal({ ...NO_DRIVER_HISTORY, pauses: 1 })?.code,
+    ).toBe("DRIVER_HAS_PAUSES");
+    expect(
+      driverHistoryRefusal({ ...NO_DRIVER_HISTORY, pauses: 1, users: 1 })?.code,
     ).toBe("DRIVER_HAS_PAUSES");
   });
 });

@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { createPrismaClient } from "@/shared/database/database-client";
+import { withParentNames } from "./support/partition-plan";
 
 /**
  * The nightly purge of bell notifications: what it deletes, and how far its
@@ -134,9 +135,8 @@ afterAll(async () => {
 
 describe("the notification purge", () => {
   it("deletes exactly what the two retentions say", async () => {
-    const { cleanupUserHistoryJob } = await import(
-      "@/jobs/cron/cleanup-user-history-job"
-    );
+    const { cleanupUserHistoryJob } =
+      await import("@/jobs/cron/cleanup-user-history-job");
 
     captured.length = 0;
 
@@ -183,9 +183,12 @@ describe("the notification purge", () => {
       );
     });
 
-    const root = (
-      plan[0]["QUERY PLAN"] as unknown as Array<{ Plan: PlanNode }>
-    )[0].Plan;
+    // The bell is partitioned by month since F5-15: each partition and its
+    // index read as the parent's.
+    const root = await withParentNames(
+      prisma,
+      (plan[0]["QUERY PLAN"] as unknown as Array<{ Plan: PlanNode }>)[0].Plan,
+    );
 
     const scans = nodesOn(root, "notification_created_at_idx");
 
@@ -195,6 +198,60 @@ describe("the notification purge", () => {
       expect(scan["Index Cond"] ?? "", JSON.stringify(scan)).toContain(
         "created_at",
       );
+    }
+  });
+
+  it("follows the two retentions the environment sets", async () => {
+    // NOTIFICATION_READ_RETENTION_DAYS and NOTIFICATION_UNREAD_RETENTION_DAYS
+    // (plano-escala F5-14), read on every run: the monthly partitions of the
+    // bell (F5-15) drop months by the same numbers.
+    const { env } = await import("@/env");
+    const { cleanupUserHistoryJob } =
+      await import("@/jobs/cron/cleanup-user-history-job");
+
+    const saved = {
+      read: env.NOTIFICATION_READ_RETENTION_DAYS,
+      unread: env.NOTIFICATION_UNREAD_RETENTION_DAYS,
+    };
+
+    const seeded = async (read: boolean, daysAgo: number) =>
+      (
+        await prisma.notification.create({
+          data: {
+            type: "delivery",
+            title: "Retenção",
+            message: "Retenção",
+            read,
+            userId: USER,
+            businessId: CARRIER,
+            created_at: new Date(Date.now() - daysAgo * DAY_MS),
+          },
+        })
+      ).id;
+
+    const readFortyDays = await seeded(true, 40);
+    const unreadFortyDays = await seeded(false, 40);
+
+    const kept = async (id: string) =>
+      (await prisma.notification.count({ where: { id } })) === 1;
+
+    try {
+      env.NOTIFICATION_READ_RETENTION_DAYS = 35;
+      env.NOTIFICATION_UNREAD_RETENTION_DAYS = 60;
+
+      await cleanupUserHistoryJob.handler();
+
+      expect(await kept(readFortyDays)).toBe(false);
+      expect(await kept(unreadFortyDays)).toBe(true);
+
+      env.NOTIFICATION_UNREAD_RETENTION_DAYS = 35;
+
+      await cleanupUserHistoryJob.handler();
+
+      expect(await kept(unreadFortyDays)).toBe(false);
+    } finally {
+      env.NOTIFICATION_READ_RETENTION_DAYS = saved.read;
+      env.NOTIFICATION_UNREAD_RETENTION_DAYS = saved.unread;
     }
   });
 });

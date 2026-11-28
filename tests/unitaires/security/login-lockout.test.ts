@@ -19,6 +19,7 @@ import {
   LOGIN_LOCK_MS,
   MAX_FAILED_LOGINS,
 } from "@/shared/security/login-lockout-rules";
+import { InMemoryDriverTrustedDeviceRepository } from "@/modules/user/repositories/in-memory/in-memory-driver-trusted-device-repository";
 
 /**
  * Password guessing, bounded without Redis.
@@ -63,6 +64,7 @@ beforeEach(async () => {
     users as never,
     new InMemoryUserTokensRepository() as never,
     new InMemoryDriverRepository() as never,
+    new InMemoryDriverTrustedDeviceRepository(),
   );
 });
 

@@ -16,7 +16,9 @@ class SearchServiceOrderByVehicleCursorController {
       const { id } = request.user;
 
       const { vehicleId } = updateDeleteVehicleSchema.parse(request.params);
-      const { limit, cursor } = cursorPaginationSchema.parse(request.query);
+      const { limit, cursor, search } = cursorPaginationSchema.parse(
+        request.query,
+      );
 
       const searchServiceOrderByVehicleCursorUseCase = container.resolve(
         SearchServiceOrderByVehicleCursorUseCase,
@@ -27,6 +29,7 @@ class SearchServiceOrderByVehicleCursorController {
         vehicleId,
         limit,
         cursor,
+        search,
       });
 
       /**
@@ -43,6 +46,8 @@ class SearchServiceOrderByVehicleCursorController {
       return await sendAsNDJSON({
         reply,
         dataPromise: dataPromise.then((result) => ({
+          // Already in the reader's view (the use case): the stream has no
+          // serializer that would cut a line down to its schema.
           data: result.data,
           total: 0,
           meta: {

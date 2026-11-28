@@ -78,6 +78,20 @@ describe("the list filters, as published", () => {
     expect(operation("/events").description ?? "").not.toMatch(/outbox/i);
   });
 
+  it("publishes limit as an integer from 1 to 200, 50 by default, on every list", () => {
+    // A code generator typed `limit` as a string because the spec said so
+    // (plan of 02/11/2026, L2): the ERP then sent "50" as text and its own
+    // compiler forced a cast on every call.
+    for (const path of ["/deliveries", "/routes", "/events"]) {
+      expect(queryParameter(path, "limit")?.schema, path).toMatchObject({
+        type: "integer",
+        minimum: 1,
+        maximum: 200,
+        default: 50,
+      });
+    }
+  });
+
   it("documents the 400 every keyed route answers to a bad parameter", () => {
     for (const path of [
       "/deliveries",

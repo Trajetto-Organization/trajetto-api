@@ -15,7 +15,8 @@ import { createPrismaClient } from "@/shared/database/database-client";
  *   second failed, the trail kept points the map never showed, and the resend
  *   the phone makes after the 5xx met them again.
  *
- * - driver_position is range-partitioned by day with no DEFAULT partition,
+ * - the trail (driver_position_v2 since plano-escala F2-10, driver_position
+ *   before) is range-partitioned by day with no DEFAULT partition,
  *   so a row with no partition is REFUSED, and the refusal fails the whole
  *   INSERT. The API accepts points up to 89 days old, but the oldest partition
  *   is the day before the migration ran — a phone flushing a backlog that
@@ -194,10 +195,11 @@ describe("a flush for a day whose partition is still to be created", () => {
     // points are NOT unwritable — a 200 that dropped them would throw away a
     // day of every driver's trail in silence.
     const today = utcMidnight(0);
-    const name = `driver_position_${today.toISOString().slice(0, 10).replace(/-/g, "")}`;
+    // The lean trail's (plano-escala F2-10): the table the flush writes.
+    const name = `driver_position_v2_${today.toISOString().slice(0, 10).replace(/-/g, "")}`;
 
     await prisma.$executeRawUnsafe(
-      `ALTER TABLE "driver_position" DETACH PARTITION "${name}"`,
+      `ALTER TABLE "driver_position_v2" DETACH PARTITION "${name}"`,
     );
 
     try {
@@ -212,7 +214,7 @@ describe("a flush for a day whose partition is still to be created", () => {
       expect(response.statusCode).toBeGreaterThanOrEqual(500);
     } finally {
       await prisma.$executeRawUnsafe(
-        `ALTER TABLE "driver_position" ATTACH PARTITION "${name}"
+        `ALTER TABLE "driver_position_v2" ATTACH PARTITION "${name}"
            FOR VALUES FROM ('${today.toISOString()}') TO ('${utcMidnight(1).toISOString()}')`,
       );
     }

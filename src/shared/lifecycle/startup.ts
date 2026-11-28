@@ -2,6 +2,11 @@
  * The order a replica comes up in, kept apart from `server.ts` so it can be
  * tested without booting the application — the mirror of shutdown.ts.
  *
+ * 0. DATABASE ROLE: which role the runtime connects as (plano-escala
+ *    F3-21, shared/database/runtime-role-check.ts). A warning while it is
+ *    still the owner; with DATABASE_REQUIRE_RUNTIME_ROLE=true a refusal,
+ *    which stops the boot here, before any worker or listener exists.
+ *    A database that does not answer never stops it.
  * 0. CERTIFICATES: the proof signing A1 is opened and its state logged
  *    (design §6.3 of the ICP proof), so a bad PFX or password shows up in
  *    the deploy log instead of on the first receipt. It never stops the boot:
@@ -22,6 +27,9 @@
  * notification — the bell is the source of truth.
  */
 interface StartupSteps {
+  /** Checks the database role. Throws only to refuse the boot. */
+  verifyDatabaseRole?: () => Promise<void>;
+
   /** Opens and logs the signing certificates. Must not throw; if it does, the boot goes on. */
   inspectCertificates?: () => void;
 
@@ -38,6 +46,8 @@ interface StartupSteps {
 }
 
 async function runStartup(steps: StartupSteps): Promise<void> {
+  await steps.verifyDatabaseRole?.();
+
   try {
     steps.inspectCertificates?.();
   } catch {

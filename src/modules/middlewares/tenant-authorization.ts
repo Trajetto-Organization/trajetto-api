@@ -49,6 +49,37 @@ function assertTenantAccessToRecord(
 }
 
 /**
+ * The company a read of one record by its own id is scoped to (wave 3: an
+ * order, a bill, opened from a notification). A MASTER names it the way the
+ * listings receive `businessId`, and without it there is nothing to read
+ * (400 BUSINESS_NOT_IDENTIFIED); anyone else reads their own company, and
+ * naming another one is the tenant refusal. The record is then looked up
+ * inside this company only, so another company's id answers as a missing
+ * one.
+ */
+function resolveRequestedCompany(
+  principal: TenantPrincipal,
+  businessId?: string | null,
+): string {
+  const resolved =
+    principal.role === "MASTER"
+      ? businessId
+      : (businessId ?? principal.businessId);
+
+  if (!resolved) {
+    throw new AppError(
+      "Empresa não identificada. Selecione uma empresa para continuar.",
+      400,
+      "BUSINESS_NOT_IDENTIFIED",
+    );
+  }
+
+  assertTenantAccess(principal, resolved);
+
+  return resolved;
+}
+
+/**
  * The refusal for a record of another company reached through a path whose
  * :businessId the tenant guard already matched to the caller. For a tenant
  * user that can only mean "someone else's row", which must look exactly like
@@ -153,4 +184,5 @@ export {
   enforceRequestedTenant,
   getRequestedTenantId,
   requestedTenantValues,
+  resolveRequestedCompany,
 };

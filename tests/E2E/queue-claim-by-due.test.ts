@@ -19,6 +19,7 @@ import type { AddressInfo } from "node:net";
 
 import { container } from "tsyringe";
 import { createPrismaClient } from "@/shared/database/database-client";
+import { uuid7Sql } from "./support/uuid7-sql";
 
 /**
  * The queues claim by due time, and a retry storm is not in the way.
@@ -42,9 +43,8 @@ const sent = vi.hoisted(() => ({
 }));
 
 vi.mock("@/../infra/database", async () => {
-  const { createPrismaClient } = await import(
-    "@/shared/database/database-client"
-  );
+  const { createPrismaClient } =
+    await import("@/shared/database/database-client");
 
   const client = createPrismaClient({
     log: [{ emit: "event", level: "query" }],
@@ -57,6 +57,8 @@ vi.mock("@/../infra/database", async () => {
 
   return {
     default: client,
+    // http.ts reads the pool for the load shedding's pressure (none here).
+    databasePool: () => null,
     TRANSACTION_OPTIONS: { maxWait: 10_000, timeout: 15_000 },
   };
 });
@@ -175,7 +177,9 @@ async function dueEmail(): Promise<string> {
       aggregateType: "account-payable",
       aggregateId: randomUUID(),
       businessId: BUSINESS,
-      actorId: RECIPIENT,
+      // Nobody's action: the bill's responsible is told of a bill
+      // somebody else registered (actor-notice.test.ts).
+      actorId: null,
       payload: {
         accountPayableId: randomUUID(),
         businessId: BUSINESS,
@@ -305,7 +309,7 @@ describe("a WhatsApp outage in the external lane", () => {
         "id", "eventKey", "topic", "aggregateType", "aggregateId", "businessId",
         "payload", "status", "availableAt", "created_at", "updated_at"
       )
-      SELECT gen_random_uuid()::text, 'backlog:' || n, 'account-payable.created',
+      SELECT ${uuid7Sql("now() - interval '2 hours'")}, 'backlog:' || n, 'account-payable.created',
              'account-payable', gen_random_uuid()::text, $1, '{}'::jsonb,
              'PUBLISHED', now() - interval '2 hours',
              now() - interval '2 hours', now()
@@ -320,7 +324,7 @@ describe("a WhatsApp outage in the external lane", () => {
         "id", "outboxEventId", "userId", "channel", "status", "attempts",
         "availableAt", "lastError", "created_at", "updated_at"
       )
-      SELECT gen_random_uuid()::text, e."id", $1, 'WHATSAPP', 'PENDING', 2,
+      SELECT ${uuid7Sql('e."created_at"')}, e."id", $1, 'WHATSAPP', 'PENDING', 2,
              now() + interval '1 hour', 'Meta indisponível', e."created_at", now()
       FROM "domain_outbox_event" e
       WHERE e."eventKey" LIKE 'backlog:%'
@@ -498,7 +502,7 @@ describe("a customer's endpoint down, in the webhook queue", () => {
         "id", "endpointId", "businessId", "topic", "payload", "signature",
         "status", "attempts", "availableAt", "lastError", "created_at", "updated_at"
       )
-      SELECT gen_random_uuid()::text, $1, $2, 'delivery.delivered', '{}'::jsonb,
+      SELECT ${uuid7Sql("now() - interval '2 hours'")}, $1, $2, 'delivery.delivered', '{}'::jsonb,
              'assinatura', 'PENDING', 2, now() + interval '1 hour', 'HTTP 503',
              now() - interval '2 hours' - n * interval '100 milliseconds', now()
       FROM generate_series(1, ${BACKLOG}) AS n
@@ -515,7 +519,7 @@ describe("a customer's endpoint down, in the webhook queue", () => {
         "id", "endpointId", "businessId", "topic", "payload", "signature",
         "status", "attempts", "availableAt", "deliveredAt", "created_at", "updated_at"
       )
-      SELECT gen_random_uuid()::text, $1, $2, 'delivery.delivered', '{}'::jsonb,
+      SELECT ${uuid7Sql("at")}, $1, $2, 'delivery.delivered', '{}'::jsonb,
              'assinatura', 'DELIVERED', 1, at, at, at, at
       FROM (
         SELECT now() - n * interval '2 minutes' AS at
@@ -546,13 +550,44 @@ describe("a customer's endpoint down, in the webhook queue", () => {
     expect(claim, "o ciclo não enviou o claim").toBeDefined();
 
     const plan = await planOfClaim(claim!);
-    const pages = pagesRead(plan);
     const touched = rowsTouched(plan, "webhook_delivery");
+
+    // The queue is partitioned by day (F5-09): without the claim floor
+    // (QUEUE_CLAIM_ID_FLOOR_ENABLED, off by default) every probe also
+    // opens each empty day ahead, a constant two pages a probe whatever
+    // the backlog. The budget is for the partitions that hold rows, where
+    // the backlog is; every other partition may cost only its probe.
+    const holding = new Set(
+      (
+        await prisma.$queryRawUnsafe<{ rel: string }[]>(
+          `SELECT DISTINCT tableoid::regclass::text AS "rel" FROM "webhook_delivery"`,
+        )
+      ).map(({ rel }) => rel),
+    );
+    // Scans only: the UPDATE's own node names the parent and carries the
+    // buffers of everything under it.
+    const scans = flatten(plan).filter(
+      (node) =>
+        node["Node Type"].endsWith("Scan") &&
+        String(node["Relation Name"] ?? "").startsWith("webhook_delivery"),
+    );
+    const pages = scans
+      .filter((node) => holding.has(String(node["Relation Name"])))
+      .reduce((sum, node) => sum + pagesRead(node), 0);
 
     expect(
       pages,
       `o claim leu ${pages} páginas com ${BACKLOG} webhooks em espera e nenhum vencido:\n${claim!.query}`,
     ).toBeLessThan(PAGES_BUDGET);
+
+    for (const node of scans.filter(
+      (scan) => !holding.has(String(scan["Relation Name"])),
+    )) {
+      expect(
+        pagesRead(node) / Math.max(1, node["Actual Loops"] ?? 1),
+        `${node["Relation Name"]}: uma partição vazia leu mais que a sonda`,
+      ).toBeLessThanOrEqual(3);
+    }
 
     expect(touched).toBeLessThan(200);
   }, 60_000);

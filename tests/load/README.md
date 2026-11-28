@@ -11,15 +11,15 @@ A produção é **Dokploy + Traefik** na frente de N réplicas da imagem da API
 (`trajetto-api/docs/deploy.md`). O harness de
 `compose.load.yaml` é essa forma numa máquina só:
 
-|                 | produção                                                        | harness                                                                       |
-| --------------- | --------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| borda           | Traefik v3 do Dokploy (provider swarm), TLS, `Host()`           | Traefik v3 fixado por digest (provider docker), HTTP na 8080, `PathPrefix(/)` |
-| réplicas        | imagem `trajetto-api`, `NODE_ENV=production`, 1024M, 2 réplicas | a mesma imagem, construída do `Dockerfile`, 1024M, `LOAD_REPLICAS` (padrão 2) |
-| readiness no LB | `/health/readiness`, 10 s, timeout 5 s                          | os mesmos rótulos (um teste mantém os dois iguais)                            |
-| `readTimeout`   | 120 s (`infra/traefik/traefik.reference.yaml`)                  | 120 s                                                                         |
-| banco / Redis   | Postgres 16, Redis 7 sem persistência                           | idem, descartáveis                                                            |
-| uploads         | R2                                                              | credenciais falsas (nenhuma cena envia arquivo)                               |
-| k6              | —                                                               | dentro da mesma rede do Docker                                                |
+|                 | produção                                                                                                                                                                                            | harness                                                                                                                                                                                                                                                                                         |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| borda           | Traefik v3 do Dokploy (provider swarm), TLS, `Host()`                                                                                                                                               | Traefik v3 fixado por digest (provider docker), HTTP na 8080, `PathPrefix(/)`                                                                                                                                                                                                                   |
+| réplicas        | imagem `trajetto-api`, `NODE_ENV=production`, 1024M, 2 réplicas                                                                                                                                     | a mesma imagem, construída do `Dockerfile`, 1024M, `LOAD_REPLICAS` (padrão 2)                                                                                                                                                                                                                   |
+| readiness no LB | **nenhuma**: o Traefik do Dokploy fala com o endereço virtual do serviço do Swarm, e um health check ali tiraria as duas réplicas juntas; quem tira uma réplica é o healthcheck do Swarm (liveness) | `/health/readiness`, 10 s, timeout 5 s, por contêiner (provider docker, um servidor por réplica): uma diferença conhecida                                                                                                                                                                       |
+| `readTimeout`   | 120 s (`infra/traefik/traefik.reference.yaml`)                                                                                                                                                      | 120 s                                                                                                                                                                                                                                                                                           |
+| banco / Redis   | Postgres 16, Redis 7 sem persistência                                                                                                                                                               | a imagem `trajetto-postgres` (`infra/postgres`, a que o Database passa a rodar com a troca do dono), construída pelo compose, com o teto de `LOAD_PG_MEMORY_MB` (padrão 2048, o da produção na VPS única) e `POSTGRES_MEMORY_LIMIT_MB` igual a ele, sem arquivamento; Redis igual; descartáveis |
+| uploads         | R2                                                                                                                                                                                                  | credenciais falsas (nenhuma cena envia arquivo)                                                                                                                                                                                                                                                 |
+| k6              | —                                                                                                                                                                                                   | dentro da mesma rede do Docker                                                                                                                                                                                                                                                                  |
 
 **A pasta `nginx` foi removida.** Ela era um harness local de round-robin que
 nenhum script subia, e nunca representou a produção; quem quiser o histórico
@@ -37,7 +37,9 @@ requisição, não para uma conexão já promovida a WebSocket.
 **Com a imagem real da API o harness rodou em 07/10/2026**: 1, 2 e 4 réplicas,
 smoke, carga, estresse até a saturação e o `multi-replica.sh`. Números,
 gargalos e as quatro correções que saíram de lá em
-`docs/desempenho/carga-2026-10.md` (raiz do workspace).
+[`docs/desempenho/README.md`](../../docs/desempenho/README.md) ("Carga de
+07/10/2026"; o relatório original ficou fora do repositório). Os relatórios
+de portão seguem o [`TEMPLATE.md`](../../docs/desempenho/TEMPLATE.md).
 
 ## Como rodar
 
@@ -56,7 +58,9 @@ gargalos e as quatro correções que saíram de lá em
 #    trajetto-itest-pg costuma ocupá-la e é compartilhado com as suítes: em
 #    vez de pará-lo, exporte LOAD_PG_PORT (ex.: 54331) para o Postgres do
 #    harness. Os scripts que escrevem (seed.ts, mint-*.ts) aceitam só 54321
-#    ou a LOAD_PG_PORT declarada, em localhost (lib/disposable-database.ts).
+#    ou a LOAD_PG_PORT declarada, em localhost (lib/disposable-database.ts),
+#    e o seed.ts recusa também um banco com qualquer empresa que ele não
+#    criou: a porta diz para onde vai a conexão, não o que há do outro lado.
 docker compose --env-file .env -f tests/load/compose.load.yaml up -d --build
 
 # 2. Um conjunto de dados com MUITOS tenants: a cardinalidade de businessId é
@@ -109,6 +113,138 @@ src/server.ts`) e o k6 pelo Docker com
 Esse caminho cruza a fronteira WSL2/Windows a cada requisição: serve para
 achar gargalo, não para número de capacidade.
 
+### Papéis, imagens trocáveis e CPU da VPS (plano de escala LOAD-01)
+
+Sem perfil, o harness é o de sempre: N réplicas em `PROCESS_ROLE=all`, cada
+uma com todas as filas e o cron, como a produção até a onda 14. Dois perfis
+sobem a frota dividida em papéis da mesma imagem:
+
+| Perfil     | O que sobe                                                                                                                                              | Com                                                                                         |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `roles`    | o `worker` (`PROCESS_ROLE=worker`, `LOAD_WORKER_REPLICAS`, padrão 1): todas as filas e o cron, varredura de 2 s, acordado pelas dicas da api pelo Redis | `LOAD_API_ROLE=api`: as réplicas atrás do Traefik param de consumir filas e de rodar o cron |
+| `realtime` | o `realtime` (`PROCESS_ROLE=realtime`) atrás do Traefik em `/socket.io`, como a _Domain_ com _Path_ da onda 18                                          | `LOAD_API_SOCKETS=false`: as réplicas da api recusam socket                                 |
+
+O papel da api é a variável `LOAD_API_ROLE` (padrão `all`), e não o perfil:
+um perfil do compose não muda outro serviço. A frota da fase C (api ×2 sem
+workers, worker ×1):
+
+```bash
+LOAD_API_ROLE=api docker compose --env-file .env \
+  -f tests/load/compose.load.yaml --profile roles up -d --build
+```
+
+Imagens trocáveis: `LOAD_API_IMAGE`, `LOAD_WORKER_IMAGE` e
+`LOAD_REALTIME_IMAGE` (as duas últimas seguem a primeira) sobem uma frota
+mista, como no meio de um rolling. Construa uma vez e suba **sem** `--build`
+(com ele, o compose constrói esta árvore com a tag pedida).
+
+CPU da VPS: `tests/load/vps-6vcpu.env` fixa a pilha inteira nos núcleos 0 a
+5 (a VPS única tem 6 vCPU compartilhadas) e o k6 nos 6 a 9, fora deles, para
+o gerador não tirar CPU do que ele mede. Só numa máquina Linux com 10 núcleos
+ou mais (o Docker recusa um cpuset que a máquina não tem), nunca na VPS:
+
+```bash
+docker compose --env-file .env --env-file tests/load/vps-6vcpu.env \
+  -f tests/load/compose.load.yaml up -d --build
+```
+
+O cpuset imita núcleos, não o _steal_ da VPS: os números da bancada são
+indicativos. A memória de cada fase (seção 3 do plano) vai em
+`API_MEMORY_LIMIT`, `API_HEAP_MB`, `LOAD_WORKER_MEMORY_LIMIT`,
+`LOAD_WORKER_HEAP_MB` e `LOAD_WORKER_CPUS`. O perfil `pgbouncer` do plano
+entra com a imagem `trajetto-pgbouncer` (onda 17), que ainda não existe.
+
+### Seed por degrau (`LOAD_TIER`, plano de escala LOAD-02)
+
+Com `LOAD_TIER`, o `seed.ts` semeia pelo Prisma só o tenant que a carga
+mede (usuários e tokens precisam de bcrypt e JWT) e a população inteira em
+SQL de massa (`generate_series`), pelos arquivos `NN-*.sql` de
+[`seed-tiers/`](./seed-tiers), em ordem e numa sessão só, que guarda as
+contagens do degrau como configurações `load.<nome>`
+([`lib/load-tiers.ts`](./lib/load-tiers.ts)). Sem `LOAD_TIER`, nada muda: os
+`LOAD_TENANTS` tenants iguais de sempre.
+
+| degrau      | transportadoras (Zipf) | pequenas | entregas    | dias | motoristas | trilha                      | para quê                                       |
+| ----------- | ---------------------- | -------- | ----------- | ---- | ---------- | --------------------------- | ---------------------------------------------- |
+| `tiny`      | 10                     | 20       | 5 mil       | 30   | 40         | 2 dias × 48 pontos          | conferir o SQL em segundos                     |
+| `100k`      | 100                    | 500      | 300 mil     | 180  | 400        | 7 dias × 240 pontos         | o portão do 100k                               |
+| `1m`        | 720                    | 500      | 3 milhões   | 90   | 4 mil      | 2 dias × 240 pontos         | o portão do 1M                                 |
+| `5m`        | 3.600                  | 500      | 15 milhões  | 90   | 20 mil     | 30 dias × 240 pontos        | o portão do 5M (clone temporário do alvo)      |
+| `prod-like` | as da produção         | 0        | as da prod. | idem | idem       | a média por motorista e dia | os ensaios das ondas 10 e 11, só com contagens |
+
+- **Cauda longa:** a transportadora de posição k recebe k^-1,1 das entregas
+  e dos motoristas (Zipf, s = 1,1), pelo menos um de cada. No `100k`, a
+  primeira tem 23 % das entregas e a última, 442. O planejador escolhe
+  planos diferentes para um `businessId` com 23 % de uma tabela e para um
+  com 0,1 %, e tenants iguais não medem nenhum dos dois.
+- **Paradas abertas:** 150 mil paradas `PENDING`, em rotas liberadas hoje,
+  nas 500 empresas pequenas (o caso dos planos do anti-join, F2-21).
+- **Por entrega:** dois eventos (chegada e comprovante), uma linha de
+  `activity` e uma ocorrência a cada vinte; as entregas dos últimos 7 dias
+  em rotas, uma por motorista e dia.
+- **Filas assentadas:** 30 dias de eventos `PUBLISHED` (com a chave em
+  `outbox_event_key`), entregas de notificação `DELIVERED` (com
+  `business_id`), sino e webhooks entregues: o estado de regime que as
+  varreduras das filas atravessam.
+- **Ids:** uuid v7 cunhado no SQL a partir do instante de cada linha (a
+  trilha das entregas é particionada pelo id); só as `activity_v4` linhas
+  de `prod-like` levam v4, como as antigas da produção, para o ensaio da
+  re-chave (onda 11).
+- **Carga em massa:** os índices não únicos das tabelas grandes saem antes
+  (`05-indexes-off.sql`) e voltam depois (`85-indexes-on.sql`, que o
+  `seed.ts` roda também quando um arquivo falha), e, com superusuário, as
+  chaves estrangeiras não são conferidas linha a linha
+  (`session_replication_role = replica`); o `95-references.sql` confere
+  as referências uma vez no fim e falha se alguma quebrou.
+
+```bash
+# Um degrau, no banco descartável (a guarda de lib/disposable-database.ts
+# continua: 54321 ou a LOAD_PG_PORT, em localhost), já migrado e vazio: com
+# qualquer empresa que o seed não criou, ele para antes de escrever.
+LOAD_TIER=100k LOAD_BASE_URL=http://traefik \
+  DATABASE_URL="postgresql://trajetto:trajetto-password@localhost:54321/load_test?schema=public" \
+  npx tsx tests/load/seed.ts
+```
+
+**`prod-like`:** recebe só as CONTAGENS da produção, nunca uma linha dela.
+
+1. Na produção, só leitura, rode
+   [`seed-tiers/prod-counts.sql`](./seed-tiers/prod-counts.sql) (Dokploy →
+   Database da produção → terminal → `psql`, colando o arquivo): ele abre
+   uma transação `READ ONLY`, imprime uma linha JSON de contagens e faz
+   `ROLLBACK`.
+2. Na máquina que semeia, passe essa linha (ou o caminho de um arquivo com
+   ela) em `LOAD_PROD_COUNTS`. O seed recusa qualquer chave que não seja
+   uma das contagens, e qualquer valor que não seja inteiro ≥ 0.
+3. O Database descartável dos ensaios fica no servidor: a guarda só aceita
+   localhost, então o caminho é um túnel para ele numa porta local
+   declarada em `LOAD_PG_PORT`, com o banco já migrado
+   (`yarn prisma:migrate:deploy` pelo mesmo túnel). Apague o Database no
+   fim. O Database da produção fica no mesmo servidor, e um túnel para ele
+   passa pela guarda da porta; por isso o seed confere, antes de escrever
+   qualquer linha e de novo antes do `05-indexes-off.sql`, que o banco não
+   tem nenhuma empresa além da que ele mesmo acabou de criar, e para com
+   o nome do banco na mensagem.
+
+**Medido** (17/11/2026, nesta máquina: Docker Desktop, 16 vCPUs, Postgres
+16 num contêiner de 2 GiB com a configuração do harness: shared_buffers
+448 MB, `max_wal_size` 8 GB, `checkpoint_timeout` 15 min):
+
+| degrau | tempo do seed | banco   | o que mais pesa                                                 |
+| ------ | ------------- | ------- | --------------------------------------------------------------- |
+| `tiny` | 9 s           | —       | —                                                               |
+| `100k` | 1,6 min       | 1,5 GiB | a volta dos índices (39 s) e as entregas com o histórico (22 s) |
+
+Antes da carga em massa, o mesmo `100k` levava 4,0 min: 4,6 mil entregas por
+segundo com os 20 índices de `delivery` (um GIN de trigramas entre eles) e as
+chaves estrangeiras conferidas linha a linha; sem os dois, 39 mil.
+
+**O `1m` não foi medido aqui:** ele ocupa ~15 GiB, mais o WAL, e esta máquina
+tinha 16 GB livres. A projeção linear do `100k` dá 16 a 20 min (a volta dos
+índices cresce um pouco mais que linear), abaixo dos 30 min do aceite. A
+medida fica para uma máquina com ≥ 40 GB livres (a bancada do G-02 serve),
+anotada aqui com o tempo de cada arquivo que o `seed.ts` imprime.
+
 ### Contas das suítes de navegador (web)
 
 As suítes de navegador da web (`trajetto-ui/tests/ui`, `tests/a11y`,
@@ -119,7 +255,7 @@ todos só para o banco descartável de teste:
 
 | script                                     | o que faz                                                                                                                                                                                                                                                                                                      |
 | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `seed.ts`                                  | o conjunto de dados (empresas, administradores, motoristas); recusa um banco já semeado: recrie o `load_test` antes de semear de novo                                                                                                                                                                          |
+| `seed.ts`                                  | o conjunto de dados (empresas, administradores, motoristas); recusa um banco já semeado ou com qualquer empresa que ele não criou: recrie o `load_test` antes de semear de novo                                                                                                                                |
 | `mint-master.ts`                           | o MASTER e as sessões de vida longa que as specs do `/admin` abrem por cookie (`fixtures/browser-sessions.json`)                                                                                                                                                                                               |
 | `mint-browser-users.ts`                    | contas reais **com senha**, que entram pelo formulário: MASTER, BUSINESS_ADMIN (e um segundo admin da mesma empresa), BUSINESS_USER com perfil completo, BUSINESS_USER só leitura, conta com 2FA, motorista, empresa sem Entregas e empresa sem Frota. Grava só e-mails e ids em `fixtures/browser-users.json` |
 | `mint-two-factor-code.ts <email> <código>` | troca o código de dois fatores pendente por um que a spec conhece (o real vai por e-mail; o desafio, as tentativas e a validade continuam valendo)                                                                                                                                                             |
@@ -127,8 +263,9 @@ todos só para o banco descartável de teste:
 
 A senha das contas é `WEB_E2E_PASSWORD`; sem ela, o padrão documentado de
 teste `Navegador@E2E2026`. Ela nunca é gravada em disco. Ordem: `seed.ts`,
-`mint-master.ts`, `mint-browser-users.ts` (a CI noturna,
-`trajetto-ui/.github/workflows/browser-suites.yml`, roda os três nessa ordem).
+`mint-master.ts`, `mint-browser-users.ts` (as suítes de navegador da web, no
+passo `Prepare the API` dos jobs `Browser suites (1/2)` e `(2/2)` do
+`trajetto-ui/.github/workflows/validate.yml`, rodam os três nessa ordem).
 Com `NODE_ENV=test` (como as suítes de navegador sobem a API), o 2FA e a
 criação de usuário guardam o e-mail numa caixa em memória do processo: nenhum
 servidor de e-mail é chamado e o executor não precisa de rede de saída para
@@ -136,33 +273,340 @@ isso. Em desenvolvimento, eles vão para o Ethereal.
 
 ### O que cada medida pede
 
-| medida                                       | de onde vem                                                                                                                          |
-| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| RPS, p50/p95/p99, erro, timeout              | resumo do k6 (`surface_latency`, `surface_failures`, `surface_throttled` por superfície)                                             |
-| CPU e RAM por réplica, banco, Redis, Traefik | `docker stats` durante a corrida (o `multi-replica.sh` tira uma foto no fim)                                                         |
-| pool do Prisma, backlog das filas, runtime   | `GET /health/metrics` (MASTER; token em `fixtures/browser-sessions.json` do `mint-master.ts`)                                        |
-| latência do banco                            | `pg_stat_statements` (carregado no Postgres do harness; `CREATE EXTENSION IF NOT EXISTS pg_stat_statements;` uma vez no `load_test`) |
-| Redis                                        | `docker compose ... exec redis redis-cli info stats`                                                                                 |
-| conexões WebSocket                           | **sem contador exposto hoje** — lacuna registrada junto das cenas abaixo                                                             |
+| medida                                       | de onde vem                                                                                                                                                                                                   |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| RPS, p50/p95/p99, erro, timeout              | resumo do k6 (`surface_latency`, `surface_failures`, `surface_throttled` por superfície)                                                                                                                      |
+| CPU e RAM por réplica, banco, Redis, Traefik | `docker stats` durante a corrida (o `multi-replica.sh` tira uma foto no fim)                                                                                                                                  |
+| pool do Prisma, backlog das filas, runtime   | `GET /health/metrics` (MASTER; token em `fixtures/browser-sessions.json` do `mint-master.ts`)                                                                                                                 |
+| latência do banco                            | `pg_stat_statements` (pré-carregado pela imagem do banco, como nos servidores, com `pg_stat_statements.track=all` só no harness; `CREATE EXTENSION IF NOT EXISTS pg_stat_statements;` uma vez no `load_test`) |
+| Redis                                        | `docker compose ... exec redis redis-cli info stats`                                                                                                                                                          |
+| conexões WebSocket                           | o resumo JSON do `socket-fleet.mjs` (conexão, quedas e volta; "Frota de sockets", no fim deste arquivo)                                                                                                       |
 
-Cenas que ainda não existem (auth/refresh, frota, escrita de entregas,
-upload, envio de chat, SSE de notificações, escrita da API pública, WebSocket
-em volume) estão listadas como lacuna em `docs/PENDENCIAS-DO-USUARIO.md`: as
-cinco abaixo medem leitura, a trilha de posições e o chat lido.
+Cenas que ainda não existem (frota, escrita da API pública) estão listadas
+como lacuna em `docs/PENDENCIAS-DO-USUARIO.md`. O WebSocket em volume é o
+`socket-fleet.mjs` (LOAD-05), no fim deste arquivo.
 
-As quatro cenas, em ordem de utilidade:
+As cenas, em ordem de utilidade (as cinco depois do `soak.js` são do plano
+de escala, LOAD-03, e as duas últimas, das filas e da importação, LOAD-04,
+mais abaixo):
 
-| arquivo     | pergunta                                                 |
-| ----------- | -------------------------------------------------------- |
-| `smoke.js`  | as outras três estão medindo alguma coisa real?          |
-| `load.js`   | uma hora movimentada cabe?                               |
-| `spike.js`  | a frota inteira chegando de uma vez quebra ou enfileira? |
-| `stress.js` | onde é o teto, e o que estoura primeiro?                 |
-| `soak.js`   | trinta minutos depois ainda está de pé?                  |
+| arquivo             | pergunta                                                                                |
+| ------------------- | --------------------------------------------------------------------------------------- |
+| `smoke.js`          | as outras estão medindo alguma coisa real?                                              |
+| `load.js`           | uma hora movimentada cabe?                                                              |
+| `spike.js`          | a frota inteira chegando de uma vez quebra ou enfileira?                                |
+| `stress.js`         | onde é o teto, e o que estoura primeiro?                                                |
+| `soak.js`           | trinta minutos depois ainda está de pé?                                                 |
+| `write-mix.js`      | as escritas juntas (posições, sino, presign, chat, entrega e refresh) cabem?            |
+| `positions.js`      | a trilha de N motoristas, cada um com o próprio token e honrando o `nextFlushAfterMs`   |
+| `tower.js`          | 50 abas da Torre de uma empresa e 500 empresas com 2 abas, no tique espalhado           |
+| `noisy-tenant.js`   | uma empresa a 10× tira o p95 das outras 20 do lugar?                                    |
+| `outage.js`         | 2 min sem a API: os celulares de contrato 7 e 8 martelam a volta?                       |
+| `import-20k.js`     | uma planilha de 20 mil linhas tira o event loop da api do lugar?                        |
+| `import-geocode.js` | 20 mil endereços ganham o ponto em menos de 2 h, sem passar do plano do geocodificador? |
 
 `smoke.js` primeiro, sempre: um teste de estresse contra uma URL que responde
 404 reporta um p95 lindo, e essa é a forma mais comum de uma suíte de carga
 mentir.
+
+### As cenas do plano de escala (LOAD-03)
+
+Cada uma grava o resumo com `--summary-export`, numa pasta montada no k6 (o
+`/load` do harness é só leitura; `tests/load/results/` fica fora do Git), e o
+aceite que compara janelas da mesma corrida sai de `lib/verdicts.mjs`, que lê
+esse JSON:
+
+```bash
+H="docker compose --env-file .env -f tests/load/compose.load.yaml --profile k6"
+R="-v $PWD/tests/load/results:/results"
+
+$H run --rm $R k6 run --summary-export /results/write-mix.json /load/write-mix.js
+$H run --rm $R k6 run --summary-export /results/positions.json /load/positions.js
+$H run --rm $R k6 run --summary-export /results/tower.json /load/tower.js
+$H run --rm $R k6 run --summary-export /results/noisy-tenant.json /load/noisy-tenant.js
+$H run --rm $R k6 run --summary-export /results/outage.json /load/outage.js
+$H run --rm $R -e SPIKE_ACCEPTANCE=true k6 run --summary-export /results/spike.json /load/spike.js
+
+node tests/load/lib/verdicts.mjs noisy-tenant tests/load/results/noisy-tenant.json
+node tests/load/lib/verdicts.mjs outage tests/load/results/outage.json
+node tests/load/lib/verdicts.mjs spike tests/load/results/spike.json
+```
+
+O seed traz o que elas pedem: o embarcador do tenant principal
+(`shipperId`), uma sessão de BUSINESS_ADMIN em cada uma de
+`LOAD_PANEL_TENANTS` outras empresas com Entregas (20 por padrão; a Torre
+pede 500, com `LOAD_TENANTS` ou um `LOAD_TIER` que tenha essas empresas) e
+`LOAD_REFRESH_SESSIONS` sessões com refresh token de verdade (200), cada uma
+de uma família, para o refresh do `write-mix.js`.
+
+- **`write-mix.js`** (`WRITE_RATE`, 40/s por `WRITE_DURATION`, 3 min): posições
+  35, a lista do sino em NDJSON (`/notification/stream`) 25, o presign de uma
+  foto do canhoto 15, uma mensagem do escritório para o motorista 13 e uma
+  entrega cadastrada no painel 12. O refresh roda num cenário próprio
+  (`WRITE_REFRESH_VUS`, 20, a cada `WRITE_REFRESH_EVERY_S`, 30 s): o refresh
+  token gira a cada uso e cada sessão é de um VU só (`exec.vu.idInTest`),
+  porque duas usando a mesma acionariam a detecção de reuso, que encerra a
+  sessão. Por isso `LOAD_REFRESH_SESSIONS` ≥ `WRITE_MAX_VUS` +
+  `WRITE_REFRESH_VUS`; o VU sem sessão própria pula e conta em
+  `refresh_sessions_missing`, que reprova.
+- **`positions.js`** (`POSITIONS_DRIVERS`, até os tokens do fixture, por
+  `POSITIONS_DURATION`, 10 min): cada VU é um motorista e faz o que o app do
+  contrato 8 faz (F2-27): manda os pontos do minuto e espera o maior entre o
+  próprio minuto e o `nextFlushAfterMs` da resposta (60, 120 ou 300 s), preso
+  em [1 min, 5 min]; uma recusa espera o backoff, nunca menos que o
+  Retry-After. O POST/s sai da frota, não do harness: os ~333 POST/s da régua
+  no 5M são vinte mil motoristas (`LOAD_PRIMARY_DRIVERS`). `POSITIONS_CONTRACT=7`
+  manda como o app antigo, sem ler a dica.
+- **`tower.js`** (`TOWER_PRIMARY_TABS` 50, `TOWER_TENANTS` 500,
+  `TOWER_TABS_PER_TENANT` 2, `TOWER_PERIOD_MS` 60000, `TOWER_DURATION` 10
+  min): cada aba lê a Torre e o sino a cada tique, no período alinhado ao
+  relógio mais um deslocamento sorteado no período inteiro (F2-29, D25). Uma
+  leitura recusada com Retry-After segura as próximas por max(Retry-After,
+  período), como o `readsHeldUntil` da web.
+- **`noisy-tenant.js`** (`NOISY_NORMALS` 20, `NOISY_TENANT_RATE` 3 leituras/s
+  por empresa, `NOISY_FACTOR` 10, `NOISY_BASELINE` 3 min, `NOISY_DURATION` 3
+  min): primeiro só as normais (`stage:baseline`), depois o tenant principal
+  a dez vezes ao lado delas (`stage:noisy`), alternando Torre, quadro e
+  rotas (3, 10 e 10 no orçamento do painel). O aceite: o p95 das normais muda
+  no máximo 10% e nenhuma leitura delas falha; com
+  `TENANT_PANEL_BUDGET_MODE=enforce` nas réplicas, o barulhento também
+  precisa receber 429 (`'{"expectThrottle":true}'` como terceiro argumento do
+  verdicts).
+- **`outage.js`** (`OUTAGE_PHONES`, `OUTAGE_CONTRACT` 7, 8 ou `mixed` com
+  `OUTAGE_CONTRACT8_SHARE` 0,9, `OUTAGE_BASE` 2 min, `OUTAGE_DOWN` 2 min,
+  `OUTAGE_AFTER` 3 min): cada VU é um celular de um contrato. O 7 reenvia com
+  o próximo fix, 15 s depois, em todos ao mesmo tempo, e despeja o acúmulo de
+  uma vez; o 8 espera o backoff com jitter e manda o acúmulo em pedaços de 200
+  pontos, de 0,5 a 2 s um do outro. Com `OUTAGE_MODE=simulated` (o padrão) a
+  queda é o `OUTAGE_URL`, uma porta fechada que recusa na hora; com
+  `external`, a cena continua mandando para a API e outra coisa a derruba na
+  janela que o setup imprime (`docker compose stop` das réplicas). O aceite
+  (com ≥ 90% de contrato 8): POST/s no máximo 1,2× a base durante a queda e
+  1,5× no primeiro minuto depois (passe `baseSeconds` e `downSeconds` ao
+  verdicts quando mudar os tempos).
+- **`spike.js`** ganhou o aceite do descarte de carga (F2-24), com
+  `SPIKE_ACCEPTANCE=true` e `SHED_MODE=enforce` nas réplicas: 0 falha de
+  produto, p95 abaixo de 1 s, nada acima de 10 s, e cada janela de calma
+  depois de uma parede (`window:recovery`, 45 e 60 s) de volta abaixo de 1 s.
+  Sem a variável, ficam os limiares medidos de sempre.
+
+Duas mudanças de régua valem para todas as cenas desde 17/11/2026:
+
+- uma recusa 429 ou 503 **com Retry-After** é uma resposta, em qualquer
+  superfície: conta em `surface_throttled` ou `surface_shed`, nunca em
+  `surface_failures` (`record` em `lib/api.js`). Antes só as três superfícies
+  que listavam o 429 tinham isso, e o descarte de carga fazendo o seu
+  trabalho apareceria como produto quebrando;
+- no `lib/mix.js`, as posições pesam 10 de 83 (12%), e não mais 34 (um
+  terço): ~333 POST/s de ~3.000 requisições por segundo no degrau de 5M. Um
+  número medido antes dessa data veio do mix mais pesado em posições.
+
+### As cenas de fila e importação (LOAD-04)
+
+Quatro cenas para os portões do 100k e do 1M (seção 6 do plano) e para a
+bancada da onda 13. Duas são k6; as outras duas escrevem filas por SQL e
+leem o banco, e por isso são scripts do Node (pelo `tsx`, que lê a guarda de
+`lib/disposable-database.ts`: só 54321 ou a `LOAD_PG_PORT`, em localhost).
+
+| cena                | o que faz                                                                                                                               | aceite                                                                           |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `drain-backlog.mjs` | grava 50 mil eventos `activity.recorded` e 20 mil notificações IN_APP vencidos, em 100 empresas, e acompanha o dreno feito pelo harness | dreno em menos de 15 min, nenhuma linha FAILED, e o HTTP em p95 abaixo de 300 ms |
+| `queue-flood.ts`    | 20 mil WhatsApp de uma empresa na raia `external`, com o provedor falso de 300 ms, e 20 outras empresas mandando um a cada 5 s          | o p95 de espera das outras abaixo de 60 s                                        |
+| `import-20k.js`     | uma planilha de 20 mil linhas (com o ponto em cada uma) enquanto o quadro é lido a 5 por segundo                                        | lag p99 do event loop da api abaixo de 100 ms e RSS de pico abaixo do teto       |
+| `import-geocode.js` | 20 mil endereços sem ponto contra o geocodificador falso, nas taxas do plano Startup                                                    | todos com ponto em menos de 2 h, e nenhuma recusa do geocodificador              |
+
+Nada delas sai da máquina: o dreno só toca o nosso banco (as atividades e o
+sino não chamam provedor), a enchente tem o provedor falso no próprio
+processo, e a geocodificação tem o `fake-geocoder.mjs` do perfil `fakes`.
+
+```bash
+H="docker compose --env-file .env -f tests/load/compose.load.yaml"
+R="-v $PWD/tests/load/results:/results"
+DB="postgresql://trajetto:trajetto-password@localhost:54321/load_test?schema=public"
+
+# Dreno (com o worker separado, como a fase C). O load.js mede o HTTP
+# durante o dreno inteiro; o veredito junta os dois resumos.
+LOAD_API_ROLE=api $H --profile roles up -d --build
+$H --profile k6 run --rm $R -e LOAD_DURATION=15m k6 run \
+  --summary-export /results/drain-load.json /load/load.js &
+DATABASE_URL="$DB" npx tsx tests/load/drain-backlog.mjs
+wait
+node tests/load/lib/verdicts.mjs drain tests/load/results/drain-load.json \
+  '{"drainFile":"tests/load/results/drain-backlog.json"}'
+
+# Enchente: este processo é o único consumidor da raia external.
+LOAD_API_ROLE=api LOAD_WORKER_QUEUES=outbox,internal,webhooks,ai \
+  $H --profile roles up -d
+NODE_ENV=test QUEUE_FAIR_CLAIM_ENABLED=true DATABASE_URL="$DB" \
+  REDIS_URL=redis://localhost:56379 npx tsx tests/load/queue-flood.ts
+
+# Planilha de 20 mil linhas; a janela sai na última linha da cena.
+$H --profile k6 run --rm $R k6 run \
+  --summary-export /results/import-20k.json /load/import-20k.js
+DATABASE_URL="$DB" node tests/load/lib/ops-window.mjs --since <início> --until <fim>
+
+# Geocodificação no plano Startup, contra o geocodificador falso.
+LOAD_API_ENV_FILE=geocoder-startup.env $H --profile fakes up -d --build
+$H --profile k6 run --rm $R k6 run \
+  --summary-export /results/import-geocode.json /load/import-geocode.js
+```
+
+- **`drain-backlog.mjs`** (`DRAIN_EVENTS` 50000, `DRAIN_NOTIFICATIONS` 20000,
+  `DRAIN_TENANTS` 100, `DRAIN_LIMIT_MIN` 15, `DRAIN_TIMEOUT_MIN` 30,
+  `DRAIN_POLL_S` 5, `DRAIN_OUT`): os eventos são do administrador de cada
+  empresa, e a expansão faz de cada um uma ACTIVITY; as notificações já vêm
+  expandidas (uma conta a pagar), com o `business_id`. As linhas levam uuid v7
+  do instante, na partição do dia, como o seed. O resumo
+  (`tests/load/results/drain-backlog.json`) tem o tempo, o progresso de
+  cada leitura e as linhas FAILED. Quem drena é o harness: as réplicas em
+  `all`, ou o worker com `--profile roles`. O veredito `drain` reprova sem o
+  resumo do dreno.
+- **`queue-flood.ts`** (`FLOOD_MESSAGES` 20000, `FLOOD_OTHERS` 20,
+  `FLOOD_OTHER_EVERY_S` 5, `FLOOD_DURATION_MIN` 10, `FLOOD_GRACE_MIN` 5,
+  `FLOOD_PROVIDER_MS` 300, `FLOOD_P95_LIMIT_S` 60, `FLOOD_BUSINESS_ID`,
+  `FLOOD_CONTEXT`, `FLOOD_OUT`): roda fora da imagem de propósito. Os
+  provedores da imagem têm o host escrito no código (`graph.facebook.com`,
+  com TLS), e um provedor falso de 300 ms atrás dela pediria uma rota ou um
+  certificado que a produção carregaria junto. O processo roda o
+  `NotificationPipelineService` desta árvore na raia `external`, contra o
+  `load_test` e o Redis do harness (`127.0.0.1:${LOAD_REDIS_PORT:-56379}`),
+  com o WhatsApp falso, como os E2E fazem. Por isso o harness não pode
+  consumir a raia enquanto isso: `LOAD_API_ROLE=api` e, com o worker,
+  `LOAD_WORKER_QUEUES` sem `external`. A espera de uma mensagem é
+  `deliveredAt − created_at`. Com `QUEUE_FAIR_CLAIM_ENABLED=false`, a mesma
+  cena mostra o que a justiça resolve: as outras empresas atrás das 20 mil.
+- **`import-20k.js`** (`IMPORT_ROWS` 19999, `IMPORT_TIMEOUT` 30m,
+  `IMPORT_PROBE_RATE` 5, `IMPORT_PROBE_DURATION` 10m): o importador conta o
+  cabeçalho entre as 20 mil linhas que aceita, então o arquivo tem 19.999
+  entregas. O lag e o RSS são os números de cada réplica, minuto a minuto, nas
+  linhas `ops_sample`; o `lib/ops-window.mjs` julga a janela que a cena
+  imprime no fim (`--roles`, padrão `api,all`; `--lag-p99-ms`, 100;
+  `--rss-limit-mb` quando a linha não traz o teto do cgroup).
+- **`import-geocode.js`** (`IMPORT_ROWS` 19999, `GEOCODE_TIMEOUT` 2h,
+  `GEOCODE_POLL_S` 30, `FAKE_GEOCODER_URL`): com `--profile fakes` e
+  `LOAD_API_ENV_FILE=geocoder-startup.env`, as réplicas e o worker leem o
+  arquivo [`geocoder-startup.env`](./geocoder-startup.env), com variáveis
+  da própria API: o `REVERSE_GEOCODER_URL` do falso e a linha Startup da
+  tabela da decisão D40 (17 por segundo compartilhadas, 2 do comprovante,
+  45 mil por dia para o job). O falso responde em HTTPS, porque a produção
+  recusa um geocodificador sem https: ele cunha uma CA só da corrida com o
+  `node-forge` do repositório, grava-a no volume `fakes-ca` depois de
+  escutar (é o que o healthcheck espera), e o mesmo arquivo põe o
+  `NODE_EXTRA_CA_CERTS` das réplicas nela. Nenhuma outra máquina confia
+  nessa CA. O falso recusa com 429 o que passa
+  de 22 por segundo ou 60 mil no dia (`LOAD_FAKE_GEOCODER_PER_SECOND`,
+  `LOAD_FAKE_GEOCODER_PER_DAY`, `LOAD_FAKE_GEOCODER_LATENCY_MS`), como o
+  LocationIQ, e conta à parte os endereços desta corrida (a rua leva a marca
+  dela). `geocode_ms` vai do 202 ao último endereço respondido, e
+  `geocoder_refused` precisa ficar em 0. Sem o arquivo, o harness segue sem
+  geocodificador.
+
+**Conferido** (18/11/2026, nesta máquina, em escala reduzida, só para provar
+que cada uma roda e mede o que diz; não são números de capacidade): num
+Postgres descartável com o seed de 6 empresas, a enchente de 400 mensagens com
+o falso de 100 ms e a justiça ligada deu p95 de 0,5 s às outras; o dreno de 600
+eventos e 200 notificações saiu em 9 s, sem FAILED, drenado por um processo do
+pipeline no lugar do worker; a importação de 500 linhas levou 10 s; e a de 40
+endereços ganhou o ponto (ADDRESS, pelo GEOCODER) em 7 s, com pico de 16 por
+segundo e nenhuma recusa do falso, contra uma API local com as variáveis do
+`geocoder-startup.env`; de novo com o falso em HTTPS e a CA da corrida no
+`NODE_EXTRA_CA_CERTS`, 30 endereços em 40 s, sem erro de certificado. A
+imagem de produção não foi construída para isso: a rodada de verdade é da
+bancada (Linux com 10 núcleos ou mais e o `vps-6vcpu.env`) e dos portões.
+
+### As cenas do portão do 5M (LOAD-11)
+
+Três critérios do portão do 5M (seção 6 do plano, "Portão do 5M") pedem
+cenas próprias: as posições a 500 POST/s com o ABBA do group commit e do
+cache de sessão, a folga de 10× contando os pontos no banco e o DROP de um
+dia de fila sob carga. O número só vale no hardware-alvo (onda 23), com o
+seed `5m`; aqui elas ficam prontas e provadas em escala pequena.
+
+| cena                        | o que faz                                                                                                                                                                    | aceite                                                                                                            |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `positions-5m.js`           | `POST /route/positions` a uma taxa fixa (500 POST/s de 4 pontos, 2.000 pontos/s), um motorista do fixture depois do outro, com o braço do ABBA em cada amostra               | p95 abaixo de 150 ms e nenhuma falha (`POSITIONS_5M_ACCEPTANCE=true`)                                             |
+| `positions-abba.sh`         | a cena acima em A B B A no mesmo harness: A com o group commit e o cache desligados (a produção de hoje), B com os dois ligados; conta os pontos da janela no banco          | 0 ponto perdido em toda corrida, nenhuma abertura do disjuntor em B e o p95 de B no máximo 5% pior que o de A     |
+| `queue-drop-under-load.mjs` | grava um dia da família de notificação (500 mil eventos assentados, 1 mil FAILED, 10 mil recibos e 5 mil pendentes), espera o dreno do dia e roda o DROP do job de partições | o dia drenado, as três partições fora, as falhas nos dead letters e o DROP em menos de 1 min, com a carga ao lado |
+
+```bash
+H="docker compose --env-file .env -f tests/load/compose.load.yaml"
+R="-v $PWD/tests/load/results:/results"
+DB="postgresql://trajetto:trajetto-password@localhost:54321/load_test?schema=public"
+
+# O ABBA das posições (sem o perfil ingest: o braço chega só às réplicas da api).
+bash tests/load/positions-abba.sh
+
+# A folga de 10×: 3.330 POST/s por 10 min, com o mesmo arquivo.
+$H --profile k6 run --rm $R -e POSITIONS_5M_RATE=3330 -e POSITIONS_5M_MAX_VUS=6000 \
+  k6 run --summary-export /results/positions-5m.json /load/positions-5m.js
+
+# O DROP de um dia sob carga: o load.js mede o HTTP durante a cena inteira.
+$H --profile k6 run --rm $R -e LOAD_DURATION=20m k6 run \
+  --summary-export /results/queue-drop-load.json /load/load.js &
+NODE_ENV=test REDIS_URL=redis://localhost:56379 DATABASE_URL="$DB" \
+  npx tsx tests/load/queue-drop-under-load.mjs
+wait
+node tests/load/lib/verdicts.mjs queue-drop tests/load/results/queue-drop-load.json \
+  '{"dropFile":"tests/load/results/queue-drop.json"}'
+```
+
+- **`positions-5m.js`** (`POSITIONS_5M_RATE` 500, `POSITIONS_5M_POINTS` 4,
+  `POSITIONS_5M_DURATION` 10 min, `POSITIONS_5M_MAX_VUS` 2000,
+  `POSITIONS_5M_ARM`, `POSITIONS_5M_ACCEPTANCE`): o `positions.js` é a
+  frota no ritmo que o servidor pede; este segura a taxa do portão, qualquer
+  que seja a resposta, para medir o caminho de escrita nela. Cada 200 soma o
+  `data.stored` da resposta em `positions_points_stored` (um reenvio responde
+  0), e o fim da cena imprime a janela (`POSITIONS_5M_WINDOW`) em que os
+  pontos foram gravados. Com o seed `5m`, cada um dos vinte mil motoristas
+  envia a cada 40 s; na folga de 10×, a cada 6 s.
+- **`positions-abba.sh`** (`POSITIONS_ABBA_ORDER` ABBA, `POSITIONS_ABBA_RATE`
+  500, `POSITIONS_ABBA_POINTS` 4, `POSITIONS_ABBA_DURATION` 10m,
+  `POSITIONS_ABBA_CACHE_TTL_MS` 15000, e as do `lib/bench.sh`): recria as
+  réplicas da api com o env de cada braço (`LOAD_API_ENV_FILE`, um arquivo
+  na pasta da corrida), confere que ele chegou, lê os commits do
+  `pg_stat_database` antes e depois, conta as linhas da janela em
+  `driver_position_v2` e soma as seções `position_group_commit` e
+  `session_cache` do `ops_sample` da janela. O veredito `positions-abba` diz
+  também o ganho de B: commits por POST e o p95, braço a braço, e a taxa de
+  acerto do cache. Só na máquina do harness (a guarda do `lib/bench.sh`).
+- **`queue-drop-under-load.mjs`** (`QUEUE_DROP_DAY`, `QUEUE_DROP_EVENTS`
+  500000, `QUEUE_DROP_FAILED` 1000, `QUEUE_DROP_RECEIPTS` 10000,
+  `QUEUE_DROP_PENDING` 5000, `QUEUE_DROP_TENANTS` 100, `QUEUE_DROP_CHUNK`
+  50000, `QUEUE_DROP_LIMIT_S` 60, `QUEUE_DROP_DRAIN_TIMEOUT_MIN` 30,
+  `QUEUE_DROP_POLL_S` 5, `QUEUE_DROP_OUT`): grava o dia numa partição que já
+  existe (por padrão a mais antiga antes de ontem, senão a mais nova depois
+  de amanhã: a API grava em ontem, hoje e amanhã), com os ids em uuid v7 de
+  instantes do dia, e espera o pipeline do harness drenar os pendentes (o
+  portão do DROP guarda um dia com algo em voo). Depois roda o
+  `maintainPartitions` desta árvore nas três tabelas da família, com a
+  retenção posta para que só esse dia passe dela e o portão aberto só para
+  ele (o legado e os outros dias ficam), e mede. Por fim roda o job de novo
+  com a retenção de verdade e confere que nenhum dia de que uma linha
+  precisa agora ficou faltando. Antes de carregar o código da API, fixa no
+  banco descartável toda URL de banco que o `.env` do repositório poderia
+  trazer (a DDL nunca vai para outro lugar). Imprime a janela do DROP
+  (`QUEUE_DROP_WINDOW`) para o `lib/ops-window.mjs`.
+
+**No portão (hardware-alvo, onda 23).** O `positions-abba.sh` não roda lá:
+o alvo é um servidor do Dokploy, que a guarda do `lib/bench.sh` recusa. A
+mesma sequência é à mão, do gerador: em cada corrida, `POSITION_GROUP_COMMIT`
+e `SESSION_CACHE_TTL_MS` do braço no _Environment_ das Applications que
+recebem a rota (**Deploy**), o `positions-5m.js` com `POSITIONS_5M_ARM` e
+`--summary-export`, e a contagem da janela pelo SSH do alvo, com o SQL do
+script. O ABBA da expansão do outbox em lote (`OUTBOX_EXPANSION_MODE`,
+F5-33) segue o mesmo desenho com o `drain-backlog.mjs`: `per-event` e
+`batch` no worker, A B B A, comparando o `drainSeconds` e os commits.
+
+**Conferido** (19/11/2026, nesta máquina, em escala pequena, só para provar
+que cada uma roda e mede o que diz): o `positions-5m.js` no k6 do harness
+(`grafana/k6:2.2.0` pelo digest), 50 POST/s por 5 s contra um servidor
+falso, somou 1.000 pontos gravados e imprimiu a janela; o SQL de contagem e
+do `ops_sample` do `positions-abba.sh` rodou num Postgres 16 descartável; e o
+`queue-drop-under-load.mjs`, num banco descartável com as filas
+particionadas, gravou 5 mil eventos e 400 pendentes num dia futuro, viu um
+processo do pipeline drenar o dia em 6 s e derrubou as três partições em
+0,5 s, com os 20 FAILED nos dead letters; sem consumidor, parou no tempo do
+dreno com o motivo.
 
 ## O que foi medido, e o que mudou por causa disso
 
@@ -170,7 +614,8 @@ mentir.
 
 > **Substituído em 07/10/2026.** Com histórico (empresa de 300 mil entregas) e
 > a imagem de produção, o joelho é **~110–120 req/s por réplica**; ver
-> `docs/desempenho/carga-2026-10.md`. A tabela abaixo é a medição de setembro,
+> [`docs/desempenho/README.md`](../../docs/desempenho/README.md). A tabela
+> abaixo é a medição de setembro,
 > sem histórico, mantida pelo registro.
 
 |                                      | antes      | depois          |
@@ -203,7 +648,8 @@ redis-adapter, filas no Postgres com SKIP LOCKED). A régua: **uma réplica por
 1. **A torre lia a última posição com `DISTINCT ON` sobre a trilha.** Com 261
    mil linhas de UM dia: Seq Scan na partição inteira mais sort em disco de
    14 MB, 408 ms no banco, para devolver 40 linhas. O custo crescia com o
-   número de PINGS, e a régua de capacidade põe pings em 670/s. Virou uma
+   número de PINGS, e a régua de capacidade de então punha pings em 670/s
+   (a de hoje: ~333 POST/s com ~1.333 pontos/s no 5M, estimada). Virou uma
    tabela `driver_last_position`, uma linha por motorista. 145× mais rápido.
 
 2. **`dashboard/overview` fazia 89 queries.** Nove entidades × oito meses, uma
@@ -417,6 +863,62 @@ obrigatório), e o passo 0 lia o log vazio como "uma réplica só atendeu".
 `LOAD_STEPS="0 2"` faz só algumas perguntas; o roteiro sai com erro se alguma
 falhar.
 
+Com a frota dividida (o perfil `roles` com `LOAD_API_ROLE=api`, plano de
+escala LOAD-07), o roteiro acrescenta sozinho mais três perguntas quando o
+harness roda o `worker`:
+
+6. **Só o worker reivindica?** No `process_heartbeat`, só o `worker` declara
+   filas, há ao menos um processo em `api` e nenhum laço de fila bate no
+   `worker_heartbeat` fora do worker. Esquecer o `LOAD_API_ROLE=api` deixa as
+   réplicas em `all`, consumindo também, e o passo diz isso.
+7. **A notificação criada na api chega ao worker pela dica?** Três mensagens
+   do chat pela porta de uma réplica da api; cada evento do outbox precisa
+   ser processado pelo worker em menos de 2 s (`processedAt` − `created_at`),
+   e a dica de despertar precisa aparecer no canal `*:wake:outbox` do Redis.
+   Sem a dica, o passo reprova mesmo quando a varredura de 2 s do worker
+   pegou o evento a tempo por sorte.
+8. **Cada cron roda uma vez por minuto agendado?** Em cada um dos últimos
+   três minutos completos desde que o cron subiu, o `ops-heartbeat` tem
+   exatamente uma linha da eleição no `scheduled_job_execution` (nenhum
+   minuto perdido) e exatamente uma linha `cluster` no `ops_sample`, a que
+   cada execução grava com o seu minuto (nenhum minuto rodado duas vezes: a
+   eleição guarda uma linha por minuto por construção, e só o efeito da
+   execução mostra uma segunda); e só o `worker` tem o cron. Logo depois do
+   `up`, espere uns 4 minutos antes deste passo.
+
+```bash
+LOAD_API_ROLE=api docker compose --env-file .env \
+  -f tests/load/compose.load.yaml --profile roles up -d --build
+# (seed, como acima; espere uns 4 minutos)
+bash tests/load/multi-replica.sh            # 0 a 8
+LOAD_STEPS="6 7 8" bash tests/load/multi-replica.sh
+```
+
+### Os papéis por _Path_ (`roles-routing.sh`)
+
+Na staging e na produção, o realtime e o ingest entram no host da API por
+uma _Domain_ com _Path_ (`/socket.io`, `/route/positions`), que o Dokploy
+escreve como roteador de arquivo, sem prioridade (plano de escala F5-26).
+O Traefik do harness carrega as mesmas regras, no formato do Dokploy, de
+`traefik/dokploy-roles.yml`, só para o host `roles.load.localhost` (as
+cenas seguem nos labels de sempre). O `roles-routing.sh` pergunta por esse
+host e confere no access log (`RouterName`) quem atendeu: a API no host
+puro, o realtime em `/socket.io`, o ingest em `/route/positions`,
+`/route/live` na API, e o ingest com 0 réplicas dando 502 e voltando:
+
+```bash
+LOAD_API_ROLE=api LOAD_API_SOCKETS=false docker compose --env-file .env \
+  -f tests/load/compose.load.yaml --profile roles --profile realtime \
+  --profile ingest up -d --build
+bash tests/load/roles-routing.sh
+```
+
+Provado na onda 18 com o Traefik 3.7.13 avulso e servidores de mentira no
+lugar dos papéis (`ROUTING_TRAEFIK_CONTAINER` e
+`ROUTING_INGEST_CONTAINER`): os quatro caminhos nos seus roteadores e o
+502 do ingest parado. O runbook é
+[`docs/runbooks/roteamento-por-path.md`](../../docs/runbooks/roteamento-por-path.md).
+
 ### O que foi verificado
 
 **O tráfego se divide.** O access log do Traefik diz qual réplica atendeu cada
@@ -464,6 +966,373 @@ uma) media a fronteira WSL2/Windows, não a aplicação: k6 (WSL2) → nginx (WS
 rede do Docker, e a comparação 1 × 2 réplicas é o passo 5 do
 `multi-replica.sh`. **Executada em 07/10/2026**: platô de ~140 req/s com 1
 réplica, ~205 com 2 e ~250–285 com 4, quando a CPU da máquina acaba
-(`docs/desempenho/carga-2026-10.md`, seção 7.3). Numa máquina só ela diz se a aplicação escala até a
+([`docs/desempenho/README.md`](../../docs/desempenho/README.md), "Carga de
+07/10/2026"). Numa máquina só ela diz se a aplicação escala até a
 CPU da máquina, não quantos hosts a produção precisa — isso continua em
 `docs/PENDENCIAS-DO-USUARIO.md`.
+
+## Rolling num Swarm descartável (`swarm-rolling.sh`, LOAD-06)
+
+O deploy da API é um rolling do Swarm: sobe a réplica nova, espera o
+healthcheck, tira a velha do endereço virtual e só então manda o SIGTERM
+(_start-first_). O risco é a velha fechar uma conexão keep-alive enquanto o
+Traefik escreve um POST nela: 502, que o Go não repete. O roteiro ensaia isso
+num Swarm de um nó, com as flags que o Dokploy dá à API
+([`docs/deploy.md`](../../docs/deploy.md) §7.7):
+
+```bash
+docker build --target migrate -t trajetto-api-migrate:rolling .
+docker build -t trajetto-api:rolling .
+ROLLING_IMAGE=trajetto-api:rolling ROLLING_MIGRATE_IMAGE=trajetto-api-migrate:rolling \
+  bash tests/load/swarm-rolling.sh
+```
+
+- **O que ele cria** (tudo com o prefixo `ROLLING_PREFIX`, removido no fim):
+  rede overlay _attachable_ (como a `dokploy-network`), Postgres 16 e Redis 7
+  como serviços em tmpfs, a etapa de release uma vez, o `seed.ts` pequeno
+  (porta `ROLLING_PG_PORT`, 54391), a API com 3 réplicas e o Traefik
+  apontando para `http://<prefixo>-api:3333`, o endereço virtual do serviço,
+  que é o que o Dokploy escreve para o domínio de uma Application. As flags da
+  API são as do guia: _Stop Grace Period_ 40 s, _Update_ e _Rollback Config_
+  `start-first`, uma por vez, 5 s entre elas, 30 s de monitor, rollback na
+  falha, reinício em qualquer saída; o healthcheck é o da imagem (o mesmo teste
+  que o guia cola). `swarm-rolling-script.test.ts` compara as flags com o JSON
+  do guia e com o `HEALTHCHECK` do `Dockerfile`.
+- **Onde ele recusa rodar**: num nó que já está num Swarm com serviços (é o
+  formato de um servidor do Dokploy, a produção inclusive) e num worker. Fora de
+  qualquer Swarm, faz `docker swarm init` só no loopback e sai do Swarm no fim
+  (removendo a `docker_gwbridge` que o init criou); num Swarm vazio, usa e
+  deixa como estava. Nunca puxa a imagem do GHCR: as imagens são locais
+  (`--no-resolve-image`).
+- **Pergunta 1, rolling**: `service update --force` (o _Redeploy_) sob
+  `ROLLING_RATE` (50 req/s) do `rolling.js`. Aprova com **zero** 5xx, zero
+  pedidos sem resposta e cada réplica substituída com saída 0 e a linha
+  `shutdown complete` no log (o desligamento coube no grace).
+- **Pergunta 2, escala**: de 3 para 6 réplicas sob a mesma carga; na janela
+  depois de as novas ficarem saudáveis, a mais ocupada atende no máximo 1,3
+  vez a média (contagem das linhas `request completed` de cada réplica). As
+  réplicas rodam com o teto da produção: `HTTP_MAX_REQUESTS_PER_SOCKET` fica
+  sem valor, como na Application, e vale o padrão da imagem (1.000 pedidos
+  por conexão). O que a razão mede depende de quantas conexões se renovam na
+  janela (ritmo × janela ÷ teto): com 15 (300 s a 50 req/s com 1.000) ela
+  mediu como elas caíram (1,48 em 15/11/2026, com o teto funcionando); com
+  150 (teto de 100) mediu 1,00, porque o Swarm entrega as conexões novas em
+  rodízio e a réplica mais ocupada fica uma conexão acima da média. Por isso
+  a janela é a maior entre 300 s e 60 renovações: 1.200 s a 50 req/s, e o
+  passo de escala leva uns 24 min. `ROLLING_MAX_REQUESTS_PER_SOCKET=100` é a
+  conferência rápida só do mecanismo (janela de 300 s), e o veredito diz que
+  não é o valor da produção.
+- `ROLLING_STOP_GRACE=10s` ensaia o Dokploy sem o campo _Stop Grace Period_
+  (o padrão de 10 s do Docker); `ROLLING_STEPS=rolling` faz só a primeira
+  pergunta; `ROLLING_KEEP=1` deixa tudo de pé para olhar.
+
+`rolling.js` é autocontido (roda por stdin, `k6 run -`, num host sem o
+repositório) e lê os tokens de `ROLLING_CONTEXT_JSON`: o `seed.ts` aqui, a
+`staging-fixture.mjs` na staging. A mistura é a do motorista (posições,
+lista do dia) com 15% de leituras de gestor; o veredito é `rolling_5xx`
+`count==0`, nunca uma taxa.
+
+## Burn-in na staging (`staging-burn-in.sh`, LOAD-09)
+
+Curto, limitado e só de madrugada: a staging divide a VPS com a produção, e
+o que ele prova é a fiação e o rolling sem 5xx, nunca capacidade. Roda **no
+host da VPS**, com o passo a passo em
+[`docs/deploy.md`](../../docs/deploy.md#ensaio-de-carga-na-staging-burn-in) (a
+empresa 'Carga (staging)' e o administrador dela são do dono).
+
+- **Recusa antes de tudo**: o host da produção (`api.intrajetto.com`,
+  `www`) e qualquer host sem o rótulo `staging`; mais de 30 req/s, 10 minutos
+  ou 200 sockets; fora das 06:00–08:00 UTC (03:00–05:00 BRT, a `load-window`
+  de [`docs/operacao/jobs.md`](../../docs/operacao/jobs.md)), no dia 1 (o
+  ensaio de restauração) e no domingo (a janela do histórico).
+- **A fixture** (`staging-fixture.mjs`) roda num contêiner Node na
+  `dokploy-network`, contra o Traefik com o Host da staging: entra com o
+  administrador de 'Carga (staging)' e prepara pela API, de forma idempotente,
+  os motoristas e os logins deles, um veículo cada, a rota do dia com as
+  entregas, liberada e iniciada pela sessão do motorista (o QR Code, como no
+  app). Recusa a produção e qualquer empresa com outro nome **antes de
+  escrever**. Os tokens ficam na memória do script, nunca em disco.
+- **As sondas abortam tudo**: a `/health/readiness` da produção (uma ida ao
+  banco, pelo Traefik do próprio host) com p95 acima de 2× a base medida antes
+  da carga, ou 3 falhas; a base e a sonda são o p95 de 12 amostras, e o
+  limite nunca fica abaixo do piso de 20 ms (o dobro de uma base de poucos
+  ms é ruído), que vai no máximo a 50 ms
+  (`BURN_IN_PROBE_FLOOR_MS`; acima disso o roteiro recusa, para a sonda não
+  ficar desligada); o `vmstat` do host com iowait acima de 20% ou steal
+  acima de 10%. O k6 roda limitado
+  (`--cpus 0.5 --memory 256m`).
+- Saída: 0 aprovado (zero 5xx), 1 reprovado, 2 recusou começar, 3 abortado
+  por uma sonda.
+
+`staging-burn-in.test.ts` e `staging-fixture.test.ts` executam os dois com
+stubs (docker, curl, vmstat, date e um falso da API).
+
+## Frota de sockets (`socket-fleet.mjs`, LOAD-05)
+
+Quantos sockets conectam, quantos caem e em quanto tempo os que caíram
+voltam depois de um restart. Um processo Node segura a frota: cada socket
+é uma conexão própria (`forceNew`), com o próprio token e uma origem, o
+endereço local a que ele se liga (`FLEET_SOURCE_ADDRESSES`). O cliente é o
+`lib/socket-client.mjs`.
+
+**Por que as origens.** A API tem orçamentos de handshake
+(`src/shared/socket/handshake-rate-limit.ts`): 300 por endereço e 30 por
+usuário a cada minuto, e 20 sockets por usuário numa réplica. Uma frota de
+um endereço só mede o limitador, não a frota. Por isso todo handshake, os
+da rampa e cada reconexão depois dela, passa por um compassador que deixa
+cada origem abaixo de `FLEET_ORIGIN_PER_MINUTE` (240; o roteiro recusa 300)
+e cada token abaixo de `FLEET_TOKEN_PER_MINUTE` (20; recusa 30) em
+qualquer janela de 60 s. Endereços IPv6 do mesmo /64 são uma origem só,
+como a API os conta. O plano recusa o que não cabe e diz o que falta:
+
+- sockets por token acima de `FLEET_SOCKETS_PER_TOKEN` (10; no máximo 20,
+  o teto da API por réplica): mais motoristas no seed
+  (`LOAD_PRIMARY_DRIVERS`) ou na fixture;
+- uma rampa (`FLEET_RATE`) acima do que as origens e os tokens deixam;
+- com restart (`FLEET_RESTART_AFTER_S`), mais sockets por origem do que
+  cabem num minuto do orçamento: a volta em até 60 s precisaria passar
+  dele. 1.000 sockets com restart pedem pelo menos 5 origens; as 8 do
+  padrão deixam 125 em cada uma;
+- uma espera depois da rampa que não deixe o restart, a janela dele
+  (`FLEET_RESTART_WINDOW_S`, 120 s) e o minuto da volta.
+
+**Como ele reconecta**, como a web e o app: a recusa com `retryAfterMs`
+(`SOCKET_UNAVAILABLE`, a admissão do U-01) espera o que ela pede; um
+transporte que caiu ou outra recusa que se repete espera 1 s, dobrando até
+30 s, com ±50%; uma recusa da credencial nunca se repete e reprova a
+corrida (os tokens venceram).
+
+**O resumo** sai em JSON no stdout (e em `FLEET_SUMMARY`): o p50, o p95 e o
+p99 do handshake, as recusas por motivo, as quedas (dentro e fora da
+janela do restart, por motivo) e a volta (quantas em até 60 s, p95 e
+máximo), com um critério por linha. Aprova com todos os sockets
+conectados, nenhuma recusa de credencial nem dos limites de handshake,
+cada origem abaixo de 300 por minuto, as origens mínimas
+(`FLEET_MIN_ORIGINS`: 8 direto, 1 pela borda), nenhuma queda fora do
+restart, o restart derrubando sockets (quando ele está no plano) e 99%
+dos derrubados de volta em até 60 s ([SLO](../../docs/slo.md)). Saída: 0
+aprovado, 1 reprovado, 2 recusou começar, 3 abortado por uma sonda.
+`node tests/load/socket-fleet.mjs plan` mostra o plano sem conectar nada.
+
+### No harness: 1.000 sockets de 8 contêineres, com restart
+
+Com o harness de pé e o seed com motoristas para todos os tokens
+(`LOAD_PRIMARY_DRIVERS=200`: 25 tokens por contêiner, 5 sockets cada).
+Cada contêiner é uma origem (um IP na rede do harness) e um pedaço da
+frota (`FLEET_SHARD`); todos começam no mesmo instante (`FLEET_START_AT`):
+
+```bash
+NODE_IMAGE=node:22.21.1-alpine3.23@sha256:0340fa682d72068edf603c305bfbc10e23219fb0e40df58d9ea4d6f33a9798bf
+START=$(( ($(date +%s) + 20) * 1000 ))
+mkdir -p tests/load/results
+
+for i in 1 2 3 4 5 6 7 8; do
+  docker run -d --name trajetto-load-fleet-$i --network trajetto-load-edge \
+    -v "$PWD/tests/load:/load:ro" -v "$PWD/node_modules:/deps/node_modules:ro" \
+    -v "$PWD/tests/load/results:/results" \
+    -e SOCKET_IO_CLIENT_ENTRY=/deps/node_modules/socket.io-client/build/esm/index.js \
+    -e FLEET_URL=http://traefik -e FLEET_SOCKETS=1000 -e FLEET_SHARD=$i/8 \
+    -e FLEET_START_AT=$START -e FLEET_DURATION=6m -e FLEET_RESTART_AFTER_S=60 \
+    -e FLEET_SUMMARY=/results/fleet-$i.json \
+    "$NODE_IMAGE" node /load/socket-fleet.mjs
+done
+
+# Na hora que os contêineres imprimem ("restart às ..."), as réplicas:
+docker logs trajetto-load-fleet-1 2>&1 | grep restart
+docker compose --env-file .env -f tests/load/compose.load.yaml restart api
+
+docker wait trajetto-load-fleet-{1..8}
+node tests/load/socket-fleet.mjs merge tests/load/results/fleet.json \
+  tests/load/results/fleet-{1..8}.json
+docker rm trajetto-load-fleet-{1..8}
+```
+
+O `merge` junta os resumos e julga a frota inteira: as origens somadas, o
+p95 de todos os handshakes e cada queda. Ele recusa um conjunto que não é
+uma frota (alvos diferentes, um shard faltando ou repetido, dois shards no
+mesmo host com o endereço padrão, que seriam uma origem só). Numa máquina
+com vários endereços, um processo só faz o mesmo com
+`FLEET_SOURCE_ADDRESSES`; noutras máquinas (os geradores dos portões),
+`FLEET_SHARD` em cada uma.
+
+### Pela borda, na staging (`--via-edge`)
+
+Pela Cloudflare e pelo Traefik da VPS, à mão, com o passo a passo em
+[`docs/deploy.md`](../../docs/deploy.md#frota-de-sockets-pela-borda-load-05).
+Os sockets passam pelo Traefik e pelo conntrack que a produção usa, por
+isso os tetos próprios, que o roteiro recusa antes de conectar:
+
+- rampa de no máximo 20 handshakes/s e no máximo 10 minutos;
+- só das 06:00 às 08:00 UTC (03:00–05:00 BRT, a `load-window`), nunca no
+  dia 1 nem no domingo;
+- na VPS única, no máximo **1.000 sockets**; 5.000 só depois do G-03 (a
+  staging no 2º VPS), com `FLEET_EDGE_TOPOLOGY=second-vps`;
+- só um host de staging, por nome e em https; a produção nunca, em modo
+  nenhum, e a staging nunca no modo direto.
+
+As sondas são as do burn-in e abortam tudo: a readiness da produção com
+p95 acima de 2× a base (12 amostras antes, piso de 20 ms, até 50 com
+`FLEET_PROBE_FLOOR_MS`) ou 3 falhas, e o iowait do host acima de 20% ou o
+steal acima de 10%, lidos do `/proc/stat` entre duas sondas (os números
+do `vmstat`, sem depender do procps no contêiner).
+
+De um host só (uma origem), o compassador deixa 4 handshakes/s: 1.000
+sockets sobem em ~250 s e cabem nos 10 minutos, mas com restart só cabem
+240 (o minuto da volta). A fixture tem no máximo 50 motoristas: com o
+administrador, 51 tokens, e 1.000 sockets pedem
+`FLEET_SOCKETS_PER_TOKEN=20`. Os 5.000 do 2º VPS pedem mais origens
+(`FLEET_SOURCE_ADDRESSES` ou `FLEET_SHARD` em várias máquinas) e mais
+motoristas que a fixture cria hoje.
+
+`socket-fleet.test.ts` roda a frota de verdade contra um Socket.IO no
+loopback (8 origens em 127.0.0.2–9, uma recusa com `retryAfterMs`, um
+restart que derruba todos) e confere o plano, os tetos da borda, o
+compassador, as sondas e o `merge`.
+
+## Portão (`gate.sh`, LOAD-08)
+
+Os portões de capacidade da seção 6 do plano de escala (B, 100k, 1M e 5M)
+rodam num servidor novo e vazio, com o gerador de carga **noutra máquina**
+(D71: um k6 no próprio alvo prova só a contenção). O `gate.sh` roda no
+gerador, com este repositório clonado e o `yarn install` feito (a cena de
+sockets usa o `socket.io-client` dele), e escreve o relatório em
+[`docs/desempenho`](../../docs/desempenho/README.md):
+
+```bash
+export TARGET_HOST_IP='<ip do alvo>'
+export GATE_TARGET_URL="http://$TARGET_HOST_IP"   # a origem, pela rede privada
+export GATE_TARGET_SSH="root@$TARGET_HOST_IP"     # os fatos do alvo
+GATE_SEED_TIER=100k GATE_TARGET_MACHINE='<provedor, plano, região>' \
+  bash tests/load/gate.sh 100k
+```
+
+- **Recusa antes de tudo**, sem tocar no docker nem no SSH: os hosts da
+  produção (`api.intrajetto.com`, `www`, o domínio) e os da staging; um
+  `TARGET_HOST_IP` que seja desta máquina (loopback, um IP das interfaces,
+  ou um nome do alvo que resolva para um deles); e uma URL que aponte para
+  outro IP que não o `TARGET_HOST_IP`.
+- **As cenas** de cada portão estão em `lib/gate-report.mjs`, com o critério
+  de cada uma: o B roda o `load.js` (30 min, vazão por réplica ≥ 80 req/s,
+  com `GATE_REPLICAS`) e o `rolling.js` (0 respostas 5xx, com o _Redeploy_
+  da api feito à mão quando o roteiro avisa); o 100k roda o load a 200
+  req/s, o soak de 2 h, o pico com o aceite do descarte, 1.000 sockets por
+  60 min (`socket-fleet.mjs`), o rolling a 100 req/s, o vizinho ruidoso e
+  a queda; o 1M e o 5M, o load do degrau e os sockets que um gerador
+  segura. `GATE_SCENES=load` roda só uma cena.
+- **Os fatos**: do alvo, pelo SSH, o hostname, o `nproc`, a memória, o
+  `vmstat 5` da corrida inteira (o steal), o `docker stats` no meio de
+  cada cena, as imagens por digest e o top 20 do `pg_stat_statements`
+  (zerado no começo; só estatística); do `/health/liveness`, o commit
+  servido; do gerador, o hostname, o IP de onde ele chega ao alvo e o
+  `nproc`. Os tokens do seed (`fixtures/load-context.json`, ou
+  `GATE_CONTEXT_FILE`) vão aos contêineres pelo nome da variável, nunca na
+  linha de comando.
+- **O relatório** é `docs/desempenho/<data>-<degrau>.md` (um portão refeito
+  no mesmo dia vira `-2`, `-3`…): uma linha por critério, com o limite, o
+  medido e sim ou não. O que nenhuma cena mede ainda (as filas do LOAD-04,
+  a escala de 3 para 6, o PITR…) sai "pendente", com o jeito de medir, e o
+  resultado sai "incompleto" até o dono preencher. Os resumos brutos ficam
+  em `tests/load/results/gate-<…>`, fora do Git.
+- Saída: 0 aprovado, 1 reprovado, 2 recusou começar, 3 o que ele mede
+  passou e há linhas pendentes.
+
+`gate-script.test.ts` executa o roteiro com stubs (docker, ssh, curl, ip,
+hostname, nproc e sleep): as recusas sem tocar em nada, o relatório com o
+commit, o digest e o gerador, e o reprovado com um 5xx.
+`performance-reports.test.ts` confere todo relatório da pasta e o
+verificador que recusa um sem o commit, sem o digest ou sem o gerador.
+
+## Bancada de CPU (`cpu-abba.sh` e `cpu-profile.sh`, LOAD-10)
+
+A CPU e os statements por requisição, medidos como o
+[ADR 0011](../../docs/adr/0011-orm-prisma-6-7-8.md#medições) mediu os 8,14
+ms e os 10,68 statements: duas imagens da API se alternam no mesmo harness,
+em ABBAAB, cada corrida numa cópia nova do mesmo banco. É a régua da meta
+da onda 15 (≤ 6 ms e ≤ 7 statements por requisição) e de cada corte da
+F4-07. Roda só nesta máquina de bancada: recusa um docker que aponte para
+outra máquina (`DOCKER_HOST` ou o contexto por `ssh://` ou `tcp://`), um nó
+com a pasta do Dokploy e um nó num Swarm com serviços, que é como um
+servidor do Dokploy se parece.
+
+```bash
+# O harness de pé e com o seed (passos 1 e 2 acima), de preferência com a
+# CPU da VPS. Rode a bancada com as MESMAS variáveis do `up`: a api é
+# recriada com elas a cada corrida.
+docker compose --env-file .env --env-file tests/load/vps-6vcpu.env \
+  -f tests/load/compose.load.yaml up -d --build
+
+# O controle, A=B: a mesma imagem duas vezes. |Δ| < 5% na CPU e nos
+# statements, ou a bancada está ruidosa demais para julgar um corte.
+docker tag trajetto-api:load trajetto-api:controle
+LOAD_EXTRA_ENV_FILES=tests/load/vps-6vcpu.env ABBA_LABEL=controle \
+  ABBA_A_IMAGE=trajetto-api:load ABBA_B_IMAGE=trajetto-api:controle \
+  bash tests/load/cpu-abba.sh
+
+# Um corte: a imagem de antes e a de depois.
+LOAD_EXTRA_ENV_FILES=tests/load/vps-6vcpu.env ABBA_LABEL=sessao-num-statement \
+  ABBA_A_IMAGE=trajetto-api:antes ABBA_B_IMAGE=trajetto-api:depois \
+  bash tests/load/cpu-abba.sh
+
+# Onde a CPU vai: o perfil de cada réplica sob carga, e a parte da sessão.
+LOAD_EXTRA_ENV_FILES=tests/load/vps-6vcpu.env \
+  PROFILE_MATCH='ensureAuthenticated|loadSession' bash tests/load/cpu-profile.sh
+```
+
+Cada corrida do `cpu-abba.sh`:
+
+1. para as réplicas (e o worker e o realtime, quando rodam), devolve o
+   `load_test` a partir do modelo `load_abba_template` (feito do `load_test`
+   na primeira sessão; `ABBA_FRESH_TEMPLATE=1` depois de um seed novo) e
+   esvazia o Redis do harness, para nenhuma corrida herdar as escritas, os
+   caches ou os limites da anterior;
+2. recria as réplicas com a imagem da vez e espera a readiness de cada uma;
+3. aquece com o `load.js` (`ABBA_WARMUP_SECONDS`, 20) e mede o repouso sem
+   carga (`ABBA_IDLE_SECONDS`, 15: as filas, o cron, os amostradores);
+4. zera o `pg_stat_statements`, lê a CPU de cada contêiner no cgroup
+   (`cpu.stat`), roda o `load.js` a `ABBA_RATE` operações/s (60, a do ADR)
+   por `ABBA_DURATION_SECONDS` (120) e lê tudo de novo.
+
+A CPU por requisição é a das réplicas da api na janela sobre as requisições
+do k6; com `PROCESS_ROLE=all` o trabalho das filas está nela, como no ADR.
+Os statements são as chamadas do `pg_stat_statements` no `load_test` sobre
+as mesmas requisições (com BEGIN e COMMIT). O relatório traz também os dois
+números sem o repouso, a CPU do Postgres, a execução no Postgres e o
+p50/p95/p99, e o veredito (`lib/abba-report.mjs`):
+
+- **controle** (A e B a mesma imagem): |Δ| < 5% na CPU e nos statements;
+- **corte** (duas imagens): fica só com a CPU 2% menor ou mais e o p95 no
+  máximo 5% pior;
+- **inválido**: uma corrida sem requisição, com 1% ou mais de falhas, ou
+  fora da ordem;
+- a meta da onda 15 para B, indicativa: o número que vale é o do portão do
+  1M no hardware-alvo.
+
+O relatório vai para `docs/desempenho/bancada/<data>-<rótulo>.md` (uma
+segunda sessão no mesmo dia vira `-2`); os arquivos brutos ficam em
+`tests/load/results/abba-<…>`, fora do Git. A api fica com a imagem da
+última corrida e o `load_test` como ela o deixou. Saída: 0 o veredito
+passou, 1 não passou, 2 recusou começar ou uma corrida falhou. As tabelas
+do relatório saem sem o alinhamento do Prettier, e o `lint:check` do CI
+confere a pasta `docs/`: antes do commit, rode
+`./node_modules/.bin/prettier --write` no arquivo.
+
+O `cpu-profile.sh` recria as réplicas com a flag `--cpu-prof` em
+`LOAD_API_NODE_FLAGS`, que só o `NODE_OPTIONS` da api lê no
+`compose.load.yaml` (o migrate,
+o worker e o realtime não), roda o `load.js` (`PROFILE_RATE`, 60, por
+`PROFILE_DURATION_SECONDS`, 120), para as réplicas com `docker stop -t 40`
+(o desligamento da API termina em `process.exit`, e o Node grava o perfil
+na saída), copia o perfil de cada uma e imprime o topo da janela medida,
+sem o boot nem o desligamento: por pacote, por função (tempo próprio e
+total) e, com `PROFILE_MATCH`, a parte da CPU sob um padrão (o gatilho do
+cache de sessão é a sessão acima de 25%). No fim, sempre, recria as
+réplicas sem a flag. O perfil é o da thread principal: a CPU por
+requisição dele é conferência, o número da bancada é o do cgroup.
+`lib/cpuprofile-top.mjs` também lê perfis avulsos:
+`node tests/load/lib/cpuprofile-top.mjs --top 30 CPU.*.cpuprofile`.
+
+`cpu-bench.test.ts` executa os dois roteiros com um docker de mentira que
+guarda o estado do harness (a ordem ABBAAB, a cópia do banco e o Redis
+vazio antes de cada corrida, o perfil desligado no fim mesmo com falha) e
+alimenta as duas bibliotecas com números e com um perfil real do
+`node --cpu-prof`.

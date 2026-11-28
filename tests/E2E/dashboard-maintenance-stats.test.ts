@@ -198,12 +198,15 @@ async function seedVehicles(
     data: { description: "Diesel", businessId },
   });
 
-  for (const { label, ...vehicle } of vehicles) {
+  for (const [index, { label, ...vehicle }] of vehicles.entries()) {
     await prisma.vehicle.create({
       data: {
         ...vehicle,
         description: label,
-        license_plate: `MNT${Math.floor(Math.random() * 9000) + 1000}`,
+        // By the row: the plate is unique per company
+        // (vehicle_businessId_license_plate_key), and ten plates drawn from
+        // 9.000 numbers collided about once in 200 runs.
+        license_plate: `MNT${String(index + 1000)}`,
         brand: "Volvo",
         model: "FH",
         acquisition_date: new Date("2024-01-10T12:00:00.000Z"),

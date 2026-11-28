@@ -1,0 +1,224 @@
+#!/usr/bin/env bash
+#
+# trajetto-backup full|diff [--repo=N]: one backup of the PITR, run by the
+# Dokploy Schedule Job of the server inside the Database's own container
+# (plano-escala F1-02; docs/runbooks/restore-drill.md):
+#
+#   docker exec -u postgres $(docker ps -q -f label=com.docker.swarm.service.name=<Database App Name>) trajetto-backup diff
+#
+# 1. pgbackrest backup --type=full|diff;
+# 2. pgbackrest check (the archive still takes a segment, right now);
+# 3. pgbackrest info, and the archive's own listing: every WAL segment from
+#    the start of the previous backup to the end of this one must be in the
+#    repository. A hole means a stretch of time the PITR cannot reach: the
+#    archive queue dropped segments while the repository was down
+#    (archive-push-queue-max, trajetto-entrypoint.sh) or someone deleted
+#    them. The backup itself is still good (pgBackRest checks its own WAL);
+#    the window between the two backups is not. After a diff the ping is
+#    /fail 'archive-gap', asking for a full, which starts a clean window.
+#    A full IS that remedy: it reports the same hole in its summary and on
+#    stderr, and pings success (its check would otherwise stay red for the
+#    week until the next full, hiding a real failure).
+#
+# The result goes to healthchecks.io (PITR_BACKUP_FULL_PING_URL or
+# PITR_BACKUP_DIFF_PING_URL, from the Database's Environment): the plain URL
+# on success, /fail with a JSON reason otherwise, /start before. No secret
+# ever reaches the output or a ping: the repository's keys and passphrase
+# are blanked out of whatever pgBackRest prints.
+#
+# Exit status: 0 ok; 1 usage; 2 archive-gap; 3 backup failed; 4 check
+# failed; 5 info or listing failed.
+set -Eeuo pipefail
+
+STANZA=trajetto
+
+usage() {
+  echo "uso: trajetto-backup full|diff [--repo=N]" >&2
+  exit 1
+}
+
+TYPE=${1:-}
+case "$TYPE" in
+  full | diff) shift ;;
+  *) usage ;;
+esac
+REPO=1
+for arg in "$@"; do
+  case "$arg" in
+    --repo=[12]) REPO=${arg#--repo=} ;;
+    *) usage ;;
+  esac
+done
+
+# pgBackRest runs as the cluster's owner; `docker exec` without -u is root.
+if [ "$(id -u)" = 0 ] && [ -z "${TRAJETTO_BACKUP_AS_POSTGRES:-}" ] \
+  && command -v gosu > /dev/null 2>&1; then
+  export TRAJETTO_BACKUP_AS_POSTGRES=1
+  exec gosu postgres "$0" "$TYPE" "$@"
+fi
+
+case "$TYPE" in
+  full) PING_URL=${PITR_BACKUP_FULL_PING_URL:-} ;;
+  diff) PING_URL=${PITR_BACKUP_DIFF_PING_URL:-} ;;
+esac
+
+# --- output without secrets -----------------------------------------------------
+
+# Every value that must never be printed or sent: the repositories' keys
+# and passphrases (pgBackRest redacts its own options, not an error text
+# that might quote one) and the ping URLs themselves.
+SECRETS=()
+for name in "${!PGBACKREST_REPO@}" "${!PITR_@}"; do
+  case "$name" in
+    *_S3_KEY | *_S3_KEY_SECRET | *_CIPHER_PASS | *_PING_URL)
+      if [ -n "${!name:-}" ]; then SECRETS+=("${!name}"); fi
+      ;;
+  esac
+done
+
+redact() {
+  local text=$1 secret
+  for secret in "${SECRETS[@]+"${SECRETS[@]}"}"; do
+    text=${text//"$secret"/<redacted>}
+  done
+  printf '%s' "$text"
+}
+
+# A JSON string, from text that may hold quotes, backslashes and newlines.
+json_string() {
+  local text
+  text=$(redact "$1")
+  text=${text//\\/\\\\}
+  text=${text//\"/\\\"}
+  text=${text//$'\t'/ }
+  text=${text//$'\r'/}
+  text=${text//$'\n'/\\n}
+  printf '"%s"' "$text"
+}
+
+# ping [start|fail] [body]: never fails the run, never prints the URL.
+ping() {
+  local suffix=${1:-} body=${2:-} url attempt
+  [ -n "$PING_URL" ] || return 0
+  url=${PING_URL%/}${suffix:+/$suffix}
+  for attempt in 1 2 3; do
+    if wget -q -T 10 -O /dev/null --header 'Content-Type: application/json' \
+      --post-data "$body" "$url" > /dev/null 2>&1; then
+      return 0
+    fi
+    [ "$attempt" -eq 3 ] || sleep $((attempt * 2))
+  done
+  echo "trajetto-backup: AVISO: o healthchecks não respondeu (3 tentativas)." >&2
+}
+
+started=$(date +%s)
+LOG=$(mktemp)
+trap 'rm -f "$LOG"' EXIT
+
+fail() {
+  local code=$1 reason=$2 detail=$3 tail_text=""
+  [ -s "$LOG" ] && tail_text=$(tail -n 20 "$LOG")
+  echo "trajetto-backup: FALHOU (${reason}): ${detail}" >&2
+  [ -z "$tail_text" ] || redact "$tail_text" >&2
+  [ -z "$tail_text" ] || echo >&2
+  ping fail "{\"result\":\"fail\",\"reason\":\"${reason}\",\"type\":\"${TYPE}\",\"repo\":${REPO},\"detail\":$(json_string "$detail"),\"log\":$(json_string "$tail_text")}"
+  exit "$code"
+}
+
+pgbr() { pgbackrest --stanza="$STANZA" "$@"; }
+# repo-ls takes no --stanza: pgBackRest refuses an option a command lacks.
+repo_ls() { pgbackrest --repo="$REPO" repo-ls "$@"; }
+
+ping start ""
+
+# --- 1 and 2: the backup, then the archive right now --------------------------------
+
+if ! pgbr --repo="$REPO" --type="$TYPE" backup > "$LOG" 2>&1; then
+  fail 3 backup-failed "pgbackrest backup --type=${TYPE} falhou"
+fi
+if ! pgbr check > "$LOG" 2>&1; then
+  fail 4 check-failed "pgbackrest check falhou depois do backup: o arquivamento não está chegando ao repositório"
+fi
+
+# --- 3: no hole in the archive since the previous backup ----------------------------
+
+if ! pgbr --repo="$REPO" info > "$LOG" 2>&1; then
+  fail 5 info-failed "pgbackrest info falhou"
+fi
+info=$(cat "$LOG")
+
+# The backups of the current database, oldest first: label and WAL range.
+backups=$(printf '%s\n' "$info" | awk '
+  /^ *db \(current\)/ { current = 1; next }
+  /^ *db \(/ { current = 0 }
+  current && /^ *(full|diff|incr) backup: / { label = $3 }
+  current && /^ *wal start\/stop: / { print label, $3, $5 }
+')
+count=$(printf '%s\n' "$backups" | grep -c . || true)
+if [ "$count" -eq 0 ]; then
+  fail 5 info-failed "pgbackrest info não lista backup nenhum depois do backup"
+fi
+read -r label latest_start latest_stop <<< "$(printf '%s\n' "$backups" | tail -n 1)"
+if [ "$count" -ge 2 ]; then
+  read -r previous previous_start _ <<< "$(printf '%s\n' "$backups" | tail -n 2 | head -n 1)"
+else
+  previous="(nenhum)"
+  previous_start=$latest_start
+fi
+
+segment_ok() { [[ "$1" =~ ^[0-9A-F]{24}$ ]]; }
+segment_ok "$latest_start" && segment_ok "$latest_stop" && segment_ok "$previous_start" \
+  || fail 5 info-failed "pgbackrest info com um intervalo de WAL que não entendo: ${previous_start} a ${latest_stop}"
+
+note=""
+# A restore or promote starts a new timeline: the previous backup's WAL is
+# on another one, and only this backup's own range is checked.
+if [ "${previous_start:0:8}" != "${latest_stop:0:8}" ]; then
+  note="timeline mudou desde o backup anterior: conferido só o intervalo deste backup"
+  previous_start=$latest_start
+fi
+
+if ! repo_ls "archive/${STANZA}" > "$LOG" 2>&1; then
+  fail 5 info-failed "pgbackrest repo-ls archive/${STANZA} falhou"
+fi
+# The current database's archive: <major>-<id>, the highest id.
+archive_id=$(grep -E '^[0-9]+-[0-9]+$' "$LOG" | sort -t- -k2,2n | tail -n 1 || true)
+[ -n "$archive_id" ] || fail 5 info-failed "nenhum arquivo em archive/${STANZA}"
+
+timeline=${latest_stop:0:8}
+first=$((16#${previous_start:8:8} * 256 + 16#${previous_start:16:8}))
+last=$((16#${latest_stop:8:8} * 256 + 16#${latest_stop:16:8}))
+
+declare -A present=()
+for ((log_id = first / 256; log_id <= last / 256; log_id++)); do
+  dir=$(printf '%s%08X' "$timeline" "$log_id")
+  if ! repo_ls "archive/${STANZA}/${archive_id}/${dir}" > "$LOG" 2>&1; then
+    fail 5 info-failed "pgbackrest repo-ls de archive/${STANZA}/${archive_id}/${dir} falhou"
+  fi
+  while IFS= read -r name; do
+    name=${name##*/}
+    if [[ "$name" =~ ^([0-9A-F]{24})-[0-9a-f]{40} ]]; then
+      present[${BASH_REMATCH[1]}]=1
+    fi
+  done < "$LOG"
+done
+
+missing=()
+for ((index = first; index <= last; index++)); do
+  segment=$(printf '%s%08X%08X' "$timeline" $((index / 256)) $((index % 256)))
+  [ -n "${present[$segment]:-}" ] || missing+=("$segment")
+done
+
+gap=""
+if [ "${#missing[@]}" -gt 0 ]; then
+  gap="faltam ${#missing[@]} segmento(s) de WAL entre ${previous_start} e ${latest_stop} (${missing[*]:0:5}): o PITR não alcança esse trecho"
+  if [ "$TYPE" != full ]; then
+    fail 2 archive-gap "${gap}. Rode trajetto-backup full para abrir uma janela limpa e veja docs/runbooks/wal-archive-stalled.md"
+  fi
+  echo "trajetto-backup: AVISO: archive-gap: ${gap}. Este full abre uma janela limpa daqui em diante." >&2
+fi
+
+seconds=$(($(date +%s) - started))
+summary="{\"result\":\"ok\",\"type\":\"${TYPE}\",\"repo\":${REPO},\"label\":\"${label}\",\"previous\":\"${previous}\",\"wal_from\":\"${previous_start}\",\"wal_to\":\"${latest_stop}\",\"wal_segments\":$((last - first + 1)),\"seconds\":${seconds}${note:+,\"note\":$(json_string "$note")}${gap:+,\"archive_gap\":$(json_string "$gap")}}"
+printf '%s\n' "$summary"
+ping "" "$summary"

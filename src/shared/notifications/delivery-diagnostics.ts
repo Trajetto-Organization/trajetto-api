@@ -35,6 +35,14 @@ interface ProviderErrorDetail {
 
   /** The SMTP server's numeric reply (535, 550, 451...). */
   smtpReply?: number;
+
+  /**
+   * The e-mail provider refused for rate (plano-escala F3-15c): SMTP has no
+   * 429, so the transport reads it from the reply's words
+   * (mail-delivery-error.ts). Never printed in the bracket: the alerting
+   * reads the bracket's `key=value` fields only.
+   */
+  throttled?: boolean;
 }
 
 /**
@@ -160,6 +168,38 @@ function isCredentialFailure(lastError: string | null | undefined): boolean {
   }
 }
 
+/** Meta's "message throughput rate limit hit" (Cloud API). */
+const META_THROUGHPUT_LIMIT_CODE = 130429;
+
+/**
+ * The provider whose answer was a refusal for RATE (plano-escala F3-15c),
+ * or null: Meta's 130429 or an HTTP 429 from the Graph API, the e-mail
+ * transport's rate refusal, Expo's 429. What the provider-throttled alert
+ * counts and, with the provider's rate on, what holds the provider for
+ * everybody and waits without spending an attempt. Meta's pair limit
+ * (131056: one recipient, too often) is about the recipient, not the
+ * platform's rate, and is not one.
+ */
+function throttledProviderOf(
+  detail: ProviderErrorDetail | undefined,
+): DeliveryProvider | null {
+  if (!detail) return null;
+
+  switch (detail.provider) {
+    case "whatsapp":
+      return detail.httpStatus === 429 ||
+        Number(detail.errorCode) === META_THROUGHPUT_LIMIT_CODE
+        ? "whatsapp"
+        : null;
+    case "email":
+      return detail.throttled === true ? "email" : null;
+    case "push":
+      return detail.httpStatus === 429 ? "push" : null;
+    default:
+      return null;
+  }
+}
+
 type SuppressionReason = "preference_off" | "no_push_device" | "no_contact";
 
 /**
@@ -203,7 +243,11 @@ function suppressedChannels(
   if (options.hasEmailContent && !chosen.has(NotificationChannel.EMAIL)) {
     suppressed.push({
       channel: NotificationChannel.EMAIL,
-      reason: "preference_off",
+      // A driver's login without an e-mail (D2) is no preference of theirs.
+      reason:
+        flags.emailNotificationsEnabled && !flags.hasEmail
+          ? "no_contact"
+          : "preference_off",
     });
   }
 
@@ -219,10 +263,32 @@ function suppressedChannels(
   return suppressed;
 }
 
+/**
+ * The word a queue row closes with when whoever it addressed was deleted —
+ * a user, an external recipient, a webhook endpoint (plano-escala F5-05,
+ * decision D54). FAILED at once, with no call to the provider and no retry.
+ *
+ * Today the foreign keys of the queues cascade the deletion and such a row
+ * never exists. Wave 10 (F5-06) drops them: a deletion takes its rows
+ * explicitly (queue-row-cleanup.ts), and a row it could not see — written
+ * by a transaction that committed after the deletion read the queue — is
+ * accepted until the day's partition is dropped, closing with this. At the
+ * start of lastError, so the dead letter and the alerts can search for it.
+ */
+const RECIPIENT_GONE = "recipient_gone";
+
+/** `recipient_gone: Recipient user no longer exists`. */
+function recipientGoneError(what: string): string {
+  return `${RECIPIENT_GONE}: ${what}`;
+}
+
 export {
+  RECIPIENT_GONE,
   formatDeliveryError,
   isCredentialFailure,
   providerDetailOf,
+  recipientGoneError,
   suppressedChannels,
+  throttledProviderOf,
 };
 export type { DeliveryProvider, ProviderErrorDetail, SuppressionReason };

@@ -7,6 +7,15 @@ import {
 import { dateOnlyField } from "@/shared/delivery/date-only-field";
 import { optionalMultilineText } from "@/shared/delivery/text-rules";
 import { WRITABLE_DELIVERY_KINDS } from "@/shared/delivery/delivery-kind";
+import {
+  addressLatitudeField,
+  addressLongitudeField,
+  refineAddressPointPair,
+} from "@/shared/delivery/address-coordinates";
+import {
+  panelRecipientEmailField,
+  recipientEmailField,
+} from "@/shared/delivery/recipient-email";
 
 const requiredTextField = (label: string, min: number, max: number) =>
   z
@@ -80,6 +89,14 @@ const optionalDigits = (label: string, pattern: RegExp, message: string) =>
 /** The smallest quantity numeric(10, 3), rounding half up, keeps above 0. */
 const MIN_STORED_QUANTITY = 0.0005;
 
+/**
+ * How many items a delivery takes, and the sentence past it: the panel's list
+ * and the integration's strict one (create-integration-delivery-schema) refuse
+ * alike.
+ */
+const MAX_DELIVERY_ITEMS = 200;
+const TOO_MANY_DELIVERY_ITEMS = `Uma entrega não pode ter mais de ${MAX_DELIVERY_ITEMS} itens.`;
+
 const deliveryItemSchema = z.object({
   description: requiredTextField("A descrição do item", 2, 200),
   quantity: z.coerce
@@ -112,10 +129,8 @@ const createDeliverySchema = z.object({
   // (the column default). On the edit, absent keeps the current type.
   kind: z
     .enum(WRITABLE_DELIVERY_KINDS, {
-      errorMap: () => ({
-        message:
-          "Tipo inválido. Use DELIVERY (entrega) ou SERVICE_ORDER (ordem de serviço).",
-      }),
+      error:
+        "Tipo inválido. Use DELIVERY (entrega) ou SERVICE_ORDER (ordem de serviço).",
     })
     .optional()
     .describe(
@@ -146,14 +161,13 @@ const createDeliverySchema = z.object({
     /^(\d{11}|\d{14})$/,
     "O documento deve ser um CPF (11 dígitos) ou CNPJ (14 dígitos).",
   ),
+  // One address, by the rule the NF-e and spreadsheet imports apply to each
+  // entry of theirs (recipient-email.ts). The integration API derives its
+  // body from this object and keeps it; the panel's create body below and
+  // the edit take the list (panelRecipientEmailField).
   recipient_email: z.preprocess(
     (val) => (val === "" ? null : val),
-    z
-      .string()
-      .email("O e-mail do destinatário não é válido.")
-      .max(100, "O e-mail deve ter no máximo 100 caracteres.")
-      .nullable()
-      .optional(),
+    recipientEmailField.nullable().optional(),
   ),
   recipient_telephone: optionalDigits(
     "O telefone do destinatário",
@@ -181,6 +195,12 @@ const createDeliverySchema = z.object({
   address_number: optionalTextField("O número do endereço", 10),
   complement: optionalTextField("O complemento", 50),
   neighborhood: optionalTextField("O bairro", 100),
+  // Plan of 02/11/2026, E1: the point an operation already has, stored as
+  // the address point (MANUAL). Both or neither: the pair rule is on
+  // createDeliveryBodySchema, because a refinement here would stop the
+  // public create and the edit from deriving their shapes from this object.
+  latitude: addressLatitudeField,
+  longitude: addressLongitudeField,
   // A day, not an instant (decision 1.3): "YYYY-MM-DD", stored as UTC midnight.
   scheduled_date: dateOnlyField("A data prevista").describe(
     "Data prevista (AAAA-MM-DD), sem hora.",
@@ -194,8 +214,26 @@ const createDeliverySchema = z.object({
   // here only exists for the scalar fields the edit form can blank out.
   items: z
     .array(deliveryItemSchema)
-    .max(200, "Uma entrega não pode ter mais de 200 itens.")
+    .max(MAX_DELIVERY_ITEMS, TOO_MANY_DELIVERY_ITEMS)
     .optional(),
 });
 
-export { createDeliverySchema, deliveryItemSchema };
+/**
+ * The panel's create body: the fields above plus the rules across them
+ * (the address point is both coordinates or neither), and the recipient's
+ * e-mail as a list, the shape an NF-e or a spreadsheet stores, so the one
+ * form takes the same value on create and on edit. The route validates
+ * with it and the controller parses with it; derivations use the field
+ * object, createDeliverySchema.
+ */
+const createDeliveryBodySchema = createDeliverySchema
+  .extend({ recipient_email: panelRecipientEmailField })
+  .superRefine(refineAddressPointPair);
+
+export {
+  createDeliveryBodySchema,
+  createDeliverySchema,
+  deliveryItemSchema,
+  MAX_DELIVERY_ITEMS,
+  TOO_MANY_DELIVERY_ITEMS,
+};

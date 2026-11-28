@@ -18,6 +18,18 @@ const payload = (): AccountPayableCreatedPayload => ({
 
 const ctx = { baseUrl: "https://app.trajetto.com" };
 
+/** Intl puts a non-breaking space after "R$"; the registry flattens it before the send. */
+function plainSpaces<T extends { parameters: ReadonlyArray<unknown> }>(
+  rendered: T,
+): T {
+  return {
+    ...rendered,
+    parameters: rendered.parameters.map((value) =>
+      typeof value === "string" ? value.replace(/\s/g, " ") : value,
+    ),
+  };
+}
+
 describe("account-payable.created in-app render", () => {
   it("links a driver to the driver route", () => {
     const rendered = renderAccountPayableCreatedInApp(payload(), ctx, {
@@ -62,27 +74,60 @@ describe("account-payable.created in-app render", () => {
   });
 });
 
+/**
+ * Plan of 02/11/2026 (B1): trajetto_conta_pagar, with the value first (it is
+ * what the notification preview shows) and the linked order by its short
+ * code — never the raw id a person cannot use.
+ */
 describe("account-payable.created WhatsApp render", () => {
-  it("carries value, bill id and linked order", () => {
-    const text = renderAccountPayableCreatedWhatsApp(payload());
+  it("names its template, with the value first and every field in order", () => {
+    const rendered = plainSpaces(
+      renderAccountPayableCreatedWhatsApp({
+        ...payload(),
+        serviceOrderId: "018f0000-0000-7000-8000-8f2c4a9e1b3d",
+        payeeName: "Auto Center Rota Sul",
+        dueDate: "2026-11-10T12:00:00.000Z",
+        timeZone: "America/Sao_Paulo",
+        category: "OTHER",
+        categoryDescription: "Guincho",
+        description: "Revisão\ndo caminhão",
+        serviceOrderVehiclePlate: "RTA4F21",
+      }),
+    );
 
-    expect(text).toContain("ap-1");
-    expect(text).toContain("os-1");
+    expect(rendered).toEqual({
+      template: "trajetto_conta_pagar",
+      parameters: [
+        "R$ 780,90",
+        "Auto Center Rota Sul",
+        "10/11/2026",
+        "Outros (Guincho)",
+        "Revisão do caminhão",
+        "8f2c4a9e1b3d (veículo RTA4F21)",
+      ],
+    });
   });
 
   /**
-   * The old inline flow joined a falsy line without filtering, leaving a
-   * blank line in the message when there was no linked order. This pins the
-   * cleaned-up behavior.
+   * An event queued before the new fields existed still goes out: what it
+   * lacks becomes the variable's fallback when the registry fits it.
    */
-  it("drops the order line entirely when there is none", () => {
-    const text = renderAccountPayableCreatedWhatsApp({
-      ...payload(),
-      serviceOrderId: null,
-    });
+  it("leaves to the fallbacks what an older event does not carry", () => {
+    const rendered = plainSpaces(
+      renderAccountPayableCreatedWhatsApp({
+        ...payload(),
+        serviceOrderId: null,
+      }),
+    );
 
-    expect(text).not.toContain("ordem de serviço");
-    expect(text).not.toContain("\n\n");
+    expect(rendered.parameters).toEqual([
+      "R$ 780,90",
+      null,
+      null,
+      null,
+      null,
+      null,
+    ]);
   });
 });
 

@@ -358,6 +358,7 @@ class DecideOccurrenceAuthorizationUseCase {
             previousStatus,
             nextStatus,
             occurrenceTypeName: found.occurrenceType.name,
+            occurrenceTypeCode: found.occurrenceType.code,
             blocksDelivery: blocks,
             description: found.description,
             photosCount: found.photos.length,
@@ -477,7 +478,7 @@ class DecideOccurrenceAuthorizationUseCase {
 
     announceStopSettled(businessId, settled);
 
-    await announceDroppedPlans(this.user, businessId, droppedPlans);
+    await announceDroppedPlans(this.user, businessId, droppedPlans, userId);
 
     for (const changed of supersededTickets) {
       await this.occurrenceTickets?.announce({

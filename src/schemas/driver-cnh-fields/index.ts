@@ -9,6 +9,7 @@ import {
 
 import { cnhExpiryIssue } from "@/modules/driver/driver-rules";
 import { CNH_CATEGORIES } from "@/modules/driver/usecases/list-driver/driver-list";
+import { fieldError } from "@/shared/validation/field-error";
 
 /**
  * The licence fields of a driver, shared by create and update and mirrored by
@@ -19,7 +20,7 @@ import { CNH_CATEGORIES } from "@/modules/driver/usecases/list-driver/driver-lis
 const cnhNumberField = z.preprocess(
   (value) => (typeof value === "string" ? value.replace(/\D/g, "") : value),
   z
-    .string({ required_error: "O número da CNH é obrigatório." })
+    .string(fieldError({ required: "O número da CNH é obrigatório." }))
     .min(1, "O número da CNH é obrigatório.")
     .regex(/^\d{11}$/, "A CNH deve ter exatamente 11 dígitos."),
 );
@@ -28,9 +29,7 @@ const cnhCategoryField = z.preprocess(
   emptyStringToNull,
   z
     .enum(CNH_CATEGORIES, {
-      errorMap: () => ({
-        message: `A categoria da CNH deve ser uma destas: ${CNH_CATEGORIES.join(", ")}.`,
-      }),
+      error: `A categoria da CNH deve ser uma destas: ${CNH_CATEGORIES.join(", ")}.`,
     })
     .nullable()
     .optional()

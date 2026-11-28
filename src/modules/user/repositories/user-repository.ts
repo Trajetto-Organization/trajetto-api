@@ -1,12 +1,18 @@
-import database from "@/../infra/database";
+import database, { readDatabase } from "@/../infra/database";
 
 import { forgetRequestCache, remember } from "@/shared/http/request-context";
+import { rememberBusinessZone } from "@/shared/time/business-time-zone";
 import { Prisma } from "@prisma/client";
 
-import { IUserRepository } from "./IUser-repository";
+import {
+  DRIVER_LOGINS_BY_CPF_LIMIT,
+  IUserRepository,
+  KeptSessionEndedError,
+} from "./IUser-repository";
 
 import {
   CreateUserProps,
+  DriverLoginByCpf,
   User,
   UpdateUserPassword,
   UpdateUserName,
@@ -22,9 +28,12 @@ import {
   ListMasterUsersProps,
   SearchUserWithCursorProps,
   CursorPaginatedUser,
+  UpdateUserPasswordKeepingSession,
+  PasswordKeptSession,
 } from "../dtos/user-dto";
 
 import { buildSearchOr } from "@/shared/pagination/search-or";
+import { deleteQueueRowsOfUser } from "@/shared/notifications/queue-row-cleanup";
 import { resolveOrderBy } from "@/shared/pagination/list-query";
 
 import {
@@ -38,22 +47,52 @@ import {
   lockUntil,
 } from "@/shared/security/login-lockout-rules";
 
+import { NO_USER_HISTORY, type UserHistoryCounts } from "../user-history-rules";
+import { ASSIGNABLE_USER_WHERE } from "../user-assignable-rules";
+
 /**
  * The user listings stream NDJSON, and a stream never passes through the
  * response serializer: whatever these queries return is exactly what leaves.
  * They selected the whole row, so every password hash of a company went to
- * any profile allowed to read its users. The hash stops here.
+ * any profile allowed to read its users. The hash stops here, and so does
+ * `anonymized_at`: the removal job's own bookkeeping (when the personal
+ * data was erased), which the documented line does not carry and no screen
+ * reads (an anonymized user already shows under the anonymous name).
  */
-function withoutPassword<T extends { password?: unknown }>(
+function listedUser<T extends { password?: unknown; anonymized_at?: unknown }>(
   user: T,
-): Omit<T, "password"> {
-  const { password: _password, ...listed } = user;
+): Omit<T, "password" | "anonymized_at"> {
+  const { password: _password, anonymized_at: _anonymizedAt, ...listed } = user;
 
   return listed;
 }
 
+/**
+ * The key the session user is remembered under in the request's memory.
+ * The session lookup in one statement (session-repository.ts) leaves its
+ * user under it, so findUserById of the same request answers from there.
+ */
+function userRequestKey(userId: string): string {
+  return `user:${userId}`;
+}
+
 class UserRepository implements IUserRepository {
   constructor(private prisma = database) {}
+
+  /**
+   * The heavy reads' bulkhead (plano-escala F3-17), for the MASTER's list of
+   * master users: a pool of its own, 3 connections and 10 s a statement, so a
+   * burst of them waits among itself instead of taking the connections every
+   * other request needs. A repository built on another client (a test's) reads
+   * on that client. A getter, so a module that mocks infra/database without it
+   * only needs it when one of these reads runs.
+   * With DATABASE_REPLICA_URL, readDatabase() sends them to the standby
+   * while the replica guard vouches for it: lists only (plano-escala F4-42,
+   * tests/unitaires/database/read-routing-guard.test.ts).
+   */
+  private get read(): typeof this.prisma {
+    return this.prisma === database ? readDatabase() : this.prisma;
+  }
 
   async createUser({
     email,
@@ -63,6 +102,8 @@ class UserRepository implements IUserRepository {
     profileAccessId,
     businessId,
     driverId,
+    email_verified,
+    must_change_password,
   }: CreateUserProps): Promise<User> {
     // Anything cached for this request describes the row before this
     // write. Kept, it would be read back by the next lookup in the
@@ -78,6 +119,8 @@ class UserRepository implements IUserRepository {
         businessId,
         profileAccessId: profileAccessId || null,
         driverId: driverId || null,
+        email_verified: email_verified ?? null,
+        must_change_password: must_change_password ?? false,
       },
     });
 
@@ -138,7 +181,7 @@ class UserRepository implements IUserRepository {
         : [];
 
     return {
-      data: rows.map(withoutPassword),
+      data: rows.map(listedUser),
       groups: grouped.map((group) => ({
         role: group.role,
         access_revoked: group.access_revoked,
@@ -200,6 +243,11 @@ class UserRepository implements IUserRepository {
     const updateData: Prisma.UserUpdateInput = {};
 
     Object.entries(restData).forEach(([key, value]) => {
+      // A null e-mail is "not sent", as the edit plan reads it: an edit never
+      // clears an e-mail. Only the creation of a driver's login writes NULL
+      // (D2, the release after migration 20261102120100).
+      if (key === "email" && value === null) return;
+
       if (value !== undefined) {
         (updateData as Record<string, unknown>)[key] = value;
       }
@@ -246,11 +294,16 @@ class UserRepository implements IUserRepository {
     // same request and reported as the current state.
     forgetRequestCache();
 
-    const deletedUser = await (tx ?? this.prisma).user.delete({
-      where: { id: userId },
-    });
+    // The user's queue rows go first, in the same transaction: the cascade
+    // that takes them today leaves with wave 10 (queue-row-cleanup.ts). A
+    // delete that fails (P2025, a RESTRICT key) rolls them back with it.
+    const remove = async (client: Prisma.TransactionClient) => {
+      await deleteQueueRowsOfUser(client, userId);
 
-    return deletedUser;
+      return client.user.delete({ where: { id: userId } });
+    };
+
+    return tx ? remove(tx) : this.prisma.$transaction(remove);
   }
 
   /**
@@ -278,6 +331,9 @@ class UserRepository implements IUserRepository {
       // The target must be among the locked rows: a non-MASTER or an already
       // deleted id is a refusal, not a silent no-op.
       if (!masters.some((master) => master.id === userId)) return null;
+
+      // Its queue rows first, as deleteUser does.
+      await deleteQueueRowsOfUser(tx, userId);
 
       return tx.user.delete({ where: { id: userId } });
     };
@@ -399,7 +455,7 @@ class UserRepository implements IUserRepository {
    * every write here calls `forgetRequestCache`.
    */
   async findUserById(userId: string): Promise<User | null> {
-    return remember(`user:${userId}`, () => this.loadUserById(userId));
+    return remember(userRequestKey(userId), () => this.loadUserById(userId));
   }
 
   /**
@@ -423,6 +479,10 @@ class UserRepository implements IUserRepository {
         business: {
           select: {
             is_active: true,
+            // The company's zone, for the request's "today": every list,
+            // the tower and the driver's work list ask for it, and this row
+            // is already being read (storedBusinessZone).
+            timezone: true,
             // Hired modules ride along with the session lookup: the web app
             // gates its navigation with them, and a second round trip on
             // every navigation would buy nothing.
@@ -435,6 +495,8 @@ class UserRepository implements IUserRepository {
     });
 
     if (!user) return null;
+
+    rememberBusinessZone(user.businessId, user.business);
 
     const profileAccess = await this.loadProfilePermissions(
       user.profileAccessId,
@@ -492,6 +554,57 @@ class UserRepository implements IUserRepository {
     return { ...driver, branch };
   }
 
+  async findDriverLoginsByCpf(cpf: string): Promise<DriverLoginByCpf[]> {
+    // Served by driver_cpf_idx: the CPF is unique per company only
+    // (@@unique([businessId, cpf]) leads with the company), and a login by
+    // CPF does not know the company yet.
+    const rows = await this.prisma.user.findMany({
+      where: { driver: { cpf } },
+      include: {
+        business: {
+          select: {
+            is_active: true,
+            fantasy_name: true,
+            corporate_reason: true,
+          },
+        },
+        profileAccess: {
+          select: {
+            name: true,
+            permissions: {
+              select: {
+                id: true,
+                permissionKey: true,
+                action: true,
+                canRead: true,
+                canWrite: true,
+              },
+            },
+          },
+        },
+        // What assertSessionEligible reads, so it does not load it again.
+        driver: {
+          select: {
+            id: true,
+            status: true,
+            businessId: true,
+            branchId: true,
+            branch: { select: { is_active: true } },
+          },
+        },
+      },
+      orderBy: [{ created_at: "asc" }, { id: "asc" }],
+      take: DRIVER_LOGINS_BY_CPF_LIMIT,
+    });
+
+    return rows.map(({ business, ...user }) => ({
+      ...user,
+      business: business ? { is_active: business.is_active } : null,
+      companyName:
+        business?.fantasy_name?.trim() || business?.corporate_reason || "",
+    }));
+  }
+
   async findUsersByBusiness(businessId: string): Promise<User[]> {
     const findUserByBusiness = await this.prisma.user.findMany({
       where: {
@@ -506,9 +619,111 @@ class UserRepository implements IUserRepository {
     return this.prisma.user.count({ where: { profileAccessId } });
   }
 
+  async countUserHistory(userId: string): Promise<UserHistoryCounts> {
+    // One statement, seven scalar sub-selects (as countBranchDependencies):
+    // one connection and one round trip, each an index probe on the user
+    // column. Replaces two findMany that loaded every service order and
+    // payable of the person just to read the length.
+    const [row] = await this.prisma.$queryRaw<UserHistoryCounts[]>`
+      SELECT
+        (SELECT count(*) FROM "service_order"        WHERE "responsibleUserId"  = ${userId})::int AS "serviceOrders",
+        (SELECT count(*) FROM "account_payable"      WHERE "registrationUserId" = ${userId})::int AS "accountPayables",
+        (SELECT count(*) FROM "delivery_event"       WHERE "reportedById"       = ${userId})::int AS "deliveryEvents",
+        (SELECT count(*) FROM "delivery_occurrence"  WHERE "reportedById"       = ${userId})::int AS "occurrences",
+        (SELECT count(*) FROM "delivery_proof_audit" WHERE "reviewedById"       = ${userId})::int AS "proofReviews",
+        (SELECT count(*) FROM "chat_message"         WHERE "senderId"           = ${userId})::int AS "chatMessages",
+        (SELECT count(*) FROM "import"               WHERE "performedById"      = ${userId})::int AS "imports"
+    `;
+
+    return row ?? { ...NO_USER_HISTORY };
+  }
+
+  async updateUserPasswordKeepingSession({
+    userId,
+    password,
+    keepFamilyId,
+    replacement,
+    effects,
+  }: UpdateUserPasswordKeepingSession): Promise<PasswordKeptSession> {
+    forgetRequestCache();
+
+    return this.prisma.$transaction(async (tx) => {
+      const now = new Date();
+
+      // The UPDATE locks the row, so two changes of one account serialize
+      // and the replacement below carries the version this one wrote.
+      const user = await tx.user.update({
+        where: { id: userId },
+        data: {
+          password,
+          session_version: { increment: 1 },
+          must_change_password: false,
+          failed_login_attempts: 0,
+          failed_login_at: null,
+          login_locked_until: null,
+        },
+      });
+
+      // The kept session's live tokens carry the old version and are deleted,
+      // not revoked: a renewal of this session that read the user before this
+      // commit and rotates after it must find no row ("unknown", a plain
+      // 401). A revoked row without `replaced_by_jti` reads as a spent token
+      // presented again, and the reuse alarm would end every session —
+      // the one just re-issued included. Its older, spent rows stay.
+      const { count: live } = await tx.refreshToken.deleteMany({
+        where: {
+          userId,
+          family_id: keepFamilyId,
+          revoked_at: null,
+          expires_in: { gt: now },
+        },
+      });
+
+      // None left: the session ended after the caller checked it, outside
+      // this transaction (and a bcrypt) — a logout, the manager's "Revogar
+      // este aparelho", "Aparelhos conectados", the reuse alarm or a reset.
+      // Most of those never touch the user row, so nothing above waited for
+      // them. Storing the replacement would bring the session back with the
+      // new version, undoing that end; the whole write rolls back instead.
+      if (live === 0) throw new KeptSessionEndedError();
+
+      const others = await tx.refreshToken.findMany({
+        where: { userId, family_id: { not: keepFamilyId } },
+        select: { family_id: true },
+        distinct: ["family_id"],
+      });
+
+      await tx.refreshToken.deleteMany({
+        where: { userId, family_id: { not: keepFamilyId } },
+      });
+      // A device without a session predates the column (A9) and cannot be
+      // this one's: it goes with the others.
+      await tx.pushDeviceToken.deleteMany({
+        where: {
+          userId,
+          OR: [
+            { session_family_id: null },
+            { session_family_id: { not: keepFamilyId } },
+          ],
+        },
+      });
+
+      await tx.refreshToken.create({ data: replacement(user) });
+
+      if (effects) await effects(tx, user);
+
+      return {
+        user,
+        endedFamilies: others.map((row) => row.family_id),
+      };
+    });
+  }
+
   async updateUserPassword({
     userId,
     password,
+    markEmailVerifiedAt,
+    mustChangePassword = false,
   }: UpdateUserPassword): Promise<User | null> {
     // Anything cached for this request describes the row before this
     // write. Kept, it would be read back by the next lookup in the
@@ -519,6 +734,9 @@ class UserRepository implements IUserRepository {
       where: { id: userId },
       data: {
         password,
+        ...(markEmailVerifiedAt && { email_verified: markEmailVerifiedAt }),
+        // Set by a password the manager chose, cleared by the person's own.
+        must_change_password: mustChangePassword,
         session_version: { increment: 1 },
         RefreshToken: { deleteMany: {} },
         // Every session ends, so every device they registered stops receiving.
@@ -697,25 +915,31 @@ class UserRepository implements IUserRepository {
   ): Promise<void> {
     forgetRequestCache();
 
-    // One statement: the bump, the deletions and the caller's own write
+    // One transaction: the bump, the deletions and the caller's own write
     // commit or roll back together.
-    await (tx ?? this.prisma).user.update({
-      where: { id: userId },
-      data: {
-        session_version: { increment: 1 },
-        RefreshToken: { deleteMany: {} },
-        PushDeviceToken: { deleteMany: {} },
-        Notification: { deleteMany: {} },
-        // What was fanned out to them and not delivered yet was addressed to
-        // the old role or company: left in place, an IN_APP row would land in
-        // the emptied inbox (another tenant's plates and values) and an
-        // e-mail would carry it outside. DELIVERED and FAILED rows stay: they
-        // are the ledger, and hold no message.
-        NotificationDelivery: {
-          deleteMany: { status: { in: ["PENDING", "PROCESSING"] } },
+    const clear = async (client: Prisma.TransactionClient) => {
+      await client.user.update({
+        where: { id: userId },
+        data: {
+          session_version: { increment: 1 },
+          RefreshToken: { deleteMany: {} },
+          PushDeviceToken: { deleteMany: {} },
         },
-      },
-    });
+      });
+
+      // What was fanned out to them and not delivered yet was addressed to
+      // the old role or company: left in place, an IN_APP row would land in
+      // the emptied inbox (another tenant's plates and values) and an
+      // e-mail would carry it outside. DELIVERED and FAILED rows stay: they
+      // are the ledger, and hold no message. With their receipts (a push
+      // in flight already has Expo's ticket), which the cascade takes
+      // today and wave 10 no longer will (queue-row-cleanup.ts). And the
+      // inbox itself, the bell, emptied by the same statement (the
+      // relation that did it leaves with F5-15).
+      await deleteQueueRowsOfUser(client, userId, { unsentOnly: true });
+    };
+
+    await (tx ? clear(tx) : this.prisma.$transaction(clear));
   }
 
   async updateWhatsAppSettings({
@@ -903,25 +1127,25 @@ class UserRepository implements IUserRepository {
     const where = masterListWhere(filters, { withFacets: true });
 
     const [rows, grouped] = await Promise.all([
-      this.prisma.user.findMany({
+      this.read.user.findMany({
         skip: (page - 1) * pageSize,
         take: pageSize,
         where,
         orderBy: resolveOrderBy(USER_SORT, { sort, order }),
       }),
-      this.prisma.user.groupBy({
+      this.read.user.groupBy({
         by: ["role", "access_revoked", "two_factor_enabled", "profileAccessId"],
         where: masterListWhere(filters, { withFacets: false }),
         _count: { _all: true },
       }),
     ]);
 
-    const emailVerified = await this.prisma.user.count({
+    const emailVerified = await this.read.user.count({
       where: { AND: [where, { email_verified: { not: null } }] },
     });
 
     return {
-      data: rows.map(withoutPassword),
+      data: rows.map(listedUser),
       groups: grouped.map((group) => ({
         role: group.role,
         access_revoked: group.access_revoked,
@@ -945,6 +1169,9 @@ class UserRepository implements IUserRepository {
     const items = await this.prisma.user.findMany({
       where: {
         businessId,
+        // Every consumer is an assignment picker: a revoked or removed login
+        // is never offered, as the branch picker skips inactive branches.
+        ...ASSIGNABLE_USER_WHERE,
         ...(term &&
           buildSearchOr<Prisma.UserWhereInput>([
             { name: { contains: term, mode: "insensitive" as const } },
@@ -962,8 +1189,8 @@ class UserRepository implements IUserRepository {
     const data = hasMore ? items.slice(0, limit) : items;
     const nextCursor = hasMore ? (data[data.length - 1]?.id ?? null) : null;
 
-    return { data: data.map(withoutPassword), nextCursor, hasMore };
+    return { data: data.map(listedUser), nextCursor, hasMore };
   }
 }
 
-export { UserRepository };
+export { UserRepository, userRequestKey };

@@ -1,0 +1,118 @@
+name: Check out the web and the app next to this repository
+description: >-
+  The two client repositories next to this one (../trajetto-ui and
+  ../trajetto-mobile), on the branch of the same name when the sibling has
+  it, otherwise on its staging, for the tests that read them: the route
+  contract (tests/unitaires/contract/client-routes.test.ts) and the links
+  and ADRs the documentation cites (tests/unitaires/docs/
+  architecture-docs.test.ts), which skip themselves without them. Used by
+  the `Validate` and `Docs` jobs of validate.yml, so a push of either kind
+  meets the same siblings.
+
+# The job checks the repository out first. Checked out only when the
+# read-only token exists (CLIENT_REPOS_READ_TOKEN, handed over as `token`:
+# a composite action cannot read `secrets`), and moved out of the workspace
+# at once so prettier and tsc never see them. The token reaches the scripts
+# through `env` and the checkouts through `with`, never the job env nor
+# .git/config: nothing installed later can read it.
+inputs:
+  token:
+    description: "secrets.CLIENT_REPOS_READ_TOKEN (vazio = pula os irmãos, com aviso)"
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Check the sibling token
+      id: clients
+      env:
+        TOKEN: ${{ inputs.token }}
+      shell: bash
+      run: |
+        if [ -n "$TOKEN" ]; then
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "::warning::CLIENT_REPOS_READ_TOKEN ausente: o contrato de rotas com a web e o app foi pulado."
+        fi
+
+    # The same branch in the sibling repository first: a change that spans
+    # the repositories (routes, socket events) is tested against its own
+    # counterpart — which is why such a change goes on a branch of the SAME
+    # name in each repository (docs/deploy.md). Falls back to the sibling's
+    # staging when there is no branch of that name: work branches come from
+    # staging and go back to it, while main can be behind it (a change on
+    # staging not promoted yet would fail every work branch without a
+    # defect of its own). On a push to staging, that is the sibling's
+    # staging: the point where the three meet.
+    #
+    # Only "no such branch" falls back: `git ls-remote --exit-code` answers
+    # 2 for it, on purpose, with a notice. Any other code (128: network,
+    # credentials) used to fall back too, silently, and tested this branch
+    # against the default one; now it is tried 3 times with growing pauses
+    # and then fails, saying the probe could not reach GitHub.
+    - name: Pick the sibling branches
+      id: refs
+      if: steps.clients.outputs.enabled == 'true'
+      env:
+        TOKEN: ${{ inputs.token }}
+        BRANCH: ${{ github.head_ref || github.ref_name }}
+      shell: bash
+      run: |
+        # The empty extraheader first: this repository's own checkout persisted
+        # one, and two Authorization headers get a 400 (read as "no branch").
+        auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
+        for pair in web:trajetto-ui app:trajetto-mobile; do
+          key=${pair%%:*}
+          repo=${pair#*:}
+          for attempt in 1 2 3; do
+            code=0
+            git -c "http.https://github.com/.extraheader=" -c "http.https://github.com/.extraheader=$auth" ls-remote --exit-code --heads \
+              "https://github.com/Trajetto-Organization/${repo}.git" "refs/heads/${BRANCH}" > /dev/null || code=$?
+            case "$code" in
+              0)
+                echo "${key}=${BRANCH}" >> "$GITHUB_OUTPUT"
+                echo "${repo}: branch ${BRANCH}"
+                break
+                ;;
+              2)
+                echo "${key}=staging" >> "$GITHUB_OUTPUT"
+                echo "::notice::${repo} não tem a branch ${BRANCH}: o contrato de rotas usa a staging de ${repo}, de onde saem as branches de trabalho."
+                break
+                ;;
+            esac
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::Não deu para consultar as branches de ${repo} no GitHub depois de 3 tentativas (git ls-remote, código ${code}: rede ou credencial). O contrato de rotas não foi testado contra a staging por engano."
+              exit 1
+            fi
+            echo "::warning::A consulta das branches de ${repo} falhou (git ls-remote, código ${code}; tentativa ${attempt} de 3). De novo em $((attempt * 10))s."
+            sleep $((attempt * 10))
+          done
+        done
+
+    - name: Check out the web next to this repository
+      if: steps.clients.outputs.enabled == 'true'
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      with:
+        repository: Trajetto-Organization/trajetto-ui
+        ref: ${{ steps.refs.outputs.web }}
+        token: ${{ inputs.token }}
+        path: .siblings/trajetto-ui
+        persist-credentials: false
+
+    - name: Check out the app next to this repository
+      if: steps.clients.outputs.enabled == 'true'
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      with:
+        repository: Trajetto-Organization/trajetto-mobile
+        ref: ${{ steps.refs.outputs.app }}
+        token: ${{ inputs.token }}
+        path: .siblings/trajetto-mobile
+        persist-credentials: false
+
+    - name: Move the web and the app beside this repository
+      if: steps.clients.outputs.enabled == 'true'
+      shell: bash
+      run: |
+        mv .siblings/trajetto-ui ../trajetto-ui
+        mv .siblings/trajetto-mobile ../trajetto-mobile
+        rmdir .siblings

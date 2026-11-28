@@ -73,7 +73,7 @@ afterAll(async () => {
 });
 
 describe("the route module's published surface", () => {
-  it("publishes exactly the twenty-two endpoints the module implements", () => {
+  it("publishes exactly the twenty-four endpoints the module implements", () => {
     // Listed rather than counted: a route added without documentation, or one
     // documented and never registered, both show up here as a diff instead of
     // a number that happens to match.
@@ -92,6 +92,11 @@ describe("the route module's published surface", () => {
       "POST /route/on-the-way/{stopId}/route/{routeId}/business/{businessId}",
 
       "PATCH /route/cancel-route/{routeId}/business/{businessId}",
+
+      // "Encerrar com pendências" (plan of 02/11/2026, K11): the route left
+      // open, closed by the dispatcher with a reason.
+      "POST /route/close-with-pending/{routeId}/business/{businessId}",
+
       "POST /route/add-stops/{routeId}/business/{businessId}",
       "DELETE /route/remove-stop/{stopId}/route/{routeId}/business/{businessId}",
       "PATCH /route/reorder-stops/{routeId}/business/{businessId}",
@@ -114,6 +119,9 @@ describe("the route module's published surface", () => {
       // token is refused rather than shown the whole operation.
       "POST /route/positions",
       "GET /route/control-tower",
+      // The tower's list without the tower's cost, for the manager's
+      // phone (wave 4).
+      "GET /route/live",
       "GET /route/driver-trail/{driverId}",
       "GET /route/monitoring",
       "GET /route/monitoring/drivers",
@@ -305,6 +313,10 @@ describe("the shapes it publishes", () => {
 
         if (!schema) continue;
 
+        // A 304 has no body to lose (RFC 9110, 15.4.5): the tower's
+        // snapshot (F4-11) declares it as the null the 204s use.
+        if (status === "304" && schema.nullable === true) continue;
+
         const described =
           schema.properties !== undefined ||
           schema.$ref !== undefined ||
@@ -331,6 +343,36 @@ describe("the shapes it publishes", () => {
     expect(schema).toContain("sequence");
     expect(schema).toContain("ARRIVED");
     expect(schema).toContain("progress");
+  });
+
+  it("publishes the period of the routes list and of the tower's board", () => {
+    // Plan of 09/11/2026. The board's answer is serialized through its zod
+    // schema, which strips an undeclared key: without `period` declared, a
+    // new screen would read the new API as an old one.
+    for (const path of ["/route/list-routes", "/route/monitoring"]) {
+      const operation = operationFor(path) as OpenApiOperation & {
+        parameters?: Array<{ name: string; in: string }>;
+      };
+
+      const query = (operation.parameters ?? [])
+        .filter((parameter) => parameter.in === "query")
+        .map((parameter) => parameter.name);
+
+      expect(query, path).toEqual(
+        expect.arrayContaining(["period", "from", "to"]),
+      );
+    }
+
+    expect(
+      JSON.stringify(operationFor("/route/monitoring").responses["200"]),
+    ).toContain('"period"');
+
+    const listing = JSON.stringify(
+      operationFor("/route/list-routes").responses["200"],
+    );
+
+    expect(listing).toContain('"period"');
+    expect(listing).toContain('"applied"');
   });
 });
 
@@ -598,18 +640,22 @@ describe("the public integration API, as published", () => {
    */
   const integration = () => operationsUnder("/integration/v1/");
 
-  it("publishes the surface a v1 promises: the reads and the one write", () => {
+  it("publishes the surface a v1 promises: the reads and the writes", () => {
     expect(
       integration().map(([path, method]) => `${method.toUpperCase()} ${path}`),
     ).toEqual([
       "GET /integration/v1/catalogue",
       "GET /integration/v1/deliveries",
-      // Decision 5.10: an ERP pushes documents; nothing else is written.
+      // Decision 5.10: an ERP pushes documents.
       "POST /integration/v1/deliveries",
       "GET /integration/v1/deliveries/{id}",
       "GET /integration/v1/routes",
       "GET /integration/v1/routes/{id}",
       "GET /integration/v1/events",
+      // Plano-escala U-04: up to 100 documents in one call.
+      "POST /integration/v1/deliveries/batch",
+      // L9 (D49): the ERP calls off a delivery it pushed, or any other.
+      "POST /integration/v1/deliveries/{id}/cancel",
     ]);
   });
 

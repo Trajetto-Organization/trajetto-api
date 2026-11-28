@@ -10,9 +10,10 @@ import { describe, expect, it } from "vitest";
  * every connect and disconnect and nothing ever read. With N replicas it only
  * ever held this replica's sockets, so the first feature to ask it "is this
  * user online?" — or "send a push if they are not" — would be wrong about
- * (N-1)/N of the time. Presence is the adapter's answer (`getOnlineUserIds`),
- * and a per-replica count, when one is needed, is the local adapter's own room
- * index, which cleans itself up.
+ * (N-1)/N of the time. Presence is Postgres's answer (`getOnlineUserIds`,
+ * the beats of `user_presence` since plano-escala U-05), and a per-replica
+ * count, when one is needed, is the local adapter's own room index, which
+ * cleans itself up.
  */
 const source = readFileSync(resolve(process.cwd(), "src/websocket.ts"), "utf8");
 

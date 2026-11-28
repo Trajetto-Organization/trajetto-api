@@ -56,7 +56,9 @@ const IMPORT_RETRY_AFTER_SECONDS = 30;
  * boundary and close its record before the queue hands it back itself. A row
  * is one short transaction; this only runs out on a job stuck in a single
  * call (a huge workbook still being parsed, a database that stopped
- * answering).
+ * answering). The default is the shutdown plan's figure for the 40 s stop
+ * grace (shared/lifecycle/shutdown-plan.ts, an eighth of it); the shutdown
+ * passes the plan's own.
  */
 const IMPORT_STOP_GRACE_MS = 5_000;
 
@@ -64,10 +66,12 @@ const IMPORT_STOP_GRACE_MS = 5_000;
  * How long the drain then waits for the hand-back writes still in flight. A
  * healthy database takes milliseconds; one that stopped answering would hold
  * them up to the pool timeout, and the workers still need their own deadline
- * (12 s at most, the webhook dispatcher's) inside the 35 s shutdown
- * watchdog: 15 s of grace (server.ts), 5 s to stop and 2 s here end the
- * import step by 22 s. A write that misses it is left to the
- * abandoned-import sweep.
+ * before the shutdown watchdog. The shutdown plan sizes the three steps
+ * together from the stop grace (shared/lifecycle/shutdown-plan.ts): with
+ * 40 s, 15 s of grace, 5 s to stop and 2 s here end the import step by
+ * 22 s, and the workers' 12 s by 34 s, under the 35 s watchdog. This
+ * default is that plan's figure; the shutdown passes the plan's own. A
+ * write that misses it is left to the abandoned-import sweep.
  */
 const IMPORT_HANDBACK_WRITE_MS = 2_000;
 
@@ -370,6 +374,22 @@ async function settlesWithin(
 /** This replica's queue, shared by every upload route. */
 const importQueue = new ImportQueue();
 
+/**
+ * The import step of the shutdown plan (shared/lifecycle/shutdown-plan.ts),
+ * as `drain` takes it: the three deadlines come from the same stop grace.
+ */
+function drainOptionsFrom(plan: {
+  importGraceMs: number;
+  importStopGraceMs: number;
+  importHandBackMs: number;
+}): ImportDrainOptions {
+  return {
+    graceMs: plan.importGraceMs,
+    stopGraceMs: plan.importStopGraceMs,
+    handBackMs: plan.importHandBackMs,
+  };
+}
+
 export {
   IMPORTS_RUNNING_PER_REPLICA,
   IMPORTS_WAITING_PER_REPLICA,
@@ -377,6 +397,7 @@ export {
   IMPORT_RETRY_AFTER_SECONDS,
   IMPORT_STOP_GRACE_MS,
   ImportQueue,
+  drainOptionsFrom,
   importQueue,
   type AbandonedStage,
   type ImportDrainOptions,

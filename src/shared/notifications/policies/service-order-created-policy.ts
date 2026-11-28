@@ -11,6 +11,14 @@ import {
   RenderedInApp,
   ServiceOrderCreatedPayload,
 } from "../notification-types";
+import type { RenderedWhatsApp } from "../whatsapp-templates";
+import {
+  MAINTENANCE_TYPE_LABELS,
+  dayLabel,
+  mileageLine,
+  oneLine,
+  shortId,
+} from "../whatsapp-parameters";
 
 /**
  * Notification policy for a newly created service order.
@@ -41,22 +49,42 @@ function renderServiceOrderCreatedInApp(
   };
 }
 
+/** trajetto_ordem_servico (B1): the same template for created and updated. */
 function renderServiceOrderCreatedWhatsApp(
   payload: ServiceOrderCreatedPayload,
-): string {
-  const mileagePart = payload.newMileage ? ` → ${payload.newMileage}km` : "";
+): RenderedWhatsApp {
+  return serviceOrderWhatsApp(payload);
+}
 
-  return [
-    `🔧 *Nova Ordem de Serviço! Você foi designado como responsável por uma nova ordem de serviço*`,
-    `Veículo: *${payload.vehiclePlate || "N/A"}*`,
-    `Valor: *${formatCurrency(payload.totalAmount)}*`,
-    payload.currentMileage &&
-      `Quilometragem: *${payload.currentMileage}km${mileagePart}*`,
-    `Identificador da ordem de serviço: *${payload.serviceOrderId}*`,
-    `Para mais detalhes, acesse o sistema.`,
-  ]
-    .filter(Boolean)
-    .join("\n");
+/**
+ * Shared with service-order.updated: "foi atribuída a você como
+ * responsável" is true of both, which is why one template serves them.
+ */
+function serviceOrderWhatsApp(payload: {
+  serviceOrderId: string;
+  vehiclePlate: string | null;
+  totalAmount: number;
+  description?: string | null;
+  maintenanceType?: string | null;
+  orderDate?: string | null;
+  timeZone?: string;
+  currentMileage?: number | null;
+  newMileage?: number | null;
+}): RenderedWhatsApp {
+  return {
+    template: "trajetto_ordem_servico",
+    parameters: [
+      payload.vehiclePlate,
+      shortId(payload.serviceOrderId),
+      oneLine(payload.description),
+      payload.maintenanceType
+        ? (MAINTENANCE_TYPE_LABELS[payload.maintenanceType] ?? null)
+        : null,
+      dayLabel(payload.orderDate, payload.timeZone),
+      formatCurrency(Number(payload.totalAmount) || 0),
+      mileageLine(payload.currentMileage, payload.newMileage),
+    ],
+  };
 }
 
 function renderServiceOrderCreatedActivity(
@@ -99,4 +127,5 @@ export {
   renderServiceOrderCreatedInApp,
   renderServiceOrderCreatedWhatsApp,
   renderServiceOrderCreatedActivity,
+  serviceOrderWhatsApp,
 };

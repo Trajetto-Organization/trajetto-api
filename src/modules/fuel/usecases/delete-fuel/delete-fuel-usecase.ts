@@ -17,6 +17,7 @@ import { AppError } from "@/shared/errors/AppError";
 import { Fuel } from "../../dtos/fuel-dto";
 
 import { UploadService } from "@/shared/services/upload-service";
+import { announceVehicleChanged } from "@/shared/vehicle/vehicle-realtime";
 
 interface DeleteFuelRequest {
   fuelId: string;
@@ -77,6 +78,9 @@ class DeleteFuelUseCase {
       // record pointing at a missing file whenever the row delete failed.
       // The photo removal is best-effort (deleteFile never throws).
       const deletedFuel = await this.fuel.deleteFuel(fuelId);
+
+      // A refuelling that set the odometer took its km with it.
+      announceVehicleChanged(businessId);
 
       if (findFuel.odometer_photo) {
         await this.uploadService.deleteFile(findFuel.odometer_photo);

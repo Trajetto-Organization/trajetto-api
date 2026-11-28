@@ -44,9 +44,14 @@ const GATED_USE_CASES: Record<string, string> = {
   "business/usecases/request-business-deletion":
     "POST /business/request-business-deletion/{businessId}",
   "user/usecases/authenticate-user": "POST /user/session",
+  // Wave 2: the password created right after a QR code, and the two-factor
+  // switch that now asks for the current password.
+  "user/usecases/create-own-password": "POST /user/me/password",
+  "user/usecases/update-two-factor-authentication": "PATCH /user/twofactor",
   "user/usecases/create-master-user": "POST /user/create-master-user",
   "user/usecases/create-user": "POST /user/create-user",
   "user/usecases/reset-user-password": "POST /user/reset/password",
+  "user/usecases/reset-driver-password": "PATCH /user/{userId}/driver-password",
   // Through verifyOneTimeCode: a code stored as bcrypt before the HMAC
   // format is still compared through the gate.
   "user/usecases/two-factor-verification": "POST /user/two-factor-verification",
@@ -158,6 +163,7 @@ describe("AUTH_BUSY (bcrypt gate)", () => {
       "AUTH_BUSY",
       "AUTH_SESSION_UNAVAILABLE",
       "SERVICE_UNAVAILABLE",
+      "SERVICE_BUSY",
     ]);
   });
 });
@@ -168,7 +174,12 @@ describe("IMPORT_BUSY (import queue)", () => {
     (id) => {
       const tooMany = responseOf(id, "429");
 
-      expect(listedCodes(tooMany)).toEqual(["IMPORT_BUSY", "RATE_LIMITED"]);
+      // TENANT_BUSY: the company's panel budget (plano-escala F2-28).
+      expect(listedCodes(tooMany)).toEqual([
+        "IMPORT_BUSY",
+        "RATE_LIMITED",
+        "TENANT_BUSY",
+      ]);
       expect(tooMany.description).toContain("reiniciando");
       expect(tooMany.headers?.["retry-after"]).toBeDefined();
     },
@@ -206,6 +217,23 @@ describe("every ServiceBusyError code", () => {
         "EXPORT_BUSY",
         "IMPORT_BUSY",
         "SOCKET_TICKET_UNAVAILABLE",
+        // The address search (plan pin-search): the provider's slot, the
+        // search paused, the day's searches spent and, since 14/11/2026,
+        // the search off by configuration (a code of its own).
+        "ADDRESS_SEARCH_BUSY",
+        "ADDRESS_SEARCH_DISABLED",
+        "ADDRESS_SEARCH_UNAVAILABLE",
+        "ADDRESS_SEARCH_DAILY_LIMIT",
+        // Load shedding (plano-escala F2-24): the same code the database's
+        // lock and statement ceilings answer with.
+        "SERVICE_BUSY",
+        // The company's panel budget, with its person's slice (F2-28).
+        "TENANT_BUSY",
+        // The CPU pool's line full, a thread that did not answer, a
+        // thread lost (F3-29): every export's 503 and the XML import's.
+        "CPU_POOL_BUSY",
+        "CPU_POOL_TIMEOUT",
+        "CPU_POOL_UNAVAILABLE",
       ]),
     );
 
@@ -238,12 +266,12 @@ describe("merged code lists", () => {
 
     for (const { id, response } of exports) {
       expect(codeDescription(response), id).toBe(
-        "Um destes: RATE_LIMITED, EXPORT_BUSY.",
+        "Um destes: RATE_LIMITED, TENANT_BUSY, EXPORT_BUSY.",
       );
     }
   });
 
-  function transformed(responses: Record<string, z.ZodTypeAny>): Json {
+  function transformed(responses: Record<string, z.ZodType>): Json {
     const { schema } = openapiTransform({
       url: "/probe/:businessId",
       schema: {
@@ -266,7 +294,7 @@ describe("merged code lists", () => {
       "Um destes: AUTH_TOKEN_MISSING, AUTH_TOKEN_INVALID, AUTH_SESSION_INVALID, AUTH_SESSION_INVALIDATED.",
     );
     expect(responses["429"].properties.code.description).toBe(
-      "Um destes: RATE_LIMITED.",
+      "Um destes: RATE_LIMITED, TENANT_BUSY.",
     );
   });
 
@@ -290,11 +318,11 @@ describe("merged code lists", () => {
     });
 
     expect(responses["429"].properties.code.description).toBe(
-      "Um destes: PROBE_BUSY, RATE_LIMITED.",
+      "Um destes: PROBE_BUSY, RATE_LIMITED, TENANT_BUSY.",
     );
     // A code both sides list appears once.
     expect(responses["503"].properties.code.description).toBe(
-      "Um destes: SERVICE_UNAVAILABLE, AUTH_SESSION_UNAVAILABLE.",
+      "Um destes: SERVICE_UNAVAILABLE, AUTH_SESSION_UNAVAILABLE, SERVICE_BUSY.",
     );
   });
 });

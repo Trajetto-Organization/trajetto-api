@@ -7,6 +7,7 @@ import {
   ListVehicleByBusinessIdProps,
   UpdateVehicle,
   GetVehicleByIdAndBusinessProps,
+  VehicleDetail,
   SearchVehicleWithCursorProps,
   CursorPaginatedVehicle,
   VehicleUsageCounts,
@@ -31,10 +32,13 @@ interface IVehicleRepository {
   ) => Promise<{ vehicle: Vehicle | null; activeCount: number }>;
 
   /**
-   * An update that puts an INACTIVE vehicle back into a contracted slot
-   * (FLEET-VEH-7), under the same per-company lock as the create: counting
-   * and writing apart let N simultaneous reactivations all pass the limit.
-   * Returns `vehicle: null`, writing nothing, when the limit is reached.
+   * An update that sets a status taking a contracted slot (FLEET-VEH-7),
+   * under the same per-company lock as the create: counting and writing
+   * apart let N simultaneous reactivations all pass the limit. Whether the
+   * vehicle already holds a slot is read under the lock, from the row as it
+   * is (M8): only one that does not is counted. Returns `vehicle: null`,
+   * writing nothing, when the limit is reached. `statusFromRunningRoute`
+   * derives the status in the same transaction, as updateVehicle does.
    */
   updateVehicleWithinLimit: (
     update: UpdateVehicle & { businessId: string },
@@ -46,9 +50,17 @@ interface IVehicleRepository {
     listVehicleProps: ListVehicleByBusinessIdProps,
   ) => Promise<ListVehicleProps>;
 
-  /** With `tx`, inside the caller's transaction. */
+  /**
+   * With `tx`, inside the caller's transaction. With
+   * `statusFromRunningRoute`, the status written is IN_ROUTE while a route
+   * of this vehicle is on the road and ACTIVE otherwise, read under that
+   * route's lock (FOR SHARE) in the same transaction as the write: a route
+   * closing at that instant is waited for and then seen ended, and a route
+   * still running cannot close until the write commits — its own vehicle
+   * sync then frees the truck. Never an "Em rota" with no route out.
+   */
   updateVehicle: (
-    { vehicleData, vehicleId }: UpdateVehicle,
+    { vehicleData, vehicleId, statusFromRunningRoute }: UpdateVehicle,
     tx?: Prisma.TransactionClient,
   ) => Promise<Vehicle>;
 
@@ -95,7 +107,7 @@ interface IVehicleRepository {
   getVehicleByIdAndBusiness({
     businessId,
     vehicleId,
-  }: GetVehicleByIdAndBusinessProps): Promise<Vehicle | null>;
+  }: GetVehicleByIdAndBusinessProps): Promise<VehicleDetail | null>;
   findVehiclesByFuelTypeId: (fuelTypeId: string) => Promise<Vehicle[]>;
 
   /** The listing's rows (same filters), for the export (decision 5.8). */
@@ -117,6 +129,29 @@ interface IVehicleRepository {
     vehicleId: string;
     driverId: string;
     businessId: string;
+  }) => Promise<boolean>;
+
+  /**
+   * The ids of every vehicle of this company this driver may operate: the
+   * same rule as canDriverOperateVehicle, as a list (wave 3: the service
+   * orders "Do seu veículo"). Any status, like the single-vehicle check.
+   */
+  findDriverOperableVehicleIds: (props: {
+    driverId: string;
+    businessId: string;
+  }) => Promise<string[]>;
+
+  /**
+   * Whether this driver may READ this vehicle (GET /vehicle/get-vehicle):
+   * every vehicle they may operate, plus the one of their route that ended
+   * within the arrival checklist window (canDriverReadVehicle). Never used
+   * to authorise a write.
+   */
+  canDriverReadVehicle: (props: {
+    vehicleId: string;
+    driverId: string;
+    businessId: string;
+    now: Date;
   }) => Promise<boolean>;
 
   /** Routes of this vehicle still ahead or on the road (decision 8.3). */

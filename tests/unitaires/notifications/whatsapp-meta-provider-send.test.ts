@@ -14,8 +14,6 @@ import { MetaCloudApiProvider } from "@/shared/providers/whatsapp-provider/imple
 const saved = {
   token: env.META_WHATSAPP_ACCESS_TOKEN,
   phone: env.META_WHATSAPP_PHONE_NUMBER_ID,
-  template: env.META_WHATSAPP_TEMPLATE_NAME,
-  customerTemplate: env.META_WHATSAPP_CUSTOMER_TEMPLATE_NAME,
 };
 
 const TEMPLATE_PAUSED = {
@@ -51,25 +49,39 @@ function sentBody(fetchMock: { mock: { calls: unknown[][] } }, call = 0) {
 
   return JSON.parse(init.body) as {
     biz_opaque_callback_data?: string;
-    template: { name: string };
+    template: {
+      name: string;
+      language: { code: string };
+      components: Array<Record<string, unknown>>;
+    };
   };
 }
 
 beforeEach(() => {
   env.META_WHATSAPP_ACCESS_TOKEN = "token-de-teste";
   env.META_WHATSAPP_PHONE_NUMBER_ID = "1234567890";
-  env.META_WHATSAPP_TEMPLATE_NAME = "trajetto_notification";
-  env.META_WHATSAPP_CUSTOMER_TEMPLATE_NAME = undefined;
 });
 
 afterEach(() => {
   env.META_WHATSAPP_ACCESS_TOKEN = saved.token;
   env.META_WHATSAPP_PHONE_NUMBER_ID = saved.phone;
-  env.META_WHATSAPP_TEMPLATE_NAME = saved.template;
-  env.META_WHATSAPP_CUSTOMER_TEMPLATE_NAME = saved.customerTemplate;
 
   vi.unstubAllGlobals();
 });
+
+/** An internal notice: a template of its own, its parameters, no buttons. */
+const FINE = {
+  name: "trajetto_multa_registrada",
+  parameters: ["RTA4F21", "Carlos", "Filial", "745-50", "14/10/2026"],
+};
+
+/** A customer message: the moment's template and its two URL buttons. */
+const TOKEN = "0f".repeat(32);
+const DISPATCHED = {
+  name: "trajetto_cliente_saiu_para_entrega",
+  parameters: ["Mercado Bom Preço", "Transportes Serra Azul", "NF-e 4521"],
+  urlButtonSuffixes: [TOKEN, TOKEN],
+};
 
 describe("tying a WhatsApp send to its delivery", () => {
   /**
@@ -86,7 +98,7 @@ describe("tying a WhatsApp send to its delivery", () => {
 
     const result = await new MetaCloudApiProvider().sendMessage({
       phoneNumber: "11999990000",
-      message: "Sua entrega saiu",
+      template: FINE,
       referenceId: "018f0000-0000-7000-8000-0000000000d1",
     });
 
@@ -103,10 +115,111 @@ describe("tying a WhatsApp send to its delivery", () => {
 
     await new MetaCloudApiProvider().sendMessage({
       phoneNumber: "11999990000",
-      message: "Teste",
+      template: FINE,
     });
 
     expect(sentBody(fetchMock)).not.toHaveProperty("biz_opaque_callback_data");
+  });
+});
+
+/**
+ * Plan of 02/11/2026 (B1/B2). Every message went out under one generic
+ * template with the whole text in a single parameter — vague enough that
+ * Meta filed it as Marketing, and the customer's message had no button to
+ * stop. Each message now names its own template, in pt_BR, with its
+ * parameters in order; the customer's carry the token at the end of both
+ * URL buttons.
+ */
+describe("the template on the wire", () => {
+  it("names the message's own template, with every parameter in order", async () => {
+    const fetchMock = stubFetch([
+      { status: 200, body: { messages: [{ id: "wamid.1" }] } },
+    ]);
+
+    await new MetaCloudApiProvider().sendMessage({
+      phoneNumber: "11999990000",
+      template: FINE,
+    });
+
+    const { template } = sentBody(fetchMock);
+
+    expect(template.name).toBe("trajetto_multa_registrada");
+    expect(template.language).toEqual({ code: "pt_BR" });
+    expect(template.components).toEqual([
+      {
+        type: "body",
+        parameters: FINE.parameters.map((text) => ({ type: "text", text })),
+      },
+    ]);
+  });
+
+  it("puts the token at the end of both URL buttons of a customer message", async () => {
+    const fetchMock = stubFetch([
+      { status: 200, body: { messages: [{ id: "wamid.1" }] } },
+    ]);
+
+    await new MetaCloudApiProvider().sendMessage({
+      phoneNumber: "11999990000",
+      template: DISPATCHED,
+    });
+
+    const { template } = sentBody(fetchMock);
+
+    expect(template.name).toBe("trajetto_cliente_saiu_para_entrega");
+    expect(template.components.slice(1)).toEqual([
+      {
+        type: "button",
+        sub_type: "url",
+        index: "0",
+        parameters: [{ type: "text", text: TOKEN }],
+      },
+      {
+        type: "button",
+        sub_type: "url",
+        index: "1",
+        parameters: [{ type: "text", text: TOKEN }],
+      },
+    ]);
+  });
+
+  it("never names the old generic template", async () => {
+    const fetchMock = stubFetch([
+      { status: 200, body: { messages: [{ id: "wamid.1" }] } },
+    ]);
+
+    await new MetaCloudApiProvider().sendMessage({
+      phoneNumber: "11999990000",
+      template: DISPATCHED,
+    });
+
+    expect(JSON.stringify(sentBody(fetchMock))).not.toContain(
+      "trajetto_notification",
+    );
+  });
+
+  it("fails a template Meta does not have for good, without crashing", async () => {
+    stubFetch([
+      {
+        status: 404,
+        body: {
+          error: {
+            message: "Template name does not exist in the translation",
+            code: 132001,
+          },
+        },
+      },
+    ]);
+
+    const result = await new MetaCloudApiProvider().sendMessage({
+      phoneNumber: "11999990000",
+      template: FINE,
+    });
+
+    expect(result).toMatchObject({
+      success: false,
+      retryable: false,
+      errorCode: 132001,
+    });
   });
 });
 
@@ -123,7 +236,7 @@ describe("a template Meta paused", () => {
 
     const result = await new MetaCloudApiProvider().sendMessage({
       phoneNumber: "11999990000",
-      message: "Sua entrega saiu",
+      template: DISPATCHED,
     });
 
     expect(result.success).toBe(false);
@@ -138,66 +251,24 @@ describe("a template Meta paused", () => {
 
     const provider = new MetaCloudApiProvider();
 
-    await provider.sendMessage({ phoneNumber: "11999990000", message: "1" });
+    await provider.sendMessage({
+      phoneNumber: "11999990000",
+      template: DISPATCHED,
+    });
 
     const second = await provider.sendMessage({
       phoneNumber: "11999990001",
-      message: "2",
+      template: DISPATCHED,
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(second.retryable).toBe(true);
     expect(second.retryAfterSeconds).toBeGreaterThan(0);
   });
-});
 
-describe("the customer's template", () => {
-  /**
-   * A carrier's message to its own customer used to ride the SAME template as
-   * the product's internal notices ("...Acesse o sistema..."): a customer
-   * reporting one as spam put the template every driver depends on at risk.
-   */
-  it("goes out under its own template when one is configured", async () => {
-    env.META_WHATSAPP_CUSTOMER_TEMPLATE_NAME = "trajetto_cliente";
-
-    const fetchMock = stubFetch([
-      { status: 200, body: { messages: [{ id: "wamid.1" }] } },
-    ]);
-
-    const provider = new MetaCloudApiProvider();
-
-    await provider.sendMessage({
-      phoneNumber: "11999990000",
-      message: "Sua entrega saiu",
-      audience: "customer",
-    });
-
-    await provider.sendMessage({
-      phoneNumber: "11999990000",
-      message: "Nova multa",
-    });
-
-    expect(sentBody(fetchMock, 0).template.name).toBe("trajetto_cliente");
-    expect(sentBody(fetchMock, 1).template.name).toBe("trajetto_notification");
-  });
-
-  it("falls back to the shared template until one is configured", async () => {
-    const fetchMock = stubFetch([
-      { status: 200, body: { messages: [{ id: "wamid.1" }] } },
-    ]);
-
-    await new MetaCloudApiProvider().sendMessage({
-      phoneNumber: "11999990000",
-      message: "Sua entrega saiu",
-      audience: "customer",
-    });
-
-    expect(sentBody(fetchMock).template.name).toBe("trajetto_notification");
-  });
-
-  it("does not stop the internal notices when Meta pauses it", async () => {
-    env.META_WHATSAPP_CUSTOMER_TEMPLATE_NAME = "trajetto_cliente";
-
+  it("does not stop the other templates", async () => {
+    // A customer's spam report pauses that moment's template, never the
+    // internal notices every driver and dispatcher depends on.
     const fetchMock = stubFetch([
       { status: 400, body: TEMPLATE_PAUSED },
       { status: 200, body: { messages: [{ id: "wamid.2" }] } },
@@ -207,13 +278,12 @@ describe("the customer's template", () => {
 
     await provider.sendMessage({
       phoneNumber: "11999990000",
-      message: "Sua entrega saiu",
-      audience: "customer",
+      template: DISPATCHED,
     });
 
     const internal = await provider.sendMessage({
       phoneNumber: "11999990000",
-      message: "Nova multa",
+      template: FINE,
     });
 
     expect(internal.success).toBe(true);

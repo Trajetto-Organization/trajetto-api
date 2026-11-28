@@ -1,16 +1,20 @@
 import { z } from "zod";
 
 import { isPickedDateInput } from "@/shared/vehicle/record-dates";
+import { APP_SUBMISSION_KEY_REQUIRED } from "@/shared/vehicle/record-origin";
 
 import { LocationSource, RecordOrigin } from "@prisma/client";
 import { isWithinAllowedDistance } from "@/shared/utils/geolocation";
 import { devicePrecheckField } from "@/shared/ai-precheck/device-precheck";
+import { occurredAtField } from "@/shared/delivery/occurred-at";
+import { RECENT_REASON_MAX_LENGTH } from "@/modules/fuel/usecases/fuel-rules";
 
 import {
   hasConsecutiveSpaces,
   hasSpaceAtEdges,
   isEmptyOrWhitespace,
 } from "@/shared/utils/zod-schema-helpers";
+import { fieldError } from "@/shared/validation/field-error";
 
 const createFuelSchema = z
   .object({
@@ -19,7 +23,7 @@ const createFuelSchema = z
       .uuid("A chave de idempotência do envio é inválida.")
       .optional()
       .describe(
-        "Chave de idempotência do envio (UUID), gerada uma vez pelo app e repetida em cada retentativa; o header Idempotency-Key preenche este campo quando ele vem vazio. Repetir a chave devolve o abastecimento já criado em vez de duplicar. Obrigatória quando created_from = MOBILE_APP.",
+        "Chave de idempotência do envio (UUID), gerada uma vez pelo app e repetida em cada retentativa; o header Idempotency-Key preenche este campo quando ele vem vazio. Repetir a chave devolve o abastecimento já criado em vez de duplicar. Obrigatória quando created_from = MOBILE_APP e em todo abastecimento de motorista, cuja origem é sempre MOBILE_APP.",
       ),
     current_mileage: z.preprocess(
       (val) => {
@@ -33,11 +37,12 @@ const createFuelSchema = z
         return val;
       },
       z
-        .number({
-          required_error: "A quilometragem atual do veículo é obrigatória.",
-          invalid_type_error:
-            "A quilometragem atual deve ser um número válido.",
-        })
+        .number(
+          fieldError({
+            required: "A quilometragem atual do veículo é obrigatória.",
+            invalid: "A quilometragem atual deve ser um número válido.",
+          }),
+        )
         .nonnegative("A quilometragem atual deve ser um valor não negativo.")
         .min(0.1, "A quilometragem atual deve ser maior que zero.")
         .max(9999999, "A quilometragem atual não pode exceder 9.999.999 km."),
@@ -52,11 +57,12 @@ const createFuelSchema = z
         return val;
       },
       z
-        .number({
-          required_error: "A quantidade de litros é obrigatória.",
-          invalid_type_error:
-            "A quantidade de litros deve ser um número válido.",
-        })
+        .number(
+          fieldError({
+            required: "A quantidade de litros é obrigatória.",
+            invalid: "A quantidade de litros deve ser um número válido.",
+          }),
+        )
         .positive("A quantidade de litros deve ser um valor positivo.")
         .min(0.001, "A quantidade de litros deve ser maior que zero.")
         .max(
@@ -74,10 +80,12 @@ const createFuelSchema = z
         return val;
       },
       z
-        .number({
-          required_error: "O preço por litro é obrigatório.",
-          invalid_type_error: "O preço por litro deve ser um número válido.",
-        })
+        .number(
+          fieldError({
+            required: "O preço por litro é obrigatório.",
+            invalid: "O preço por litro deve ser um número válido.",
+          }),
+        )
         .positive("O preço por litro deve ser um valor positivo.")
         .min(0.01, "O preço por litro deve ser no mínimo R$ 0,01")
         // Sanity cap (decision 15.9): no fuel costs more than R$ 50/L; a typed
@@ -139,11 +147,13 @@ const createFuelSchema = z
         // server's end of day let tomorrow through from 21:00 in São Paulo.
       }),
     vehicleId: z
-      .string({ required_error: "ID do veículo é obrigatório!" })
+      .string(fieldError({ required: "ID do veículo é obrigatório!" }))
       .uuid("ID do veículo é inválido."),
     driverId: z.string().uuid("ID do motorista é inválido.").optional(),
     fuelTypeId: z
-      .string({ required_error: "ID do tipo de combustível é obrigatório!" })
+      .string(
+        fieldError({ required: "ID do tipo de combustível é obrigatório!" }),
+      )
       .uuid("ID do tipo de combustível é inválido."),
     branchId: z.string().uuid("ID da filial é inválido.").optional(),
 
@@ -159,9 +169,9 @@ const createFuelSchema = z
         return val;
       },
       z
-        .number({
-          invalid_type_error: "A latitude deve ser um número válido.",
-        })
+        .number(
+          fieldError({ invalid: "A latitude deve ser um número válido." }),
+        )
         .min(-90, "A latitude deve estar entre -90 e 90.")
         .max(90, "A latitude deve estar entre -90 e 90.")
         .optional()
@@ -179,9 +189,9 @@ const createFuelSchema = z
         return val;
       },
       z
-        .number({
-          invalid_type_error: "A longitude deve ser um número válido.",
-        })
+        .number(
+          fieldError({ invalid: "A longitude deve ser um número válido." }),
+        )
         .min(-180, "A longitude deve estar entre -180 e 180.")
         .max(180, "A longitude deve estar entre -180 e 180.")
         .optional()
@@ -212,15 +222,56 @@ const createFuelSchema = z
     // 🆕 GEOLOCATION AUDIT: Track location source
     location_source: z.nativeEnum(LocationSource).optional().nullable(),
 
-    // 🆕 RECORD ORIGIN: Track where the record was created
-    created_from: z.nativeEnum(RecordOrigin, {
-      errorMap: () => ({
-        message: "Origem inválida. Deve ser MOBILE_APP ou WEB_DASHBOARD.",
-      }),
-    }),
+    // 🆕 RECORD ORIGIN: Track where the record was created. A driver's is
+    // MOBILE_APP whatever this says: the use case decides it from the caller
+    // (shared/vehicle/record-origin.ts), and the app's rules follow it.
+    created_from: z
+      .nativeEnum(RecordOrigin, {
+        error: "Origem inválida. Deve ser MOBILE_APP ou WEB_DASHBOARD.",
+      })
+      .describe(
+        "Origem do cadastro: MOBILE_APP ou WEB_DASHBOARD. Para o motorista, o servidor grava sempre MOBILE_APP, seja qual for o valor enviado, e exige o que o app sempre manda: a localização GPS e a chave de idempotência.",
+      ),
 
     // Decision 14.2: the phone's offline check of the odometer photo.
     device_precheck: devicePrecheckField,
+
+    // Plan of 02/11/2026 (C5/F3): the route the refuelling was made on.
+    routeId: z
+      .string()
+      .uuid("ID da rota é inválido.")
+      .nullable()
+      .optional()
+      .describe(
+        "A rota em que o abastecimento foi feito (abastecimento a partir da rota no app). A rota tem de ser do motorista do abastecimento e ter o veículo dele (senão 422 ROUTE_LINK_MISMATCH); rota inexistente ou de outra empresa: 404 DELIVERY_ROUTE_NOT_FOUND. O status da rota não importa: um abastecimento feito sem sinal pode chegar depois do fim. A rota informada também vale como a atribuição do veículo ao motorista, mesmo depois do fim.",
+      ),
+
+    // K6: when the driver refuelled, for a refuelling the app queued
+    // offline. With X-Client-Sent-At it replaces refueling_date.
+    occurred_at: occurredAtField,
+
+    // 05/11/2026: the driver's answer to "another refuelling of this
+    // vehicle less than 30 minutes ago" (fuel-rules.ts). Not columns: the
+    // use case keeps the reason only when the alert holds.
+    confirm_recent: z
+      .boolean(
+        fieldError({ invalid: "A confirmação deve ser verdadeiro ou falso." }),
+      )
+      .optional()
+      .describe(
+        "O motorista confirmou um segundo abastecimento do veículo em menos de 30 minutos. Vale com `recent_reason` de 3 caracteres ou mais; sem os dois, o app de `contract` 5 ou maior recebe 409 FUEL_RECENT_REFUEL.",
+      ),
+    recent_reason: z
+      .string(fieldError({ invalid: "O motivo deve ser um texto." }))
+      .trim()
+      .max(
+        RECENT_REASON_MAX_LENGTH,
+        `O motivo deve ter no máximo ${RECENT_REASON_MAX_LENGTH} caracteres.`,
+      )
+      .optional()
+      .describe(
+        "Por que o motorista abasteceu de novo em menos de 30 minutos (de 3 a 300 caracteres, sem os espaços das pontas). Guardado no abastecimento, com o alerta RECENT_REFUEL, quando `confirm_recent` é true.",
+      ),
   })
   // 🆕 VALIDATION: Distance check for GPS_MANUAL (manual adjustment)
   .refine(
@@ -256,10 +307,11 @@ const createFuelSchema = z
       data.created_from === RecordOrigin.MOBILE_APP &&
       !data.client_submission_id
     ) {
+      // The use case refuses a driver's refuelling without it in the same
+      // words, whatever origin the body claimed (appSubmissionKeyRefusal).
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message:
-          "A chave de idempotência é obrigatória para envios do aplicativo.",
+        message: APP_SUBMISSION_KEY_REQUIRED,
         path: ["client_submission_id"],
       });
     }

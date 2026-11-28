@@ -27,6 +27,12 @@ import { callerNotFound } from "@/shared/delivery/caller-not-found";
 import { WebhookFanOutService } from "@/shared/integration/webhook-fan-out-service";
 import { deliveryEventPayload } from "@/shared/integration/announce";
 import { logger } from "@/shared/logging/logger";
+import { announceRoutesRemoved } from "@/shared/route/route-realtime";
+import { env } from "@/env";
+import type { IBackgroundJobRepository } from "@/shared/jobs/background-job-repository";
+import { PermanentJobError } from "@/shared/jobs/job-errors";
+import type { JobContext } from "@/shared/jobs/job-runner";
+import { wakeJobsAfterCommit } from "@/shared/jobs/job-wake";
 
 import {
   importQueue as defaultImportQueue,
@@ -91,6 +97,10 @@ class ReverseImportUseCase {
     private notificationService: NotificationService,
     @inject("WebhookFanOutService")
     private webhooks: WebhookFanOutService,
+    // The undo as a durable job (plano-escala F3-24). Optional for the
+    // suites that only drive the in-memory path.
+    @inject("BackgroundJobRepository")
+    private jobs?: IBackgroundJobRepository,
   ) {}
 
   /**
@@ -124,6 +134,15 @@ class ReverseImportUseCase {
   ): Promise<ReverseImportOutcome> {
     const record = await this.check(request);
 
+    // An undo already in the jobs queue (F3-24): this click follows it,
+    // whatever is left to remove and wherever the flag stands now.
+    if (
+      this.jobs &&
+      (await this.jobs.findLive("IMPORT_REVERSAL", request.importId))
+    ) {
+      return { kind: "accepted", record: this.accepted(record) };
+    }
+
     const remaining = await this.importRepository.countImportDeliveries(
       request.importId,
       request.businessId,
@@ -140,6 +159,10 @@ class ReverseImportUseCase {
         kind: "finished",
         result: await this.run(request, record, claim.lease, claim.progress),
       };
+    }
+
+    if (env.IMPORT_DURABLE_JOBS && this.jobs) {
+      return this.startJob(request, record, this.jobs);
     }
 
     // A full replica refuses with 429 IMPORT_BUSY before the lease is taken.
@@ -200,6 +223,119 @@ class ReverseImportUseCase {
         },
       },
     };
+  }
+
+  /**
+   * A large undo as a durable job (plano-escala F3-24, IMPORT_DURABLE_JOBS):
+   * the lease is taken now, as for the in-memory queue, so the record reads
+   * RUNNING at once and a second click — on any replica — follows this one;
+   * then the IMPORT_REVERSAL job is enqueued, and the process that consumes
+   * the `jobs` queue runs the batches (`runJob`). The 60 s transactions of
+   * the batches leave the HTTP process with it.
+   */
+  private async startJob(
+    request: ReverseImportRequest,
+    record: ImportRecord,
+    jobs: IBackgroundJobRepository,
+  ): Promise<ReverseImportOutcome> {
+    const claim = await this.claim(request);
+
+    if (claim.outcome === "running") {
+      return { kind: "accepted", record: this.accepted(claim.record) };
+    }
+
+    const { importId, businessId, userId } = request;
+
+    try {
+      await jobs.enqueue({
+        kind: "IMPORT_REVERSAL",
+        businessId,
+        subjectId: importId,
+        payload: { importId, userId },
+      });
+    } catch (error) {
+      await this.importRepository
+        .releaseReversal(importId, businessId, claim.lease)
+        .catch(() => undefined);
+
+      throw error;
+    }
+
+    wakeJobsAfterCommit();
+
+    return {
+      kind: "accepted",
+      record: {
+        id: record.id,
+        status: record.status,
+        reversal: {
+          state: "RUNNING",
+          removedDeliveries: claim.progress.removedDeliveries,
+          removedRoutes: claim.progress.removedRoutes,
+          keptDeliveries: claim.progress.keptDeliveries,
+          keptRoutes: claim.progress.keptRoutes,
+          startedAt: claim.progress.startedAt,
+          finishedAt: null,
+        },
+      },
+    };
+  }
+
+  /**
+   * The IMPORT_REVERSAL job (import-reversal-job.ts): the one run of this
+   * undo, so it takes the lease over whatever holds it — the request's that
+   * enqueued it, or a run that died — and resumes from the progress the
+   * committed batches left on the record. A run the takeover fenced out
+   * rolls its batch back. It stops between two batches when asked
+   * (SIGTERM): the lease goes, the progress stays, and the job resumes on
+   * the next process to claim it.
+   */
+  async runJob(job: JobContext): Promise<void> {
+    const payload = job.payload as { importId?: unknown; userId?: unknown };
+    const businessId = job.businessId;
+
+    if (
+      !businessId ||
+      typeof payload?.importId !== "string" ||
+      typeof payload.userId !== "string"
+    ) {
+      throw new PermanentJobError("import reversal: malformed job payload");
+    }
+
+    const request: ReverseImportRequest = {
+      importId: payload.importId,
+      userId: payload.userId,
+      businessId,
+    };
+
+    const record = await this.importRepository.findImportById(
+      request.importId,
+      businessId,
+    );
+
+    // Gone, or undone already: nothing left to do.
+    if (!record || record.status === "REVERSED") return;
+
+    if (record.status === "IN_PROGRESS") {
+      throw new PermanentJobError("import reversal: the upload is running");
+    }
+
+    // Any lease is taken over: staleness measured from a minute ahead.
+    const claim = await this.importRepository.claimReversal(
+      request.importId,
+      businessId,
+      new Date(Date.now() + 60_000),
+    );
+
+    if (claim.outcome === "reversed") return;
+
+    if (claim.outcome !== "claimed") {
+      throw new Error(`import reversal: lease not taken (${claim.outcome})`);
+    }
+
+    await this.run(request, record, claim.lease, claim.progress, () =>
+      job.throwIfStopped(),
+    );
   }
 
   /** The caller, the upload, and whether it can be undone at all. */
@@ -281,6 +417,7 @@ class ReverseImportUseCase {
     record: ImportRecord,
     lease: Date,
     progress: ReversalProgress,
+    beforeBatch?: () => void,
   ): Promise<ReversalResult> {
     // Each delivery the upload announced as `delivery.created` and this undo
     // removes is announced as `delivery.cancelled` (decision 5.1), in the
@@ -297,12 +434,19 @@ class ReverseImportUseCase {
       }
     };
 
+    // The PLANNED routes the undo deleted, after their commit: the other
+    // tabs' boards and route pickers kept offering them, and choosing one
+    // answered 404; only the tab that undid read again (audit of
+    // 25/11/2026).
+    const onRoutesRemoved = (routes: Array<{ id: string; code: number }>) =>
+      announceRoutesRemoved(businessId, routes);
+
     const result = await this.importRepository.runReversal(
       importId,
       businessId,
       lease,
       progress,
-      { onRemoved },
+      { onRemoved, beforeBatch, onRoutesRemoved },
     );
 
     const kept = result.keptDeliveries.length + result.keptRoutes.length;

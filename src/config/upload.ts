@@ -20,9 +20,20 @@ export const UPLOAD_TYPES = [
   // namespace, because `extractFilePath` refusing an undeclared prefix is what
   // keeps a key from pointing anywhere in the bucket.
   "deliveryProofs",
+
+  // The second one the server writes (plano-escala F3-23a): a spreadsheet
+  // upload kept for the durable import job to read, on whichever process
+  // claims it. Deleted when the job ends; kept seven days when it fails.
+  "spreadsheetImports",
 ] as const;
 
 export type UploadType = (typeof UPLOAD_TYPES)[number];
+
+/** What a stored spreadsheet upload is served as: an .xlsx or a .csv. */
+const SPREADSHEET_MIME_TYPES = [
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "text/csv",
+] as const;
 
 const MIME_TYPES = {
   images: ["image/jpeg", "image/jpg", "image/png", "image/webp"],
@@ -99,6 +110,9 @@ export const uploadConfig = {
       // document here that is not a single image. Ten megabytes is far past
       // anything the renderer produces and still a ceiling.
       deliveryProofs: 10 * 1024 * 1024, // 10MB
+
+      // The import's 8 MB of base64 (its schema's cap) decodes to 6 MB.
+      spreadsheetImports: 8 * 1024 * 1024, // 8MB
     };
 
     return limits[uploadType];
@@ -116,6 +130,10 @@ export const uploadConfig = {
       return ["application/pdf"];
     }
 
+    if (uploadType === "spreadsheetImports") {
+      return [...SPREADSHEET_MIME_TYPES];
+    }
+
     return MIME_TYPES.images;
   },
 
@@ -129,7 +147,10 @@ export const uploadConfig = {
    * wrong question. The answer to the right question is that the write must
    * not be possible.
    */
-  serverOnlyUploadTypes: ["deliveryProofs"] as UploadType[],
+  serverOnlyUploadTypes: [
+    "deliveryProofs",
+    "spreadsheetImports",
+  ] as UploadType[],
 };
 
 export type UploadConfig = typeof uploadConfig;

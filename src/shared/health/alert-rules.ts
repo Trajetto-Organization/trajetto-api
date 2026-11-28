@@ -1,9 +1,19 @@
+import type { WorkerQueue } from "@/shared/lifecycle/process-role";
 import { isCredentialFailure } from "@/shared/notifications/delivery-diagnostics";
+
+import {
+  clusterEpochStaleReason,
+  type ClusterEpochState,
+} from "./cluster-epoch";
+import { feedTxidRegressed, type FeedTxidState } from "./feed-txid";
+import type { PgBouncerMetrics } from "./pgbouncer-metrics";
 
 /**
  * When the operation must be woken up (OBS-03). Pure: the ops heartbeat job
- * gathers an OperationalSnapshot, these rules turn it into reasons, and an
- * empty list is the only "all is well".
+ * gathers an OperationalSnapshot, these rules turn it into alerts, each with
+ * a stable code and a pt-BR message that ends with the path of its runbook
+ * (docs/runbooks/<code>.md, plano-escala F1-20), and an empty list is the
+ * only "all is well".
  *
  * Every lag here is ELIGIBLE lag — how long something already due has waited
  * to be taken — never age from creation. A delivery legitimately waits up to
@@ -21,6 +31,15 @@ interface CronJobState {
 
   /** RUNNING rows whose lease ran out: a run whose replica died mid-way. */
   staleRunning: number;
+
+  /**
+   * The latest run stopped with work left (FAILED "[partial]", F1-17), and
+   * since when the job has done nothing but partials — null when a run that
+   * really failed came after the last success (readCronJobs). Absent on a
+   * snapshot that did not read them, which judges the job as before.
+   */
+  lastPartial?: boolean;
+  partialSince?: Date | null;
 }
 
 interface OperationalSnapshot {
@@ -37,6 +56,23 @@ interface OperationalSnapshot {
 
   /** Oldest PENDING AI analysis already due. */
   aiEligibleLagSec: number | null;
+
+  /**
+   * Oldest PENDING durable job already due (plano-escala F3-22): a job of
+   * background_job nobody claimed. Absent when the collector did not read
+   * it, which judges nothing.
+   */
+  jobEligibleLagSec?: number | null;
+
+  /**
+   * The durable jobs that must finish (MUST_FINISH_JOB_KINDS: a company's
+   * purge, a person's anonymization): `failing`, the live ones that spent
+   * their regular attempts and still fail (the runner retries them every
+   * hour); `failed`, the ones that failed for good in the last 24 h (a
+   * PermanentJobError, or a process that died in the last attempt).
+   * Absent when the collector did not read them, which judges nothing.
+   */
+  mustFinishJobs?: { failing: number; failed: number };
 
   /** Deliveries that gave up recently (the collector's window), newest first. */
   deliveryFailures: Array<{ channel: string; lastError: string | null }>;
@@ -56,6 +92,14 @@ interface OperationalSnapshot {
   partitionRunwayOk: boolean;
   partitionRunwayDays: number | null;
 
+  /**
+   * Every registered partitioned table (plano-escala F2-09), as
+   * operational-state.ts judged it. When present, it replaces the two
+   * driver_position fields above for the alerts; absent on a snapshot that
+   * did not read it, which judges driver_position by them as before.
+   */
+  partitions?: PartitionAlertState[];
+
   /** Workers with no sign of progress for too long, on live replicas. */
   stuckWorkers: Array<{ replica: string; worker: string }>;
 
@@ -74,8 +118,219 @@ interface OperationalSnapshot {
     notAfter: Date | null;
   };
 
+  /**
+   * The database's own numbers the scale plan's alerts read (F1-11), from
+   * the heartbeat's cluster readings. Absent when the collector did not
+   * read them, which judges nothing of it.
+   */
+  database?: ClusterDatabaseState;
+
+  /** Redis' memory, ceiling and evictions (F1-11); absent likewise. */
+  redis?: ClusterRedisState;
+
+  /**
+   * Deliveries created in the last 24 h and 7 days (plano-escala U-12),
+   * from the cluster rows' counter; absent without a reading (no recent
+   * quarter-hour row, or the series switched off), which judges nothing.
+   */
+  volume?: VolumeState;
+
+  /**
+   * The geocoder's account today (plano-escala F2-32): the lookups the
+   * day's rows count across its scopes, and the plan's daily quota
+   * (LOCATIONIQ_DAILY_QUOTA). Absent without a quota written down, or
+   * when the rows could not be read, which judges nothing.
+   */
+  geocodingQuota?: GeocodingQuotaState;
+
+  /**
+   * The providers' refusals for rate in the last 24 h (plano-escala
+   * F3-15c): Meta's 130429 or 429, the e-mail provider's, Expo's 429,
+   * summed from the processes' ops_sample rows. Absent when the rows could
+   * not be read, which judges nothing.
+   */
+  providerThrottled?: ProviderThrottleState;
+
+  /**
+   * The integration feed's stamp against the cluster (plano-escala F2-03):
+   * the largest delivery_event.txid stored and the next xid. Absent until
+   * the feed's index is valid, or when it could not be read, which judges
+   * nothing.
+   */
+  feedTxid?: FeedTxidState;
+
+  /**
+   * The cluster's epoch row against the cluster (plano-escala U-14): the
+   * stored system_identifier and timeline, and the cluster's own. Absent
+   * before the table exists, or when it could not be read, which judges
+   * nothing.
+   */
+  clusterEpoch?: ClusterEpochState;
+
+  /**
+   * Each replica's sockets against its real ceiling (plano-escala F5-31),
+   * from its newest ops_sample row of the last minutes. Absent when the
+   * rows could not be read, which judges nothing; a replica with no
+   * ceiling (cap 0) is never judged.
+   */
+  sockets?: SocketUsageState[];
+
+  /**
+   * The processes whose memory budget does not fit (plano-escala U-15),
+   * from each one's newest ops_sample row of the last minutes. Absent when
+   * the rows could not be read, which judges nothing.
+   */
+  memoryBudgets?: MemoryBudgetState[];
+
+  /**
+   * Cursors of another cluster epoch the integration feed converted in the
+   * last minutes (plano-escala F2-05), summed from the processes' ops_sample
+   * rows. Absent when the rows could not be read, which judges nothing.
+   */
+  feedEpochConversions?: number;
+
+  /**
+   * The live processes of process_heartbeat (plano-escala F3-34): which
+   * queues have a consumer, which commits run, and whether a process of
+   * another environment writes to this database. Absent when the rows could
+   * not be read (or by a collector that does not read them), which judges
+   * nothing of it.
+   */
+  processes?: ProcessFleetState;
+
+  /**
+   * PgBouncer's consoles, as the process with the cron read them this
+   * minute (plano-escala F4-36). Absent or null when PGBOUNCER_STATS_URL is
+   * not set, which judges nothing.
+   */
+  pgbouncer?: PgBouncerMetrics | null;
+
   /** Parts of the snapshot that could not be read; each one is a reason. */
   collectionErrors: string[];
+}
+
+interface ProcessFleetState {
+  /** The APP_ENV of the process that collected: whose rows these should be. */
+  appEnv: string;
+
+  /** Every row beating within the live window (90 s). */
+  live: Array<{
+    replica: string;
+    role: string;
+    appEnv: string;
+    commit: string | null;
+    queues: string[];
+    startedAt: Date;
+
+    /**
+     * What the process's image says the realtime role runs and speaks
+     * (plano-escala F3-31c: the `trajetto.realtime-source` and
+     * `trajetto.contract-epoch` labels, as APP_REALTIME_SOURCE and
+     * APP_CONTRACT_EPOCH): the deploy holds trajetto-realtime on its build
+     * while both match the new image's. Null in an image without them;
+     * absent from an older collector.
+     */
+    realtimeSource?: string | null;
+    contractEpoch?: number | null;
+  }>;
+}
+
+interface MemoryBudgetState {
+  replica: string;
+  totalMb: number;
+  limitMb: number;
+}
+
+interface SocketUsageState {
+  replica: string;
+  connections: number;
+  cap: number;
+}
+
+interface PartitionAlertState {
+  table: string;
+
+  /** Whole days until the last partition ends; null when there is none. */
+  lookaheadDays: number | null;
+
+  /** Under 3 days ahead: a few nights from refused inserts. */
+  runwayOk: boolean;
+
+  /** Under 5 days ahead: the job has missed two nights. */
+  lookaheadOk: boolean;
+
+  /** Partitions past the retention by more than 3 days, still there. */
+  stuck: string[];
+
+  /** The days of grace before `stuck` (the registry's); 3 when absent. */
+  stuckGraceDays?: number;
+
+  /**
+   * Who drops the table's partitions past the retention, when a gate
+   * settles them first (F5-11): the message says why a day is kept.
+   */
+  dropGate?: string;
+}
+
+interface GeocodingQuotaState {
+  usedToday: number;
+  dailyQuota: number;
+}
+
+interface ProviderThrottleState {
+  whatsapp: number;
+  email: number;
+  push: number;
+}
+
+interface ClusterDatabaseState {
+  /** SHOW archive_mode: "on", "always" (a standby) or "off". */
+  archiveMode: string | null;
+
+  /** pg_stat_archiver: the last segment archived, and the last failure. */
+  lastArchivedAgeSec: number | null;
+  lastArchivedAt: Date | null;
+  lastArchiveFailedAt: Date | null;
+  archiveFailedCount: number | null;
+
+  /** The cluster's age(datfrozenxid), its largest database. */
+  xidAge: number | null;
+
+  /** The oldest transaction with an xid, anywhere in the cluster. */
+  oldestWriteXactSec: number | null;
+
+  /** pg_wal's size; null when this user may not list it. */
+  pgWalBytes: number | null;
+}
+
+interface ClusterRedisState {
+  up: boolean;
+
+  /** null with Redis up is "no ceiling" (maxmemory 0). */
+  maxmemoryMb: number | null;
+  maxmemoryPolicy: string | null;
+
+  /**
+   * Keys evicted since the 'cluster' row of about 15 minutes ago, and how
+   * long ago that was; null without such a row (the first minutes after a
+   * deploy, or the series switched off).
+   */
+  evictedKeys: { delta: number; windowSec: number } | null;
+}
+
+interface VolumeState {
+  last24h: number;
+  last7d: number;
+}
+
+/** What the environment says should be there (F1-11). */
+interface AlertExpectations {
+  /**
+   * PITR_EXPECTED: WAL archiving is meant to be on. False until the
+   * pgBackRest setup of each environment is done (F1a staging, F1b
+   * production), so a database that never archived pages nobody.
+   */
+  pitrExpected: boolean;
 }
 
 const DEFAULT_ALERT_THRESHOLDS = {
@@ -94,6 +349,14 @@ const DEFAULT_ALERT_THRESHOLDS = {
   aiLagSec: 15 * 60,
 
   /**
+   * A durable job due and unclaimed (F3-22, the job-overdue rule): the
+   * worker's sweep is 2 s and the role all's 30 s, and a job's lease runs
+   * out within 2 min of its process dying; ten minutes is a queue that
+   * nobody runs, or a kind no process has a handler for.
+   */
+  jobOverdueSec: 10 * 60,
+
+  /**
    * Terminal failures of ONE channel inside the collector's window. A few
    * are customer data (a number without WhatsApp, a mailbox that is gone);
    * this many at once is the channel itself.
@@ -105,27 +368,316 @@ const DEFAULT_ALERT_THRESHOLDS = {
 
   connectionUsagePercent: 80,
 
+  /**
+   * A replica's sockets against its ceiling (F5-31): past 80%, the next
+   * deploy's reconnections no longer fit on the replicas left over, and
+   * the handshakes start being refused with the wait.
+   */
+  socketCapUsagePercent: 80,
+
+  /**
+   * A queue with a due row and no live consumer (F3-34): the worker of a
+   * split fleet is down or was never created, and the api only enqueues.
+   * Two minutes is past every sweep (2 s on a worker, 30 s on `all`) and a
+   * restart, and before the 5 minutes of the lag rules.
+   */
+  queueNoConsumerSec: 2 * 60,
+
+  /**
+   * Live processes on different commits (F3-34): a deploy rolls every
+   * role within minutes; half an hour is a role whose deploy failed or
+   * whose Application was left out, running the old build beside the new.
+   */
+  mixedVersionsSec: 30 * 60,
+
   /** The A1 certificate is renewed by hand: a month to buy and install it. */
   proofSigningWarningDays: 30,
 
   /** From here on, receipts are days away from going out unsigned. */
   proofSigningCriticalDays: 7,
+
+  /**
+   * archive_timeout is 60 s (plano-escala), so a segment leaves at least a
+   * minute apart while anything writes, and the ops_sample rows write every
+   * minute: five minutes without one is an archiver that stopped.
+   */
+  archiveLagSec: 300,
+
+  /**
+   * Wraparound is at 2^31 (~2.1 billion) and the anti-wraparound vacuum
+   * starts at 200 million: a billion is the freeze falling far behind, with
+   * time still to act.
+   */
+  xidAge: 1_000_000_000,
+
+  /**
+   * LONG_WRITE_XACT_ALERT_SECONDS (120 by default): an open write holds the
+   * vacuum's horizon and, with the integration feed (F2-05), the feed's.
+   * The import reversal runs a 60 s transaction inside HTTP today; the
+   * limit drops to 60 by env once that becomes a job (wave 14).
+   */
+  longWriteXactSec: 120,
+
+  /**
+   * PG_WAL_ALERT_GIB (12 by default, 8 on the single VPS): normal use is
+   * 1-2 GB, plus the archive queue when R2 is away, and pg_wal lives on the
+   * disk both productions share.
+   */
+  pgWalBytes: 12 * 1024 ** 3,
+
+  /**
+   * APPROVED_GATE_MONTHLY_DELIVERIES (10 000 by default, today's step): the
+   * monthly volume the newest approved load report in docs/desempenho
+   * proved this hardware takes (plano-escala U-12). Raised only with a
+   * new report.
+   */
+  approvedGateMonthlyDeliveries: 10_000,
+
+  /**
+   * The share of the gate that pages: at 70% the next cohort of the ramp
+   * waits for the next step (V-07), with room left for the peak.
+   */
+  volumeGateRatio: 0.7,
+
+  /**
+   * PLATFORM_DAILY_DELIVERY_SOFT_CAP: deliveries in the last 24 h past it
+   * page. Unset is no cap (infinite). Only an alert: nothing is refused.
+   */
+  dailyDeliverySoftCap: Number.POSITIVE_INFINITY,
+
+  /**
+   * The share of the provider's day that pages (decision D40): at 70% the
+   * owner still has the day's rest to raise the plan or lower a budget
+   * before the 429 holds every path until midnight UTC.
+   */
+  geocodingQuotaRatio: 0.7,
+
+  /**
+   * A client waiting this long for one of PgBouncer's server connections
+   * pages (plano-escala F4-36): the image drops the waiting client with
+   * query_wait_timeout at 5 s, a 503, so 2 s is the pool already short.
+   */
+  pgbouncerMaxWaitSec: 2,
+
+  /**
+   * PgBouncer's server connections of a database against its
+   * max_db_connections: at 80% the next burst queues (and the 1M gate
+   * asks for under 70% sustained, docs/desempenho).
+   */
+  pgbouncerServerUsageRatio: 0.8,
 } as const;
 
 type AlertThresholds = { [K in keyof typeof DEFAULT_ALERT_THRESHOLDS]: number };
+
+const GIB = 1024 ** 3;
+
+/**
+ * The thresholds the environment tunes (F1-11, U-12); the rest are the
+ * code's. The volume ones are optional here: absent is the default.
+ */
+function alertThresholdsFromEnv(values: {
+  LONG_WRITE_XACT_ALERT_SECONDS: number;
+  PG_WAL_ALERT_GIB: number;
+  APPROVED_GATE_MONTHLY_DELIVERIES?: number;
+  PLATFORM_DAILY_DELIVERY_SOFT_CAP?: number;
+}): AlertThresholds {
+  return {
+    ...DEFAULT_ALERT_THRESHOLDS,
+    longWriteXactSec: values.LONG_WRITE_XACT_ALERT_SECONDS,
+    pgWalBytes: values.PG_WAL_ALERT_GIB * GIB,
+    approvedGateMonthlyDeliveries:
+      values.APPROVED_GATE_MONTHLY_DELIVERIES ??
+      DEFAULT_ALERT_THRESHOLDS.approvedGateMonthlyDeliveries,
+    dailyDeliverySoftCap:
+      values.PLATFORM_DAILY_DELIVERY_SOFT_CAP ??
+      DEFAULT_ALERT_THRESHOLDS.dailyDeliverySoftCap,
+  };
+}
+
+/** How many names of stuck partitions a message carries. */
+const STUCK_NAMES_SHOWN = 3;
+
+/**
+ * The partitions of each registered table (F2-09): runway-low (under 3
+ * days, inserts about to be refused) or, before it, lookahead-low (under
+ * 5, the job missed two nights), never both for one table; and stuck, a
+ * partition past the retention the job keeps failing to drop. A snapshot
+ * without the per-table states judges driver_position's runway alone, as
+ * before.
+ */
+function partitionAlerts(snapshot: OperationalSnapshot): Alert[] {
+  if (!snapshot.partitions) {
+    return snapshot.partitionRunwayOk
+      ? []
+      : [
+          {
+            code: "partition-runway-low",
+            message: `driver_position: restam ${snapshot.partitionRunwayDays ?? 0} dia(s) de partições — sem elas o INSERT de posição é recusado`,
+          },
+        ];
+  }
+
+  const alerts: Alert[] = [];
+
+  for (const table of snapshot.partitions) {
+    const days = table.lookaheadDays ?? 0;
+
+    if (!table.runwayOk) {
+      alerts.push({
+        code: "partition-runway-low",
+        message: `${table.table}: restam ${days} dia(s) de partições — sem elas o INSERT é recusado`,
+      });
+    } else if (!table.lookaheadOk) {
+      alerts.push({
+        code: "partition-lookahead-low",
+        message: `${table.table}: só ${days} dia(s) de partições à frente (o mínimo é 5) — o job partition-maintenance não as criou em noites seguidas`,
+      });
+    }
+
+    if (table.stuck.length > 0) {
+      const shown = table.stuck.slice(0, STUCK_NAMES_SHOWN).join(", ");
+      const more =
+        table.stuck.length > STUCK_NAMES_SHOWN
+          ? ` e mais ${table.stuck.length - STUCK_NAMES_SHOWN}`
+          : "";
+
+      alerts.push({
+        code: "partition-stuck",
+        message: `${table.table}: ${table.stuck.length} partição(ões) passaram da retenção há mais de ${table.stuckGraceDays ?? 3} dias e continuam no banco (${shown}${more}) — o job partition-maintenance não consegue destacá-las ou apagá-las${
+          table.dropGate
+            ? " (numa fila, o dia só sai sem linha em voo, com as falhas nos dead letters e a família toda particionada)"
+            : ""
+        }`,
+      });
+    }
+  }
+
+  return alerts;
+}
+
+/**
+ * Every alert's stable code (plano-escala F1-20): the name of its runbook,
+ * docs/runbooks/<code>.md, and what a reader of the log or of the check
+ * greps for. A code is never renamed (an operator's notes and the
+ * runbook's links point to it); a new rule brings its code AND its
+ * runbook, and tests/unitaires/lifecycle/runbooks.test.ts refuses one
+ * without the other.
+ */
+const ALERT_KINDS = [
+  "outbox-lag",
+  "delivery-lag",
+  "webhook-lag",
+  "ai-lag",
+  "channel-credential",
+  "channel-failure-burst",
+  "ai-provider-paused",
+  "ai-credential",
+  "job-overdue",
+  "job-failing",
+  "cron-lease-expired",
+  "cron-partial-stuck",
+  "cron-overdue",
+  "partition-runway-low",
+  "partition-lookahead-low",
+  "partition-stuck",
+  "worker-stuck",
+  "connection-usage-high",
+  "socket-cap-high",
+  "memory-budget",
+  "queue-no-consumer",
+  "mixed-versions",
+  "foreign-environment",
+  "redis-down",
+  "pitr-archive-off",
+  "wal-archive-stalled",
+  "xid-age-high",
+  "long-write-xact",
+  "pg-wal-high",
+  "redis-evictions",
+  "redis-memory-policy",
+  "proof-signing",
+  "volume-near-gate",
+  "geocoding-quota-high",
+  "provider-throttled",
+  "feed-txid-regressed",
+  "cluster-epoch-stale",
+  "feed-epoch-conversion",
+  "pgbouncer-down",
+  "pgbouncer-clients-waiting",
+  "pgbouncer-server-saturation",
+  "collection-incomplete",
+] as const;
+
+type AlertKind = (typeof ALERT_KINDS)[number];
+
+/**
+ * Runbooks of incidents no rule names yet (F1-20): a provider down, a
+ * reconnect storm, a migration stuck on a lock, a full disk, a PITR
+ * restore and the restore drill; and the planned moves between servers
+ * (F1-24): the staging to a Remote Server, production to its own servers;
+ * the planned windows, such as the history's copy window (F2-17); and the
+ * operation of the scale plan's second phase (F2-35): a frozen feed, a
+ * missing partition, a pending detach, load shedding, a noisy company and
+ * the trail's archive; and the adoption and the operation of PgBouncer
+ * (F4-39). They live beside the alerts' runbooks.
+ */
+const OPERATION_RUNBOOKS = [
+  "provider-down",
+  "reconnect-storm",
+  "migration-lock",
+  "disk-full",
+  "pitr-restore",
+  "restore-drill",
+  "staging-remote-server",
+  "producao-servidores-proprios",
+  "delivery-event-writer-bound",
+  "history-window",
+  "feed-frozen",
+  "partition-missing",
+  "partition-detach-pending",
+  "load-shedding",
+  "noisy-tenant",
+  "trail-archive",
+  "pgbouncer",
+  "failover-standby",
+  "drills",
+  "swarm-multi-no",
+  "roteamento-por-path",
+  "troca-do-dump",
+] as const;
+
+/** One reason to wake the operation: its code and its pt-BR message. */
+interface Alert {
+  code: AlertKind;
+  message: string;
+}
+
+/** Where the code's runbook is, from the repository's root. */
+function runbookPath(code: AlertKind): string {
+  return `docs/runbooks/${code}.md`;
+}
+
+/** The reason as the check and the log show it: the message, then the link. */
+function formatAlert(alert: Alert): string {
+  return `${alert.message} (runbook: ${runbookPath(alert.code)})`;
+}
 
 function seconds(value: number): string {
   return `${Math.round(value)}s`;
 }
 
-function lagReason(
+function lagAlert(
+  code: AlertKind,
   what: string,
   lag: number | null,
   limit: number,
-): string | null {
-  return lag !== null && lag > limit
-    ? `${what}: item devido há ${seconds(lag)} sem ser processado (limite ${seconds(limit)})`
-    : null;
+): Alert | null {
+  if (lag === null || lag <= limit) return null;
+
+  return {
+    code,
+    message: `${what}: item devido há ${seconds(lag)} sem ser processado (limite ${seconds(limit)})`,
+  };
 }
 
 /** Enough of the provider's text to act on, not a wall of it. */
@@ -175,77 +727,462 @@ function proofSigningReason(
   return null;
 }
 
-function evaluateAlerts(
-  snapshot: OperationalSnapshot,
-  thresholds: AlertThresholds = DEFAULT_ALERT_THRESHOLDS,
-): string[] {
-  const reasons: Array<string | null> = [];
+/** "on" and "always" (a standby archiving what it replays) both archive. */
+function archives(mode: string | null): boolean {
+  return mode === "on" || mode === "always";
+}
 
-  reasons.push(
-    lagReason(
-      "Outbox (expansão de eventos)",
-      snapshot.outboxEligibleLagSec,
-      thresholds.outboxLagSec,
-    ),
-    lagReason(
-      "Entregas internas (in-app, push, atividade)",
-      snapshot.deliveryEligibleLagSec.internal,
-      thresholds.deliveryInternalLagSec,
-    ),
-    lagReason(
-      "Entregas externas (e-mail, WhatsApp)",
-      snapshot.deliveryEligibleLagSec.external,
-      thresholds.deliveryExternalLagSec,
-    ),
-    lagReason(
-      "Webhooks de integração",
-      snapshot.webhookDueLagSec,
-      thresholds.webhookLagSec,
-    ),
-    lagReason("Análises de IA", snapshot.aiEligibleLagSec, thresholds.aiLagSec),
-  );
+function gib(bytes: number): string {
+  return `${(Math.round((bytes / GIB) * 10) / 10).toLocaleString("pt-BR")} GiB`;
+}
 
-  // Credentials first, and on the FIRST occurrence: every later send of the
-  // channel fails the same way until somebody changes the secret.
-  const byChannel = new Map<string, Array<string | null>>();
+/**
+ * The database's own rules (F1-11). The archiver is judged only while it
+ * archives: with archive_mode off there is nothing to judge, and
+ * pg_stat_archiver keeps whatever an old setup left. Whether it SHOULD be
+ * on is PITR_EXPECTED's question. pg_wal is judged either way: it fills the
+ * disk whatever the cause.
+ */
+function databaseAlerts(
+  database: ClusterDatabaseState,
+  thresholds: AlertThresholds,
+  expectations: AlertExpectations,
+): Alert[] {
+  const alerts: Alert[] = [];
+  const archiving = archives(database.archiveMode);
 
-  for (const failure of snapshot.deliveryFailures) {
-    const list = byChannel.get(failure.channel) ?? [];
-    list.push(failure.lastError);
-    byChannel.set(failure.channel, list);
+  if (
+    expectations.pitrExpected &&
+    database.archiveMode !== null &&
+    !archiving
+  ) {
+    alerts.push({
+      code: "pitr-archive-off",
+      message: `PITR esperado (PITR_EXPECTED=true), mas archive_mode está "${database.archiveMode}": o WAL não sai do servidor e não há restauração até o minuto`,
+    });
   }
 
-  for (const [channel, errors] of byChannel) {
-    const credential = errors.find((error) => isCredentialFailure(error));
+  if (archiving) {
+    const lastFailed = database.lastArchiveFailedAt;
+    const lastArchived = database.lastArchivedAt;
 
-    if (credential) {
-      reasons.push(
-        `Canal ${channel}: falha de credencial ou configuração do provedor — ${excerpt(credential)}`,
-      );
-    } else if (errors.length >= thresholds.terminalFailuresPerChannel) {
-      reasons.push(
-        `Canal ${channel}: ${errors.length} entregas falharam de vez na janela — a mais recente: ${excerpt(errors[0])}`,
-      );
+    // The latest attempt failed: a failure newer than the last success.
+    // failed_count alone is cumulative since the stats reset, and an
+    // archiver that recovered keeps it.
+    if (
+      lastFailed !== null &&
+      (lastArchived === null || lastFailed.getTime() > lastArchived.getTime())
+    ) {
+      alerts.push({
+        code: "wal-archive-stalled",
+        message: `Arquivamento do WAL falhando: a última tentativa falhou em ${lastFailed.toISOString()} (${database.archiveFailedCount ?? "?"} falha(s) desde o último reset); o pg_wal cresce até o arquivamento voltar`,
+      });
+    } else if (
+      database.lastArchivedAgeSec !== null &&
+      database.lastArchivedAgeSec > thresholds.archiveLagSec
+    ) {
+      alerts.push({
+        code: "wal-archive-stalled",
+        message: `Arquivamento do WAL parado: o último segmento foi arquivado há ${seconds(database.lastArchivedAgeSec)} (limite ${seconds(thresholds.archiveLagSec)}); o pg_wal cresce até o arquivamento voltar`,
+      });
     }
   }
 
-  if ((snapshot.aiProviderPausedRequests ?? 0) > 0) {
-    reasons.push(
-      `Análises de IA pausadas: ${snapshot.aiProviderPausedRequests} aguardando porque o provedor recusou o serviço (limite de gasto ou de uso da conta)`,
+  if (database.xidAge !== null && database.xidAge > thresholds.xidAge) {
+    alerts.push({
+      code: "xid-age-high",
+      message: `Postgres: idade do xid em ${Math.round(database.xidAge)} (limite ${thresholds.xidAge}); o congelamento do vacuum está atrasado`,
+    });
+  }
+
+  if (
+    database.oldestWriteXactSec !== null &&
+    database.oldestWriteXactSec > thresholds.longWriteXactSec
+  ) {
+    alerts.push({
+      code: "long-write-xact",
+      message: `Postgres: transação de escrita aberta há ${seconds(database.oldestWriteXactSec)} (limite ${seconds(thresholds.longWriteXactSec)}); segura o vacuum e o feed da integração`,
+    });
+  }
+
+  if (
+    database.pgWalBytes !== null &&
+    database.pgWalBytes > thresholds.pgWalBytes
+  ) {
+    alerts.push({
+      code: "pg-wal-high",
+      message: `Postgres: pg_wal com ${gib(database.pgWalBytes)} (limite ${gib(thresholds.pgWalBytes)}); o disco compartilhado enche se continuar`,
+    });
+  }
+
+  return alerts;
+}
+
+/**
+ * Redis' memory rules (F1-11). With Redis down they say nothing: the
+ * "Redis sem resposta" rule speaks, and its numbers are not there.
+ */
+function redisAlerts(redis: ClusterRedisState): Alert[] {
+  if (!redis.up) return [];
+
+  const alerts: Alert[] = [];
+
+  if (redis.evictedKeys && redis.evictedKeys.delta > 0) {
+    alerts.push({
+      code: "redis-evictions",
+      message: `Redis despejou ${redis.evictedKeys.delta} chave(s) em ${Math.round(redis.evictedKeys.windowSec / 60)} min: memória no teto; contadores do rate limit e estado do Socket.IO foram descartados`,
+    });
+  }
+
+  const noCeiling = redis.maxmemoryMb === null;
+  const noEviction = redis.maxmemoryPolicy === "noeviction";
+
+  if (noCeiling || noEviction) {
+    const what: string[] = [];
+
+    if (noCeiling) what.push("sem teto de memória (maxmemory 0)");
+    if (noEviction) what.push("com maxmemory-policy noeviction");
+
+    alerts.push({
+      code: "redis-memory-policy",
+      message: `Redis ${what.join(" e ")}: cheio, recusa escritas e desliga o rate limit de uma vez (o esperado é --maxmemory 256mb --maxmemory-policy allkeys-lru)`,
+    });
+  }
+
+  return alerts;
+}
+
+/** A whole number in pt-BR, with the thousands' dot. */
+function count(value: number): string {
+  return Math.round(value).toLocaleString("pt-BR");
+}
+
+/**
+ * The ramp's rules (plano-escala U-12). The 7 days' deliveries, projected
+ * to a month (× 30/7), past 70% of the approved gate; and the last 24 h
+ * past the platform's soft cap, when one is set. Neither refuses anything:
+ * they say the ramp has to wait for the next step.
+ */
+function volumeAlerts(
+  volume: VolumeState,
+  thresholds: AlertThresholds,
+): Alert[] {
+  const alerts: Alert[] = [];
+  const gate = thresholds.approvedGateMonthlyDeliveries;
+  const projected = (volume.last7d * 30) / 7;
+
+  if (projected > gate * thresholds.volumeGateRatio) {
+    alerts.push({
+      code: "volume-near-gate",
+      message: `Volume de entregas perto do portão aprovado: ${count(volume.last7d)} nos últimos 7 dias, cerca de ${count(projected)} por mês (${Math.round((projected / gate) * 100)}% de ${count(gate)}, APPROVED_GATE_MONTHLY_DELIVERIES); a próxima coorte espera o degrau seguinte`,
+    });
+  }
+
+  if (volume.last24h > thresholds.dailyDeliverySoftCap) {
+    alerts.push({
+      code: "volume-near-gate",
+      message: `Volume de entregas acima do teto diário: ${count(volume.last24h)} nas últimas 24 h (PLATFORM_DAILY_DELIVERY_SOFT_CAP ${count(thresholds.dailyDeliverySoftCap)}); nada é recusado`,
+    });
+  }
+
+  return alerts;
+}
+
+/** How many replica names a message carries. */
+/** How many silent PgBouncer tasks a message names. */
+const PGBOUNCER_DOWN_SHOWN = 3;
+
+/**
+ * PgBouncer's consoles (plano-escala F4-36): a task that did not answer
+ * the stats login, a client waiting for a server connection, and a
+ * database's server connections near max_db_connections.
+ */
+function pgBouncerAlerts(
+  metrics: PgBouncerMetrics,
+  thresholds: AlertThresholds,
+): Alert[] {
+  const alerts: Alert[] = [];
+  const { totals } = metrics;
+
+  if (metrics.status !== "up") {
+    const down = metrics.instances.filter(
+      (instance) => instance.status === "down",
+    );
+    const shown = down
+      .slice(0, PGBOUNCER_DOWN_SHOWN)
+      .map((instance) => `${instance.address}: ${excerpt(instance.error)}`);
+    const more =
+      down.length > PGBOUNCER_DOWN_SHOWN
+        ? ` e mais ${down.length - PGBOUNCER_DOWN_SHOWN}`
+        : "";
+
+    alerts.push({
+      code: "pgbouncer-down",
+      message:
+        metrics.instances.length === 0
+          ? `PgBouncer sem endereço para ler pelo login de estatística (${excerpt(metrics.error)}): confira PGBOUNCER_STATS_HOSTS e a Application trajetto-pgbouncer`
+          : `PgBouncer sem resposta pelo login de estatística em ${down.length} de ${metrics.instances.length} tarefa(s) (${shown.join("; ")}${more})`,
+    });
+  }
+
+  if (totals.maxwait_seconds >= thresholds.pgbouncerMaxWaitSec) {
+    alerts.push({
+      code: "pgbouncer-clients-waiting",
+      message: `PgBouncer com cliente esperando conexão de servidor há ${seconds(totals.maxwait_seconds)} no pool ${totals.maxwait_pool ?? "?"} (${totals.cl_waiting} esperando; o query_wait_timeout responde 503 aos 5 s)`,
+    });
+  }
+
+  if (
+    totals.server_usage_percent !== null &&
+    totals.server_usage_percent >= thresholds.pgbouncerServerUsageRatio * 100
+  ) {
+    alerts.push({
+      code: "pgbouncer-server-saturation",
+      message: `PgBouncer usando ${Math.round(totals.server_usage_percent)}% das conexões de servidor do banco ${totals.server_usage_database ?? "?"} (max_db_connections; limite ${Math.round(thresholds.pgbouncerServerUsageRatio * 100)}%)`,
+    });
+  }
+
+  return alerts;
+}
+
+const REPLICAS_SHOWN = 3;
+
+function replicaList(replicas: string[]): string {
+  const shown = replicas.slice(0, REPLICAS_SHOWN).join(", ");
+
+  return replicas.length > REPLICAS_SHOWN
+    ? `${shown} e mais ${replicas.length - REPLICAS_SHOWN}`
+    : shown;
+}
+
+/** The queues whose due rows the snapshot measures, with their lag. */
+function measuredQueues(
+  snapshot: OperationalSnapshot,
+): Array<[WorkerQueue, string, number | null]> {
+  return [
+    ["outbox", "Outbox (expansão de eventos)", snapshot.outboxEligibleLagSec],
+    [
+      "internal",
+      "Entregas internas (in-app, push, atividade)",
+      snapshot.deliveryEligibleLagSec.internal,
+    ],
+    [
+      "external",
+      "Entregas externas (e-mail, WhatsApp)",
+      snapshot.deliveryEligibleLagSec.external,
+    ],
+    ["webhooks", "Webhooks de integração", snapshot.webhookDueLagSec],
+    ["ai", "Análises de IA", snapshot.aiEligibleLagSec],
+    // Only when read (F3-22): an older collector judges nothing of it.
+    ...(snapshot.jobEligibleLagSec !== undefined
+      ? [
+          [
+            "jobs",
+            "Jobs duráveis (importação, estorno, exclusão de empresa)",
+            snapshot.jobEligibleLagSec,
+          ] as [WorkerQueue, string, number | null],
+        ]
+      : []),
+  ];
+}
+
+/**
+ * The fleet's rules (plano-escala F3-34), from process_heartbeat:
+ *
+ *  - a queue with a row due for more than two minutes and no live process
+ *    of this environment claiming it: with the api in PROCESS_ROLE=api and
+ *    the worker down, nothing would page until the lag rules' 5 to 30
+ *    minutes, and then without saying why;
+ *  - processes of this environment on different commits for more than half
+ *    an hour, counted from the moment the newest of the commits appeared
+ *    (the oldest start of each one): a role left on the old build. A
+ *    restart only makes the count shorter, never a false page. The
+ *    realtime the deploy held on its build (F3-31c: it is deployed only
+ *    when what it runs changed) is not a role left behind: a realtime
+ *    process whose realtime-source and contract epoch are the newest
+ *    commit's own (heldRealtime) is left out of the count, and any other
+ *    process on another commit still pages;
+ *  - a row of another APP_ENV: a staging process pointed at production's
+ *    database (or the other way round), claiming its rows with the wrong
+ *    environment's settings. The dokploy-network is shared by both.
+ */
+function processAlerts(
+  snapshot: OperationalSnapshot,
+  fleet: ProcessFleetState,
+  thresholds: AlertThresholds,
+): Alert[] {
+  const alerts: Alert[] = [];
+  const own = fleet.live.filter((process) => process.appEnv === fleet.appEnv);
+
+  for (const [queue, what, lag] of measuredQueues(snapshot)) {
+    if (lag === null || lag <= thresholds.queueNoConsumerSec) continue;
+    if (own.some((process) => process.queues.includes(queue))) continue;
+
+    alerts.push({
+      code: "queue-no-consumer",
+      message: `${what}: item devido há ${seconds(lag)} e nenhum processo vivo deste ambiente consome a fila ${queue} — o worker caiu ou não existe, ou o PROCESS_ROLE e o WORKER_QUEUES das Applications deixaram a fila sem dono`,
+    });
+  }
+
+  const commits = new Map<
+    string,
+    { count: number; since: number; roles: Set<string> }
+  >();
+
+  const held = heldRealtime(own);
+
+  for (const process of own) {
+    if (held.has(process)) continue;
+
+    const key = process.commit ?? "sem commit";
+    const entry = commits.get(key) ?? {
+      count: 0,
+      since: process.startedAt.getTime(),
+      roles: new Set<string>(),
+    };
+
+    entry.count += 1;
+    entry.since = Math.min(entry.since, process.startedAt.getTime());
+    entry.roles.add(process.role);
+    commits.set(key, entry);
+  }
+
+  if (commits.size > 1) {
+    const mixedSince = Math.max(
+      ...[...commits.values()].map((entry) => entry.since),
+    );
+    const age = (snapshot.now.getTime() - mixedSince) / 1000;
+
+    if (age > thresholds.mixedVersionsSec) {
+      const list = [...commits.entries()]
+        .map(
+          ([commit, entry]) =>
+            `${commit.slice(0, 12)} (${entry.count}: ${[...entry.roles].sort().join(", ")})`,
+        )
+        .join("; ");
+
+      alerts.push({
+        code: "mixed-versions",
+        message: `Processos deste ambiente em ${commits.size} commits diferentes há mais de ${Math.round(thresholds.mixedVersionsSec / 60)} min: ${list} — um papel ficou no build anterior (deploy dele falhou, ou a Application ficou de fora do deploy)`,
+      });
+    }
+  }
+
+  const foreign = new Map<string, Array<{ role: string; replica: string }>>();
+
+  for (const process of fleet.live) {
+    if (process.appEnv === fleet.appEnv) continue;
+
+    const list = foreign.get(process.appEnv) ?? [];
+    list.push({ role: process.role, replica: process.replica });
+    foreign.set(process.appEnv, list);
+  }
+
+  for (const [appEnv, processes] of foreign) {
+    alerts.push({
+      code: "foreign-environment",
+      message: `${processes.length} processo(s) de APP_ENV=${appEnv} gravando no banco deste ambiente (${fleet.appEnv}): ${replicaList(processes.map((process) => `${process.role} em ${process.replica}`))} — uma Application do outro ambiente está com a DATABASE_URL deste; ele consome as filas daqui com a configuração de lá`,
+    });
+  }
+
+  return alerts;
+}
+
+type FleetProcess = ProcessFleetState["live"][number];
+
+/**
+ * The realtime processes the deploy kept on their build (plano-escala
+ * F3-31c), as deploy-roles.sh decides it: on another commit than the
+ * newest one the other roles run, with the same realtime-source and the
+ * same contract epoch as that commit's image. Without both in its own row
+ * (an image before them) or in the newest commit's, nothing is held: the
+ * rule reads it as any role left behind, as the deploy deploys it.
+ */
+function heldRealtime(own: readonly FleetProcess[]): Set<FleetProcess> {
+  const held = new Set<FleetProcess>();
+
+  // The newest commit among the other roles: the one whose first process
+  // started last.
+  const firstStart = new Map<string | null, number>();
+
+  for (const process of own) {
+    if (process.role === "realtime") continue;
+
+    const started = process.startedAt.getTime();
+
+    firstStart.set(
+      process.commit,
+      Math.min(firstStart.get(process.commit) ?? started, started),
     );
   }
 
-  if (snapshot.aiCredentialFailures > 0) {
-    reasons.push(
-      `Análises de IA: ${snapshot.aiCredentialFailures} recusada(s) pelo provedor por credencial (401/403)`,
-    );
+  if (firstStart.size === 0) return held;
+
+  const [newest] = [...firstStart.entries()].reduce((latest, entry) =>
+    entry[1] > latest[1] ? entry : latest,
+  );
+
+  const reference = own.find(
+    (process) =>
+      process.role !== "realtime" &&
+      process.commit === newest &&
+      typeof process.realtimeSource === "string" &&
+      typeof process.contractEpoch === "number",
+  );
+
+  if (!reference) return held;
+
+  for (const process of own) {
+    if (
+      process.role === "realtime" &&
+      process.commit !== newest &&
+      process.realtimeSource === reference.realtimeSource &&
+      process.contractEpoch === reference.contractEpoch
+    ) {
+      held.add(process);
+    }
   }
+
+  return held;
+}
+
+/** The cron rules: a dead run, partials that never end, no success. */
+function cronAlerts(
+  snapshot: OperationalSnapshot,
+  thresholds: AlertThresholds,
+): Alert[] {
+  const alerts: Alert[] = [];
+  const staleHours = Math.round(thresholds.cronStaleMs / 3_600_000);
 
   for (const job of snapshot.cronJobs) {
     if (job.staleRunning > 0) {
-      reasons.push(
-        `Cron ${job.job}: execução interrompida (lease vencido) — a réplica caiu no meio do job`,
-      );
+      alerts.push({
+        code: "cron-lease-expired",
+        message: `Cron ${job.job}: execução interrompida (lease vencido) — a réplica caiu no meio do job`,
+      });
+      continue;
+    }
+
+    // A partial run did work and left some (F1-17): the catch-up sweep takes
+    // it again in the partial window, and the next night after that. The
+    // first one is not an alert; 26 h of nothing but partials is, because
+    // then the purge is losing to the inflow.
+    //
+    // The grace needs the streak's start. Without it (partialSince null: a
+    // run that really failed came after the last success) the job is judged
+    // like any failure, by its last success below. Skipping it here let one
+    // partial after two nights of a statement timeout silence an overdue
+    // job for another 26 h.
+    if (job.lastPartial && job.partialSince) {
+      const partialAge = snapshot.now.getTime() - job.partialSince.getTime();
+
+      if (partialAge > thresholds.cronStaleMs) {
+        alerts.push({
+          code: "cron-partial-stuck",
+          message: `Cron ${job.job}: só execuções parciais há mais de ${staleHours}h (o expurgo não dá conta do que entra)`,
+        });
+      }
+
       continue;
     }
 
@@ -262,50 +1199,309 @@ function evaluateAlerts(
     // Worded apart: a job whose only run failed a minute ago has not been
     // failing "for 26 h", and the operator should not go looking for that.
     if (neverSucceeded) {
-      reasons.push(
-        `Cron ${job.job}: nenhuma execução bem-sucedida registrada (último status: FAILED)`,
-      );
+      alerts.push({
+        code: "cron-overdue",
+        message: `Cron ${job.job}: nenhuma execução bem-sucedida registrada (último status: FAILED)`,
+      });
     } else if (overdue) {
-      reasons.push(
-        `Cron ${job.job}: sem execução bem-sucedida há mais de ${Math.round(
-          thresholds.cronStaleMs / 3_600_000,
-        )}h (último status: ${job.lastStatus ?? "nenhum"})`,
-      );
+      alerts.push({
+        code: "cron-overdue",
+        message: `Cron ${job.job}: sem execução bem-sucedida há mais de ${staleHours}h (último status: ${job.lastStatus ?? "nenhum"})`,
+      });
     }
   }
 
-  if (!snapshot.partitionRunwayOk) {
-    reasons.push(
-      `driver_position: restam ${snapshot.partitionRunwayDays ?? 0} dia(s) de partições — sem elas o INSERT de posição é recusado`,
-    );
+  return alerts;
+}
+
+/** Every reason to wake the operation, with its code (F1-20). */
+function collectAlerts(
+  snapshot: OperationalSnapshot,
+  thresholds: AlertThresholds = DEFAULT_ALERT_THRESHOLDS,
+  expectations: AlertExpectations = { pitrExpected: false },
+): Alert[] {
+  const alerts: Array<Alert | null> = [];
+
+  alerts.push(
+    lagAlert(
+      "outbox-lag",
+      "Outbox (expansão de eventos)",
+      snapshot.outboxEligibleLagSec,
+      thresholds.outboxLagSec,
+    ),
+    lagAlert(
+      "delivery-lag",
+      "Entregas internas (in-app, push, atividade)",
+      snapshot.deliveryEligibleLagSec.internal,
+      thresholds.deliveryInternalLagSec,
+    ),
+    lagAlert(
+      "delivery-lag",
+      "Entregas externas (e-mail, WhatsApp)",
+      snapshot.deliveryEligibleLagSec.external,
+      thresholds.deliveryExternalLagSec,
+    ),
+    lagAlert(
+      "webhook-lag",
+      "Webhooks de integração",
+      snapshot.webhookDueLagSec,
+      thresholds.webhookLagSec,
+    ),
+    lagAlert(
+      "ai-lag",
+      "Análises de IA",
+      snapshot.aiEligibleLagSec,
+      thresholds.aiLagSec,
+    ),
+    lagAlert(
+      "job-overdue",
+      "Jobs duráveis (importação, estorno, exclusão de empresa)",
+      snapshot.jobEligibleLagSec ?? null,
+      thresholds.jobOverdueSec,
+    ),
+  );
+
+  // A purge or an anonymization that keeps failing leaves the data half
+  // gone: nobody would know but the log.
+  const mustFinish = snapshot.mustFinishJobs;
+
+  if (mustFinish && (mustFinish.failing > 0 || mustFinish.failed > 0)) {
+    alerts.push({
+      code: "job-failing",
+      message: `Jobs que precisam terminar (exclusão de empresa, anonimização de pessoa): ${mustFinish.failing} seguem falhando depois das tentativas normais (voltam a cada hora, de onde pararam) e ${mustFinish.failed} falharam de vez nas últimas 24 h`,
+    });
   }
 
+  // Credentials first, and on the FIRST occurrence: every later send of the
+  // channel fails the same way until somebody changes the secret.
+  const byChannel = new Map<string, Array<string | null>>();
+
+  for (const failure of snapshot.deliveryFailures) {
+    const list = byChannel.get(failure.channel) ?? [];
+    list.push(failure.lastError);
+    byChannel.set(failure.channel, list);
+  }
+
+  for (const [channel, errors] of byChannel) {
+    const credential = errors.find((error) => isCredentialFailure(error));
+
+    if (credential) {
+      alerts.push({
+        code: "channel-credential",
+        message: `Canal ${channel}: falha de credencial ou configuração do provedor — ${excerpt(credential)}`,
+      });
+    } else if (errors.length >= thresholds.terminalFailuresPerChannel) {
+      alerts.push({
+        code: "channel-failure-burst",
+        message: `Canal ${channel}: ${errors.length} entregas falharam de vez na janela — a mais recente: ${excerpt(errors[0])}`,
+      });
+    }
+  }
+
+  if ((snapshot.aiProviderPausedRequests ?? 0) > 0) {
+    alerts.push({
+      code: "ai-provider-paused",
+      message: `Análises de IA pausadas: ${snapshot.aiProviderPausedRequests} aguardando porque o provedor recusou o serviço (limite de gasto ou de uso da conta)`,
+    });
+  }
+
+  if (snapshot.aiCredentialFailures > 0) {
+    alerts.push({
+      code: "ai-credential",
+      message: `Análises de IA: ${snapshot.aiCredentialFailures} recusada(s) pelo provedor por credencial (401/403)`,
+    });
+  }
+
+  alerts.push(...cronAlerts(snapshot, thresholds));
+
+  alerts.push(...partitionAlerts(snapshot));
+
   for (const worker of snapshot.stuckWorkers) {
-    reasons.push(
-      `Worker ${worker.worker} travado na réplica ${worker.replica} (sem sinal de progresso)`,
-    );
+    alerts.push({
+      code: "worker-stuck",
+      message: `Worker ${worker.worker} travado na réplica ${worker.replica} (sem sinal de progresso)`,
+    });
   }
 
   if (snapshot.connectionUsagePercent >= thresholds.connectionUsagePercent) {
-    reasons.push(
-      `Postgres: ${snapshot.connectionUsagePercent}% de max_connections em uso (limite ${thresholds.connectionUsagePercent}%)`,
-    );
+    alerts.push({
+      code: "connection-usage-high",
+      message: `Postgres: ${snapshot.connectionUsagePercent}% de max_connections em uso (limite ${thresholds.connectionUsagePercent}%)`,
+    });
+  }
+
+  for (const replica of snapshot.sockets ?? []) {
+    if (replica.cap <= 0) continue;
+
+    const percent = Math.round((replica.connections / replica.cap) * 100);
+
+    if (percent >= thresholds.socketCapUsagePercent) {
+      alerts.push({
+        code: "socket-cap-high",
+        message: `Sockets na réplica ${replica.replica}: ${replica.connections} de ${replica.cap} (${percent}% do teto, limite ${thresholds.socketCapUsagePercent}%)`,
+      });
+    }
+  }
+
+  // A process whose heaps and reserve add up past its container's ceiling
+  // (U-15): the first big spreadsheet can take it to an OOM kill of the
+  // whole replica. It booted anyway because MEMORY_BUDGET_MODE=warn.
+  for (const replica of snapshot.memoryBudgets ?? []) {
+    alerts.push({
+      code: "memory-budget",
+      message: `Orçamento de memória da réplica ${replica.replica} não fecha: ${replica.totalMb} MiB de heap, threads e reserva nativa para um teto de ${replica.limitMb} MiB do contêiner; ajuste o NODE_OPTIONS, o SPREADSHEET_WORKER_MAX_OLD_MB ou o Memory da Application`,
+    });
+  }
+
+  if (snapshot.processes) {
+    alerts.push(...processAlerts(snapshot, snapshot.processes, thresholds));
   }
 
   if (!snapshot.redisOk) {
-    reasons.push(
-      "Redis sem resposta: rate limit em modo local e Socket.IO sem adapter entre réplicas",
-    );
+    alerts.push({
+      code: "redis-down",
+      message:
+        "Redis sem resposta: rate limit em modo local e Socket.IO sem adapter entre réplicas",
+    });
   }
 
-  reasons.push(proofSigningReason(snapshot, thresholds));
+  if (snapshot.database) {
+    alerts.push(...databaseAlerts(snapshot.database, thresholds, expectations));
+  }
+
+  if (snapshot.redis) alerts.push(...redisAlerts(snapshot.redis));
+
+  if (snapshot.pgbouncer) {
+    alerts.push(...pgBouncerAlerts(snapshot.pgbouncer, thresholds));
+  }
+
+  if (snapshot.volume) {
+    alerts.push(...volumeAlerts(snapshot.volume, thresholds));
+  }
+
+  const quota = snapshot.geocodingQuota;
+
+  if (
+    quota &&
+    quota.dailyQuota > 0 &&
+    quota.usedToday > quota.dailyQuota * thresholds.geocodingQuotaRatio
+  ) {
+    alerts.push({
+      code: "geocoding-quota-high",
+      message: `Geocodificação: ${count(quota.usedToday)} consultas hoje (UTC), ${Math.round((quota.usedToday / quota.dailyQuota) * 100)}% de ${count(quota.dailyQuota)} do plano (LOCATIONIQ_DAILY_QUOTA); acima de ${Math.round(thresholds.geocodingQuotaRatio * 100)}%, o resto do dia pode acabar em 429`,
+    });
+  }
+
+  // A provider refused for rate (F3-15c; decision D45): the trigger to turn
+  // its bucket on, or to look at the value when it already is. One in the
+  // last 24 h is enough: the platform's single account is what a provider
+  // throttles, and a contract broken at Meta reaches every company.
+  const throttled = snapshot.providerThrottled;
+
+  if (throttled && throttled.whatsapp + throttled.email + throttled.push > 0) {
+    const parts = [
+      throttled.whatsapp > 0
+        ? `WhatsApp ${count(throttled.whatsapp)} (Meta 130429/429; WHATSAPP_SENDS_PER_SECOND)`
+        : null,
+      throttled.email > 0
+        ? `e-mail ${count(throttled.email)} (Resend; EMAIL_REQUESTS_PER_SECOND)`
+        : null,
+      throttled.push > 0
+        ? `push ${count(throttled.push)} (Expo 429; PUSH_NOTIFICATIONS_PER_SECOND)`
+        : null,
+    ].filter((part): part is string => part !== null);
+
+    alerts.push({
+      code: "provider-throttled",
+      message: `Provedores recusaram por taxa nas últimas 24 h: ${parts.join(", ")}; ligue o balde de taxa do provedor abaixo do limite do contrato, ou baixe o valor se ele já está ligado`,
+    });
+  }
+
+  // A logical restore into a new cluster without `pg_resetwal -e`
+  // (F2-03): from here on every new event sorts behind the integrators'
+  // cursors, silently.
+  if (snapshot.feedTxid && feedTxidRegressed(snapshot.feedTxid)) {
+    alerts.push({
+      code: "feed-txid-regressed",
+      message: `Feed da integração: o maior txid gravado em delivery_event (${snapshot.feedTxid.newest}) não está abaixo do próximo xid do cluster (${snapshot.feedTxid.next}); veio de outro cluster (um restore lógico sem o pg_resetwal -e) e os eventos novos ficariam para trás do cursor dos integradores`,
+    });
+  }
+
+  // A PITR, a promote or a new cluster (U-14) the release step has not
+  // seen yet: transaction ids are being reused under the old epoch.
+  const epochStale = snapshot.clusterEpoch
+    ? clusterEpochStaleReason(snapshot.clusterEpoch)
+    : null;
+
+  if (epochStale) {
+    alerts.push({
+      code: "cluster-epoch-stale",
+      message: `Época do cluster: ${epochStale}; rode a etapa de release (Deploy na trajetto-api-migrate) para o cursor do feed da integração não confundir os xids reaproveitados`,
+    });
+  }
+
+  // A cursor emitted before a PITR, a promote or a logical restore (F2-05):
+  // the feed sent that integrator a stretch of events again, by design,
+  // and the customer should hear it from us before their ERP shows it.
+  if ((snapshot.feedEpochConversions ?? 0) > 0) {
+    alerts.push({
+      code: "feed-epoch-conversion",
+      message: `Feed da integração: ${snapshot.feedEpochConversions} cursor(es) de outra época do cluster convertido(s) nos últimos minutos; os eventos desde o piso de cada um foram enviados de novo (a integração deduplica pelo id)`,
+    });
+  }
+
+  const proofSigning = proofSigningReason(snapshot, thresholds);
+
+  if (proofSigning) {
+    alerts.push({ code: "proof-signing", message: proofSigning });
+  }
 
   for (const error of snapshot.collectionErrors) {
-    reasons.push(`Verificação incompleta: ${excerpt(error)}`);
+    alerts.push({
+      code: "collection-incomplete",
+      message: `Verificação incompleta: ${excerpt(error)}`,
+    });
   }
 
-  return reasons.filter((reason): reason is string => reason !== null);
+  return alerts.filter((alert): alert is Alert => alert !== null);
 }
 
-export { DEFAULT_ALERT_THRESHOLDS, evaluateAlerts };
-export type { AlertThresholds, CronJobState, OperationalSnapshot };
+/**
+ * The reasons the ops heartbeat sends and logs: each alert's pt-BR message,
+ * ending with the path of its runbook. Empty is the only "all is well".
+ */
+function evaluateAlerts(
+  snapshot: OperationalSnapshot,
+  thresholds: AlertThresholds = DEFAULT_ALERT_THRESHOLDS,
+  expectations: AlertExpectations = { pitrExpected: false },
+): string[] {
+  return collectAlerts(snapshot, thresholds, expectations).map(formatAlert);
+}
+
+export {
+  ALERT_KINDS,
+  DEFAULT_ALERT_THRESHOLDS,
+  OPERATION_RUNBOOKS,
+  alertThresholdsFromEnv,
+  collectAlerts,
+  evaluateAlerts,
+  formatAlert,
+  runbookPath,
+};
+export type {
+  Alert,
+  AlertExpectations,
+  AlertKind,
+  AlertThresholds,
+  ClusterDatabaseState,
+  ClusterRedisState,
+  CronJobState,
+  GeocodingQuotaState,
+  OperationalSnapshot,
+  PartitionAlertState,
+  MemoryBudgetState,
+  ProcessFleetState,
+  ProviderThrottleState,
+  SocketUsageState,
+  VolumeState,
+};

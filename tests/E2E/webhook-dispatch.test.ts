@@ -568,8 +568,12 @@ describe("an endpoint built to hurt the dispatcher", () => {
       },
     });
 
+    // The claim leaves it alone; the minute's sweep closes it (plano-escala
+    // F3-08), off the claim's path.
     expect(await dispatcher.processBatch()).toBe(0);
     expect(received).toHaveLength(0);
+
+    expect(await dispatcher.closeExhausted()).toBe(1);
 
     const [row] = await prisma.webhookDelivery.findMany({
       where: { businessId: CARRIER },
@@ -577,6 +581,7 @@ describe("an endpoint built to hurt the dispatcher", () => {
 
     expect(row.status).toBe("FAILED");
     expect(row.lastError).toMatch(/interrompido/);
+    expect(row.leaseExpiresAt).toBeNull();
   });
 });
 
@@ -902,5 +907,61 @@ describe("a backlog, and a slow neighbour", () => {
       slowest,
       `o último webhook rápido esperou ${slowest} ms pelo vizinho lento`,
     ).toBeLessThan(SLOW_MS);
+  }, 60_000);
+
+  /**
+   * Past the first claim (plano-escala F3-07). The barrier claimed again
+   * only when its slowest call ended: the slow endpoint's eight rows, two
+   * at a time, held the next claim for four of its answers, and the fast
+   * endpoint's rows beyond its first ten waited for them. The continuous
+   * pool claims as slots free and leaves the slow endpoint out while its
+   * rows wait for their turn.
+   */
+  it("keeps the others going past the first claim while a slow endpoint holds its calls", async () => {
+    await seedEndpoint({ topics: ["delivery.delivered"], path: "/slow" });
+    await seedEndpoint({ topics: ["delivery.failed"] });
+
+    for (let index = 0; index < 8; index += 1) {
+      await fanOutWebhookEvent({
+        topic: "delivery.delivered",
+        businessId: CARRIER,
+        payload: { index },
+      });
+    }
+
+    for (let index = 0; index < 40; index += 1) {
+      await fanOutWebhookEvent({
+        topic: "delivery.failed",
+        businessId: CARRIER,
+        payload: { index },
+      });
+    }
+
+    await prisma.webhookDelivery.updateMany({
+      where: { businessId: CARRIER, topic: "delivery.delivered" },
+      data: { availableAt: new Date(Date.now() - 60 * 1000) },
+    });
+
+    const started = Date.now();
+
+    await expect(dispatcher.processBatch()).resolves.toBe(48);
+
+    const fast = received.filter((entry) => entry.url === "/hook");
+    const slowest = Math.max(...fast.map((entry) => (entry.at ?? 0) - started));
+
+    expect(fast).toHaveLength(40);
+
+    // Four slow answers (6 s) is what the barrier made them wait; two is
+    // room for a loaded machine.
+    expect(
+      slowest,
+      `o último webhook rápido esperou ${slowest} ms pelo vizinho lento`,
+    ).toBeLessThan(2 * SLOW_MS);
+
+    const rows = await prisma.webhookDelivery.findMany({
+      where: { businessId: CARRIER },
+    });
+
+    expect(rows.every((row) => row.status === "DELIVERED")).toBe(true);
   }, 60_000);
 });

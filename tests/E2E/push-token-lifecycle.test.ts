@@ -215,9 +215,8 @@ describe("logging out", () => {
 
 describe("ending every session of the user", () => {
   it("unregisters every device when the sessions are invalidated", async () => {
-    const { UserRepository } = await import(
-      "@/modules/user/repositories/user-repository"
-    );
+    const { UserRepository } =
+      await import("@/modules/user/repositories/user-repository");
 
     const token = await registerDevice(await openSession(DRIVER_USER));
 
@@ -227,9 +226,8 @@ describe("ending every session of the user", () => {
   });
 
   it("unregisters every device when the password changes", async () => {
-    const { UserRepository } = await import(
-      "@/modules/user/repositories/user-repository"
-    );
+    const { UserRepository } =
+      await import("@/modules/user/repositories/user-repository");
 
     const token = await registerDevice(await openSession(DRIVER_USER));
 
@@ -242,9 +240,8 @@ describe("ending every session of the user", () => {
   });
 
   it("unregisters every device when access is revoked", async () => {
-    const { UserRepository } = await import(
-      "@/modules/user/repositories/user-repository"
-    );
+    const { UserRepository } =
+      await import("@/modules/user/repositories/user-repository");
 
     const token = await registerDevice(await openSession(DRIVER_USER));
 
@@ -264,9 +261,8 @@ describe("ending every session of the user", () => {
 
 describe("a session that ended without telling the server", () => {
   it("loses its device once the family has expired and been purged", async () => {
-    const { cleanupExpiredRefreshTokensJob } = await import(
-      "@/jobs/cron/cleanup-expired-refresh-tokens-job"
-    );
+    const { cleanupExpiredRefreshTokensJob } =
+      await import("@/jobs/cron/cleanup-expired-refresh-tokens-job");
 
     // An offline logout: the phone forgot the session, the server never heard.
     const session = await openSession(DRIVER_USER);
@@ -286,5 +282,55 @@ describe("a session that ended without telling the server", () => {
 
     // A device whose session is alive stays.
     expect(await devicesWith(liveToken)).toBe(1);
+  });
+
+  /**
+   * Plan of 02/11/2026 (A9). A device registered before the session column
+   * existed has no session to end with, so the purge above never reached it:
+   * it kept receiving the user's pushes forever. The app registers on every
+   * launch (which fills the column), so such a row unseen for longer than any
+   * session may sit idle belongs to a phone whose login is certainly over.
+   */
+  it("loses a device registered before sessions were tracked once it has been idle past every session window", async () => {
+    const { cleanupExpiredRefreshTokensJob } =
+      await import("@/jobs/cron/cleanup-expired-refresh-tokens-job");
+    const { default: auth } = await import("@/config/auth");
+
+    const longestIdleMs =
+      Math.max(
+        ...Object.values(auth.refresh_policies).map(
+          (policy) => policy.idleSeconds,
+        ),
+      ) * 1000;
+
+    const forgotten = `ExponentPushToken[${randomUUID()}]`;
+    const recent = `ExponentPushToken[${randomUUID()}]`;
+
+    await prisma.pushDeviceToken.createMany({
+      data: [
+        { token: forgotten, platform: "android", userId: DRIVER_USER },
+        { token: recent, platform: "android", userId: DRIVER_USER },
+      ],
+    });
+
+    // updated_at is the last registration (the app's launch).
+    await prisma.$executeRaw`
+      UPDATE "push_device_token"
+      SET "updated_at" = ${new Date(Date.now() - longestIdleMs - 60_000)}
+      WHERE "token" = ${forgotten}
+    `;
+    await prisma.$executeRaw`
+      UPDATE "push_device_token"
+      SET "updated_at" = ${new Date(Date.now() - longestIdleMs + 60 * 60_000)}
+      WHERE "token" = ${recent}
+    `;
+
+    await cleanupExpiredRefreshTokensJob.handler();
+
+    expect(await devicesWith(forgotten)).toBe(0);
+
+    // Still inside the window: its login may be alive, and the next launch
+    // ties it to its session.
+    expect(await devicesWith(recent)).toBe(1);
   });
 });

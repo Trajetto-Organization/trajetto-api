@@ -13,6 +13,16 @@ import {
 } from "../usecases/errors/delivery-errors";
 
 import { DeliveryStatus } from "@/shared/delivery/delivery-rules";
+import {
+  recordEventSubmission,
+  submittedEventId,
+} from "@/shared/delivery/event-submission";
+import { refreshStopGroupKeysOfDelivery } from "@/shared/delivery/stop-group";
+import { openStopsOnRoutesLeftOpen } from "@/shared/route/routes-left-open-query";
+import { notOnAnOpenStop } from "@/shared/route/open-stop-anti-join";
+import { utcInstant } from "@/shared/database/utc-instant";
+import { historyIdRangeSince } from "@/shared/time/history-id-range";
+import { deliveryStatusTrailEnabled } from "@/shared/delivery/status-trail";
 import type { OperationDay } from "@/modules/route/repositories/IOperation-day-repository";
 
 import {
@@ -24,12 +34,15 @@ import {
   CreateOccurrenceProps,
   CreateDeliveryEventProps,
   DeliveryEventRecord,
+  DeliveryItemInput,
+  DepartedDelivery,
+  DepartureHook,
   ListOccurrencesProps,
   ListOccurrencesResult,
   OccurrenceAuthorizationStatus,
 } from "../dtos/delivery-dto";
 
-import database from "@/../infra/database";
+import database, { readDatabase } from "@/../infra/database";
 
 import { buildSearchOr } from "@/shared/pagination/search-or";
 import { resolveOrderBy } from "@/shared/pagination/list-query";
@@ -41,6 +54,17 @@ import {
 import { deliveryExportRow, occurrenceExportRow } from "./export-rows";
 import { narrowDeliverySearch, resolveDeliveryPeriod } from "./delivery-search";
 import { narrowOccurrenceSearch } from "./occurrence-search";
+import { manualAddressPoint } from "@/shared/delivery/address-coordinates";
+import { deliveryAddressKey } from "@/shared/delivery/address-key";
+import {
+  pickReusablePoint,
+  type ReusedAddressPoint,
+} from "@/shared/delivery/geocoding/address-point-reuse";
+import {
+  lockLender,
+  readDoorCandidates,
+} from "@/shared/delivery/geocoding/address-point-propagation";
+import { CLEARED_ADDRESS_POINT } from "@/shared/delivery/address-point";
 
 import {
   OCCURRENCE_SORT,
@@ -126,10 +150,14 @@ async function withListRelations<
  * A delivery that belongs to a route leaves WITH that route, through the
  * route's own departure. This is what keeps the two dispatch models — batch
  * assignment and routes — from writing over each other while both exist.
+ *
+ * Scoped to the company's open routes (plan F2-21): unscoped, the planner
+ * could hash every open stop of the platform for the count the app asks on
+ * every refresh.
  */
-const NOT_ON_A_ROUTE: Prisma.DeliveryWhereInput = {
-  stops: { none: { status: { in: ["PENDING", "ARRIVED"] } } },
-};
+function notOnARoute(businessId: string): Prisma.DeliveryWhereInput {
+  return notOnAnOpenStop(businessId);
+}
 
 /**
  * The tenant of a delivery, for the rows that copy it.
@@ -163,6 +191,26 @@ const AUTHORIZATION_REQUEST_SELECT = {
   authorized_at: true,
   created_at: true,
 } as const;
+
+/**
+ * The driver's newest request (the list is newest first) that belongs to
+ * the delivery's current attempt. On a route, that is one made since its
+ * open stop was created: after "Reentregar" the new stop used to show
+ * "Autorizado…" from the APPROVED report that left the delivery FAILED.
+ * The table has no stop column; a request for this stop can only be filed
+ * once the stop exists, so its creation time is the boundary. Loose work
+ * (no open stop) keeps the newest request.
+ */
+function forOpenAttempt<T extends { created_at: Date }>(
+  newestFirst: ReadonlyArray<T>,
+  openStopCreatedAt: Date | undefined,
+): T | undefined {
+  if (!openStopCreatedAt) return newestFirst[0];
+
+  return newestFirst.find(
+    (request) => request.created_at.getTime() >= openStopCreatedAt.getTime(),
+  );
+}
 
 function toAuthorizationRequest(
   row: {
@@ -216,33 +264,132 @@ function keysetAfter(after: ExportKey) {
 class DeliveryRepository implements IDeliveryRepository {
   constructor(private prisma = database) {}
 
+  /**
+   * The heavy reads' bulkhead (plano-escala F3-17), for the exports: a pool of
+   * its own, 3 connections and 10 s a statement, so a burst of them waits
+   * among itself instead of taking the connections every other request needs.
+   * A repository built on another client (a test's) reads on that client. A
+   * getter, so a module that mocks infra/database without it only needs it
+   * when one of these reads runs.
+   * With DATABASE_REPLICA_URL, readDatabase() sends them to the standby
+   * while the replica guard vouches for it: lists only (plano-escala F4-42,
+   * tests/unitaires/database/read-routing-guard.test.ts).
+   */
+  private get read(): typeof this.prisma {
+    return this.prisma === database ? readDatabase() : this.prisma;
+  }
+
   async createDelivery(
     deliveryData: CreateDeliveryProps,
     tx?: Prisma.TransactionClient,
   ): Promise<Delivery> {
-    const { items, ...delivery } = deliveryData;
+    const { items, latitude, longitude, ...delivery } = deliveryData;
+    const now = new Date();
+    const addressKey = deliveryAddressKey(delivery);
 
-    const deliveryCreated = await (tx ?? this.prisma).delivery.create({
-      data: {
-        ...delivery,
-        code: delivery.code || null,
-        invoice_key: delivery.invoice_key || null,
-        invoice_number: delivery.invoice_number || null,
-        ...(items &&
-          items.length > 0 && {
-            items: {
-              create: items.map((item) => ({
-                description: item.description,
-                quantity: item.quantity ?? 1,
-                unit: item.unit || null,
-                unit_value: item.unit_value ?? null,
-              })),
-            },
-          }),
-      },
-    });
+    // A whole pair is the address point, MANUAL (plan E1). Without one, the
+    // point another delivery of the company has at the same door, read in
+    // the same transaction (14/11/2026): it needs no lookup, works with the
+    // geocoder off, and the create's answer already has it. Anything else
+    // writes no point and the geocoder's queue picks the row up.
+    const given = manualAddressPoint(latitude, longitude, now);
+
+    const run = async (client: Prisma.TransactionClient) => {
+      const found =
+        "geo_source" in given || !addressKey
+          ? null
+          : await this.findReusablePoint(
+              delivery.businessId,
+              addressKey,
+              null,
+              client,
+            );
+      // The copy only while its root still holds the point, locked until
+      // this commit (lockLender): a pin moving or clearing the root at the
+      // same instant then finds this row and takes it along, instead of
+      // leaving it with a point the root no longer has. Without it, the
+      // row joins the queue, and the lookup right after the commit reads
+      // the door again.
+      const point =
+        "geo_source" in given
+          ? given
+          : found && (await lockLender(client, delivery.businessId, found))
+            ? found
+            : null;
+
+      const created = await client.delivery.create({
+        data: {
+          ...delivery,
+          code: delivery.code || null,
+          invoice_key: delivery.invoice_key || null,
+          invoice_number: delivery.invoice_number || null,
+          address_key: addressKey,
+          ...point,
+          ...(items &&
+            items.length > 0 && {
+              items: {
+                create: items.map((item) => ({
+                  description: item.description,
+                  quantity: item.quantity ?? 1,
+                  unit: item.unit || null,
+                  unit_value: item.unit_value ?? null,
+                })),
+              },
+            }),
+        },
+      });
+
+      // The trail starts where the delivery does (plano-escala F2-06): a
+      // STATUS_CHANGE from nothing, so every status the row ever had has
+      // its line and the last line always says the status it has. By the
+      // key that created it, or the panel (an import is a panel action).
+      // Only with DELIVERY_STATUS_TRAIL_ENABLED: the image before this one
+      // reads the line as work and as a `delivery.pending` (status-trail.ts).
+      if (deliveryStatusTrailEnabled()) {
+        await client.deliveryEvent.create({
+          data: {
+            type: "STATUS_CHANGE",
+            deliveryId: created.id,
+            businessId: created.businessId,
+            status_from: null,
+            status_to: created.status,
+            actor: created.apiKeyId ? "INTEGRATION" : "USER",
+            apiKeyId: created.apiKeyId ?? null,
+          },
+        });
+      }
+
+      return created;
+    };
+
+    // Every caller in the code brings its transaction (the row and its
+    // delivery.created commit together); one without gets its own, so the
+    // root's lock lasts until the insert commits.
+    const deliveryCreated = tx
+      ? await run(tx)
+      : await this.prisma.$transaction(run);
 
     return deliveryCreated as Delivery;
+  }
+
+  async findReusablePoint(
+    businessId: string,
+    addressKey: string,
+    excludeDeliveryId?: string | null,
+    tx?: Prisma.TransactionClient,
+  ): Promise<ReusedAddressPoint | null> {
+    // The company's rows at this door with a point they may lend: the
+    // job's two index probes on delivery_address_key_idx, the newest of
+    // each source with the root it lends as (readDoorCandidates), and the
+    // rule decides between them (the twin runs the same rule over all of
+    // them). One statement, so it runs inside the caller's transaction.
+    const candidates = await readDoorCandidates(tx ?? this.prisma, {
+      businessId,
+      addressKey,
+      exceptId: excludeDeliveryId ?? null,
+    });
+
+    return pickReusablePoint(candidates, new Date(), excludeDeliveryId ?? null);
   }
 
   async findDeliveryBySubmissionId(
@@ -267,6 +414,8 @@ class DeliveryRepository implements IDeliveryRepository {
     pageSize,
     sort,
     order,
+    leftOpenBefore,
+    skipFacets,
     ...requested
   }: ListDeliveriesProps): Promise<ListDeliveriesPage> {
     const skip = (page - 1) * pageSize;
@@ -282,6 +431,28 @@ class DeliveryRepository implements IDeliveryRepository {
     // page and the three counts below read those rows instead of the
     // company's whole history each.
     const filters = await narrowDeliverySearch(this.prisma, periodic);
+
+    // `facets=skip` (plano-escala F2-30): a client turning pages under the
+    // same filters already has the counts, so the grouped read over the
+    // company's history — the heaviest statement of the board — is not run
+    // again for page 2, 3, 4. The rows are the same read as below.
+    if (skipFacets) {
+      const rows = await this.prisma.delivery.findMany({
+        skip,
+        take: pageSize,
+        where: deliveryListWhere(filters),
+        orderBy: resolveOrderBy(DELIVERY_SORT, { sort, order }),
+      });
+
+      return {
+        data: (await withListRelations(this.prisma, rows)) as Delivery[],
+        periodApplied,
+        statusCounts: [],
+        shipperOptions: [],
+        driverOptions: [],
+        facetsSkipped: true,
+      };
+    }
 
     // The page and the counts side by side (the two connections a screen may
     // hold). The counts replace a count(*): the pager total and the cards
@@ -330,9 +501,14 @@ class DeliveryRepository implements IDeliveryRepository {
         })
       : [];
 
+    const leftOpenRoutes = leftOpenBefore
+      ? await this.countLeftOpenShare(filters, leftOpenBefore)
+      : undefined;
+
     return {
       data: data as Delivery[],
       periodApplied,
+      ...(leftOpenRoutes && { leftOpenRoutes }),
       statusCounts: byStatus.map((group) => ({
         value: group.status,
         count: group._count._all,
@@ -357,19 +533,48 @@ class DeliveryRepository implements IDeliveryRepository {
   }
 
   /**
+   * H3 (plan of 02/11/2026): the "Em Rota" card's share that sits on routes
+   * left open — per running route that left before the cutoff, its open
+   * stops whose document is in the card's set (IN_TRANSIT, every filter but
+   * the status). Routes holding none are left out.
+   *
+   * The two reads of openStopsOnRoutesLeftOpen (the routes, then only their
+   * stops, grouped), shared with the operation summary's `inherited`; never
+   * a filtered relation `_count`, which Prisma groups over every open stop
+   * of the database (query-plans.test.ts).
+   */
+  private async countLeftOpenShare(
+    filters: Awaited<ReturnType<typeof narrowDeliverySearch>>,
+    leftOpenBefore: Date,
+  ): Promise<Array<{ started_at: Date | null; open: number }>> {
+    return openStopsOnRoutesLeftOpen(this.prisma, {
+      businessId: filters.businessId,
+      startedBefore: leftOpenBefore,
+      stops: {
+        delivery: {
+          AND: [
+            deliveryListWhere(filters, { except: "status" }),
+            { status: "IN_TRANSIT" },
+          ],
+        },
+      },
+    });
+  }
+
+  /**
    * The status, shipper and driver counts of the listing.
    *
    * Each facet is counted without its own filter (deliveryListWhere's
    * `except`), so with any facet chosen the three `where`s differ and stay
-   * three grouped reads, one after the other. In the board's default view
-   * (the `where` is only the tenant and the period, see
-   * isTenantOnlyDeliveryList) the three are the SAME `where` — the
-   * company's whole history without a period — and reading it three times
-   * was the heaviest database work of the load test: 64 + 64 + 28 ms per page
-   * on a tenant with 300k deliveries, a third of the database CPU at 120
-   * req/s (docs/desempenho/carga-2026-10.md). There, one scan with GROUPING
-   * SETS answers all three, inside the period when there is one (the cards
-   * and the pager count what the table lists, never the whole history).
+   * three grouped reads, one after the other. In the board's default view (the
+   * `where` is only the tenant and the period, see isTenantOnlyDeliveryList)
+   * the three are the SAME `where` — the company's whole history without a
+   * period — and reading it three times was the heaviest database work of the
+   * load test: 64 + 64 + 28 ms per page on a tenant with 300k deliveries, a
+   * third of the database CPU at 120 req/s (the load of 07/10/2026,
+   * docs/desempenho/README.md). There, one scan with GROUPING SETS answers all
+   * three, inside the period when there is one (the cards and the pager count
+   * what the table lists, never the whole history).
    */
   private async countListFacets(
     filters: Awaited<ReturnType<typeof narrowDeliverySearch>>,
@@ -479,6 +684,12 @@ class DeliveryRepository implements IDeliveryRepository {
    * key order as the include.
    */
   async findDeliveryDetailById(deliveryId: string): Promise<unknown | null> {
+    // Nothing happened to a delivery before it existed: its trail runs from
+    // its own id's instant (a uuid v7) to now, which keeps the read on those
+    // months once delivery_event is partitioned by month on its id
+    // (plano-escala F2-17). No bound for an id that is not a v7.
+    const trailIds = historyIdRangeSince(deliveryId);
+
     const found = await this.prisma.delivery.findUnique({
       where: { id: deliveryId },
       include: {
@@ -486,7 +697,10 @@ class DeliveryRepository implements IDeliveryRepository {
         // The trail, newest first: arrivals and proofs from the app, status
         // overrides and notes from the panel. The reason comes along because
         // it is the sentence support is scanning for.
-        events: { orderBy: { created_at: "desc" } },
+        events: {
+          ...(trailIds && { where: { id: trailIds } }),
+          orderBy: { created_at: "desc" },
+        },
         occurrences: { orderBy: { created_at: "desc" } },
 
         /**
@@ -543,12 +757,23 @@ class DeliveryRepository implements IDeliveryRepository {
       ),
     ]);
 
-    const [reasons, occurrenceTypes] = await Promise.all([
+    const [reasons, apiKeys, occurrenceTypes, routes] = await Promise.all([
       rowsByKey(
         events.map((event) => event.reasonId),
         (ids) =>
           this.prisma.statusChangeReason.findMany({
             where: { id: { in: ids } },
+            select: { id: true, name: true },
+          }),
+      ),
+      // The key behind an INTEGRATION event (L9), named on the trail. Its
+      // company is the delivery's; said again, so the name of another
+      // company's key can never be read through here.
+      rowsByKey(
+        events.map((event) => event.apiKeyId),
+        (ids) =>
+          this.prisma.apiKey.findMany({
+            where: { id: { in: ids }, businessId: row.businessId },
             select: { id: true, name: true },
           }),
       ),
@@ -569,6 +794,16 @@ class DeliveryRepository implements IDeliveryRepository {
             },
           }),
       ),
+      // The route an event happened on, by its number: "Saiu para entrega
+      // (Rota 12)" (F2-06). The delivery's company, said again.
+      rowsByKey(
+        events.map((event) => event.routeId),
+        (ids) =>
+          this.prisma.route.findMany({
+            where: { id: { in: ids }, businessId: row.businessId },
+            select: { id: true, code: true },
+          }),
+      ),
     ]);
 
     return {
@@ -579,6 +814,8 @@ class DeliveryRepository implements IDeliveryRepository {
         ...event,
         reportedBy: relatedTo(people, event.reportedById),
         reason: relatedTo(reasons, event.reasonId),
+        apiKey: relatedTo(apiKeys, event.apiKeyId),
+        route: relatedTo(routes, event.routeId),
       })),
       occurrences: occurrences.map((occurrence) => ({
         ...occurrence,
@@ -620,6 +857,7 @@ class DeliveryRepository implements IDeliveryRepository {
     deliveryId: string,
     deliveryData: UpdateDeliveryProps,
     expectedStatus?: DeliveryStatus,
+    outerTx?: Prisma.TransactionClient,
   ): Promise<Delivery> {
     const { items, ...fields } = deliveryData;
 
@@ -629,13 +867,21 @@ class DeliveryRepository implements IDeliveryRepository {
 
     // One commit for the row and its item list: an edit that saved the
     // address but lost the items (or the reverse) is an edit nobody asked for.
-    return this.prisma.$transaction(async (tx) => {
+    // A caller with its own transaction (K9) owns that commit.
+    const run = async (tx: Prisma.TransactionClient): Promise<Delivery> => {
+      // An address edit that takes another delivery's point (the use case
+      // read it before this transaction) writes it only while its root
+      // still holds it, locked until this commit, as the create does
+      // (lockLender); otherwise the edit leaves the new address without a
+      // point, for the lookup after the commit.
+      const data = await this.withHeldCopy(tx, deliveryId, filteredData);
+
       const { count } = await tx.delivery.updateMany({
         where: {
           id: deliveryId,
           ...(expectedStatus && { status: expectedStatus }),
         },
-        data: filteredData,
+        data,
       });
 
       if (count === 0) {
@@ -659,12 +905,70 @@ class DeliveryRepository implements IDeliveryRepository {
         }
       }
 
+      // A new address or recipient may be another visit now (B6, K9).
+      await refreshStopGroupKeysOfDelivery(tx, deliveryId);
+
       const updated = await tx.delivery.findUniqueOrThrow({
         where: { id: deliveryId },
       });
 
       return updated as Delivery;
+    };
+
+    return outerTx ? run(outerTx) : this.prisma.$transaction(run);
+  }
+
+  /**
+   * The edit's columns, with a copied point dropped (CLEARED_ADDRESS_POINT
+   * in its place) when its root no longer holds it. The company is the
+   * edited row's own, read here: the link never crosses companies.
+   */
+  private async withHeldCopy(
+    tx: Prisma.TransactionClient,
+    deliveryId: string,
+    data: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const root = data.geo_copied_from;
+
+    if (typeof root !== "string") return data;
+
+    const row = await tx.delivery.findUnique({
+      where: { id: deliveryId },
+      select: { businessId: true },
     });
+    const held =
+      row !== null &&
+      (await lockLender(tx, row.businessId, {
+        latitude: data.latitude as number,
+        longitude: data.longitude as number,
+        geo_source: "GEOCODER",
+        geo_precision: data.geo_precision as "ADDRESS" | "STREET",
+        geocode_status: "RESOLVED",
+        geo_updated_at: data.geo_updated_at as Date,
+        geo_copied_from: root,
+      }));
+
+    return held ? data : { ...data, ...CLEARED_ADDRESS_POINT };
+  }
+
+  async findDeliveryItems(deliveryId: string): Promise<DeliveryItemInput[]> {
+    const items = await this.prisma.deliveryItem.findMany({
+      where: { deliveryId },
+      orderBy: { id: "asc" },
+      select: {
+        description: true,
+        quantity: true,
+        unit: true,
+        unit_value: true,
+      },
+    });
+
+    return items.map((item) => ({
+      description: item.description,
+      quantity: Number(item.quantity),
+      unit: item.unit,
+      unit_value: item.unit_value === null ? null : Number(item.unit_value),
+    }));
   }
 
   async findOpenStopRoute(
@@ -802,6 +1106,10 @@ class DeliveryRepository implements IDeliveryRepository {
         receipt_photo: occurrenceData.receipt_photo ?? null,
         signature: occurrenceData.signature ?? null,
         received_by: occurrenceData.received_by ?? null,
+        // Plan of 02/11/2026 (E3/E4): the geofence record of the report.
+        distance_m: occurrenceData.distance_m ?? null,
+        accuracy_m: occurrenceData.accuracy_m ?? null,
+        geofence_outcome: occurrenceData.geofence_outcome ?? null,
       },
       select: { id: true },
     });
@@ -812,6 +1120,7 @@ class DeliveryRepository implements IDeliveryRepository {
     businessId: string,
   ): Promise<{
     id: string;
+    deliveryId: string;
     authorization_status: OccurrenceAuthorizationStatus;
     category: "DELIVERED" | "NOT_DELIVERED" | "PAUSE";
   } | null> {
@@ -823,7 +1132,12 @@ class DeliveryRepository implements IDeliveryRepository {
         client_submission_id: clientSubmissionId,
         delivery: { businessId },
       },
-      select: { id: true, authorization_status: true, category: true },
+      select: {
+        id: true,
+        deliveryId: true,
+        authorization_status: true,
+        category: true,
+      },
     });
   }
 
@@ -1070,6 +1384,8 @@ class DeliveryRepository implements IDeliveryRepository {
           on_the_way_at: true,
           deliveryId: true,
           routeId: true,
+          // Which requests belong to this attempt (forOpenAttempt); not sent.
+          created_at: true,
         },
       }),
 
@@ -1080,7 +1396,8 @@ class DeliveryRepository implements IDeliveryRepository {
       // not something the driver asked, nor is the request of the driver
       // who held the delivery before it was handed over. Newest first with
       // the id as tiebreak, so the first per delivery is the include's
-      // `take: 1`.
+      // `take: 1`. On a route, only a request of the open stop's attempt
+      // counts (forOpenAttempt).
       this.prisma.deliveryOccurrence.findMany({
         where: {
           deliveryId: { in: deliveryIds },
@@ -1113,6 +1430,10 @@ class DeliveryRepository implements IDeliveryRepository {
               // Decision 14.7 (design §6): the app keeps it in its cache and
               // tells the driver once when the plan changed while offline.
               plan_version: true,
+              // Plan of 02/11/2026 (C2): the plate on the route's card, and
+              // the vehicle a checklist or a refuelling from the route is for
+              // (C4/C5). Null while the route has none (PLANNED only).
+              vehicle: { select: { id: true, license_plate: true } },
             },
           }),
       ),
@@ -1131,15 +1452,24 @@ class DeliveryRepository implements IDeliveryRepository {
     const requestsOf = groupedBy(requests, (request) => request.deliveryId);
 
     return rows.map((row) => {
-      const request = requestsOf.get(row.id)?.[0];
+      const openStops = stopsOf.get(row.id) ?? [];
+      const request = forOpenAttempt(
+        requestsOf.get(row.id) ?? [],
+        openStops[0]?.created_at,
+      );
 
       return {
         ...row,
         // A required relation: the delivery's foreign key keeps its shipper.
         shipper: shippers.get(row.shipperId)!,
         items: itemsOf.get(row.id) ?? [],
-        stops: (stopsOf.get(row.id) ?? []).map(
-          ({ deliveryId: _deliveryId, routeId, ...stop }) => ({
+        stops: openStops.map(
+          ({
+            deliveryId: _deliveryId,
+            routeId,
+            created_at: _createdAt,
+            ...stop
+          }) => ({
             ...stop,
             route: relatedTo(routes, routeId),
           }),
@@ -1165,7 +1495,7 @@ class DeliveryRepository implements IDeliveryRepository {
         businessId,
         driverId,
         status: "PENDING",
-        ...NOT_ON_A_ROUTE,
+        ...notOnARoute(businessId),
         ...(createdUpTo && { created_at: { lte: createdUpTo } }),
       },
     });
@@ -1175,39 +1505,108 @@ class DeliveryRepository implements IDeliveryRepository {
     businessId: string,
     driverId: string,
     createdUpTo?: Date,
+    onStarted?: DepartureHook,
   ): Promise<number> {
-    // Naturally idempotent: a resend finds nothing left to move. A tap sent
-    // late moves only what existed when it was made (MOB-08): the batch is
-    // picked now, and a delivery created since was never on the phone.
-    const result = await this.prisma.delivery.updateMany({
-      where: {
-        businessId,
-        driverId,
-        status: "PENDING",
-        ...NOT_ON_A_ROUTE,
-        ...(createdUpTo && { created_at: { lte: createdUpTo } }),
-      },
-      data: { status: "IN_TRANSIT" },
-    });
+    const run = async (tx: Prisma.TransactionClient) => {
+      // Naturally idempotent: a resend finds nothing left to move. A tap
+      // sent late moves only what existed when it was made (MOB-08): the
+      // batch is picked now, and a delivery created since was never on the
+      // phone.
+      //
+      // RETURNING (plano-escala F2-06): the rows that moved, for their
+      // STATUS_CHANGE lines and webhooks in this same commit — updateMany
+      // only said how many. Raw, so the "not on a route" test is the
+      // correlated NOT EXISTS over the company's open routes, with the
+      // statuses spelled out (notOnAnOpenStop is the Prisma form of it).
+      const moved = await tx.$queryRaw<DepartedDelivery[]>`
+        UPDATE "delivery" d
+           SET "status" = 'IN_TRANSIT', "updated_at" = ${utcInstant(new Date())}
+         WHERE d."businessId" = ${businessId}
+           AND d."driverId" = ${driverId}
+           AND d."status" = 'PENDING'
+           ${
+             createdUpTo
+               ? Prisma.sql`AND d."created_at" <= ${utcInstant(createdUpTo)}`
+               : Prisma.empty
+           }
+           AND NOT EXISTS (
+             SELECT 1
+               FROM "route_stop" s
+               JOIN "route" r ON r."id" = s."routeId"
+              WHERE s."deliveryId" = d."id"
+                AND s."status" IN ('PENDING', 'ARRIVED')
+                AND r."businessId" = ${businessId}
+                AND r."status" IN ('PLANNED', 'RELEASED', 'IN_PROGRESS')
+           )
+        RETURNING d."id", d."businessId", d."code", d."invoice_key",
+                  d."invoice_number", d."recipient_name", d."city", d."uf",
+                  d."status"::text AS "status"
+      `;
 
-    return result.count;
+      if (moved.length === 0) return 0;
+
+      // The lines only with DELIVERY_STATUS_TRAIL_ENABLED (status-trail.ts);
+      // the webhooks below go either way.
+      if (deliveryStatusTrailEnabled()) {
+        await tx.deliveryEvent.createMany({
+          data: moved.map((delivery) => ({
+            type: "STATUS_CHANGE" as const,
+            deliveryId: delivery.id,
+            businessId,
+            status_from: "PENDING" as const,
+            status_to: "IN_TRANSIT" as const,
+            actor: "SYSTEM" as const,
+            // The tap's moment, for one the app queued offline.
+            occurred_at: createdUpTo ?? null,
+          })),
+        });
+      }
+
+      await onStarted?.(moved, tx);
+
+      return moved.length;
+    };
+
+    return this.prisma.$transaction(run);
   }
 
   async findEventBySubmissionId(
     clientSubmissionId: string,
     businessId: string,
   ): Promise<DeliveryEventRecord | null> {
+    const select = {
+      id: true,
+      type: true,
+      deliveryId: true,
+    } as const;
+
+    // The key's own table first (plano-escala F2-14). A key whose event
+    // went with its delivery reads as absent, like before.
+    const eventId = await submittedEventId(
+      this.prisma,
+      clientSubmissionId,
+      businessId,
+    );
+
+    if (eventId) {
+      const event = await this.prisma.deliveryEvent.findFirst({
+        where: { id: eventId, businessId },
+        select,
+      });
+
+      if (event) {
+        return { ...event, client_submission_id: clientSubmissionId };
+      }
+    }
+
+    // The legacy column: what the previous image writes during the rolling
+    // deploy. Goes with the legacy unique, after the copy window (U-10).
     return this.prisma.deliveryEvent.findFirst({
       where: {
         client_submission_id: clientSubmissionId,
         delivery: { businessId },
       },
-      select: {
-        id: true,
-        type: true,
-        deliveryId: true,
-        client_submission_id: true,
-      },
+      select: { ...select, client_submission_id: true },
     });
   }
 
@@ -1222,6 +1621,46 @@ class DeliveryRepository implements IDeliveryRepository {
     });
 
     return found as Delivery | null;
+  }
+
+  async findExistingInvoiceKeys(
+    businessId: string,
+    invoiceKeys: readonly string[],
+  ): Promise<Set<string>> {
+    if (invoiceKeys.length === 0) return new Set();
+
+    // The unique index (businessId, invoice_key) answers each key.
+    const found = await this.prisma.delivery.findMany({
+      where: { businessId, invoice_key: { in: [...invoiceKeys] } },
+      select: { invoice_key: true },
+    });
+
+    return new Set(
+      found
+        .map((delivery) => delivery.invoice_key)
+        .filter((key): key is string => key !== null),
+    );
+  }
+
+  async findExistingOrderCodes(
+    businessId: string,
+    shipperId: string,
+    codes: readonly string[],
+    tx?: Prisma.TransactionClient,
+  ): Promise<Set<string>> {
+    if (codes.length === 0) return new Set();
+
+    const found = await (tx ?? this.prisma).delivery.findMany({
+      where: { businessId, shipperId, code: { in: [...codes] } },
+      select: { code: true },
+      distinct: ["code"],
+    });
+
+    return new Set(
+      found
+        .map((delivery) => delivery.code)
+        .filter((code): code is string => code !== null),
+    );
   }
 
   async lockOrderIdentity(
@@ -1255,11 +1694,11 @@ class DeliveryRepository implements IDeliveryRepository {
     // shows — the period (and its exact-search exception), the id and the
     // driver searches, and every facet, included.
     const { filters: periodic } = await resolveDeliveryPeriod(
-      this.prisma,
+      this.read,
       filters,
     );
     const where = deliveryListWhere(
-      await narrowDeliverySearch(this.prisma, periodic),
+      await narrowDeliverySearch(this.read, periodic),
     );
 
     const batchSize = 1000;
@@ -1267,7 +1706,7 @@ class DeliveryRepository implements IDeliveryRepository {
     let after: ExportKey | null = null;
 
     while (true) {
-      const batch = await this.prisma.delivery.findMany({
+      const batch = await this.read.delivery.findMany({
         where: after ? { AND: [where, ...keysetAfter(after)] } : where,
         include: {
           shipper: { select: { name: true } },
@@ -1313,7 +1752,7 @@ class DeliveryRepository implements IDeliveryRepository {
     // Resolved once for the whole file: the matched ids do not move between
     // batches any more than the term does.
     const where = occurrenceFeedWhere(
-      await narrowOccurrenceSearch(this.prisma, filters),
+      await narrowOccurrenceSearch(this.read, filters),
       { withTypeFacets: true },
     );
 
@@ -1323,7 +1762,7 @@ class DeliveryRepository implements IDeliveryRepository {
     let after: ExportKey | null = null;
 
     while (true) {
-      const batch = await this.prisma.deliveryOccurrence.findMany({
+      const batch = await this.read.deliveryOccurrence.findMany({
         where: after ? { AND: [where, ...keysetAfter(after)] } : where,
         include: {
           occurrenceType: {
@@ -1375,19 +1814,54 @@ class DeliveryRepository implements IDeliveryRepository {
     eventData: CreateDeliveryEventProps,
     tx?: Prisma.TransactionClient,
   ): Promise<void> {
-    const client = tx ?? this.prisma;
+    const key = eventData.client_submission_id ?? null;
 
-    await client.deliveryEvent.create({
+    const write = async (client: Prisma.TransactionClient): Promise<void> => {
+      const businessId = await tenantOfDelivery(client, eventData.deliveryId);
+      const event = await this.insertDeliveryEvent(
+        client,
+        eventData,
+        businessId,
+      );
+
+      // The key and its event commit together (plano-escala F2-14).
+      if (key) {
+        await recordEventSubmission(client, {
+          clientSubmissionId: key,
+          eventId: event.id,
+          businessId,
+        });
+      }
+    };
+
+    if (tx) return write(tx);
+
+    // Two statements with a key: a transaction of their own. Without one,
+    // the single insert it always was.
+    if (key) return this.prisma.$transaction(write);
+
+    return write(this.prisma);
+  }
+
+  private insertDeliveryEvent(
+    client: Prisma.TransactionClient,
+    eventData: CreateDeliveryEventProps,
+    businessId: string,
+  ): Promise<{ id: string }> {
+    return client.deliveryEvent.create({
+      select: { id: true },
       data: {
         type: eventData.type,
         deliveryId: eventData.deliveryId,
-        businessId: await tenantOfDelivery(client, eventData.deliveryId),
+        businessId,
         reportedById: eventData.reportedById ?? null,
 
         // Defaults to USER because that is what every source was until the
         // timeline existed; the column's own default says the same, and both
         // saying it is what keeps an older caller honest.
         actor: eventData.actor ?? "USER",
+        // The key behind an INTEGRATION event (L9); null for a person.
+        apiKeyId: eventData.apiKeyId ?? null,
         device: eventData.device ?? null,
 
         latitude: eventData.latitude ?? null,
@@ -1406,6 +1880,11 @@ class DeliveryRepository implements IDeliveryRepository {
 
         occurrenceId: eventData.occurrenceId ?? null,
         routeId: eventData.routeId ?? null,
+
+        // Plan of 02/11/2026 (E2/E4): the geofence record of the action.
+        distance_m: eventData.distance_m ?? null,
+        accuracy_m: eventData.accuracy_m ?? null,
+        geofence_outcome: eventData.geofence_outcome ?? null,
       },
     });
   }
@@ -1414,6 +1893,7 @@ class DeliveryRepository implements IDeliveryRepository {
     eventData: CreateDeliveryEventProps,
     expectedStatus: DeliveryStatus,
     tx?: Prisma.TransactionClient,
+    owner?: { driverId: string; vehicleId: string | null },
   ): Promise<string[]> {
     // Event and status stamp land together or not at all: a proof without
     // the DELIVERED transition (or vice versa) would lie in the trail.
@@ -1440,6 +1920,11 @@ class DeliveryRepository implements IDeliveryRepository {
           // moment the upload finally went through (MOB-08).
           delivered_at: eventData.occurred_at ?? new Date(),
           received_by: eventData.received_by ?? null,
+          // A late proof (K7): who delivered it, back on the row.
+          ...(owner && {
+            driverId: owner.driverId,
+            vehicleId: owner.vehicleId,
+          }),
         },
       });
 
@@ -1447,11 +1932,14 @@ class DeliveryRepository implements IDeliveryRepository {
         throw new DeliveryStatusConflictError();
       }
 
-      await client.deliveryEvent.create({
+      const businessId = await tenantOfDelivery(client, eventData.deliveryId);
+
+      const proof = await client.deliveryEvent.create({
+        select: { id: true },
         data: {
           type: "PROOF",
           deliveryId: eventData.deliveryId,
-          businessId: await tenantOfDelivery(client, eventData.deliveryId),
+          businessId,
           reportedById: eventData.reportedById,
           latitude: eventData.latitude ?? null,
           longitude: eventData.longitude ?? null,
@@ -1469,8 +1957,21 @@ class DeliveryRepository implements IDeliveryRepository {
           device_id: eventData.device_id ?? null,
           photo_taken_at: eventData.photo_taken_at ?? null,
           routeId: eventData.routeId ?? null,
+          // Plan of 02/11/2026 (E2/E4): the geofence record of the proof.
+          distance_m: eventData.distance_m ?? null,
+          accuracy_m: eventData.accuracy_m ?? null,
+          geofence_outcome: eventData.geofence_outcome ?? null,
         },
       });
+
+      // The proof's key commits with it (plano-escala F2-14).
+      if (eventData.client_submission_id) {
+        await recordEventSubmission(client, {
+          clientSubmissionId: eventData.client_submission_id,
+          eventId: proof.id,
+          businessId,
+        });
+      }
 
       // Decision 6.3: the proof wins over a request still waiting for the
       // tower. After the delivery row, the order every writer of a delivery

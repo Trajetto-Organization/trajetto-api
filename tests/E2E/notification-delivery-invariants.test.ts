@@ -3,9 +3,12 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { createPrismaClient } from "@/shared/database/database-client";
+import { deliveryIdFor } from "@/shared/notifications/delivery-id";
+import { v7 as uuidV7 } from "uuid";
 
 /**
- * The three rules of `notification_delivery` that live only in raw SQL.
+ * The rules of `notification_delivery` that live only in raw SQL, and the
+ * one that replaced two of them.
  *
  * Migration 20260916090000_external_recipient made `userId` nullable so a
  * delivery could address somebody with no account, and replaced the
@@ -14,11 +17,13 @@ import { createPrismaClient } from "@/shared/database/database-client";
  * no syntax for either, so schema.prisma cannot show them and no diff notices
  * when they go missing.
  *
- * They are not decoration: `expandEvent` writes deliveries with
+ * They were not decoration: `expandEvent` writes deliveries with
  * `createMany({ skipDuplicates: true })`, and that is only idempotent while a
- * unique index backs it. Without the external one, an event expanded twice
- * (lease ran out while the first expansion was still writing) queues two
- * WhatsApp rows for the same customer — two messages, nothing failing.
+ * unique key backs it. Without one, an event expanded twice (lease ran out
+ * while the first expansion was still writing) queues two WhatsApp rows for
+ * the same customer — two messages, nothing failing. Since F5-06 (plano de
+ * escala) the key is the primary key: the delivery's id is decided by the
+ * event, the recipient and the channel, and the partial uniques are gone.
  *
  * Prisma 6.1's `migrate dev` does not offer to drop partial indexes or CHECKs
  * (its introspection skips them), so the realistic ways to lose these are a
@@ -121,62 +126,39 @@ afterAll(async () => {
   await prisma.$disconnect();
 });
 
-describe("the indexes that make a re-expansion a no-op", () => {
-  it("keep one row per (event, user, channel)", async () => {
-    const index = (await indexesOf("notification_delivery")).find(
-      (row) => row.indexname === "notification_delivery_user_event_channel_idx",
+/**
+ * Since F5-06 the re-expansion is a no-op by the delivery's own id: it is
+ * decided by (event, recipient, channel) (deliveryIdFor, F5-03), so the
+ * primary key does what the two partial unique indexes did, and the queue
+ * can be partitioned by day on it (a partitioned table cannot hold those
+ * uniques). Both indexes are gone; the promise is the same.
+ */
+describe("what makes a re-expansion a no-op", () => {
+  it("is no longer a unique index: both partial ones left with F5-06", async () => {
+    const names = (await indexesOf("notification_delivery")).map(
+      (row) => row.indexname,
     );
 
-    expect(
-      index?.indexdef,
-      "notification_delivery_user_event_channel_idx sumiu — ver 20260916090000_external_recipient",
-    ).toBeDefined();
-
-    expect(index!.indexdef).toContain("CREATE UNIQUE INDEX");
-    expect(index!.indexdef).toMatch(
-      /\("outboxEventId", "userId", channel\) WHERE \("userId" IS NOT NULL\)/,
-    );
-  });
-
-  it("keep one row per (event, external recipient, channel)", async () => {
-    const index = (await indexesOf("notification_delivery")).find(
-      (row) =>
-        row.indexname === "notification_delivery_external_event_channel_idx",
-    );
-
-    expect(
-      index?.indexdef,
-      "notification_delivery_external_event_channel_idx sumiu — ver 20260916090000_external_recipient",
-    ).toBeDefined();
-
-    expect(index!.indexdef).toContain("CREATE UNIQUE INDEX");
-    expect(index!.indexdef).toMatch(
-      /\("outboxEventId", "externalRecipientId", channel\) WHERE \("externalRecipientId" IS NOT NULL\)/,
+    expect(names).not.toContain("notification_delivery_user_event_channel_idx");
+    expect(names).not.toContain(
+      "notification_delivery_external_event_channel_idx",
     );
   });
 
-  it("turn a second expansion for a user into nothing", async () => {
-    const row = { outboxEventId, userId, channel: "EMAIL" as const };
-
-    const first = await prisma.notificationDelivery.createMany({
-      data: [row],
-      skipDuplicates: true,
+  async function event() {
+    return prisma.domainOutboxEvent.findUniqueOrThrow({
+      where: { id: outboxEventId },
+      select: { id: true, created_at: true },
     });
+  }
 
-    const second = await prisma.notificationDelivery.createMany({
-      data: [row],
-      skipDuplicates: true,
-    });
-
-    expect(first.count).toBe(1);
-    expect(second.count).toBe(0);
-  });
-
-  it("turn a second expansion for a customer into nothing, not a second WhatsApp", async () => {
+  it("turns a second expansion for a user into nothing, by the id", async () => {
+    const recipient = { userId, externalRecipientId: null };
     const row = {
+      id: deliveryIdFor(await event(), recipient, "EMAIL"),
       outboxEventId,
-      externalRecipientId,
-      channel: "WHATSAPP" as const,
+      userId,
+      channel: "EMAIL" as const,
     };
 
     const first = await prisma.notificationDelivery.createMany({
@@ -185,7 +167,31 @@ describe("the indexes that make a re-expansion a no-op", () => {
     });
 
     const second = await prisma.notificationDelivery.createMany({
-      data: [row],
+      data: [{ ...row, id: deliveryIdFor(await event(), recipient, "EMAIL") }],
+      skipDuplicates: true,
+    });
+
+    expect(first.count).toBe(1);
+    expect(second.count).toBe(0);
+  });
+
+  it("turns a second expansion for a customer into nothing, not a second WhatsApp", async () => {
+    const recipient = { userId: null, externalRecipientId };
+    const row = () =>
+      event().then((found) => ({
+        id: deliveryIdFor(found, recipient, "WHATSAPP"),
+        outboxEventId,
+        externalRecipientId,
+        channel: "WHATSAPP" as const,
+      }));
+
+    const first = await prisma.notificationDelivery.createMany({
+      data: [await row()],
+      skipDuplicates: true,
+    });
+
+    const second = await prisma.notificationDelivery.createMany({
+      data: [await row()],
       skipDuplicates: true,
     });
 
@@ -206,6 +212,7 @@ describe("the rule that a delivery addresses exactly one recipient", () => {
       SELECT pg_get_constraintdef(oid) AS def
       FROM pg_constraint
       WHERE conname = 'notification_delivery_one_recipient' AND contype = 'c'
+        AND conrelid = '"notification_delivery"'::regclass
     `;
 
     expect(
@@ -218,15 +225,18 @@ describe("the rule that a delivery addresses exactly one recipient", () => {
   });
 
   /**
-   * A row with no recipient would slip past BOTH partial indexes and sit in
-   * the queue forever, claimed and failed on every cycle.
+   * A row with no recipient would have no id of its own to dedupe on (its
+   * id is decided by the recipient) and sit in the queue forever, claimed
+   * and failed on every cycle.
    */
+  // The ids are v7, as every queue id: the queues are partitioned by it
+  // since F5-09, and a v4 would fail for want of a partition first.
   it("refuses a row with no recipient at all", async () => {
     await expect(
       prisma.$executeRaw`
         INSERT INTO "notification_delivery"
           ("id", "outboxEventId", "channel", "updated_at")
-        VALUES (${randomUUID()}, ${outboxEventId}, 'EMAIL', now())
+        VALUES (${uuidV7()}, ${outboxEventId}, 'EMAIL', now())
       `,
     ).rejects.toSatisfy(violatesOneRecipient);
   });
@@ -237,7 +247,7 @@ describe("the rule that a delivery addresses exactly one recipient", () => {
         INSERT INTO "notification_delivery"
           ("id", "outboxEventId", "userId", "externalRecipientId", "channel", "updated_at")
         VALUES
-          (${randomUUID()}, ${outboxEventId}, ${userId}, ${externalRecipientId}, 'EMAIL', now())
+          (${uuidV7()}, ${outboxEventId}, ${userId}, ${externalRecipientId}, 'EMAIL', now())
       `,
     ).rejects.toSatisfy(violatesOneRecipient);
   });
@@ -250,7 +260,7 @@ describe("the rule that a delivery addresses exactly one recipient", () => {
       prisma.$executeRaw`
         INSERT INTO "notification_delivery"
           ("id", "outboxEventId", "userId", "channel", "updated_at")
-        VALUES (${randomUUID()}, ${outboxEventId}, ${userId}, 'PUSH', now())
+        VALUES (${uuidV7()}, ${outboxEventId}, ${userId}, 'PUSH', now())
       `,
     ).resolves.toBe(1);
   });

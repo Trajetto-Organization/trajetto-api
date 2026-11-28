@@ -40,7 +40,7 @@ const occurrenceFormFieldsDoc = z
 
 /** Answers by field key: text/select/date as strings, numbers, sim/não. */
 const occurrenceFormAnswersDoc = z
-  .record(z.union([z.string(), z.number(), z.boolean(), z.null()]))
+  .record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()]))
   .nullable()
   .describe(
     "Respostas do formulário do tipo de ocorrência, por chave do campo.",

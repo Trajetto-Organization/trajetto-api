@@ -1,5 +1,7 @@
-import { surfaces } from "./lib/api.js";
-import { stagesDuration } from "./lib/duration.js";
+import exec from "k6/execution";
+
+import { SUMMARY_TREND_STATS, breakdownOf, surfaces } from "./lib/api.js";
+import { parseDuration, stagesDuration } from "./lib/duration.js";
 import { pause, runOneOperation } from "./lib/mix.js";
 
 /** Quiet, wall, quiet, wall, quiet (see the scenario below). */
@@ -23,6 +25,58 @@ const RUSH = [
   { target: 20, duration: "5s" },
   { target: 20, duration: "60s" },
 ];
+
+/**
+ * Which part of the rush a sample belongs to: the first `quiet`, a `wall`
+ * (its rise, its plateau and its drop) or a `recovery`, the quiet after a
+ * wall. Tagged on the VU, so every sample of the iteration carries it.
+ */
+function windowOf(elapsedMs) {
+  let end = 0;
+  let previousTarget = RUSH[0].target;
+
+  for (const stage of RUSH) {
+    end += parseDuration(stage.duration);
+
+    if (elapsedMs < end) {
+      if (stage.target > RUSH[0].target || previousTarget > RUSH[0].target) {
+        return "wall";
+      }
+
+      return end <= parseDuration(RUSH[0].duration) ? "quiet" : "recovery";
+    }
+
+    previousTarget = stage.target;
+  }
+
+  return "recovery";
+}
+
+function tagWindow() {
+  const tags = exec.vu.metrics ? exec.vu.metrics.tags : exec.vu.tags;
+
+  tags.window = windowOf(exec.instance.currentTestRunDuration);
+}
+
+/**
+ * The acceptance of load shedding (plano-escala F2-24 and LOAD-03), with
+ * SHED_MODE=enforce on the replicas and SPIKE_ACCEPTANCE=true here: no
+ * product failure, the whole run's p95 under 1 s, no request past 10 s, and
+ * each quiet after a wall back under 1 s, the "back to the base p95 within
+ * 60 s" (the recoveries last 45 and 60 s). What the API refuses comes as 429
+ * or 503 with Retry-After, an answer (lib/api.js, `record`), never a
+ * failure. Without the variable the measured thresholds below stay, so a
+ * run in observe still says what it found.
+ */
+const ACCEPTANCE = __ENV.SPIKE_ACCEPTANCE === "true";
+
+const ACCEPTANCE_THRESHOLDS = ACCEPTANCE
+  ? {
+      surface_failures: ["rate==0"],
+      surface_latency: ["p(95)<1000", "max<10000"],
+      "surface_latency{window:recovery}": ["p(95)<1000"],
+    }
+  : {};
 
 /**
  * A wall of traffic arriving at once, and what happens after it leaves.
@@ -52,6 +106,8 @@ const RUSH = [
  * system.
  */
 export const options = {
+  summaryTrendStats: SUMMARY_TREND_STATS,
+
   scenarios: {
     /**
      * Quiet, wall, quiet, wall, quiet.
@@ -124,10 +180,18 @@ export const options = {
       queues and refuses, and it does not break.
     */
     "surface_latency{surface:route.positions}": ["p(99)<12000"],
+
+    // Each window on its own in the summary-export (lib/verdicts.mjs,
+    // spikeVerdict).
+    ...breakdownOf("window", ["quiet", "wall", "recovery"]),
+    surface_shed: ["rate>=0"],
+
+    ...ACCEPTANCE_THRESHOLDS,
   },
 };
 
 export default function spike() {
+  tagWindow();
   runOneOperation(__VU);
 
   // Shorter than the steady load's pause: a spike is people acting at the same
@@ -136,5 +200,6 @@ export default function spike() {
 }
 
 export function health() {
+  tagWindow();
   surfaces.health();
 }

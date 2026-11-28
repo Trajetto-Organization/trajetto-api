@@ -1,121 +1,57 @@
-import { Prisma } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
 
-import database from "@/../infra/database";
+import { databaseBatch } from "@/../infra/database";
+import { env } from "@/env";
+import {
+  anyLeft as anyLeftOn,
+  deleteInBatches as deleteInBatchesOn,
+  type BatchDeleteParams,
+  type BatchDeleteResult,
+} from "@/shared/database/batch-delete";
+
+// The batched delete itself lives with the database code: the user tokens
+// repository purges the expired refresh tokens with it too (F1-18).
+export { DELETE_BATCH_SIZE } from "@/shared/database/batch-delete";
+export type {
+  BatchDeleteParams,
+  BatchDeleteResult,
+} from "@/shared/database/batch-delete";
 
 /**
- * Rows removed per statement.
- *
- * A single `deleteMany` over a day's worth of queue rows is one transaction
- * holding millions of row locks: it pins the xmin horizon for its whole
- * duration, which stops autovacuum from reclaiming dead tuples anywhere in
- * the database, not just in the table being purged. 5.000 rows is small
- * enough that each statement commits in milliseconds and large enough that a
- * million-row backlog is 200 round trips, not 200.000.
+ * The nightly purges run on the maintenance pool (plano-escala F3-18),
+ * databaseBatch, not on the pool the requests take connections from: a
+ * purge that runs for its whole five-minute budget holds a connection all
+ * along, and on the app's pool of ten that is one fewer for every request
+ * of the replica. With BATCH_DATABASE_URL unset it is the same server and
+ * user, on three connections of its own; after the cut of the database
+ * roles it is the trajetto_batch login, the one with DELETE on
+ * delivery_event. A caller may still pass its own client.
  */
-const DELETE_BATCH_SIZE = 5_000;
+function deleteInBatches(
+  params: BatchDeleteParams,
+): Promise<BatchDeleteResult> {
+  return deleteInBatchesOn({ client: databaseBatch, ...params });
+}
+
+/** Whether any row still matches, on the maintenance pool. */
+function anyLeft(table: Prisma.Sql, where: Prisma.Sql): Promise<boolean> {
+  return anyLeftOn(table, where, databaseBatch);
+}
 
 /**
- * Wall-clock ceiling for one purge run.
+ * When one purge run stops, whatever is left: now plus
+ * CRON_PURGE_RUN_BUDGET_MS (5 minutes by default, and never more).
  *
  * CronSchedulerService leases an execution for 10 minutes
  * (EXECUTION_LEASE_MS), and its catch-up sweep treats a run past the lease as
  * dead: it marks it FAILED and may run the job again. Stopping at half the
- * lease keeps a slow purge from ever running alongside its own re-run;
- * whatever is left is picked up by the next night's run.
+ * lease keeps a slow purge from ever running alongside its own re-run. What
+ * is left makes the run partial (PartialRunError): the catch-up sweep takes
+ * it again inside the partial window, or the next night does. Read when the
+ * run starts, so a test can lower it.
  */
-const PURGE_RUN_BUDGET_MS = 5 * 60 * 1000;
-
-interface BatchDeleteParams {
-  /** Quoted table name, e.g. Prisma.sql`"domain_outbox_event"`. */
-  table: Prisma.Sql;
-
-  /**
-   * Row predicate. Must only ever match rows in a terminal state — the
-   * pipeline owns everything else, whatever its age.
-   */
-  where: Prisma.Sql;
-
-  /**
-   * Hard ceiling on rows removed in one run. Bounds the damage of a bad
-   * predicate and keeps a single night from turning into an hours-long
-   * delete storm; see each caller for how the number was sized.
-   */
-  maxRows: number;
-
-  /** Epoch millis after which the loop stops, whatever is left. */
-  deadline: number;
-
-  /**
-   * Optional ordering for the inner SELECT, e.g. Prisma.sql`"created_at"`.
-   * Only worth passing when an index makes the order free — it lets the scan
-   * start at the oldest rows and stop as soon as the batch is full. Without
-   * a matching index it would force a sort of the entire match set.
-   */
-  orderBy?: Prisma.Sql;
+function purgeDeadline(now: number = Date.now()): number {
+  return now + env.CRON_PURGE_RUN_BUDGET_MS;
 }
 
-interface BatchDeleteResult {
-  deleted: number;
-
-  /**
-   * True when the loop stopped on `maxRows` or on the deadline rather than
-   * because nothing was left — i.e. there is still a backlog to purge.
-   */
-  stoppedEarly: boolean;
-}
-
-/**
- * Deletes rows in bounded batches instead of one unbounded statement.
- *
- * Safe to run while the pipelines are working, and safe to run twice at once:
- *
- *   * every batch is its own implicit transaction, so the snapshot is
- *     released between batches and autovacuum can reclaim the previous
- *     batch's dead tuples while this job is still running;
- *   * the inner SELECT takes `FOR UPDATE SKIP LOCKED`, so a concurrent purge
- *     (or the pipeline, if a predicate ever overlapped) skips locked rows
- *     instead of blocking on them or deadlocking against them.
- */
-async function deleteInBatches({
-  table,
-  where,
-  maxRows,
-  deadline,
-  orderBy,
-}: BatchDeleteParams): Promise<BatchDeleteResult> {
-  const ordering = orderBy ? Prisma.sql`ORDER BY ${orderBy}` : Prisma.empty;
-
-  let deleted = 0;
-
-  while (deleted < maxRows) {
-    if (Date.now() >= deadline) {
-      return { deleted, stoppedEarly: true };
-    }
-
-    const limit = Math.min(DELETE_BATCH_SIZE, maxRows - deleted);
-
-    const removed = await database.$executeRaw`
-      DELETE FROM ${table}
-      WHERE "id" IN (
-        SELECT "id" FROM ${table}
-        WHERE ${where}
-        ${ordering}
-        LIMIT ${limit}
-        FOR UPDATE SKIP LOCKED
-      )
-    `;
-
-    deleted += removed;
-
-    // A short batch means the predicate ran out of rows — or that the rest is
-    // locked by a concurrent purge, in which case that run is deleting them
-    // and this one has nothing left to do either way.
-    if (removed < limit) {
-      return { deleted, stoppedEarly: false };
-    }
-  }
-
-  return { deleted, stoppedEarly: true };
-}
-
-export { deleteInBatches, DELETE_BATCH_SIZE, PURGE_RUN_BUDGET_MS };
+export { anyLeft, deleteInBatches, purgeDeadline };

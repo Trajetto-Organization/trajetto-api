@@ -92,6 +92,8 @@ interface AnnounceOccurrenceEffectInput {
   nextStatus: DeliveryStatus;
 
   occurrenceTypeName: string;
+  /** The company's ERP code for the type (L8), sent as occurrence_code. */
+  occurrenceTypeCode: string | null;
   blocksDelivery: boolean;
   description: string | null;
   photosCount: number;
@@ -171,6 +173,8 @@ async function announceOccurrenceEffect(
         input.at,
       ),
       occurrence_type: input.occurrenceTypeName,
+      // What an ERP matches on: the name is the company's to rename (L8).
+      occurrence_code: input.occurrenceTypeCode,
       blocks_delivery: input.blocksDelivery,
       description: input.description,
     },

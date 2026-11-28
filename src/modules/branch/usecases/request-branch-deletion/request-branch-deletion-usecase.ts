@@ -16,11 +16,14 @@ import { BranchNotFoundError } from "../errors/branch-not-found-error";
 import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 
 import { BranchHasChildrenError } from "../errors/branch-has-children-error";
+import { BranchHeadOfficeNotDeletableError } from "../errors/branch-head-office-not-deletable-error";
+import { isHeadOffice } from "../../branch-head-office";
 
 import { sendTransactionalMail } from "@/shared/services/transactional-mail-service";
 import { AppError } from "@/shared/errors/AppError";
 
 import { emailLogoUrl } from "@/shared/providers/mail-provider/email-logo";
+import { requireMailbox } from "@/modules/user/services/user-mailbox";
 import { logger } from "@/shared/logging/logger";
 
 const log = logger.child({ component: "branch" });
@@ -69,11 +72,24 @@ class RequestBranchDeletionUseCase {
 
     assertTenantAccess(findUser, businessId);
 
+    // The code goes to this mailbox: refuse before storing one nobody gets.
+    const mailbox = requireMailbox(findUser);
+
     const findBranch = await this.branch.findBranchById(branchId);
 
     // Another company's branch answers like a missing one (decision 11.3).
     if (!findBranch || findBranch.businessId !== businessId) {
       throw new BranchNotFoundError();
+    }
+
+    // The head office is never deleted (owner decision of 26/11/2026): the
+    // company would be left with none, its saves in Empresas mirroring onto
+    // nothing, and the next branch created with its CNPJ silently taking the
+    // place. Checked after the tenant check above, so another company's
+    // head office stays a plain 404, and before any code is stored, mailed
+    // or consumed.
+    if (isHeadOffice(findBranch, findBusiness)) {
+      throw new BranchHeadOfficeNotDeletableError();
     }
 
     // Fail fast: don't bother sending code if branch can't be deleted anyway
@@ -115,7 +131,7 @@ class RequestBranchDeletionUseCase {
     // stored above, asking again replaces it, and it carries a secret, so it
     // stays in-process, off the outbox.
     void sendTransactionalMail({
-      email: findUser.email,
+      email: mailbox,
       name: findUser.name,
       subject: "Código de confirmação para exclusão de filial",
       templateName: "branch-deletion-code.hbs",

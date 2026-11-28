@@ -78,6 +78,19 @@ interface PublicTrackingView {
 
   /** Present once the receipt exists. Points at the public page, not the file. */
   proofUrl: string | null;
+
+  /**
+   * The other deliveries of the same visit (plan of 02/11/2026, B6): one
+   * message per stop links to one of them, and the page lists the rest. Only
+   * what the person can act on: the number, the order code and the status.
+   */
+  sameStop: Array<{
+    invoiceNumber: string | null;
+    code: string | null;
+    status: DeliveryStatus;
+    statusLabel: string;
+    deliveredAt: Date | string | null;
+  }>;
 }
 
 export type {

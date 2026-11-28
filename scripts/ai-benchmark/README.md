@@ -38,6 +38,8 @@ npx tsx scripts/ai-benchmark/run-benchmark.mjs --provider local --container traj
 
 O `--provider anthropic` e o Haiku saíram com o provedor externo (decisão 14.1); os passos 7 e 8 abaixo ficam como registro da rodada de 28/09.
 
+Para medir o tamanho da foto do odômetro, suba o serviço com `-e OCR_DIGITS_MAX_SIDE=<px>`: só o perfil de dígitos lê a foto reduzida, e o `run.json` guarda o valor em `describe.health.digitsMaxSide`. O `--max-side` do harness reduz no cliente e vale para os dois perfis. A rodada de 18/11/2026, com os comandos exatos, está em `results-2026-11.md`: 896 px só nos dígitos perdeu 3 km exatas em 15, e a variável ficou em `0`.
+
 ## Testes dos scripts
 
 ```bash

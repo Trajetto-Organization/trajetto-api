@@ -67,6 +67,31 @@ describe("activity-only topics", () => {
     );
   });
 
+  it("checklist activity flags a driver's early arrival from an older build, before the origin", () => {
+    // Recorded, never refused (contract < 5): the office reads it here. The
+    // origin stays last, where the created_from backfill looks for it.
+    const trail = (arrivalOpenStops: number) =>
+      renderVehicleChecklistCreatedActivity({
+        checklistId: "chk-1",
+        businessId: "biz-1",
+        vehiclePlate: "ABC1D23",
+        vehicleDescription: "Caminhão Baú",
+        origin: "MOBILE_APP",
+        arrivalOpenStops,
+      }).description;
+
+    expect(trail(3)).toBe(
+      "Checklist veicular criado para o veículo ABC1D23 - Caminhão Baú | Checklist de chegada feito com 3 paradas em aberto | Origem: Aplicativo",
+    );
+    expect(trail(1)).toContain(
+      "| Checklist de chegada feito com 1 parada em aberto |",
+    );
+    // A route that never left, with nothing open to count.
+    expect(trail(0)).toContain(
+      "| Checklist de chegada feito antes de a rota começar |",
+    );
+  });
+
   it("refuelling activity keeps the exact legacy wording", () => {
     const activity = renderFuelCreatedActivity({
       fuelId: "fuel-1",

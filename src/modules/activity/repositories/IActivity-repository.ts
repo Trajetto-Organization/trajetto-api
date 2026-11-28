@@ -1,5 +1,7 @@
 import { Prisma } from "@prisma/client";
 
+import type { ActivityDataVersion } from "@/shared/activity/activity-data-version";
+
 import {
   Activity,
   CreateActivityProps,
@@ -43,6 +45,12 @@ interface IActivityRepository {
   summarizeActivities: (
     props: ActivitySummaryProps,
   ) => Promise<ActivitySummary>;
+  /**
+   * The generation of ids the trail serves (plano-escala F2-18): "1" until
+   * the copy window re-keys it, "2" from then on
+   * (src/shared/activity/activity-data-version.ts).
+   */
+  dataVersion: () => Promise<ActivityDataVersion>;
 }
 
 export { IActivityRepository };

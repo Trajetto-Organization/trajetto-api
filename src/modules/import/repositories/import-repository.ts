@@ -3,6 +3,7 @@ import database from "@/../infra/database";
 import type {
   IImportRepository,
   ReversalRemovedHook,
+  ReversalRoutesRemovedHook,
 } from "./IImport-repository";
 import type {
   CreateImportProps,
@@ -20,10 +21,12 @@ import type {
 import { Prisma } from "@prisma/client";
 
 import { OPEN_STOP_STATUSES } from "@/shared/route/route-rules";
+import { notOnAnOpenStop } from "@/shared/route/open-stop-anti-join";
 
 import { ImportReversalLeaseLostError } from "../usecases/errors/import-errors";
 import {
   KEEP_REASON,
+  PLAN_ONLY_EVENT_TYPES,
   REVERSAL_BATCH_SIZE,
   REVERSAL_TRANSACTION_OPTIONS,
   deliveryKeepReason,
@@ -114,6 +117,33 @@ const SHUTDOWN_ROW: ImportReport["rows"][number] = {
     "podem não ter rota. Estorne esta importação e envie o arquivo de novo.",
 };
 
+/**
+ * A durable import whose job failed for good (plano-escala F3-23a): every
+ * attempt ran into a failure, or the stored file was gone. The deliveries
+ * it created are counted from the rows.
+ */
+const FAILED_ROW: ImportReport["rows"][number] = {
+  line: 1,
+  outcome: "invalid",
+  recipient_name: null,
+  reference: null,
+  message:
+    "Importação interrompida por uma falha do servidor antes de terminar o " +
+    "arquivo. As entregas criadas até ali pertencem a esta importação e " +
+    "podem não ter rota. Estorne esta importação e envie o arquivo de novo.",
+};
+
+/** The same, with nothing created: nothing to undo. */
+const FAILED_EMPTY_ROW: ImportReport["rows"][number] = {
+  line: 1,
+  outcome: "invalid",
+  recipient_name: null,
+  reference: null,
+  message:
+    "Importação interrompida por uma falha do servidor e nenhuma entrega " +
+    "foi criada. Envie o arquivo de novo.",
+};
+
 /** Every column of an upload but its report (Prisma 6.1 has no `omit`). */
 const IMPORT_SUMMARY_COLUMNS = {
   id: true,
@@ -130,12 +160,29 @@ const IMPORT_SUMMARY_COLUMNS = {
   updated_at: true,
 } satisfies Prisma.ImportSelect;
 
+/**
+ * A delivery event that means somebody worked the delivery: every type but
+ * the plan's own ROUTE_ADDED, which the upload writes for the routes it
+ * builds (PLAN_ONLY_EVENT_TYPES), and the creation line every delivery
+ * starts with (F2-06), which the upload itself wrote. The same filter in the
+ * route decision, the batch's count and the delete's re-check, so the three
+ * cannot disagree.
+ */
+const WORKED_EVENT = {
+  type: { notIn: [...PLAN_ONLY_EVENT_TYPES] },
+  NOT: { type: "STATUS_CHANGE", status_from: null, status_to: "PENDING" },
+} satisfies Prisma.DeliveryEventWhereInput;
+
 class ImportRepository implements IImportRepository {
   constructor(private prisma = database) {}
 
-  async createImport(data: CreateImportProps): Promise<ImportRecord> {
-    const created = await this.prisma.import.create({
+  async createImport(
+    data: CreateImportProps,
+    tx?: Prisma.TransactionClient,
+  ): Promise<ImportRecord> {
+    const created = await (tx ?? this.prisma).import.create({
       data: {
+        ...(data.id && { id: data.id }),
         source: data.source,
         status: "IN_PROGRESS",
         filename: data.filename,
@@ -183,6 +230,11 @@ class ImportRepository implements IImportRepository {
     // import_in_progress_heartbeat_idx: the uploads running right now. Raw,
     // with the status as a literal: Prisma binds it as a parameter, and a
     // generic plan over a parameter cannot prove the partial index.
+    //
+    // An upload a live durable job owns is left alone (F3-23a): waiting in
+    // the queue, its heartbeat is old by design, and a job that died with
+    // its process is resumed by the next claim, not closed. The probe is
+    // background_job_live_subject_key.
     const stale = await this.prisma.$queryRaw<
       Array<{ id: string; businessId: string }>
     >`
@@ -190,6 +242,12 @@ class ImportRepository implements IImportRepository {
       FROM "import"
       WHERE "status" = 'IN_PROGRESS'
         AND "updated_at" < ${staleBefore}
+        AND NOT EXISTS (
+          SELECT 1 FROM "background_job" AS "job"
+          WHERE "job"."kind" = 'SPREADSHEET_IMPORT'
+            AND "job"."subjectId" = "import"."id"
+            AND "job"."status" IN ('PENDING', 'PROCESSING')
+        )
       ORDER BY "updated_at"
       LIMIT ${limit}::int
     `;
@@ -218,8 +276,14 @@ class ImportRepository implements IImportRepository {
   async closeInterruptedImport(
     importId: string,
     businessId: string,
-    stage: "not-started" | "stopped",
+    stage: "not-started" | "stopped" | "failed",
   ): Promise<boolean> {
+    if (stage === "failed") {
+      return this.closeAsInterrupted(importId, businessId, {
+        row: (imported) => (imported === 0 ? FAILED_EMPTY_ROW : FAILED_ROW),
+      });
+    }
+
     return this.closeAsInterrupted(importId, businessId, {
       // "Nothing was created" only when it is true and will stay true: the
       // upload never reached its rows (its stop signal ends it before the
@@ -280,6 +344,18 @@ class ImportRepository implements IImportRepository {
     });
 
     return done.count === 1;
+  }
+
+  async listImportedIdentities(
+    importId: string,
+    businessId: string,
+  ): Promise<
+    Array<{ id: string; invoice_key: string | null; code: string | null }>
+  > {
+    return this.prisma.delivery.findMany({
+      where: { importId, businessId },
+      select: { id: true, invoice_key: true, code: true },
+    });
   }
 
   async findImportById(
@@ -425,19 +501,35 @@ class ImportRepository implements IImportRepository {
     {
       onRemoved,
       batchSize = REVERSAL_BATCH_SIZE,
-    }: { onRemoved?: ReversalRemovedHook; batchSize?: number },
+      beforeBatch,
+      onRoutesRemoved,
+    }: {
+      onRemoved?: ReversalRemovedHook;
+      batchSize?: number;
+      beforeBatch?: () => void;
+      onRoutesRemoved?: ReversalRoutesRemovedHook;
+    },
   ): Promise<ReversalResult> {
     let current = progress;
 
     try {
       if (!current.routesDone) {
-        current = await this.prisma.$transaction(
+        beforeBatch?.();
+
+        const step = await this.prisma.$transaction(
           (tx) => this.reverseRoutes(tx, importId, businessId, lease, current),
           REVERSAL_TRANSACTION_OPTIONS,
         );
+
+        current = step.progress;
+
+        // Committed: the routes are gone for every reader now.
+        if (step.removed.length > 0) onRoutesRemoved?.(step.removed);
       }
 
       for (;;) {
+        beforeBatch?.();
+
         const step = await this.prisma.$transaction(
           (tx) =>
             this.reverseDeliveryBatch(
@@ -533,7 +625,10 @@ class ImportRepository implements IImportRepository {
     businessId: string,
     lease: Date,
     progress: ReversalProgress,
-  ): Promise<ReversalProgress> {
+  ): Promise<{
+    progress: ReversalProgress;
+    removed: Array<{ id: string; code: number }>;
+  }> {
     await this.fence(tx, importId, businessId, lease);
 
     const routes = await tx.route.findMany({
@@ -562,7 +657,7 @@ class ImportRepository implements IImportRepository {
                           { importId: { not: importId } },
                           { businessId: { not: businessId } },
                           { status: { not: "PENDING" } },
-                          { events: { some: {} } },
+                          { events: { some: WORKED_EVENT } },
                           { occurrences: { some: {} } },
                         ],
                       },
@@ -593,18 +688,31 @@ class ImportRepository implements IImportRepository {
 
     // Routes before their deliveries: a stop references its delivery, and
     // the delivery cannot go while a stop still points at it. The status is
-    // asked again in the delete: the reads above take no lock, and a route
-    // released since is not ours to remove any more.
-    const removedRoutes =
+    // asked again under the routes' lock: the reads above take none, and a
+    // route released since is not ours to remove any more. The lock (in id
+    // order, as the route writes take it) makes the rows read here exactly
+    // the rows deleted, so the hint after the commit names the routes that
+    // went — a count could not (audit of 25/11/2026).
+    const removed =
       removableRouteIds.length > 0
-        ? await tx.route.deleteMany({
-            where: {
-              id: { in: removableRouteIds },
-              businessId,
-              status: "PLANNED",
-            },
-          })
-        : { count: 0 };
+        ? await tx.$queryRaw<Array<{ id: string; code: number }>>`
+            SELECT "id", "code" FROM "route"
+            WHERE "id" IN (${Prisma.join(removableRouteIds)})
+              AND "businessId" = ${businessId}
+              AND "status" = 'PLANNED'
+            ORDER BY "id"
+            FOR UPDATE
+          `
+        : [];
+
+    if (removed.length > 0) {
+      await tx.route.deleteMany({
+        where: {
+          id: { in: removed.map((route) => route.id) },
+          businessId,
+        },
+      });
+    }
 
     // Whatever is kept stops claiming to be part of this upload.
     await tx.route.updateMany({
@@ -614,14 +722,14 @@ class ImportRepository implements IImportRepository {
 
     const next: ReversalProgress = {
       ...progress,
-      removedRoutes: progress.removedRoutes + removedRoutes.count,
+      removedRoutes: progress.removedRoutes + removed.length,
       keptRoutes: [...progress.keptRoutes, ...keptRoutes],
       routesDone: true,
     };
 
     await this.saveProgress(tx, importId, businessId, next);
 
-    return next;
+    return { progress: next, removed };
   }
 
   /**
@@ -657,7 +765,12 @@ class ImportRepository implements IImportRepository {
         invoice_number: true,
         city: true,
         uf: true,
-        _count: { select: { events: true, occurrences: true } },
+        _count: {
+          select: {
+            events: { where: WORKED_EVENT },
+            occurrences: true,
+          },
+        },
         // The open stops left. The upload's routes that go are already gone
         // (reverseRoutes), so an open stop here is on a route that stays — a
         // route built by hand in the panel, or one of the upload's that was
@@ -704,7 +817,9 @@ class ImportRepository implements IImportRepository {
     //
     // The removable criteria are repeated for the same reason as the route's
     // status: a delivery that was worked, or put on a route, between the read
-    // and here is not deleted.
+    // and here is not deleted. The open-stop test is the company's (F2-21):
+    // unscoped, the planner could hash every open stop of the platform for
+    // each batch.
     const removedDeliveries =
       deletableIds.length > 0
         ? await tx.delivery.deleteMany({
@@ -712,9 +827,9 @@ class ImportRepository implements IImportRepository {
               id: { in: deletableIds },
               businessId,
               status: "PENDING",
-              events: { none: {} },
+              events: { none: WORKED_EVENT },
               occurrences: { none: {} },
-              stops: { none: { status: { in: OPEN_STOP_STATUSES } } },
+              ...notOnAnOpenStop(businessId),
             },
           })
         : { count: 0 };

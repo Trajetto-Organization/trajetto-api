@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { responseDateTime } from "./response-date";
 
 import {
   listDeliveryMessageTemplateSchema,
@@ -13,8 +14,6 @@ import {
 } from "@/schemas/proof-document-schema";
 
 import { codedRefusal, errorResponse } from "./common-responses";
-
-const isoDateTime = z.union([z.string(), z.date()]);
 
 const signatureStatus = z
   .enum(["SIGNED", "UNSIGNED"])
@@ -71,7 +70,7 @@ const proofDocumentResponses = {
           "Sobe a cada regeração. O token continua o mesmo, então um QR impresso antes ainda chega à página — a versão é o que diz que aquela cópia não é a atual.",
         ),
 
-      generated_at: isoDateTime,
+      generated_at: responseDateTime(),
       size_bytes: z.number(),
 
       layout_version: z
@@ -93,8 +92,8 @@ const proofDocumentResponses = {
           .string()
           .nullable()
           .describe("CNPJ do certificado (CN depois de ':'), 14 dígitos."),
-        cert_not_after: isoDateTime.nullable(),
-        signed_at: isoDateTime.nullable(),
+        cert_not_after: responseDateTime().nullable(),
+        signed_at: responseDateTime().nullable(),
         icp_brasil: icpBrasilChain,
         unsigned_reason: z
           .enum([
@@ -140,10 +139,10 @@ const proofDocumentResponses = {
         uf: z.string(),
         invoiceNumber: z.string().nullable(),
         carrierName: z.string(),
-        deliveredAt: isoDateTime.nullable(),
+        deliveredAt: responseDateTime().nullable(),
         receivedBy: z.string().nullable(),
         sha256: z.string(),
-        generatedAt: isoDateTime,
+        generatedAt: responseDateTime(),
         version: z.number(),
         timeZone: z
           .string()
@@ -155,8 +154,8 @@ const proofDocumentResponses = {
             status: signatureStatus,
             profile: signatureProfile,
             signerName: z.string().nullable(),
-            certNotAfter: isoDateTime.nullable(),
-            signedAt: isoDateTime.nullable(),
+            certNotAfter: responseDateTime().nullable(),
+            signedAt: responseDateTime().nullable(),
             icpBrasil: icpBrasilChain,
           })
           .describe(
@@ -181,8 +180,8 @@ const proofDocumentResponses = {
       invoiceNumber: z.string().nullable(),
       code: z.string().nullable(),
 
-      scheduledDate: isoDateTime.nullable(),
-      deliveredAt: isoDateTime.nullable(),
+      scheduledDate: responseDateTime().nullable(),
+      deliveredAt: responseDateTime().nullable(),
       receivedBy: z.string().nullable(),
 
       carrierName: z.string(),
@@ -194,7 +193,7 @@ const proofDocumentResponses = {
 
       events: z.array(
         z.object({
-          at: isoDateTime,
+          at: responseDateTime(),
           title: z.string(),
           detail: z.string().nullable(),
         }),
@@ -205,6 +204,20 @@ const proofDocumentResponses = {
         .nullable()
         .describe(
           "A página pública de verificação, não o arquivo. Uma porta só, uma história só sobre o documento ser legítimo.",
+        ),
+
+      sameStop: z
+        .array(
+          z.object({
+            invoiceNumber: z.string().nullable(),
+            code: z.string().nullable(),
+            status: z.string(),
+            statusLabel: z.string(),
+            deliveredAt: responseDateTime().nullable(),
+          }),
+        )
+        .describe(
+          "As outras entregas da mesma visita (mesmo endereço e mesmo destinatário, na rota atual): a mensagem ao cliente sai uma por parada, com o link de uma delas, e a página lista as demais. Vazio quando a entrega é a única da parada.",
         ),
     }),
   }),
@@ -225,11 +238,38 @@ const proofDocumentResponses = {
         topic: z.enum(["DISPATCHED", "ON_THE_WAY", "DELIVERED", "FAILED"]),
         channel: z.string(),
         subject: z.string().nullable(),
-        body: z.string(),
+        body: z
+          .string()
+          .nullable()
+          .describe(
+            "Texto da mensagem. Sempre presente no e-mail; no WhatsApp, que sai por modelo fixo aprovado pela Meta, pode vir nulo.",
+          ),
         is_active: z.boolean(),
         businessId: z.string(),
       }),
     ),
+    whatsapp_previews: z
+      .array(
+        z.object({
+          topic: z.enum(["DISPATCHED", "ON_THE_WAY", "DELIVERED", "FAILED"]),
+          template: z
+            .string()
+            .describe("Nome do modelo aprovado pela Meta para o momento."),
+          body: z
+            .string()
+            .describe(
+              "Texto fixo do modelo, com cada variável entre colchetes (ex.: [destinatário]).",
+            ),
+          buttons: z
+            .array(z.string())
+            .describe(
+              'Rótulos dos botões do modelo: "Acompanhar entrega" e "Parar de receber".',
+            ),
+        }),
+      )
+      .describe(
+        "A prévia fixa do WhatsApp de cada um dos quatro momentos, com linha gravada ou não. No WhatsApp a empresa só liga ou desliga o momento; o texto é o do modelo aprovado pela Meta.",
+      ),
   }),
 
   genericError: z.object({ message: z.string() }),
@@ -249,8 +289,8 @@ const proofDocumentResponses = {
    * down is the error handler's 503.
    */
   verifyProofUnavailable: codedRefusal(
-    "Não foi possível conferir agora. STORAGE_UNAVAILABLE: o armazenamento não respondeu ao ler o arquivo — o documento pode estar íntegro, e isso nunca é respondido como `intact: false`. SERVICE_UNAVAILABLE: o banco de dados está indisponível por instantes. Transitório: espere o `retry-after` e repita.",
-    ["STORAGE_UNAVAILABLE", "SERVICE_UNAVAILABLE"],
+    "Não foi possível conferir agora. STORAGE_UNAVAILABLE: o armazenamento não respondeu ao ler o arquivo — o documento pode estar íntegro, e isso nunca é respondido como `intact: false`. SERVICE_UNAVAILABLE: o banco de dados está indisponível por instantes. SERVICE_BUSY: o banco de dados está ocupado e a espera passou do limite. Transitório: espere o `retry-after` e repita.",
+    ["STORAGE_UNAVAILABLE", "SERVICE_UNAVAILABLE", "SERVICE_BUSY"],
   ),
 
   internalServerError: z.object({

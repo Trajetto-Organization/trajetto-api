@@ -1,7 +1,7 @@
 import { inject, injectable } from "tsyringe";
 
 import { verifyOneTimeCode } from "@/shared/security/one-time-code";
-import { isTwoFactorChallengeFor } from "../../services/two-factor-challenge";
+import { twoFactorChallengeFor } from "../../services/two-factor-challenge";
 
 import { IUserRepository } from "../../repositories/IUser-repository";
 import { IUsersTokensRepository } from "../../repositories/IUsers-tokens-repository";
@@ -19,6 +19,7 @@ import { assertSessionEligible } from "../../services/session-eligibility";
 import {
   SessionClient,
   createUserSession,
+  isSessionDevice,
 } from "../../services/session-service";
 
 interface TwoFactorVerificationQueryProps {
@@ -26,12 +27,21 @@ interface TwoFactorVerificationQueryProps {
   email: string;
   /** What the password step returned; see services/two-factor-challenge. */
   challenge?: string;
+
+  /**
+   * The phone, when the challenge came from a CPF login (wave 2): it must be
+   * that login's phone, and the session is bound to it.
+   */
+  deviceId?: string | null;
 }
 
 interface TwoFactorVerificationProps {
   token: string;
   refresh_token: string;
   role?: string;
+
+  /** The manager set this password (wave 2): the client asks for one. */
+  mustChangePassword: boolean;
 }
 
 @injectable()
@@ -46,7 +56,12 @@ class TwoFactorVerificationUseCase {
   ) {}
 
   async execute(
-    { twoFactorCode, email, challenge }: TwoFactorVerificationQueryProps,
+    {
+      twoFactorCode,
+      email,
+      challenge,
+      deviceId,
+    }: TwoFactorVerificationQueryProps,
     client: SessionClient = "web",
   ): Promise<TwoFactorVerificationProps> {
     if (!email) throw new ResourceNotFoundError();
@@ -72,7 +87,17 @@ class TwoFactorVerificationUseCase {
     // Only next to proof that THIS account's password was just verified
     // (WEB-07). Checked before the attempt counter on purpose: a caller
     // without the password must not be able to burn the owner's guesses.
-    if (!isTwoFactorChallengeFor(challenge, user)) {
+    const proof = twoFactorChallengeFor(challenge, user);
+
+    if (!proof) throw new UserInvalidTwoFactorCodeError();
+
+    // A CPF login's challenge is finished only by the phone it came from
+    // (wave 2): CPF and password are accepted on a trusted phone only, and
+    // the code must not carry them to another one. Before the counter, too.
+    if (
+      proof.deviceHash !== null &&
+      !isSessionDevice(proof.deviceHash, deviceId)
+    ) {
       throw new UserInvalidTwoFactorCodeError();
     }
 
@@ -154,9 +179,23 @@ class TwoFactorVerificationUseCase {
       );
     }
 
-    const session = await createUserSession(user, this.usersTokens, client);
+    // From a CPF login, the phone-bound session on that phone (D4), as the
+    // login itself would have opened; otherwise what the header asks for.
+    const session =
+      proof.deviceHash !== null && deviceId
+        ? await createUserSession(
+            user,
+            this.usersTokens,
+            "driver_device",
+            deviceId,
+          )
+        : await createUserSession(user, this.usersTokens, client);
 
-    return { ...session, role: user.role };
+    return {
+      ...session,
+      role: user.role,
+      mustChangePassword: user.must_change_password ?? false,
+    };
   }
 }
 

@@ -1,0 +1,1350 @@
+name: Staging
+
+# Every push to staging (docs/deploy.md):
+#
+#   Changes ─▶ Secret scan + Validate (validate.yml: lint, type-check, unit
+#              with the coverage floor, the E2E suite in 3 jobs, AI pytest)
+#           ─▶ Gate (all of it green)
+#           ─▶ Build: the images ONCE ─▶ GHCR `sha-<sha>` (immutable); the
+#              release image (migrations) and the AI image are reused, not
+#              rebuilt, when their source is the same as in an image already
+#              built; each image runs (smoke test) before it is pushed
+#           ─▶ (only for a new infra/postgres) the Database's image,
+#              trajetto-postgres: `src-<tree>` and `sha-<7>`, scanned, its
+#              digest in the summary; never deployed here — the owner swaps
+#              the Database by that digest
+#           ─▶ the PgBouncer's image, trajetto-pgbouncer: reused by its
+#              `src-<tree>` (infra/pgbouncer), built only for a tree the
+#              PgBouncer image job tested; `sha-<7>` on every commit
+#           ─▶ Image scan (Trivy, by digest)
+#           ─▶ Deploy (the `staging` environment, .github/actions/deploy):
+#              the PgBouncer first (only if its digest changed), then the
+#              migrations through the Dokploy Application
+#              trajetto-api-migrate when staging's database has not applied
+#              that release image, then the AI (only if its digest changed),
+#              then the API, each `staging` tag moved by digest right before
+#              its deploy; then wait until the public API answers this commit
+#              ─▶ `staged-<sha>`: the marker the PR and the promote require
+#
+# A push that changes only documentation runs the secret scan and `Docs`,
+# and builds nothing. A newer push of code cancels the VALIDATION of an
+# older one (that run would never deploy: only the branch head does); a
+# documentation push cancels nothing, so the code run under it still
+# deploys; a build or a deploy that started is never cancelled.
+#
+# Only on the staging branch: Run workflow on any other branch (the form
+# picks main, the default branch) runs nothing, as production.yml's button
+# outside main.
+#
+# A red run here means the code (or a dependency it just changed) is wrong,
+# never the network: every registry query tells "not found" from "did not
+# answer" and retries the second (.github/scripts/ghcr.sh), the dependency
+# audit blocks only a change to the dependencies (audit-gate.sh), the image
+# scan's database download is cached, every image the jobs pull is pinned by
+# digest and every job has a timeout (docs/deploy.md, "Um vermelho é sempre
+# do código").
+#
+# One image per service for both environments: the API reads all of its
+# configuration at runtime, so staging and production differ only in the
+# Environment of their Dokploy app.
+on:
+  push:
+    branches: [staging]
+  # The staging road again for the branch head (validation, build, deploy),
+  # dispatched on staging: every job below checks the ref.
+  # `force_ai_build` tests, rebuilds and redeploys the AI even when nothing
+  # under infra/ai-ocr changed — the AI is otherwise reused by its source and
+  # redeployed only when its digest changes: a fix that reached the base
+  # image without a digest bump, or an AI that drifted from its tag, needs
+  # this. `force_release` runs the release step (prisma/concurrent,
+  # migrate deploy, infra/sql, prisma/post-deploy, seeds) even when the
+  # database already applied this release image: a pending step that must
+  # not wait for the next deploy, or a database that was restored
+  # (plano-escala U-11).
+  workflow_dispatch:
+    inputs:
+      force_ai_build:
+        description: "Testa, reconstrói e reimplanta a trajetto-ai mesmo sem mudança em infra/ai-ocr"
+        type: boolean
+        required: false
+      force_release:
+        description: "Roda a etapa de release (migrations e passos) mesmo com a imagem de migração já aplicada"
+        type: boolean
+        required: false
+      force_realtime:
+        description: "Implanta a trajetto-realtime mesmo sem mudança no código que ela executa"
+        type: boolean
+        required: false
+
+# Least privilege by default; the jobs that push to GHCR ask for more
+# themselves.
+permissions:
+  contents: read
+
+# No concurrency for the whole run: only the validation of a superseded push
+# is cancelled (its own group, below), and the deploy runs one at a time,
+# never cut midway.
+
+# `bash -eo pipefail` for every `run:` (GitHub's default for a step with no
+# `shell:` is `bash -e`, without pipefail): a failure inside a pipe — `git
+# ls-remote | cut` — fails the step instead of handing an empty value on.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # Documentation only (changes.sh, the docs-only.sh rule) runs the secret
+  # scan and `Docs`, and builds nothing; anything else, everything. The
+  # audit's base is the last build staging served (`staged-<7>`), not the
+  # previous push: a push whose run was cancelled or failed is in this
+  # run's range.
+  #
+  # The road starts only on the staging branch (`github.ref`, here and in
+  # every job that publishes or deploys): a Run workflow left on main, or
+  # on a work branch, would build that ref, run its migrations on staging's
+  # database and write `staged-<7>` and a green Gate on a commit staging
+  # never had. Everything after this job needs it, so it all stays skipped.
+  changes:
+    name: Changes
+    if: github.ref == 'refs/heads/staging'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      docs: ${{ steps.changes.outputs.docs }}
+      audit_base: ${{ steps.changes.outputs.audit_base }}
+      postgres: ${{ steps.changes.outputs.postgres }}
+      pgbouncer: ${{ steps.changes.outputs.pgbouncer }}
+
+    steps:
+      # The history the comparison walks (commits and trees) and the scripts.
+      - name: Check out the full history
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          sparse-checkout: .github/scripts
+
+      # GHCR is only the audit base's lookup, which can do without it: a
+      # login that keeps failing (ghcr.sh retries it) falls back to the
+      # previous push, with a warning, as GHCR not answering the lookup does.
+      - name: Log in to GitHub Container Registry
+        id: ghcr
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if bash .github/scripts/ghcr.sh login; then
+            echo "login=ok" >> "$GITHUB_OUTPUT"
+          else
+            echo "login=failed" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Classify changes
+        id: changes
+        env:
+          BEFORE: ${{ github.event.before }}
+          GHCR_LOGIN: ${{ steps.ghcr.outputs.login }}
+        run: bash .github/scripts/changes.sh staging
+
+  # Secrets in the history (INFRA-21), with the same pinned image, flags,
+  # .gitleaksignore and .gitleaks.toml as ci.yml. No image is built before
+  # it passes. The baseline is by commit SHA, so it holds as long as PRs land
+  # with a merge commit (which the promote needs anyway): a squash merge
+  # rewrites those SHAs.
+  secrets:
+    name: Secret scan
+    if: github.ref == 'refs/heads/staging'
+    runs-on: ubuntu-24.04
+    # Measured under 30 s.
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out the full history
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+
+      - name: Scan the history for secrets
+        run: |
+          docker run --rm -v "$PWD:/repo" --entrypoint sh \
+            zricethezav/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
+            -c "git config --global --add safe.directory /repo && gitleaks git /repo --redact --no-banner --exit-code 1"
+
+  # A newer push of code cancels this (its own group): the older run would
+  # never deploy anyway, since only the branch head does. A documentation
+  # push validates in a group of its own run and cancels nothing: its head
+  # builds nothing, so the code run under it is the one that deploys (the
+  # branch-head check lets it, .github/actions/deploy), and cancelling that
+  # validation would leave staging on an older build with nothing red.
+  # Running a code run again by hand while a newer one validates cancels the
+  # newer one's validation.
+  validate:
+    name: Validate
+    needs: changes
+    uses: ./.github/workflows/validate.yml
+    concurrency:
+      group: ${{ needs.changes.outputs.docs == 'true' && format('staging-docs-{0}', github.run_id) || 'staging-validate' }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      packages: read
+    with:
+      docs: ${{ needs.changes.outputs.docs == 'true' }}
+      e2e: true
+      force_ai: ${{ inputs.force_ai_build == true }}
+      audit_base: ${{ needs.changes.outputs.audit_base }}
+      postgres: ${{ needs.changes.outputs.postgres != 'false' }}
+      pgbouncer: ${{ needs.changes.outputs.pgbouncer != 'false' }}
+    secrets:
+      CLIENT_REPOS_READ_TOKEN: ${{ secrets.CLIENT_REPOS_READ_TOKEN }}
+
+  # Everything that blocks the build, in one check: the classification, the
+  # secret scan and the whole validation (Validate, every E2E job and the AI
+  # pytest; on a documentation push, Docs). `Staging evidence` (pr.yml,
+  # production.yml) requires this check green on the commit it promotes.
+  # A validation cancelled by a newer push skips it: the run is cancelled,
+  # grey, and builds nothing. Off the staging branch nothing ran, and it
+  # stays skipped too (`!cancelled()` would run it, red, on the skips).
+  #
+  # The validation is judged by validate.yml's own verdict (its `passed`
+  # output, from the Result job), not by needs.validate.result: some job
+  # inside it is always skipped, and how that leaks into the caller's result
+  # is not a contract (validate.yml's header).
+  gate:
+    name: Gate
+    needs: [changes, secrets, validate]
+    if: ${{ github.ref == 'refs/heads/staging' && !cancelled() && !contains(needs.*.result, 'cancelled') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    steps:
+      - name: Check results
+        env:
+          CHANGES: ${{ needs.changes.result }}
+          SECRETS: ${{ needs.secrets.result }}
+          VALIDATE: ${{ needs.validate.outputs.passed }}
+        run: |
+          failed=""
+          for each in "Changes=${CHANGES}" "Secret scan=${SECRETS}"; do
+            [ "${each#*=}" = "success" ] || failed="${failed} ${each%%=*} (${each#*=})"
+          done
+          # Validate / Result says which job of the validation did not pass.
+          [ "$VALIDATE" = "true" ] || failed="${failed} Validate (Validate / Result)"
+          if [ -n "$failed" ]; then
+            echo "::error::O Gate não passa:${failed}. Nenhuma imagem é construída."
+            exit 1
+          fi
+          echo "Gate: Changes, Secret scan e Validate verdes." >> "$GITHUB_STEP_SUMMARY"
+
+  # The images, ONCE per commit, and only after the Gate and the secret scan:
+  # nothing leaves the runner before both passed (INFRA-21 and the coverage
+  # floor). A documentation push builds nothing. The merge into main
+  # promotes the digests built HERE: rebuilding later could publish bytes
+  # different from the ones staging ran.
+  #
+  # An explicit status check, here and in every job after it: under the
+  # implicit success(), a job skipped anywhere upstream skips this one too,
+  # even past a green Gate (actions/runner#2205), and validate.yml always
+  # skips some of its jobs (Docs on a push of code, the manual AI contract
+  # on staging). The Gate already judged every result.
+  build:
+    name: Build
+    needs: [changes, gate, secrets]
+    if: ${{ !cancelled() && github.ref == 'refs/heads/staging' && needs.gate.result == 'success' && needs.secrets.result == 'success' && needs.changes.outputs.docs != 'true' }}
+    runs-on: ubuntu-24.04
+    # Measured 2-9 min; a build with every cache gone and both smoke tests
+    # fit well inside this.
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    # The digests this commit ships: staging is moved to exactly these bytes,
+    # and its database migrated by exactly this release image. The release
+    # image and the AI's are the images built here, or the ones reused for
+    # the same source.
+    outputs:
+      api_digest: ${{ steps.build.outputs.digest }}
+      migrate_digest: ${{ steps.build-migrate.outputs.digest || steps.migrate-source.outputs.digest }}
+      ai_digest: ${{ steps.build-ai.outputs.digest || steps.ai-source.outputs.digest }}
+      # The Database's image is never deployed here: built (and scanned)
+      # only for a new infra/postgres, its digest is in the summary for the
+      # owner's swap.
+      postgres_digest: ${{ steps.build-postgres.outputs.digest || steps.postgres-source.outputs.digest }}
+      postgres_built: ${{ steps.build-postgres.outputs.digest != '' }}
+      # The PgBouncer's image, built or reused by its source; empty only
+      # for a tree the PgBouncer image job did not test, and then the
+      # deploy leaves the PgBouncer where it is.
+      pgbouncer_digest: ${{ steps.build-pgbouncer.outputs.digest || steps.pgbouncer-source.outputs.digest }}
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      # The same pinned BuildKit as the ai-ocr job.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+        with:
+          driver-opts: image=moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # What the realtime role runs and the contract it speaks, as two
+      # labels of the API image (plano-escala F3-31c): the deploy holds the
+      # realtime on its build while both match the image it runs. Node of
+      # the runner, no dependencies.
+      - name: Compute the realtime labels
+        id: realtime
+        run: |
+          source=$(node .github/scripts/realtime-closure.mjs --source)
+          epoch=$(node .github/scripts/realtime-closure.mjs --epoch)
+          echo "source=${source}" >> "$GITHUB_OUTPUT"
+          echo "epoch=${epoch}" >> "$GITHUB_OUTPUT"
+          echo "trajetto-realtime: fonte ${source::12}, época de contract ${epoch}." >> "$GITHUB_STEP_SUMMARY"
+
+      # Only the immutable `sha-<short sha>`. The mutable tags are pointers
+      # the deploy jobs move by digest: `staging` (every push to staging) and
+      # `stable` (the promote). The promote finds this build again by the
+      # commit it came from.
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
+        with:
+          images: ghcr.io/trajetto-organization/trajetto-api
+          flavor: latest=false
+          tags: |
+            type=sha,prefix=sha-
+
+      # The release image (Dockerfile, stage `migrate`): the API image plus
+      # the Prisma CLI, the migrations and the seeds. The deploys run it on
+      # the Dokploy Application trajetto-api-migrate before the API rolls
+      # out (.github/actions/deploy, for staging and production).
+      #
+      # Rebuilt only when what it runs changed, as the AI. Every file the
+      # release step runs or reads is listed in
+      # .github/scripts/migrate-source.sh, which hashes them into one key:
+      # the migrations and the schema, the seeds and the code they import,
+      # the entrypoint, the Dockerfile, the dependencies. Every build is also
+      # tagged `src-<key>`; a push that finds the tag reuses that image —
+      # same bytes, same digest — and only adds this commit's `sha-<sha>`.
+      # The deploys run the step only when that digest is not the one their
+      # database last applied, so a push that touches none of those files
+      # neither rebuilds the image nor runs the step again.
+      #
+      # "No such tag" builds; GHCR not answering fails the step after its
+      # retries (ghcr.sh).
+      - name: Look up the release image for this source
+        id: migrate-source
+        run: |
+          key=$(bash .github/scripts/migrate-source.sh)
+          echo "key=${key}" >> "$GITHUB_OUTPUT"
+          digest=$(bash .github/scripts/ghcr.sh digest "ghcr.io/trajetto-organization/trajetto-api-migrate:src-${key}")
+          if [ -n "$digest" ]; then
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+            echo "trajetto-api-migrate: migrations, seeds e o que eles rodam iguais aos de src-${key::12}; imagem reaproveitada (${digest}), sem rebuild." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Extract metadata (release image)
+        id: meta-migrate
+        if: steps.migrate-source.outputs.build == 'true'
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
+        with:
+          images: ghcr.io/trajetto-organization/trajetto-api-migrate
+          flavor: latest=false
+          tags: |
+            type=sha,prefix=sha-
+            type=raw,value=src-${{ steps.migrate-source.outputs.key }}
+
+      # The API image runs BEFORE it is pushed (§14/§19: smoke test of the
+      # final image; the validation runs the source, never the image).
+      # Built into the runner's Docker only — no push, no attestations (the
+      # classic image store cannot load them) — and the push step below gets
+      # the same build back from this builder's cache: same context, file
+      # and build args, every layer CACHED.
+      - name: Build the API image for the smoke test
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5.4.0
+        with:
+          context: .
+          file: ./Dockerfile
+          target: runner
+          push: false
+          load: true
+          tags: trajetto-api:smoke
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            REALTIME_SOURCE=${{ steps.realtime.outputs.source }}
+            CONTRACT_EPOCH=${{ steps.realtime.outputs.epoch }}
+
+      # On top of the API image just built: every layer up to the runner is
+      # CACHED, only the release image's own layers are new.
+      - name: Build the release image for the smoke test
+        if: steps.migrate-source.outputs.build == 'true'
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5.4.0
+        with:
+          context: .
+          file: ./Dockerfile
+          target: migrate
+          push: false
+          load: true
+          tags: trajetto-api-migrate:smoke
+          labels: ${{ steps.meta-migrate.outputs.labels }}
+          cache-from: type=gha
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+
+      # A reused release image is the one the deploys will run, so it is the
+      # one the smoke test runs: pulled by digest, under the same local name.
+      # A pull that fails is tried again; persistent, it fails as GHCR's.
+      - name: Pull the reused release image for the smoke test
+        if: steps.migrate-source.outputs.build == 'false'
+        env:
+          DIGEST: ${{ steps.migrate-source.outputs.digest }}
+        run: |
+          image="ghcr.io/trajetto-organization/trajetto-api-migrate@${DIGEST}"
+          for attempt in 1 2 3; do
+            if docker pull --quiet "$image" > /dev/null; then
+              docker tag "$image" trajetto-api-migrate:smoke
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "::warning::Falha ao baixar ${image} do GHCR (tentativa ${attempt} de 3). De novo em $((attempt * 20))s."
+              sleep $((attempt * 20))
+            fi
+          done
+          echo "::error::Não deu para baixar ${image} do GHCR depois de 3 tentativas. Não é um problema do código."
+          exit 1
+
+      # Liveness touches no dependency, but the process never gets there
+      # without Postgres: docker-entrypoint.sh waits for it and checks the
+      # schema before the server starts. So both images run against a
+      # throwaway Postgres and Redis on an internal network — no route out,
+      # so the Prisma CLI must find its engines in the image instead of
+      # downloading them — in the order a deploy runs them:
+      # - the API image carries no Prisma CLI, migrations or seeds, and
+      #   names the migration it was built for (build/schema-version.json);
+      # - on the empty database it REFUSES to start (the schema guard): a
+      #   replica never serves on a schema older than its build;
+      # - the release image, as the Dokploy Application runs it (its default
+      #   command, `release`) and with only the Environment that
+      #   Application has (the database URL; on an empty database also the
+      #   bootstrap flag and the master user): every migration, then the
+      #   seeds, strictly (Prisma queries, bcrypt, ExcelJS reading the
+      #   infraction table), until its own HEALTHCHECK reports the step
+      #   done — the signal dokploy-release.mjs waits for;
+      # - the API image again, now on the migrated database: it must pass
+      #   its own HEALTHCHECK, report this commit on /health/liveness and be
+      #   ready (/health/readiness reaches the database).
+      # Every value is random or a placeholder, lives only in these
+      # containers and goes through an env file, never a command line. A
+      # failure stops the job here: nothing reaches GHCR, and staging keeps
+      # the build it runs.
+      - name: Smoke test the API image
+        env:
+          IMAGE: trajetto-api:smoke
+          MIGRATE_IMAGE: trajetto-api-migrate:smoke
+          # The majors production runs, pinned by the same digests as the
+          # E2E jobs' services (validate.yml).
+          POSTGRES_IMAGE: postgres:16-alpine@sha256:f2f98726820d0342055351c6e9d36e705f5bfffb3dd53ff556325114b08afb6d
+          REDIS_IMAGE: redis:7-alpine@sha256:8da19c7399dca900c6822a1cf30f9d2285585e2c4b457ff4095b0f4500054d3f
+        run: |
+          net="api-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          envfile="${RUNNER_TEMP}/api-smoke.env"
+          releaseenv="${RUNNER_TEMP}/api-smoke-release.env"
+          log="${RUNNER_TEMP}/api-smoke-migrate.log"
+          pg=""
+          redis=""
+          guard=""
+          release=""
+          cid=""
+          cleanup() {
+            for container in "$cid" "$release" "$guard" "$pg" "$redis"; do
+              [ -z "$container" ] || docker rm -f "$container" > /dev/null 2>&1 || true
+            done
+            docker network rm "$net" > /dev/null 2>&1 || true
+            rm -f "$envfile" "$releaseenv" "$log"
+          }
+          trap cleanup EXIT
+
+          # The logs are a diagnosis: under pipefail a `docker logs` that fails
+          # must not end the step before the verdict below.
+          fail() {
+            echo "::error::Smoke test da imagem trajetto-api: $1. Nada foi publicado no GHCR, e a staging segue com o build que já roda."
+            if [ -n "$cid" ]; then docker logs "$cid" 2>&1 | tail -n 100 || true; fi
+            exit 1
+          }
+
+          # TURNSTILE_SECRET_KEY is Cloudflare's public always-pass test
+          # key; R2 is a placeholder the boot never reaches.
+          (
+            umask 077
+            {
+              echo "DATABASE_URL=postgresql://postgres@postgres:5432/trajetto?schema=public"
+              echo "REDIS_URL=redis://redis:6379"
+              echo "ALLOW_EMPTY_DATABASE_BOOTSTRAP=true"
+              echo "APP_ENV=staging"
+              echo "HTTP_REQUEST=http://localhost:3000"
+              echo "JWT_SECRET=$(openssl rand -base64 48)"
+              echo "JWT_SECRET_REFRESH_TOKEN=$(openssl rand -base64 48)"
+              echo "MASTER_USER_EMAIL=smoke@trajetto.invalid"
+              echo "MASTER_USER_INITIAL_PASSWORD=$(openssl rand -hex 24)"
+              echo "TURNSTILE_SECRET_KEY=1x0000000000000000000000000000000AA"
+              echo "RATE_LIMIT_TRUSTED_PROXY=none"
+              echo "UPLOAD_STORAGE_TYPE=r2"
+              echo "R2_ACCOUNT_ID=smoke"
+              echo "R2_BUCKET_NAME=smoke"
+              echo "R2_ACCESS_KEY_ID=smoke"
+              echo "R2_SECRET_ACCESS_KEY=smoke"
+            } > "$envfile"
+            # The release Application's Environment, and nothing more
+            # (docs/deploy.md, "Migrations"): a seed that needed the API's
+            # whole environment again would fail here.
+            grep -E '^(DATABASE_URL|ALLOW_EMPTY_DATABASE_BOOTSTRAP|MASTER_USER_EMAIL|MASTER_USER_INITIAL_PASSWORD)=' \
+              "$envfile" > "$releaseenv"
+          )
+
+          # Before any database: what the API image does NOT carry.
+          if ! docker run --rm --entrypoint sh "$IMAGE" -c \
+            'test ! -e node_modules/prisma && test ! -e node_modules/@prisma/engines && test ! -e prisma && test ! -e prisma.config.ts && test ! -e build/seed.js && test -f build/schema-version.json'; then
+            fail "a imagem da API traz o CLI do Prisma, migrations ou seeds, ou não traz build/schema-version.json"
+          fi
+
+          docker network create --internal "$net" > /dev/null
+          pg=$(docker run -d --network "$net" --network-alias postgres \
+            -e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_DB=trajetto "$POSTGRES_IMAGE")
+          redis=$(docker run -d --network "$net" --network-alias redis "$REDIS_IMAGE")
+
+          # The entrypoint waits for Postgres itself (wait-for-postgres),
+          # then refuses: nothing is migrated yet. A server that started
+          # instead never exits, and the wait times out.
+          guard=$(docker run -d --network "$net" --env-file "$envfile" "$IMAGE")
+          code=$(timeout 180 docker wait "$guard") || code=timeout
+          docker logs "$guard" > "$log" 2>&1 || true
+          if [ "$code" = "0" ] || [ "$code" = "timeout" ] || ! grep -q "não tem a migration" "$log"; then
+            tail -n 100 "$log"
+            fail "a API não recusou o banco sem as migrations dela (saída ${code})"
+          fi
+
+          # Done = healthy (the marker); a failed step exits, as the task
+          # does in Swarm.
+          release=$(docker run -d --network "$net" --env-file "$releaseenv" \
+            --health-interval 2s "$MIGRATE_IMAGE")
+          state=""
+          for _ in $(seq 1 90); do
+            state=$(docker inspect --format '{{.State.Status}}/{{if .State.Health}}{{.State.Health.Status}}{{else}}sem-healthcheck{{end}}' "$release")
+            [ "$state" = "running/starting" ] || break
+            sleep 2
+          done
+          docker logs "$release" > "$log" 2>&1 || true
+          if [ "$state" != "running/healthy" ]; then
+            tail -n 100 "$log"
+            fail "a etapa de release (a imagem trajetto-api-migrate) não terminou num banco vazio (${state})"
+          fi
+          docker rm -f "$release" > /dev/null
+          release=""
+
+          cid=$(docker run -d --network "$net" --env-file "$envfile" \
+            --health-interval 2s --health-start-period 120s "$IMAGE")
+
+          state=""
+          for _ in $(seq 1 75); do
+            state=$(docker inspect --format '{{.State.Status}}/{{if .State.Health}}{{.State.Health.Status}}{{else}}sem-healthcheck{{end}}' "$cid")
+            [ "$state" = "running/starting" ] || break
+            sleep 2
+          done
+          [ "$state" = "running/healthy" ] || fail "o container não ficou saudável (${state})"
+
+          commit=$(docker exec "$cid" node -e \
+            "fetch('http://127.0.0.1:3333/health/liveness').then((r) => r.json()).then((b) => console.log(b.commit))") \
+            || fail "/health/liveness não respondeu"
+          [ "$commit" = "$GITHUB_SHA" ] || fail "/health/liveness informou o commit '${commit}', não ${GITHUB_SHA}"
+          docker exec "$cid" wget -q -O /dev/null http://127.0.0.1:3333/health/readiness \
+            || fail "/health/readiness não respondeu 200 (banco)"
+
+          echo "trajetto-api: smoke test OK (a API recusa o banco sem as migrations dela; a imagem de migração, só com o Environment da Application dela, aplica tudo do zero e os seeds e fica saudável; a API sobe saudável e pronta, sem rede externa, commit ${GITHUB_SHA::7})" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build and push the API image
+        id: build
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5.4.0
+        with:
+          context: .
+          file: ./Dockerfile
+          target: runner
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          # The cache is an optimisation: a 429 or 5xx of the cache service
+          # while exporting must not fail a build that already pushed.
+          cache-to: type=gha,mode=max,ignore-error=true
+          # Attestations next to the image in GHCR (INFRA-16): what went into
+          # it (SBOM) and how it was built (provenance). `max` records the
+          # build args too; the only one is the commit, which is no secret.
+          sbom: true
+          provenance: mode=max
+          # The commit, as APP_COMMIT_SHA in the image: GET /health/liveness
+          # answers it, and deploy-staging waits until the public API does.
+          # Declared after the Dockerfile's last RUN, so no layer depends on it.
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            REALTIME_SOURCE=${{ steps.realtime.outputs.source }}
+            CONTRACT_EPOCH=${{ steps.realtime.outputs.epoch }}
+
+      # The same build of the release image the smoke test ran, from the
+      # cache, with its own attestations. Its cache export is a superset of
+      # the API's (every stage up to the runner, plus its own). A reused
+      # image skips it.
+      - name: Build and push the release image
+        id: build-migrate
+        if: steps.migrate-source.outputs.build == 'true'
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5.4.0
+        with:
+          context: .
+          file: ./Dockerfile
+          target: migrate
+          push: true
+          tags: ${{ steps.meta-migrate.outputs.tags }}
+          labels: ${{ steps.meta-migrate.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max,ignore-error=true
+          sbom: true
+          provenance: mode=max
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+
+      # Registry-side, by digest, nothing pulled: this commit's `sha-<sha>`
+      # names the reused release image, so the promote finds the release
+      # image of every commit by the same name as the API's.
+      - name: Tag the reused release image for this commit
+        if: steps.migrate-source.outputs.build == 'false'
+        env:
+          DIGEST: ${{ steps.migrate-source.outputs.digest }}
+        run: |
+          bash .github/scripts/ghcr.sh tag \
+            "ghcr.io/trajetto-organization/trajetto-api-migrate:sha-${GITHUB_SHA::7}" \
+            "ghcr.io/trajetto-organization/trajetto-api-migrate@${DIGEST}"
+
+      - name: Image digest
+        env:
+          API_DIGEST: ${{ steps.build.outputs.digest }}
+          MIGRATE_DIGEST: ${{ steps.build-migrate.outputs.digest || steps.migrate-source.outputs.digest }}
+        run: |
+          echo "trajetto-api@${API_DIGEST}"
+          echo "trajetto-api-migrate@${MIGRATE_DIGEST}"
+
+      # The OCR service of the AI readings (infra/ai-ocr, ADR 0010), tagged
+      # like the API — `sha-<sha>` — and moved with it to staging and stable.
+      #
+      # Rebuilt only when its source changed. The image's whole build input
+      # is infra/ai-ocr (the context: Dockerfile, hashed requirements, the
+      # models and their hashes, the code), and git names that directory's content
+      # with one hash. Every AI build is also tagged `src-<that hash>`; a
+      # push that finds the tag reuses that image — same bytes, same digest —
+      # and only adds this commit's `sha-<sha>` to it. A rebuild made a new
+      # digest every time (labels, the commit), so every API push used to
+      # restart the AI and send it over the VPS's flaky route again. Run
+      # workflow on staging with `force_ai_build` rebuilds anyway (a change
+      # that reaches the image without touching infra/ai-ocr, like a build
+      # option here).
+      #
+      # "No such tag" builds; GHCR not answering fails the step after its
+      # retries (ghcr.sh) — it used to read as "no such tag" and rebuild.
+      - name: Look up the AI image for this source
+        id: ai-source
+        env:
+          FORCE: ${{ inputs.force_ai_build }}
+        run: |
+          tree=$(git rev-parse HEAD:infra/ai-ocr)
+          echo "tree=${tree}" >> "$GITHUB_OUTPUT"
+          digest=""
+          if [ "$FORCE" = "true" ]; then
+            echo "::notice::force_ai_build: a imagem trajetto-ai é reconstruída mesmo sem mudança em infra/ai-ocr."
+          else
+            digest=$(bash .github/scripts/ghcr.sh digest "ghcr.io/trajetto-organization/trajetto-ai:src-${tree}")
+          fi
+          if [ -n "$digest" ]; then
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+            echo "trajetto-ai: infra/ai-ocr igual ao de src-${tree::12}; imagem reaproveitada (${digest}), sem rebuild." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Its pytest suite already ran in the `AI OCR` job (`--target test`);
+      # this builds the runtime stage only. Own cache scope.
+      - name: Extract metadata (ai)
+        id: meta-ai
+        if: steps.ai-source.outputs.build == 'true'
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
+        with:
+          images: ghcr.io/trajetto-organization/trajetto-ai
+          flavor: latest=false
+          tags: |
+            type=sha,prefix=sha-
+            type=raw,value=src-${{ steps.ai-source.outputs.tree }}
+
+      # The runtime image runs BEFORE it is pushed (§14/§19: smoke test of
+      # the final image; the `AI OCR` job's pytest ran the `test` stage, not
+      # this one). Built into the runner's Docker only — no push, no
+      # attestations (the classic image store cannot load them) — and the
+      # push step below gets the same build back from this builder's cache:
+      # same context, target and build args, every layer CACHED. A reused
+      # image skips both: it passed this when it was built.
+      - name: Build the AI image for the smoke test
+        if: steps.ai-source.outputs.build == 'true'
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5.4.0
+        with:
+          context: ./infra/ai-ocr
+          target: runtime
+          push: false
+          load: true
+          tags: trajetto-ai:smoke
+          labels: ${{ steps.meta-ai.outputs.labels }}
+          # Its own scope, plus the ai-ocr job's: the base and models layers
+          # its `test` build just cached are this build's too.
+          cache-from: |
+            type=gha,scope=ai
+            type=gha,scope=ai-test
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+
+      # Started the way the hardened deploy runs it (read-only root, tmpfs
+      # /tmp) and with no network: the models are in the image and the boot
+      # must not fetch anything. The token is random and lives only in this
+      # container (the server refuses to start without 32+ characters). It
+      # must pass its OWN HEALTHCHECK — /health answers 200 only after both
+      # profiles loaded and read warmup.jpg — with Docker's timings
+      # shortened, and report this commit. A failure stops the job here: the
+      # AI image never reaches GHCR and the deploy does not run, so
+      # staging keeps the build it runs. (The API image above is already in
+      # GHCR as `sha-<sha>` by then, but never gets its `staged-<sha>`.)
+      - name: Smoke test the AI image
+        if: steps.ai-source.outputs.build == 'true'
+        env:
+          IMAGE: trajetto-ai:smoke
+        run: |
+          AI_TOKEN=$(openssl rand -hex 32)
+          export AI_TOKEN
+          cid=$(docker run -d --network none --read-only --tmpfs /tmp \
+            --health-interval 2s --health-start-period 120s \
+            -e AI_TOKEN "$IMAGE")
+          trap 'docker rm -f "$cid" > /dev/null 2>&1 || true' EXIT
+
+          # The logs are a diagnosis, as in the API's smoke test.
+          fail() {
+            echo "::error::Smoke test da imagem trajetto-ai: $1. A imagem da IA não foi publicada no GHCR, e a staging segue com o build que já roda."
+            docker logs "$cid" 2>&1 | tail -n 100 || true
+            exit 1
+          }
+
+          state=""
+          for _ in $(seq 1 75); do
+            state=$(docker inspect --format '{{.State.Status}}/{{if .State.Health}}{{.State.Health.Status}}{{else}}sem-healthcheck{{end}}' "$cid")
+            [ "$state" = "running/starting" ] || break
+            sleep 2
+          done
+          [ "$state" = "running/healthy" ] || fail "o container não ficou saudável (${state})"
+
+          commit=$(docker exec "$cid" python -c \
+            "import json, urllib.request; print(json.load(urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3))['commit'])") \
+            || fail "/health não respondeu"
+          [ "$commit" = "$GITHUB_SHA" ] || fail "/health informou o commit '${commit}', não ${GITHUB_SHA}"
+
+          echo "trajetto-ai: smoke test OK (healthy sem rede, commit ${GITHUB_SHA::7})" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build and push the AI image
+        id: build-ai
+        if: steps.ai-source.outputs.build == 'true'
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5.4.0
+        with:
+          context: ./infra/ai-ocr
+          target: runtime
+          push: true
+          tags: ${{ steps.meta-ai.outputs.tags }}
+          labels: ${{ steps.meta-ai.outputs.labels }}
+          cache-from: |
+            type=gha,scope=ai
+            type=gha,scope=ai-test
+          cache-to: type=gha,mode=max,scope=ai,ignore-error=true
+          sbom: true
+          provenance: mode=max
+          # GET /health reports it (Dockerfile: declared in the last stage,
+          # after every layer).
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+
+      # Registry-side, by digest, nothing pulled: this commit's `sha-<sha>`
+      # names the reused image, so the PR check and the promote find the AI
+      # build of every commit by the same name as the API's.
+      - name: Tag the reused AI image for this commit
+        if: steps.ai-source.outputs.build == 'false'
+        env:
+          DIGEST: ${{ steps.ai-source.outputs.digest }}
+        run: |
+          bash .github/scripts/ghcr.sh tag \
+            "ghcr.io/trajetto-organization/trajetto-ai:sha-${GITHUB_SHA::7}" \
+            "ghcr.io/trajetto-organization/trajetto-ai@${DIGEST}"
+
+      # The Database's image (infra/postgres, plano-escala F1-03), published
+      # only for a source GHCR has no image of yet, and only after the
+      # `Postgres image` job tested that very tree (changes.sh said so:
+      # `postgres` true). Tags, lean on purpose (GHCR's storage is counted):
+      # `src-<tree>`, the key, and `sha-<7>` of the commit that built it;
+      # a commit that leaves infra/postgres alone adds no tag at all. No step
+      # here or in the deploy touches the Database: the owner swaps its
+      # image by the digest of the summary (docs/runbooks, F1-O2/F1-O3a).
+      #
+      # GHCR not answering never stops the API's road for an image nobody
+      # deploys: the lookup says so, nothing is built, and the next push
+      # tries again.
+      - name: Look up the Postgres image for this source
+        id: postgres-source
+        env:
+          TESTED: ${{ needs.changes.outputs.postgres }}
+        run: |
+          tree=$(git rev-parse HEAD:infra/postgres)
+          echo "tree=${tree}" >> "$GITHUB_OUTPUT"
+          status=0
+          digest=$(bash .github/scripts/ghcr.sh digest "ghcr.io/trajetto-organization/trajetto-postgres:src-${tree}") || status=$?
+          if [ "$status" -ne 0 ]; then
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::O GHCR não respondeu sobre trajetto-postgres:src-${tree::12}: a imagem do Postgres não foi publicada neste run; o próximo push tenta de novo. Nada é implantado no Database pela CI."
+          elif [ -n "$digest" ]; then
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+            echo "trajetto-postgres: infra/postgres igual ao de src-${tree::12}; nada a publicar (${digest})." >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$TESTED" = "false" ]; then
+            # The Changes job saw an image this lookup does not: never
+            # publish a tree the Postgres image job did not test.
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::trajetto-postgres:src-${tree::12} sumiu do GHCR depois do Changes, e o job Postgres image não testou esta fonte: nada publicado. Rode o pipeline de novo."
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Extract metadata (postgres)
+        id: meta-postgres
+        if: steps.postgres-source.outputs.build == 'true'
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
+        with:
+          images: ghcr.io/trajetto-organization/trajetto-postgres
+          flavor: latest=false
+          tags: |
+            type=sha,prefix=sha-
+            type=raw,value=src-${{ steps.postgres-source.outputs.tree }}
+
+      # Into the runner's Docker for the smoke test, as the other images;
+      # the push below gets the same build back from the cache.
+      - name: Build the Postgres image for the smoke test
+        if: steps.postgres-source.outputs.build == 'true'
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5.4.0
+        with:
+          context: ./infra/postgres
+          push: false
+          load: true
+          tags: trajetto-postgres:smoke
+          labels: ${{ steps.meta-postgres.outputs.labels }}
+          cache-from: |
+            type=gha,scope=postgres
+            type=gha,scope=postgres-test
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+
+      # Started as the staging Database will be (its cap and
+      # POSTGRES_MEMORY_LIMIT_MB=576), with no network: the parameters it
+      # derives, archiving off without PITR_ARCHIVE, and this commit in
+      # trajetto.image_revision. Its own tests and the S3 proof already ran
+      # in the Postgres image job.
+      - name: Smoke test the Postgres image
+        if: steps.postgres-source.outputs.build == 'true'
+        env:
+          IMAGE: trajetto-postgres:smoke
+        run: |
+          password=$(openssl rand -hex 24)
+          cid=$(docker run -d --network none --memory 603979776 \
+            -e POSTGRES_USER=trajetto -e POSTGRES_DB=trajetto \
+            -e POSTGRES_PASSWORD="$password" -e POSTGRES_MEMORY_LIMIT_MB=576 "$IMAGE")
+          trap 'docker rm -f "$cid" > /dev/null 2>&1 || true' EXIT
+          fail() {
+            echo "::error::Smoke test da imagem trajetto-postgres: $1. Nada foi publicado; a API segue o caminho dela."
+            docker logs "$cid" 2>&1 | tail -n 60 || true
+            exit 1
+          }
+          ready=""
+          for _ in $(seq 1 90); do
+            if [ "$(docker logs "$cid" 2>&1 | grep -c 'ready to accept connections')" -ge 2 ] \
+              && docker exec "$cid" pg_isready -q -h /var/run/postgresql -U trajetto -d trajetto; then
+              ready=yes
+              break
+            fi
+            sleep 2
+          done
+          [ -n "$ready" ] || fail "o banco não ficou pronto"
+          show() { docker exec "$cid" psql -X -h /var/run/postgresql -U trajetto -d trajetto -Atqc "SHOW $1"; }
+          [ "$(show shared_buffers)" = 108MB ] || fail "shared_buffers $(show shared_buffers), esperado 108MB"
+          [ "$(show archive_mode)" = off ] || fail "archive_mode ligado sem PITR_ARCHIVE"
+          [ "$(show trajetto.image_revision)" = "$GITHUB_SHA" ] || fail "trajetto.image_revision não é ${GITHUB_SHA}"
+          echo "trajetto-postgres: smoke test OK (576 MiB → shared_buffers 108MB, archive_mode off, commit ${GITHUB_SHA::7})" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build and push the Postgres image
+        id: build-postgres
+        if: steps.postgres-source.outputs.build == 'true'
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5.4.0
+        with:
+          context: ./infra/postgres
+          push: true
+          tags: ${{ steps.meta-postgres.outputs.tags }}
+          labels: ${{ steps.meta-postgres.outputs.labels }}
+          cache-from: |
+            type=gha,scope=postgres
+            type=gha,scope=postgres-test
+          cache-to: type=gha,mode=max,scope=postgres,ignore-error=true
+          sbom: true
+          provenance: mode=max
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+
+      # The PgBouncer's image (infra/pgbouncer, plano-escala F4-35), the
+      # endpoint every Application reaches Postgres through once the owner
+      # points the URLs at it. Unlike the Database's, the deploys roll it
+      # out, so it follows the AI's rules: reused by the git hash of
+      # infra/pgbouncer (`src-<tree>`) with this commit's `sha-<7>` added
+      # to the same digest, so the PR check and the promote find it by the
+      # API's name; built only for a tree the `PgBouncer image` job tested
+      # (changes.sh said `pgbouncer` true) and from that job's cache, the
+      # layers its test stage ran. The deploy redeploys it only when its
+      # digest changes: a push that leaves infra/pgbouncer alone does not
+      # restart the endpoint of every Application.
+      #
+      # GHCR not answering fails the step, as the lookups of the images
+      # that deploy (the push right after needs GHCR anyway). A tree that
+      # vanished from GHCR after Changes, untested, is never published:
+      # this build carries no PgBouncer image, and the deploy keeps the one
+      # running.
+      - name: Look up the PgBouncer image for this source
+        id: pgbouncer-source
+        env:
+          TESTED: ${{ needs.changes.outputs.pgbouncer }}
+        run: |
+          tree=$(git rev-parse HEAD:infra/pgbouncer)
+          echo "tree=${tree}" >> "$GITHUB_OUTPUT"
+          digest=$(bash .github/scripts/ghcr.sh digest "ghcr.io/trajetto-organization/trajetto-pgbouncer:src-${tree}")
+          if [ -n "$digest" ]; then
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+            echo "trajetto-pgbouncer: infra/pgbouncer igual ao de src-${tree::12}; imagem reaproveitada (${digest}), sem rebuild." >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$TESTED" = "false" ]; then
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::trajetto-pgbouncer:src-${tree::12} sumiu do GHCR depois do Changes, e o job PgBouncer image não testou esta fonte: este build não leva imagem do PgBouncer, e o deploy deixa o PgBouncer onde está. Rode o pipeline de novo."
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Registry-side, by digest, nothing pulled: this commit's `sha-<sha>`
+      # names the reused image, as the AI's.
+      - name: Tag the reused PgBouncer image for this commit
+        if: steps.pgbouncer-source.outputs.build == 'false' && steps.pgbouncer-source.outputs.digest != ''
+        env:
+          DIGEST: ${{ steps.pgbouncer-source.outputs.digest }}
+        run: |
+          bash .github/scripts/ghcr.sh tag \
+            "ghcr.io/trajetto-organization/trajetto-pgbouncer:sha-${GITHUB_SHA::7}" \
+            "ghcr.io/trajetto-organization/trajetto-pgbouncer@${DIGEST}"
+
+      - name: Extract metadata (pgbouncer)
+        id: meta-pgbouncer
+        if: steps.pgbouncer-source.outputs.build == 'true'
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
+        with:
+          images: ghcr.io/trajetto-organization/trajetto-pgbouncer
+          flavor: latest=false
+          tags: |
+            type=sha,prefix=sha-
+            type=raw,value=src-${{ steps.pgbouncer-source.outputs.tree }}
+
+      # Into the runner's Docker for the smoke test, as the other images;
+      # the push below gets the same build back from the cache. The runtime
+      # stage (the Dockerfile's last) shares every layer with the test
+      # stage the PgBouncer image job ran, but for the commit it records.
+      - name: Build the PgBouncer image for the smoke test
+        if: steps.pgbouncer-source.outputs.build == 'true'
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5.4.0
+        with:
+          context: ./infra/pgbouncer
+          push: false
+          load: true
+          tags: trajetto-pgbouncer:smoke
+          labels: ${{ steps.meta-pgbouncer.outputs.labels }}
+          cache-from: |
+            type=gha,scope=pgbouncer
+            type=gha,scope=pgbouncer-test
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+
+      # Started as staging's Application will be (its 32 MiB cap and the
+      # minimal Environment, with throwaway passwords), with no network:
+      # PgBouncer never reaches the Database at start, so it must turn
+      # healthy by its own HEALTHCHECK (the stats login on the console),
+      # run as its own user, record this commit and pool transactions. The
+      # whole configuration is read back in the PgBouncer image job.
+      - name: Smoke test the PgBouncer image
+        if: steps.pgbouncer-source.outputs.build == 'true'
+        env:
+          IMAGE: trajetto-pgbouncer:smoke
+        run: |
+          auth=$(openssl rand -hex 24)
+          stats=$(openssl rand -hex 24)
+          cid=$(docker run -d --network none --memory 33554432 \
+            --health-interval 2s \
+            -e PGBOUNCER_PRIMARY_HOST=trajetto-postgres-staging \
+            -e PGBOUNCER_AUTH_PASSWORD="$auth" \
+            -e PGBOUNCER_STATS_PASSWORD="$stats" "$IMAGE")
+          trap 'docker rm -f "$cid" > /dev/null 2>&1 || true' EXIT
+          fail() {
+            echo "::error::Smoke test da imagem trajetto-pgbouncer: $1. Nada foi publicado, e o ambiente segue com o PgBouncer que já roda."
+            docker logs "$cid" 2>&1 | tail -n 60 || true
+            exit 1
+          }
+          state=""
+          for _ in $(seq 1 30); do
+            state=$(docker inspect --format '{{.State.Status}}/{{if .State.Health}}{{.State.Health.Status}}{{else}}sem-healthcheck{{end}}' "$cid")
+            [ "$state" = "running/starting" ] || break
+            sleep 2
+          done
+          [ "$state" = "running/healthy" ] || fail "o container não ficou saudável (${state})"
+          uid=$(docker exec "$cid" id -u) || fail "id -u não respondeu"
+          [ "$uid" = 6432 ] || fail "o PgBouncer roda com o uid ${uid}, não com o usuário pgbouncer (6432)"
+          log=$(docker logs "$cid" 2>&1) || fail "docker logs não respondeu"
+          grep -qF "trajetto-pgbouncer: imagem ${GITHUB_SHA};" <<< "$log" \
+            || fail "a partida não registrou o commit ${GITHUB_SHA}"
+          mode=$(docker exec -e PGPASSWORD="$stats" "$cid" \
+            psql -X -h 127.0.0.1 -p 6432 -U pgbouncer_stats -d pgbouncer -Atc "SHOW CONFIG" \
+            | awk -F '|' '$1 == "pool_mode" { print $2 }') || fail "SHOW CONFIG não respondeu pelo login de estatística"
+          [ "$mode" = transaction ] || fail "pool_mode ${mode:-ausente}, esperado transaction"
+          echo "trajetto-pgbouncer: smoke test OK (32 MiB, healthy sem rede, uid 6432, pool_mode transaction, commit ${GITHUB_SHA::7})" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build and push the PgBouncer image
+        id: build-pgbouncer
+        if: steps.pgbouncer-source.outputs.build == 'true'
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5.4.0
+        with:
+          context: ./infra/pgbouncer
+          push: true
+          tags: ${{ steps.meta-pgbouncer.outputs.tags }}
+          labels: ${{ steps.meta-pgbouncer.outputs.labels }}
+          cache-from: |
+            type=gha,scope=pgbouncer
+            type=gha,scope=pgbouncer-test
+          cache-to: type=gha,mode=max,scope=pgbouncer,ignore-error=true
+          sbom: true
+          provenance: mode=max
+          # The entrypoint prints it at start (APP_COMMIT_SHA, declared in
+          # the last stage, after every layer).
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+
+      - name: Summary
+        env:
+          API_DIGEST: ${{ steps.build.outputs.digest }}
+          MIGRATE_DIGEST: ${{ steps.build-migrate.outputs.digest || steps.migrate-source.outputs.digest }}
+          AI_DIGEST: ${{ steps.build-ai.outputs.digest || steps.ai-source.outputs.digest }}
+          POSTGRES_BUILT: ${{ steps.build-postgres.outputs.digest }}
+          POSTGRES_DIGEST: ${{ steps.build-postgres.outputs.digest || steps.postgres-source.outputs.digest }}
+          PGBOUNCER_BUILT: ${{ steps.build-pgbouncer.outputs.digest }}
+          PGBOUNCER_DIGEST: ${{ steps.build-pgbouncer.outputs.digest || steps.pgbouncer-source.outputs.digest }}
+        run: |
+          {
+            echo "Imagens deste commit (sha-${GITHUB_SHA::7}): trajetto-api, trajetto-api-migrate e trajetto-ai (as duas últimas construídas ou reaproveitadas)."
+            echo "trajetto-api@${API_DIGEST}"
+            echo "trajetto-api-migrate@${MIGRATE_DIGEST}"
+            echo "trajetto-ai@${AI_DIGEST}"
+            if [ -n "$POSTGRES_BUILT" ]; then
+              echo "trajetto-postgres@${POSTGRES_DIGEST} (nova, publicada neste run). Troca no Database: ação do dono, pelo digest, com o Command e o Args vazios."
+            elif [ -n "$POSTGRES_DIGEST" ]; then
+              echo "trajetto-postgres@${POSTGRES_DIGEST} (a mesma infra/postgres de antes; nada a trocar)."
+            fi
+            if [ -n "$PGBOUNCER_BUILT" ]; then
+              echo "trajetto-pgbouncer@${PGBOUNCER_DIGEST} (nova, publicada neste run; o deploy a implanta antes das migrations)."
+            elif [ -n "$PGBOUNCER_DIGEST" ]; then
+              echo "trajetto-pgbouncer@${PGBOUNCER_DIGEST} (reaproveitada: a mesma infra/pgbouncer de antes; reimplantada só se o ambiente roda outra)."
+            else
+              echo "trajetto-pgbouncer: nenhuma imagem neste build; o PgBouncer fica onde está."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # The images the Build job just pushed, by digest, before staging runs
+  # them: a finding (when enforced) stops the deploy here.
+  image-scan:
+    name: Image scan
+    needs: build
+    if: ${{ !cancelled() && github.ref == 'refs/heads/staging' && needs.build.result == 'success' }}
+    runs-on: ubuntu-24.04
+    # Measured ~1-2 min with the database cached; a cold download and three
+    # retries per image fit inside this.
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      # The images just pushed, by digest: CRITICAL vulnerabilities that
+      # already have a fix (INFRA-16). Trivy runs from its image pinned by
+      # digest, with the job's token for GHCR.
+      #
+      # Report-only until the repository variable IMAGE_SCAN_ENFORCE is
+      # `true`: the node:22.21.1-alpine base itself carried fixable criticals
+      # (OpenSSL, npm's bundled tar) when this was added, and an enforcing
+      # scan would have stopped every build. Enforced, a finding fails this
+      # job — and with it the staging deploy, so the build never reaches
+      # production either (no `staged-<7>`).
+      #
+      # Only a FINDING can fail it, and only when enforced. Trivy's
+      # vulnerability database comes from a rate-limited registry
+      # (mirror.gcr.io, then ghcr.io), and every `docker run` downloaded it
+      # again, twice per run, hidden behind continue-on-error together with
+      # the findings. Now it is downloaded once, into a directory the Actions
+      # cache keeps per day; the scans read it with --skip-db-update. A failed
+      # download falls back to the cached copy, and the summary tells a
+      # failed download, a Trivy error and a finding apart.
+      - name: Pick the database date
+        id: trivy-db-day
+        run: echo "day=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the vulnerability database
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.cache/trivy/db
+          key: trivy-db-${{ runner.os }}-${{ steps.trivy-db-day.outputs.day }}
+          restore-keys: |
+            trivy-db-${{ runner.os }}-
+
+      # As the runner's user (and a HOME it can write), so the files it
+      # leaves are the runner's and the cache can save them.
+      - name: Download the vulnerability database
+        id: trivy-db
+        env:
+          TRIVY_IMAGE: aquasec/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969
+        run: |
+          cache="$HOME/.cache/trivy"
+          mkdir -p "$cache"
+          for attempt in 1 2 3; do
+            if docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
+              -v "$cache:/trivy-cache" "$TRIVY_IMAGE" \
+              image --download-db-only --cache-dir /trivy-cache --no-progress; then
+              echo "db=fresh" >> "$GITHUB_OUTPUT"
+              echo "Trivy: banco de vulnerabilidades atualizado." >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "::warning::Trivy: falha no download do banco de vulnerabilidades (tentativa ${attempt} de 3). De novo em $((attempt * 20))s."
+              sleep $((attempt * 20))
+            fi
+          done
+          if [ -f "$cache/db/trivy.db" ]; then
+            day=$(date -u -r "$cache/db/trivy.db" +%Y-%m-%d)
+            echo "db=cached" >> "$GITHUB_OUTPUT"
+            echo "::warning::Trivy: falha no download do banco de vulnerabilidades depois de 3 tentativas; o scan usa a cópia do cache, de ${day}. Não é achado."
+            echo "Trivy: **falha no download do banco**; o scan usou a cópia do cache, de ${day}." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "db=missing" >> "$GITHUB_OUTPUT"
+            echo "::warning::Trivy: falha no download do banco de vulnerabilidades depois de 3 tentativas, sem cópia no cache: as imagens deste run NÃO foram varridas. Não é achado; o próximo run varre de novo."
+            echo "Trivy: **falha no download do banco, sem cópia no cache: o scan não rodou** (não é achado)." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Scan the images
+        env:
+          TRIVY_USERNAME: ${{ github.actor }}
+          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+          TRIVY_IMAGE: aquasec/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969
+          API_IMAGE: ghcr.io/trajetto-organization/trajetto-api@${{ needs.build.outputs.api_digest }}
+          MIGRATE_IMAGE: ghcr.io/trajetto-organization/trajetto-api-migrate@${{ needs.build.outputs.migrate_digest }}
+          # Reused or built (the release image and the AI's): what this
+          # commit ships is what gets scanned, so a reused image meets
+          # today's vulnerability database too.
+          AI_IMAGE: ghcr.io/trajetto-organization/trajetto-ai@${{ needs.build.outputs.ai_digest }}
+          # The Database's image, only when this run published it (a new
+          # infra/postgres). Report-only, enforced or not: no job deploys it,
+          # and its finding must not hold the API's deploy; the owner reads
+          # it next to the digest before swapping the Database.
+          DATABASE_IMAGE: ${{ needs.build.outputs.postgres_built == 'true' && format('ghcr.io/trajetto-organization/trajetto-postgres@{0}', needs.build.outputs.postgres_digest) || '' }}
+          # The PgBouncer's, built or reused, as the AI's: it deploys, so
+          # its finding holds the deploy when enforced, as any other.
+          PGBOUNCER_IMAGE: ${{ needs.build.outputs.pgbouncer_digest != '' && format('ghcr.io/trajetto-organization/trajetto-pgbouncer@{0}', needs.build.outputs.pgbouncer_digest) || '' }}
+          ENFORCE: ${{ vars.IMAGE_SCAN_ENFORCE == 'true' }}
+          DB: ${{ steps.trivy-db.outputs.db }}
+        run: |
+          if [ "$DB" = "missing" ]; then
+            echo "::warning::Trivy: o scan não rodou (sem banco de vulnerabilidades; ver o passo anterior). Não é achado."
+            exit 0
+          fi
+          if [ "$ENFORCE" = "true" ]; then
+            mode="reprova (IMAGE_SCAN_ENFORCE=true)"
+          else
+            mode="só relata"
+          fi
+          cache="$HOME/.cache/trivy"
+          found=""
+          images=("$API_IMAGE" "$MIGRATE_IMAGE" "$AI_IMAGE")
+          [ -z "$PGBOUNCER_IMAGE" ] || images+=("$PGBOUNCER_IMAGE")
+          [ -z "$DATABASE_IMAGE" ] || images+=("$DATABASE_IMAGE")
+          for image in "${images[@]}"; do
+            name="${image%@*}"
+            name="${name##*/}"
+            status=error
+            code=0
+            # Exit code 3 is a finding; any other non-zero is Trivy failing
+            # (an image it could not pull), retried, and never a finding.
+            for attempt in 1 2 3; do
+              code=0
+              docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
+                -e TRIVY_USERNAME -e TRIVY_PASSWORD \
+                -v "$cache:/trivy-cache" "$TRIVY_IMAGE" \
+                image --cache-dir /trivy-cache --skip-db-update --no-progress \
+                --scanners vuln --severity CRITICAL --ignore-unfixed \
+                --exit-code 3 "$image" || code=$?
+              if [ "$code" -eq 0 ]; then
+                status=clean
+                break
+              fi
+              if [ "$code" -eq 3 ]; then
+                status=findings
+                break
+              fi
+              if [ "$attempt" -lt 3 ]; then
+                echo "::warning::Trivy: erro ao varrer ${name} (código ${code}; tentativa ${attempt} de 3). De novo em $((attempt * 20))s."
+                sleep $((attempt * 20))
+              fi
+            done
+            case "$status" in
+              clean)
+                echo "Trivy: ${name} sem CRITICAL corrigível." >> "$GITHUB_STEP_SUMMARY"
+                ;;
+              findings)
+                if [ "$image" = "$DATABASE_IMAGE" ]; then
+                  echo "::warning::Trivy: CRITICAL corrigível em ${name}. Só relata: nenhum job implanta essa imagem; veja antes de trocar o Database."
+                  echo "Trivy: **${name} tem CRITICAL corrigível** (a tabela está no log deste passo; só relata, a troca do Database é do dono)." >> "$GITHUB_STEP_SUMMARY"
+                else
+                  found="${found} ${name}"
+                  echo "Trivy: **${name} tem CRITICAL corrigível** (a tabela está no log deste passo; ${mode})." >> "$GITHUB_STEP_SUMMARY"
+                fi
+                ;;
+              *)
+                echo "::warning::Trivy: não conseguiu varrer ${name} depois de 3 tentativas (último código ${code}): erro do Trivy ou do GHCR, não é achado."
+                echo "Trivy: **erro ao varrer ${name}** (não é achado)." >> "$GITHUB_STEP_SUMMARY"
+                ;;
+            esac
+          done
+          if [ -n "$found" ]; then
+            if [ "$ENFORCE" = "true" ]; then
+              echo "::error::Trivy: CRITICAL corrigível em${found} (IMAGE_SCAN_ENFORCE=true). Atualize a dependência ou a base da imagem; a tabela está acima."
+              exit 1
+            fi
+            echo "::warning::Trivy: CRITICAL corrigível em${found}. Só relata enquanto IMAGE_SCAN_ENFORCE não for true."
+          fi
+
+  # Staging redeploys on its own, with no approval: that is the whole point of
+  # having it, and the environment is cheap to break. The deploy itself is
+  # .github/actions/deploy, the same one production runs: the PgBouncer
+  # first, only when its digest changed (without
+  # DOKPLOY_PGBOUNCER_APPLICATION_ID only its tag moves), then the
+  # migrations, when staging's database has not applied this release image yet
+  # (a failing migration stops the run there, before any tag of the API or
+  # the AI moves), then the AI (only when its digest changed), then the API,
+  # each tag moved right before its own deploy; then the wait until the
+  # public API answers this commit, and `staged-<sha>`, the marker the PR
+  # check and the promote require. A failed Dokploy deploy puts its tag
+  # back, so `staging` keeps naming what staging runs.
+  #
+  # Before Dokploy exists the tags still move and the deploy is skipped with
+  # a notice. To turn it on: secrets DOKPLOY_URL, DOKPLOY_API_KEY,
+  # DOKPLOY_API_APPLICATION_ID and DOKPLOY_MIGRATE_APPLICATION_ID in the
+  # `staging` environment (docs/deploy.md, "GitHub" and "Migrations").
+  deploy-staging:
+    name: Deploy
+    needs: [build, image-scan]
+    if: ${{ !cancelled() && github.ref == 'refs/heads/staging' && needs.build.result == 'success' && needs.image-scan.result == 'success' }}
+    runs-on: ubuntu-24.04
+    environment: staging
+    # Measured 1-11 min. A deploy whose pulls keep failing tries six times
+    # per service (dokploy-deploy.mjs), with pauses up to 160 s, and the
+    # liveness check waits up to 10 min: this covers that worst day.
+    timeout-minutes: 120
+
+    # One staging deploy at a time: two Dokploy calls on the same app would
+    # each follow the other's deployment, and two tag moves could interleave.
+    # Never cancelled midway (it would leave the API and AI tags apart).
+    concurrency:
+      group: deploy-staging
+      cancel-in-progress: false
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      # The deploy action and the scripts it runs; the git remote is what the
+      # branch-head check reads.
+      - name: Check out the deploy scripts
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          sparse-checkout: |
+            .github/actions
+            .github/scripts
+
+      # Secrets and variables of the `staging` environment, the same as
+      # always, handed to the action as inputs.
+      - name: Deploy to staging
+        uses: ./.github/actions/deploy
+        with:
+          environment: staging
+          tag: staging
+          api-digest: ${{ needs.build.outputs.api_digest }}
+          migrate-digest: ${{ needs.build.outputs.migrate_digest }}
+          ai-digest: ${{ needs.build.outputs.ai_digest }}
+          pgbouncer-digest: ${{ needs.build.outputs.pgbouncer_digest }}
+          force-ai: ${{ inputs.force_ai_build == true }}
+          expected-commit: ${{ github.sha }}
+          verify-default: http
+          rollout-verify: ${{ vars.ROLLOUT_VERIFY }}
+          api-public-url: ${{ vars.API_PUBLIC_URL }}
+          swarm-api-service: ${{ vars.SWARM_API_SERVICE }}
+          swarm-worker-service: ${{ vars.SWARM_WORKER_SERVICE }}
+          swarm-scheduler-service: ${{ vars.SWARM_SCHEDULER_SERVICE }}
+          swarm-worker-external-service: ${{ vars.SWARM_WORKER_EXTERNAL_SERVICE }}
+          swarm-ingest-service: ${{ vars.SWARM_INGEST_SERVICE }}
+          swarm-realtime-service: ${{ vars.SWARM_REALTIME_SERVICE }}
+          swarm-pgbouncer-service: ${{ vars.SWARM_PGBOUNCER_SERVICE }}
+          release-timeout-seconds: ${{ vars.RELEASE_TIMEOUT_SECONDS }}
+          force-release: ${{ inputs.force_release == true }}
+          force-realtime: ${{ inputs.force_realtime == true }}
+          rollout-status-token: ${{ secrets.ROLLOUT_STATUS_TOKEN }}
+          rollout-roles-expected: ${{ vars.ROLLOUT_ROLES_EXPECTED }}
+          release-serialize-with-application-id: ${{ vars.RELEASE_SERIALIZE_WITH_APPLICATION_ID }}
+          require-branch-head: "true"
+          restore-api-tag: "true"
+          mark-staged: "true"
+          dokploy-url: ${{ secrets.DOKPLOY_URL }}
+          dokploy-api-key: ${{ secrets.DOKPLOY_API_KEY }}
+          dokploy-api-application-id: ${{ secrets.DOKPLOY_API_APPLICATION_ID }}
+          dokploy-migrate-application-id: ${{ secrets.DOKPLOY_MIGRATE_APPLICATION_ID }}
+          dokploy-ai-application-id: ${{ secrets.DOKPLOY_AI_APPLICATION_ID }}
+          dokploy-pgbouncer-application-id: ${{ secrets.DOKPLOY_PGBOUNCER_APPLICATION_ID }}
+          dokploy-worker-application-id: ${{ secrets.DOKPLOY_WORKER_APPLICATION_ID }}
+          dokploy-scheduler-application-id: ${{ secrets.DOKPLOY_SCHEDULER_APPLICATION_ID }}
+          dokploy-worker-external-application-id: ${{ secrets.DOKPLOY_WORKER_EXTERNAL_APPLICATION_ID }}
+          dokploy-ingest-application-id: ${{ secrets.DOKPLOY_INGEST_APPLICATION_ID }}
+          dokploy-realtime-application-id: ${{ secrets.DOKPLOY_REALTIME_APPLICATION_ID }}
+          deploy-ssh-host: ${{ secrets.DEPLOY_SSH_HOST }}
+          deploy-ssh-user: ${{ secrets.DEPLOY_SSH_USER }}
+          deploy-verify-ssh-key: ${{ secrets.DEPLOY_VERIFY_SSH_KEY }}
+          deploy-ssh-known-hosts: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}

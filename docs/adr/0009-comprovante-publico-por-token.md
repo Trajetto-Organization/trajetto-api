@@ -28,6 +28,19 @@ campo a campo:
    e de quem, sem número de série nem CNPJ (o PDF já os tem;
    `src/modules/delivery/dtos/proof-document-dto.ts`).
 
+## Adendo de 02/11/2026: `proof_url` da API pública (item L7)
+
+O integrador recebe o mesmo tipo de capacidade em `proof_url` (leitura da
+entrega e eventos de documento de uma entrega que terminou). Como o PDF só
+existe depois da primeira abertura, o link não usa o token de verificação:
+nomeia a entrega e leva um HMAC do id e da empresa
+(`src/shared/integration/proof-link.ts`), sem nada gravado por entrega. A
+abertura (`GET /public/delivery-proof/:token`) segue as mesmas regras deste
+ADR: sem login, mesma recusa 404 para tudo, rate limit próprio e prazo de
+`PROOF_VERIFICATION_TTL_DAYS`, aqui contado da criação da entrega. Gera o
+documento do painel na primeira vez e redireciona para o arquivo. Trocar o
+`JWT_SECRET` (de onde a chave é derivada) revoga todos os links de uma vez.
+
 ## Fontes
 
 - [`arquitetura.md` → Comprovante de entrega](../arquitetura.md#comprovante-de-entrega).

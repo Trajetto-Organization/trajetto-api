@@ -7,6 +7,7 @@ import { verify } from "jsonwebtoken";
 import auth from "@/config/auth";
 import { isCloudflareEdge } from "@/config/trusted-edge";
 import { env } from "@/env";
+import { verifyAccessTokenOnce } from "@/shared/auth/access-token-once";
 import { AppError } from "@/shared/errors/AppError";
 import { hmacVerifyKey } from "@/shared/security/jwt-verify-key";
 
@@ -271,17 +272,17 @@ function bearerRateLimitKey(request: FastifyRequest): string | null {
   const token = bearerOf(request);
   if (!token) return null;
 
-  try {
-    const payload = verify(token, hmacVerifyKey(auth.secret_token)) as {
-      sub?: string;
-      tokenType?: string;
-    };
+  // Verified once per request: `ensureAuthenticated` reuses this verdict
+  // instead of checking the signature again (access-token-once.ts).
+  // Expired, forged or garbage tokens are counted by address, by the caller.
+  const verdict = verifyAccessTokenOnce(request, token);
 
-    if (payload.sub && payload.tokenType === "access") {
-      return `user:${payload.sub}`;
-    }
-  } catch {
-    // Expired, forged or garbage: counted by address, by the caller.
+  if (
+    verdict.valid &&
+    verdict.payload.sub &&
+    verdict.payload.tokenType === "access"
+  ) {
+    return `user:${verdict.payload.sub}`;
   }
 
   return null;

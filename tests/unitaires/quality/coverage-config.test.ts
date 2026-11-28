@@ -121,24 +121,30 @@ describe("API coverage configuration", () => {
     );
   });
 
-  it("is published and gated by the branch CI", () => {
-    const ci = read(".github/workflows/ci.yml");
+  it("is published and gated by the validation every work branch and staging push runs", () => {
+    const validate = read(".github/workflows/validate.yml");
 
     // test:coverage, not `yarn test --coverage`: only the script carries the floor.
-    expect(ci).toMatch(/run: yarn test:coverage --reporter=basic\b/);
-    expect(ci).not.toMatch(
+    expect(validate).toMatch(/run: yarn test:coverage --reporter=basic\b/);
+    expect(validate).not.toMatch(
       /run: yarn test --run --reporter=basic --coverage\b/,
     );
     // \r?: a Windows checkout with core.autocrlf has CRLF line endings.
-    expect(ci).toMatch(
+    expect(validate).toMatch(
       /name: coverage-\$\{\{ github\.sha \}\}\r?\n\s+path: coverage\r?\n/,
     );
+
+    for (const caller of ["ci.yml", "staging.yml"]) {
+      expect(read(`.github/workflows/${caller}`), caller).toContain(
+        "uses: ./.github/workflows/validate.yml",
+      );
+    }
   });
 
-  it("is gated again by the staging pipeline, before any image is built", () => {
-    const deploy = read(".github/workflows/deploy.yml");
+  it("holds back the image on staging: the build needs the Gate, which needs the validation", () => {
+    const staging = read(".github/workflows/staging.yml");
 
-    expect(deploy).toMatch(/run: yarn test:coverage --reporter=basic\b/);
-    expect(deploy).toMatch(/needs: \[test, ai-ocr, secrets\]/);
+    expect(staging).toMatch(/needs: \[changes, secrets, validate\]/);
+    expect(staging).toMatch(/needs: \[changes, gate, secrets\]/);
   });
 });

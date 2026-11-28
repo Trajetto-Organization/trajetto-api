@@ -188,7 +188,11 @@ afterAll(async () => {
 });
 
 describe("a company user created by an administrator", () => {
-  it("gets a set-password link, and whatever password a client sends is ignored", async () => {
+  // Decision D04 (plan of 02/11/2026, D2) lets a manager set the password of
+  // a DRIVER's login only. For an office user a password in the body is now
+  // refused rather than dropped in silence: nobody but the person ever sets
+  // it, and the web never sends one (its schema has no such field).
+  it("refuses a password a client sends for an office user, and creates nothing", async () => {
     const email = `nova-${randomUUID()}@exemplo.com.br`;
 
     const response = await app.inject({
@@ -199,6 +203,30 @@ describe("a company user created by an administrator", () => {
         email,
         name: "Pessoa Nova Cadastrada",
         password: "SenhaQueNaoVale1",
+        role: "BUSINESS_USER",
+        businessId: A,
+        profileAccessId: profile,
+        userType: "employee",
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json().message).toBe(
+      "A senha inicial só pode ser definida no login de um motorista.",
+    );
+    expect(await prisma.user.count({ where: { email } })).toBe(0);
+  });
+
+  it("gets a set-password link, and the password is known to nobody", async () => {
+    const email = `nova-${randomUUID()}@exemplo.com.br`;
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/user/create-user",
+      headers: { authorization: `Bearer ${admin.token}` },
+      payload: {
+        email,
+        name: "Pessoa Nova Cadastrada",
         role: "BUSINESS_USER",
         businessId: A,
         profileAccessId: profile,

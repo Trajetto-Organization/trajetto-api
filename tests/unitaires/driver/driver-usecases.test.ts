@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const socket = vi.hoisted(() => ({
   catalogChanged: [] as Array<{ businessId: string; entity: string }>,
   securityEvents: [] as Array<{ userId: string; reason: string }>,
+  revocations: [] as Array<{ kind: string; subjectId: string }>,
 }));
 
 // The realtime side effects are observed, not the thing being proven: what
@@ -13,6 +14,9 @@ vi.mock("@/websocket", () => ({
   },
   sendSecurityEventToUser: (userId: string, payload: { reason: string }) => {
     socket.securityEvents.push({ userId, reason: payload.reason });
+  },
+  announceSessionRevocation: (kind: string, subjectId: string) => {
+    socket.revocations.push({ kind, subjectId });
   },
 }));
 
@@ -26,6 +30,9 @@ import { InMemoryRouteRepository } from "@/modules/route/repositories/in-memory/
 import { InMemoryDeliveryRepository } from "@/modules/delivery/repositories/in-memory/in-memory-delivery-repository";
 
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
+import { InMemoryUserTokensRepository } from "@/modules/user/repositories/in-memory/in-memory-user-tokens-repository";
+import { InMemoryDriverEnrollmentRepository } from "@/modules/user/repositories/in-memory/in-memory-driver-enrollment-repository";
+import { InMemoryDriverTrustedDeviceRepository } from "@/modules/user/repositories/in-memory/in-memory-driver-trusted-device-repository";
 import { InMemoryBusinessRepository } from "@/modules/business/repositories/in-memory/in-memory-business-repository";
 import { InMemoryBranchRepository } from "@/modules/branch/repositories/in-memory/in-memory-branch-repository";
 
@@ -53,6 +60,7 @@ const ADMIN_A = "018fe400-0000-7000-8000-0000000000a1";
 const ADMIN_B = "018fe400-0000-7000-8000-0000000000b1";
 const MASTER = "018fe400-0000-7000-8000-0000000000f1";
 const DRIVER_USER = "018fe400-0000-7000-8000-0000000000d9";
+const BRANCH_A2 = "018fe400-0000-7000-8000-0000000000a2";
 
 const notificationStub = {
   createActivityIfEnabled: () => undefined,
@@ -81,7 +89,10 @@ function driverData(
 }
 
 function makeContext() {
-  const users = new InMemoryUserRepository();
+  const tokens = new InMemoryUserTokensRepository();
+  const enrollments = new InMemoryDriverEnrollmentRepository();
+  const trustedDevices = new InMemoryDriverTrustedDeviceRepository();
+  const users = new InMemoryUserRepository({ tokens });
   const businesses = new InMemoryBusinessRepository();
   const branches = new InMemoryBranchRepository();
   const routeRepository = new InMemoryRouteRepository();
@@ -114,6 +125,10 @@ function makeContext() {
 
   return {
     users,
+    tokens,
+    enrollments,
+    trustedDevices,
+    branches,
     drivers,
     pauses,
     routes: routeRepository.routes,
@@ -130,6 +145,9 @@ function makeContext() {
       branches,
       drivers,
       notificationStub,
+      tokens,
+      enrollments,
+      trustedDevices,
     ),
     remove: new DeleteDriverUseCase(
       users,
@@ -154,6 +172,7 @@ beforeEach(() => {
   context = makeContext();
   socket.catalogChanged.length = 0;
   socket.securityEvents.length = 0;
+  socket.revocations.length = 0;
 });
 
 function seedRoute(driverId: string, status: Route["status"]) {
@@ -223,6 +242,88 @@ describe("deactivating a driver with work pending (decision 8.3)", () => {
     expect(socket.securityEvents).toEqual([
       { userId: DRIVER_USER, reason: "driver_inactive" },
     ]);
+  });
+
+  // Plan of 02/11/2026, D5: the security event only reached an open socket.
+  // The sessions and the phone's push devices stayed on the server, so a
+  // phone kept receiving the driver's messages, and an access QR code still
+  // on the manager's screen could open a new session once the driver was
+  // reactivated. The session version is NOT bumped: the app's next request
+  // must still hear 403 AUTH_DRIVER_INACTIVE (why it was logged out), not a
+  // bare "session ended". The push devices go with the sessions in the same
+  // statement (revokeAllUserRefreshTokens); the token twin has no devices, so
+  // that half is proven against Postgres (driver-inactivation-sessions-http).
+  // Wave 2: the phones the login trusted for CPF and password go too, so a
+  // reactivated driver enters by a new QR code first.
+  it("ends the driver's sessions, access QR code and trusted phones", async () => {
+    const driver = await context.create.execute(driverData(A), ADMIN_A);
+
+    context.users.user.push({
+      id: DRIVER_USER,
+      role: "BUSINESS_USER",
+      businessId: A,
+      driverId: driver.id,
+      session_version: 3,
+    } as User);
+
+    await context.tokens.createUserRefreshToken({
+      userId: DRIVER_USER,
+      token_hash: "phone-session",
+      jti: "phone-jti",
+      family_id: "phone-family",
+      expires_in: new Date(Date.now() + 60_000),
+      device_id: "23be03c084165505",
+    });
+    await context.enrollments.issue({
+      userId: DRIVER_USER,
+      businessId: A,
+      token: "qr-ainda-na-tela",
+      code: "ABCDEFGH",
+      expiresAt: new Date(Date.now() + 60_000),
+      createdById: ADMIN_A,
+    });
+    await context.trustedDevices.trust({
+      userId: DRIVER_USER,
+      deviceHash: "a".repeat(64),
+      source: "qr",
+    });
+
+    await context.update.execute({ status: "INACTIVE" }, driver.id, ADMIN_A, A);
+
+    expect(context.tokens.refreshTokenItems).toHaveLength(0);
+    expect(context.trustedDevices.devices).toHaveLength(0);
+    expect(
+      await context.enrollments.findByToken("qr-ainda-na-tela"),
+    ).toBeNull();
+    expect(
+      context.users.user.find((user) => user.id === DRIVER_USER)
+        ?.session_version,
+    ).toBe(3);
+  });
+
+  it("ends nothing when the deactivation is refused", async () => {
+    const driver = await context.create.execute(driverData(A), ADMIN_A);
+    seedRoute(driver.id, "IN_PROGRESS");
+
+    context.users.user.push({
+      id: DRIVER_USER,
+      role: "BUSINESS_USER",
+      businessId: A,
+      driverId: driver.id,
+    } as User);
+    await context.tokens.createUserRefreshToken({
+      userId: DRIVER_USER,
+      token_hash: "phone-session",
+      jti: "phone-jti",
+      family_id: "phone-family",
+      expires_in: new Date(Date.now() + 60_000),
+    });
+
+    await expect(
+      context.update.execute({ status: "INACTIVE" }, driver.id, ADMIN_A, A),
+    ).rejects.toBeInstanceOf(DriverHasOpenRoutesError);
+
+    expect(context.tokens.refreshTokenItems).toHaveLength(1);
   });
 
   it("does not block editing a driver who is already inactive", async () => {
@@ -338,6 +439,35 @@ describe("the catalogue announces its changes (decision 2.3)", () => {
     ).rejects.toThrow();
 
     expect(socket.catalogChanged).toEqual([]);
+  });
+});
+
+// Plano-escala F5-23: a driver moved to another branch may be locked out by
+// it, and a cached session must leave this replica's session cache before
+// the edit answers. Any other edit announces nothing.
+describe("moving a driver to another branch", () => {
+  it("announces the driver's revocation, and an edit of anything else does not", async () => {
+    const driver = await context.create.execute(driverData(A), ADMIN_A);
+    // An inactive branch of the same company: the move the cache must see.
+    context.branches.branches.push({
+      id: BRANCH_A2,
+      businessId: A,
+      corporate_reason: "Filial Norte",
+      is_active: false,
+    } as never);
+
+    await context.update.execute({ city: "Campinas" }, driver.id, ADMIN_A, A);
+    expect(socket.revocations).toEqual([]);
+
+    await context.update.execute(
+      { branchId: BRANCH_A2 },
+      driver.id,
+      ADMIN_A,
+      A,
+    );
+    expect(socket.revocations).toEqual([
+      { kind: "driver", subjectId: driver.id },
+    ]);
   });
 });
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# The dependency audit of ci.yml and deploy.yml (INFRA-16): audit-ci fails on
+# The dependency audit of validate.yml (INFRA-16): audit-ci fails on
 # a CRITICAL advisory in a production dependency (audit-ci.jsonc). Here is
 # decided whether that verdict BLOCKS this run.
 #
@@ -18,9 +18,10 @@
 #   watch that opens the fix, and the next change to the dependencies has to
 #   pass this gate for real.
 #
-# What it compares (AUDIT_BASE): the pull request's base, or the push's
-# `before`. With no base to compare — a new branch (`before` all zeros), a
-# Run workflow, a base that is not in this checkout (a force push, a shallow
+# What it compares (AUDIT_BASE): the base the caller's Changes job picked
+# (changes.sh) — on staging the last build staging served, on a work
+# branch the point where it left staging. With no base to compare — none
+# found, a base that is not in this checkout (a force push, a shallow
 # clone) — the answer is "changed", and the verdict blocks.
 #
 # A verdict and a failure to audit are told apart. audit-ci says "Failed

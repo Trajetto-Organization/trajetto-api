@@ -33,6 +33,11 @@ const log = logger.child({ component: "cron", job: "cleanup-orphan-uploads" });
  * passes in the same instant this deletes that key. The app's re-upload
  * covers the ordinary "object gone" case; this one would need both to
  * happen within the same second, a month after the photo was taken.
+ *
+ * A delete a Bucket Lock refuses (infra/r2/bucket-locks.md) is not a
+ * failure: the object is "locked", skipped and counted apart, and the run
+ * still succeeds (plano-escala F1-23). A lock longer than the window keeps
+ * that orphan for good, which is what the lock is for.
  */
 type OrphanGcMode = "off" | "dry-run" | "delete";
 
@@ -92,7 +97,10 @@ interface NamespaceSpec {
   referenced(query: ReferenceQuery): Promise<Set<string>>;
 }
 
-type ClientUploadType = Exclude<UploadType, "deliveryProofs">;
+type ClientUploadType = Exclude<
+  UploadType,
+  "deliveryProofs" | "spreadsheetImports"
+>;
 
 const PRESIGNED_KEY = /^[^/]+\/[^/]+\/(\d{13})-[^/]*$/;
 
@@ -132,7 +140,9 @@ const keysOf = (rows: Array<{ key: string | null }>) =>
  * its keys are stored — the failure that matters here is a column this list
  * does not know about, which would make every object in it look orphaned.
  * `deliveryProofs` is left out on purpose: the server writes those, under a
- * key the delivery owns, and nothing but the proof flow replaces them.
+ * key the delivery owns, and nothing but the proof flow replaces them. So is
+ * `spreadsheetImports`: the durable import job owns its file and deletes it
+ * (plano-escala F3-23a).
  *
  * Every value is stored as the raw key (`resolvePresignedUploads` returns the
  * key as the path, and every caller persists that), which is what lets the
@@ -253,6 +263,10 @@ interface OrphanGcSummary {
   referenced: number;
   orphaned: number;
   deleted: number;
+
+  /** Deletes a Bucket Lock (or a token without delete) refused: skipped. */
+  locked: number;
+
   failed: number;
 
   /** Scopes skipped because their listing or reference lookup failed. */
@@ -266,7 +280,7 @@ interface RunOptions {
   mode: OrphanGcMode;
   now?: number;
   budgetMs?: number;
-  uploadService?: Pick<UploadService, "listObjectKeys" | "tryDeleteFile">;
+  uploadService?: Pick<UploadService, "listObjectKeys" | "deleteFileOutcome">;
 }
 
 /** Every key under `prefix` whose timestamp falls in the window. */
@@ -344,6 +358,7 @@ async function runOrphanUploadGc({
     referenced: 0,
     orphaned: 0,
     deleted: 0,
+    locked: 0,
     failed: 0,
     errors: 0,
     stoppedEarly: false,
@@ -404,7 +419,10 @@ async function runOrphanUploadGc({
     if (mode !== "delete") return;
 
     for (const key of orphans) {
-      if (await uploadService.tryDeleteFile(key)) summary.deleted += 1;
+      const outcome = await uploadService.deleteFileOutcome(key);
+
+      if (outcome === "deleted") summary.deleted += 1;
+      else if (outcome === "locked") summary.locked += 1;
       else summary.failed += 1;
     }
   };

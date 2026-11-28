@@ -119,9 +119,8 @@ describe("how it is switched on", () => {
   });
 
   it("runs every night as a registered cron job", async () => {
-    const { cleanupOrphanUploadsJob } = await import(
-      "@/jobs/cron/cleanup-orphan-uploads-job"
-    );
+    const { cleanupOrphanUploadsJob } =
+      await import("@/jobs/cron/cleanup-orphan-uploads-job");
 
     const source = readFileSync(
       resolve(__dirname, "../../../src/jobs/cron/index.ts"),

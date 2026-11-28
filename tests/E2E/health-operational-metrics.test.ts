@@ -439,9 +439,8 @@ describe("the delivery backlog is the current one, not a 24 h window (OUTBOX-15)
 
 describe("a stuck worker or cron job shows up (OBS-10)", () => {
   it("lists each replica's workers and flags the one that stopped beating", async () => {
-    const { WorkerHeartbeatRegistry, flushHeartbeats } = await import(
-      "@/shared/health/worker-heartbeat"
-    );
+    const { WorkerHeartbeatRegistry, flushHeartbeats } =
+      await import("@/shared/health/worker-heartbeat");
 
     // Replica A, healthy: the outbox worker just finished a cycle.
     const healthy = new WorkerHeartbeatRegistry();
@@ -497,9 +496,8 @@ describe("a stuck worker or cron job shows up (OBS-10)", () => {
 
     expect(workers.map((entry) => entry.replica)).not.toContain("replica-gone");
 
-    const { cleanupNotificationPipelineJob } = await import(
-      "@/jobs/cron/cleanup-notification-pipeline-job"
-    );
+    const { cleanupNotificationPipelineJob } =
+      await import("@/jobs/cron/cleanup-notification-pipeline-job");
 
     await cleanupNotificationPipelineJob.handler();
 
@@ -516,7 +514,7 @@ describe("a stuck worker or cron job shows up (OBS-10)", () => {
 
     await prisma.scheduledJobExecution.create({
       data: {
-        jobName: "driver-position-partitions",
+        jobName: "partition-maintenance",
         scheduledFor: new Date(minute.getTime() - 6 * 60 * MINUTE_MS),
         status: "SUCCEEDED",
         finishedAt: new Date(minute.getTime() - 6 * 60 * MINUTE_MS + 2_000),
@@ -541,7 +539,7 @@ describe("a stuck worker or cron job shows up (OBS-10)", () => {
     }>;
 
     const partitions = cron.find(
-      (entry) => entry.job === "driver-position-partitions",
+      (entry) => entry.job === "partition-maintenance",
     );
 
     expect(partitions?.last_status).toBe("SUCCEEDED");
@@ -552,15 +550,150 @@ describe("a stuck worker or cron job shows up (OBS-10)", () => {
     expect(purge).toMatchObject({ last_status: "RUNNING", stale_running: 1 });
     expect(purge?.last_succeeded_at).toBeNull();
   });
+
+  /**
+   * A partial run (F1-17) gets 26 h of grace from the first partial, because
+   * nothing but partials means the purge is working, only slower than what
+   * comes in. Dated from the last success across runs that really failed,
+   * one partial after two days of a statement timeout read as a fresh
+   * streak, and silenced a job overdue for days for another 26 h.
+   */
+  it("dates the partials only while nothing but partials came after the last success", async () => {
+    const minute = new Date();
+    minute.setSeconds(0, 0);
+
+    const at = (hoursAgo: number) =>
+      new Date(minute.getTime() - hoursAgo * 60 * MINUTE_MS);
+    const partial = "[partial] parou no orçamento ou no teto com sobra em: x";
+
+    const run = (
+      jobName: string,
+      hoursAgo: number,
+      status: "SUCCEEDED" | "FAILED",
+      lastError: string | null = null,
+    ) =>
+      prisma.scheduledJobExecution.create({
+        data: {
+          jobName,
+          scheduledFor: at(hoursAgo),
+          status,
+          finishedAt: new Date(at(hoursAgo).getTime() + 2_000),
+          leaseExpiresAt: new Date(at(hoursAgo).getTime() + 10 * MINUTE_MS),
+          lastError,
+        },
+      });
+
+    // Two real failures between the success and the partial.
+    await run("cleanup-webhook-deliveries", 72, "SUCCEEDED");
+    await run(
+      "cleanup-webhook-deliveries",
+      48,
+      "FAILED",
+      "canceling statement due to statement timeout",
+    );
+    await run(
+      "cleanup-webhook-deliveries",
+      24,
+      "FAILED",
+      "canceling statement due to statement timeout",
+    );
+    await run("cleanup-webhook-deliveries", 2, "FAILED", partial);
+
+    // Nothing but partials since the success.
+    await run("cleanup-api-usage", 26, "SUCCEEDED");
+    await run("cleanup-api-usage", 6, "FAILED", partial);
+    await run("cleanup-api-usage", 2, "FAILED", partial);
+
+    const cron = (await metrics(masterToken)).json().cron_jobs as Array<{
+      job: string;
+      last_partial?: boolean;
+      partial_since?: string | null;
+    }>;
+
+    const slow = cron.find((entry) => entry.job === "cleanup-api-usage");
+    const failing = cron.find(
+      (entry) => entry.job === "cleanup-webhook-deliveries",
+    );
+
+    expect(slow).toMatchObject({
+      last_partial: true,
+      partial_since: at(6).toISOString(),
+    });
+    expect(failing).toMatchObject({ last_partial: true, partial_since: null });
+  });
 });
 
 describe("the driver_position partition runway (INV-07)", () => {
-  it("reports how many days of partitions are left", async () => {
-    const { driverPositionPartitionsJob } = await import(
-      "@/jobs/cron/driver-position-partitions-job"
-    );
+  it("reports every registered table under partitions, with driver_position as the old alias", async () => {
+    const { partitionMaintenanceJob } =
+      await import("@/jobs/cron/partition-maintenance-job");
 
-    await driverPositionPartitionsJob.handler();
+    await partitionMaintenanceJob.handler();
+
+    const body = (await metrics(masterToken)).json();
+    const trail = body.partitions.driver_position;
+
+    expect(trail).toMatchObject({
+      lookahead_ok: true,
+      runway_ok: true,
+      retention_days: 90,
+      detach_pending: 0,
+      stuck: [],
+      // infra/sql/10-partitions.sql ran in the template, and the job made
+      // its partitions as the role.
+      owner_ok: true,
+    });
+    expect(trail.lookahead_days).toBeGreaterThanOrEqual(6);
+    expect(trail.partitions).toBeGreaterThanOrEqual(9);
+
+    // One release of the old shape: the web's Sistema screen reads it.
+    expect(body.driver_position).toEqual({
+      partition_runway_days: trail.lookahead_days,
+      last_partition_ends_at: trail.last_partition_ends_at,
+      runway_ok: true,
+    });
+  });
+
+  it("raises partition-lookahead-low with 4 days ahead, and nothing once the job runs again", async () => {
+    const { partitionMaintenanceJob } =
+      await import("@/jobs/cron/partition-maintenance-job");
+    const { collectOperationalSnapshot } =
+      await import("@/shared/health/operational-snapshot");
+    const { collectAlerts } = await import("@/shared/health/alert-rules");
+    const { addGrains, grainStart, partitionName, registeredPartitions } =
+      await import("@/shared/database/partitions");
+
+    const [table] = registeredPartitions();
+    const today = grainStart("day", new Date());
+
+    await partitionMaintenanceJob.handler();
+
+    // Two nights without the job and a bit: the days from today + 5 on
+    // were never made.
+    for (let offset = 5; offset <= table.lookahead; offset += 1) {
+      await prisma.$executeRawUnsafe(
+        `DROP TABLE IF EXISTS "${partitionName(table, addGrains("day", today, offset))}"`,
+      );
+    }
+
+    const codes = async () =>
+      collectAlerts(await collectOperationalSnapshot()).map(
+        (alert) => alert.code,
+      );
+
+    expect(await codes()).toContain("partition-lookahead-low");
+    expect(await codes()).not.toContain("partition-runway-low");
+
+    await partitionMaintenanceJob.handler();
+
+    expect(await codes()).not.toContain("partition-lookahead-low");
+  });
+
+  it("reports how many days of partitions are left", async () => {
+    const { partitionMaintenanceJob } =
+      await import("@/jobs/cron/partition-maintenance-job");
+
+    await partitionMaintenanceJob.handler();
 
     const body = (await metrics(masterToken)).json();
 

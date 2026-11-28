@@ -65,8 +65,10 @@ async function resolvePauseType(
 }
 
 /**
- * The journey route at the tap, or PAUSE_REQUIRES_ROUTE (decision 14.4).
- * The day is the company's (Business.timezone), never the server's.
+ * The journey route at the tap, or PAUSE_REQUIRES_ROUTE (decision 14.4,
+ * revised 12/11/2026): a route of the driver's started by the tap and not
+ * finished by then (pause-journey-rules.ts). The departure checklist is not
+ * checked here (D08); the app holds the departure until it exists.
  */
 async function journeyRouteOrRefuse(
   pauses: IDriverPauseRepository,
@@ -81,7 +83,7 @@ async function journeyRouteOrRefuse(
   return routeId;
 }
 
-/** The journey route at `at` in the company's day, or null. */
+/** The journey route at `at`, or null. */
 async function journeyRouteOf(
   pauses: IDriverPauseRepository,
   businessId: string,
@@ -94,7 +96,9 @@ async function journeyRouteOf(
 /**
  * The journey at `at`, with the company's day and zone it was judged in: the
  * app trusts a cached answer only while that business day lasts (review r1:
- * a 7-day cache said "pause allowed" on a day without a route).
+ * a 7-day cache said "pause allowed" on a day without a route). The day no
+ * longer decides the journey (a started route counts on any day); it only
+ * dates the answer.
  */
 async function journeyAt(
   pauses: IDriverPauseRepository,
@@ -110,7 +114,7 @@ async function journeyAt(
   const dayKey = businessDateKey(at, timeZone);
 
   return {
-    routeId: await pauses.findJourneyRouteAt(businessId, driverId, at, dayKey),
+    routeId: await pauses.findJourneyRouteAt(businessId, driverId, at),
     dayKey,
     timeZone,
   };

@@ -202,7 +202,7 @@ afterAll(async () => {
 });
 
 describe("composing a route while it departs", () => {
-  it("refuses to add a stop to a route that left in the meantime", async () => {
+  it("adds a stop to a route that left in the meantime already on the street (K12)", async () => {
     const onBoard = await seedDelivery();
     const late = await seedDelivery();
 
@@ -219,27 +219,51 @@ describe("composing a route while it departs", () => {
 
     expect(departed.status).toBe("fulfilled");
 
-    // Before: the add read RELEASED, the departure moved only the stops it
-    // could see, and the late one landed PENDING on a running route — seen by
-    // the driver, refused at arrival and proof, and holding the route open.
-    expect(added.status, "a parada entrou numa rota que já saiu").toBe(
-      "rejected",
-    );
-    expect((added as PromiseRejectedResult).reason).toBeInstanceOf(
-      RouteStatusConflictError,
+    // Before the lock: the add read RELEASED, the departure moved only the
+    // stops it could see, and the late one landed PENDING on a running route
+    // — seen by the driver, refused at arrival and proof, and holding the
+    // route open. The lock made the add wait and then refused it; since a
+    // running route takes new stops (K12), the add waits and then joins the
+    // route as the departure left it: on the street, with the route's truck.
+    expect(added.status, "a parada não entrou na rota que saiu").toBe(
+      "fulfilled",
     );
 
-    expect(await prisma.routeStop.count({ where: { deliveryId: late } })).toBe(
-      0,
-    );
+    const [stop] = await prisma.routeStop.findMany({
+      where: { deliveryId: late },
+    });
+
+    expect(stop).toMatchObject({ routeId, status: "PENDING" });
 
     const row = await prisma.delivery.findUniqueOrThrow({
       where: { id: late },
     });
 
-    expect(row.status).toBe("PENDING");
-    expect(row.driverId).toBeNull();
+    expect(row.status).toBe("IN_TRANSIT");
+    expect(row.driverId).toBe(DRIVER);
+    expect(row.vehicleId).toBe(vehicleId);
   }, 30_000);
+
+  it("still refuses to add a stop to a route cancelled in the meantime", async () => {
+    const onBoard = await seedDelivery();
+    const late = await seedDelivery();
+
+    const { routeId } = await releasedRoute([onBoard]);
+
+    await repository.transitionRoute(routeId, CARRIER, {
+      expectedStatus: "RELEASED",
+      status: "CANCELLED",
+      cancellation_reason: "Teste",
+    });
+
+    await expect(
+      repository.addStops(routeId, CARRIER, [late]),
+    ).rejects.toBeInstanceOf(RouteStatusConflictError);
+
+    expect(await prisma.routeStop.count({ where: { deliveryId: late } })).toBe(
+      0,
+    );
+  });
 
   it("refuses to remove a stop from a route that left in the meantime", async () => {
     const delivery = await seedDelivery();

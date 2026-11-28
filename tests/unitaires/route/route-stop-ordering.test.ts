@@ -14,6 +14,9 @@ import { ListRoutesUseCase } from "@/modules/route/usecases/list-routes/list-rou
 
 import { InMemoryRouteRepository } from "@/modules/route/repositories/in-memory/in-memory-route-repository";
 import { InMemoryDriverPositionRepository } from "@/modules/route/repositories/in-memory/in-memory-driver-position-repository";
+import { InMemoryBusinessRepository } from "@/modules/business/repositories/in-memory/in-memory-business-repository";
+import { InMemoryVehicleChecklistRepository } from "@/modules/vehicle-checklist/repositories/in-memory/in-memory-vehicle-checklist-repository";
+import { InMemoryFuelRepository } from "@/modules/fuel/repositories/in-memory/in-memory-fuel-repository";
 import { InMemoryDeliveryRepository } from "@/modules/delivery/repositories/in-memory/in-memory-delivery-repository";
 
 import { InMemoryDriverRepository } from "@/modules/driver/repositories/in-memory/in-memory-driver-repository";
@@ -87,6 +90,13 @@ function makeContext() {
   const driverRepository = new InMemoryDriverRepository();
   const vehicleRepository = new InMemoryVehicleRepository();
   const userRepository = new InMemoryUserRepository();
+  const businessRepository = new InMemoryBusinessRepository();
+
+  // Company A operates in Manaus (one hour behind Brasília); B has no row.
+  businessRepository.business.push({
+    id: A,
+    timezone: "America/Manaus",
+  } as never);
 
   userRepository.user.push(
     { id: DISPATCHER_A, role: "BUSINESS_ADMIN", businessId: A } as User,
@@ -130,6 +140,7 @@ function makeContext() {
       routeRepository,
       userRepository,
       driverRepository,
+      vehicleRepository,
       notificationService,
       outboxStub,
       webhookStub.asService(),
@@ -167,8 +178,15 @@ function makeContext() {
       routeRepository,
       userRepository,
       new InMemoryDriverPositionRepository(),
+      businessRepository,
+      new InMemoryVehicleChecklistRepository(),
+      new InMemoryFuelRepository(),
     ),
-    list: new ListRoutesUseCase(routeRepository, userRepository),
+    list: new ListRoutesUseCase(
+      routeRepository,
+      userRepository,
+      businessRepository,
+    ),
   };
 }
 
@@ -345,7 +363,7 @@ describe("adding stops to a route", () => {
     });
   });
 
-  it("refuses to add to a route that already departed", async () => {
+  it("appends to a route that already departed, at the end of the order (K12)", async () => {
     const route = await plannedRoute([await seedDelivery()]);
 
     await context.release.execute({
@@ -360,20 +378,21 @@ describe("adding stops to a route", () => {
       routeId: route.id,
     });
 
-    const extra = await seedDelivery(A, "Tarde demais");
+    const extra = await seedDelivery(A, "Chegou depois");
 
-    // The driver already has the plan on the screen in their hand. Adding to
-    // it would change what they were told to do without telling them.
-    await expect(
-      context.addStops.execute({
-        userId: DISPATCHER_A,
-        businessId: A,
-        routeId: route.id,
-        deliveryIds: [extra],
-      }),
-    ).rejects.toMatchObject({ statusCode: 409, code: "ROUTE_STATUS_CONFLICT" });
+    // It used to be refused: the driver had the plan in hand and adding to
+    // it changed what they were told without telling them. The plan change
+    // now reaches the driver (announcePlanChange covers a running route), so
+    // the new address joins at the end of what they already have.
+    const added = await context.addStops.execute({
+      userId: DISPATCHER_A,
+      businessId: A,
+      routeId: route.id,
+      deliveryIds: [extra],
+    });
 
-    expect(orderOf(route.id)).toHaveLength(1);
+    expect(orderOf(route.id)).toHaveLength(2);
+    expect(orderOf(route.id)[1]).toBe(added.stops[0].id);
   });
 
   it("refuses the other carrier reaching this route at all", async () => {
@@ -730,6 +749,22 @@ describe("reading routes back", () => {
     });
 
     expect(after.progress).toMatchObject({ total: 2, done: 1 });
+  });
+
+  // Plan of 02/11/2026 (G8, decision D22): the panel prints the route's
+  // times on the company's clock, so the read says which clock that is.
+  it("states the company's zone, the panel's and the driver's alike", async () => {
+    const route = await plannedRoute([]);
+
+    for (const userId of [DISPATCHER_A, DRIVER_USER_A]) {
+      const read = await context.get.execute({
+        userId,
+        businessId: A,
+        routeId: route.id,
+      });
+
+      expect(read.timeZone).toBe("America/Manaus");
+    }
   });
 
   it("answers 404 for a route of the other carrier", async () => {

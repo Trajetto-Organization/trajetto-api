@@ -1,7 +1,10 @@
 import { Prisma } from "@prisma/client";
 
 import database from "@/../infra/database";
-import { escapeLikePattern } from "@/shared/utils/like-pattern";
+import {
+  escapeLikePattern,
+  insensitiveEquals,
+} from "@/shared/utils/like-pattern";
 import {
   DELIVERY_SEARCH_TEXT,
   SEARCH_FIELD_SEPARATOR,
@@ -45,7 +48,7 @@ const rowInclude = {
     },
   },
   delivery: { select: { id: true, recipient_name: true, status: true } },
-  route: { select: { id: true, code: true, name: true } },
+  route: { select: { id: true, code: true, name: true, status: true } },
   occurrence: {
     select: {
       id: true,
@@ -86,7 +89,14 @@ function toRow(payload: RowPayload): SupportTicketRow {
           status: delivery.status,
         }
       : null,
-    route: route ? { id: route.id, code: route.code, name: route.name } : null,
+    route: route
+      ? {
+          id: route.id,
+          code: route.code,
+          name: route.name,
+          status: route.status,
+        }
+      : null,
     occurrence: occurrence
       ? {
           id: occurrence.id,
@@ -253,6 +263,27 @@ class SupportTicketRepository implements ISupportTicketRepository {
         { created_at: "desc" },
         { id: "desc" },
       ],
+    })) as SupportTicket | null;
+  }
+
+  async findEmptyOpenDriverTicket(
+    businessId: string,
+    driverId: string,
+    subject: string,
+  ): Promise<SupportTicket | null> {
+    // A driver holds a handful of open tickets: the driverId index narrows
+    // it, the rest is a filter over those rows.
+    return (await this.prisma.supportTicket.findFirst({
+      where: {
+        businessId,
+        driverId,
+        kind: "DRIVER",
+        status: "OPEN",
+        last_message_at: null,
+        // Escaped: the value is an ILIKE pattern underneath (like-pattern.ts).
+        subject: insensitiveEquals(subject),
+      },
+      orderBy: [{ created_at: "desc" }, { id: "desc" }],
     })) as SupportTicket | null;
   }
 
@@ -466,14 +497,15 @@ class SupportTicketRepository implements ISupportTicketRepository {
   }
 
   /**
-   * The search's joined arms resolved to ids first, each through an index
-   * (docs/desempenho/banco-2026-10.md §9, limit 3): the recipient through
-   * the deliveries' trigram index (rechecked on the column), the driver's
-   * name over the company's drivers. The inbox then ORs `deliveryId IN` and
-   * `driverId IN` (the ticket's own copy of its thread's driver) with the
-   * number and the subject, columns of the ticket itself, instead of joining
-   * two tables for every ticket the company ever had. Null keeps the joined
-   * search: a short term, or a recipient too common for a list of ids.
+   * The search's joined arms resolved to ids first, each through an index (the
+   * database pass of 07/10/2026, its §9 limit 3; docs/desempenho/README.md):
+   * the recipient through the deliveries' trigram index (rechecked on the
+   * column), the driver's name over the company's drivers. The inbox then ORs
+   * `deliveryId IN` and `driverId IN` (the ticket's own copy of its thread's
+   * driver) with the number and the subject, columns of the ticket itself,
+   * instead of joining two tables for every ticket the company ever had. Null
+   * keeps the joined search: a short term, or a recipient too common for a list
+   * of ids.
    */
   private async resolveSearchMatches(
     props: ListSupportTicketsProps,

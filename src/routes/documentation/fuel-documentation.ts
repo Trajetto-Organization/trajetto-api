@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { responseDateTime } from "./response-date";
 
 import { createFuelSchema } from "@/schemas/create-fuel-schema";
 import { updateFuelSchema } from "@/schemas/update-fuel-schema";
@@ -8,8 +9,10 @@ import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-sch
 import { updateDeleteVehicleSchema } from "@/schemas/update-delete-vehicle-schema";
 
 import { presignedPhotoSchema } from "@/schemas/presigned-photos-schema";
+import { FUEL_ALERTS } from "@/modules/fuel/usecases/list-fuel/fuel-list";
 import { idempotencyHeaders } from "./idempotency-documentation";
 import { errorResponse, internalErrorResponse } from "./common-responses";
+import { fieldError } from "@/shared/validation/field-error";
 
 const fuelSchemas = {
   // What the app really POSTs: the form fields the controller validates with
@@ -38,16 +41,18 @@ const fuelSchemas = {
   }),
   getPreviousFuelQuery: z.object({
     date: z
-      .string({
-        required_error: "A data do abastecimento atual é obrigatória!",
-      })
+      .string(
+        fieldError({
+          required: "A data do abastecimento atual é obrigatória!",
+        }),
+      )
       // An unparseable date reached Prisma as Invalid Date: a 500.
       .refine((value) => !Number.isNaN(Date.parse(value)), {
         message: "A data do abastecimento atual é inválida.",
       })
       .describe("Data do abastecimento atual; volta o último anterior a ela."),
     businessId: z
-      .string({ required_error: "O ID da empresa é obrigatório!" })
+      .string(fieldError({ required: "O ID da empresa é obrigatório!" }))
       .uuid("O ID da empresa deve ser um UUID válido!")
       .describe("A empresa do veículo."),
   }),
@@ -95,17 +100,54 @@ const fuelRow = z.object({
       "Situação da análise da foto: pending, analyzing, verified, mismatch, fraud, unreadable, error ou skipped.",
     ),
   notes: z.string().nullable().describe("Observações."),
-  refueling_date: z
-    .union([z.string(), z.date()])
-    .describe("Data e hora do abastecimento (ISO 8601)."),
+  refueling_date: responseDateTime().describe(
+    "Data e hora do abastecimento (ISO 8601).",
+  ),
   created_from: z
     .string()
     .describe("Origem do registro: MOBILE_APP ou WEB_DASHBOARD."),
+  // 05/11/2026 (20261105130000).
+  alerts: z
+    .array(z.enum(FUEL_ALERTS))
+    .describe(
+      "O que o escritório deve olhar neste abastecimento; vazio quando nada. RECENT_REFUEL: outro abastecimento do mesmo veículo a menos de 30 minutos deste, antes ou depois, decidido quando ele foi gravado (e de novo quando uma edição muda a data ou o veículo). Os gravados antes de 05/11/2026 não foram marcados.",
+    ),
+  recent_refuel_reason: z
+    .string()
+    .nullable()
+    .describe(
+      "O motivo que o motorista informou ao confirmar o segundo abastecimento em menos de 30 minutos; null quando não confirmou (escritório, fila offline, app antigo) ou sem RECENT_REFUEL.",
+    ),
+  recent_refuel_previous_at: responseDateTime()
+    .nullable()
+    .describe(
+      "A data e hora (ISO 8601) do outro abastecimento que gerou RECENT_REFUEL; null sem o alerta. Fica como estava mesmo se aquele abastecimento for excluído depois.",
+    ),
   businessId: z.string().describe("Empresa."),
   branchId: z.string().describe("Filial."),
   vehicleId: z.string().describe("Veículo."),
   driverId: z.string().describe("Motorista."),
   fuelTypeId: z.string().describe("Tipo de combustível."),
+  // Contract C3 (03/11/2026).
+  routeId: z
+    .string()
+    .nullable()
+    .describe(
+      "Rota em que o abastecimento foi feito pelo app (plano de 02/11/2026, C5/F3); null fora de rota.",
+    ),
+  route: z
+    .object({
+      id: z.string().describe("ID da rota."),
+      code: z
+        .string()
+        .describe(
+          'Número da rota, como texto (ex.: "318"): o "Rota 318" das telas.',
+        ),
+    })
+    .nullable()
+    .describe(
+      "A rota em que foi feito, para o link da linha. Só uma rota desta empresa é nomeada: null fora de rota (e para uma rota que não seja da empresa do registro).",
+    ),
   branch: z
     .object({
       corporate_reason: z.string().describe("Razão social da filial."),
@@ -130,10 +172,8 @@ const fuelRow = z.object({
     .optional(),
   latitude: z.number().nullable().optional().describe("Latitude do posto."),
   longitude: z.number().nullable().optional().describe("Longitude do posto."),
-  created_at: z.union([z.string(), z.date()]).describe("Criação do registro."),
-  updated_at: z
-    .union([z.string(), z.date()])
-    .describe("Última alteração do registro."),
+  created_at: responseDateTime().describe("Criação do registro."),
+  updated_at: responseDateTime().describe("Última alteração do registro."),
 });
 
 const fuelResponses = {
@@ -152,9 +192,9 @@ const fuelResponses = {
   previousFuelReading: z
     .object({
       vehicleId: z.string().describe("Veículo."),
-      refueling_date: z
-        .union([z.string(), z.date()])
-        .describe("Data e hora do abastecimento anterior."),
+      refueling_date: responseDateTime().describe(
+        "Data e hora do abastecimento anterior.",
+      ),
       current_mileage: z
         .number()
         .describe("Quilometragem no abastecimento anterior."),
@@ -169,7 +209,7 @@ const fuelResponses = {
   // Refusals with their codes. `errorResponse` keeps `code` in the body: a
   // schema that listed only `message` stripped it on the way out.
   createFuelErrors: errorResponse.describe(
-    "Recusa com `code` (também no header x-error-code): VALIDATION_ERROR, PHOTO_REQUIRED, USER_NOT_FOUND, VEHICLE_NOT_FOUND, DRIVER_NOT_FOUND ou FUEL_TYPE_NOT_FOUND (inexistente ou de outra empresa, a mesma resposta), VEHICLE_MILEAGE_INVALID (a quilometragem não se encaixa no histórico do veículo), VEHICLE_NOT_FUELABLE (veículo que não está ativo nem em rota), REFUELING_DATE_IN_FUTURE, LOCATION_REQUIRED, LOCATION_ORIGINAL_REQUIRED ou LOCATION_ADJUSTMENT_TOO_FAR (o ponto ajustado à mão está a mais de 500 m do capturado pelo GPS).",
+    "Recusa com `code` (também no header x-error-code): VALIDATION_ERROR, PHOTO_REQUIRED, USER_NOT_FOUND, VEHICLE_NOT_FOUND, DRIVER_NOT_FOUND ou FUEL_TYPE_NOT_FOUND (inexistente ou de outra empresa, a mesma resposta), VEHICLE_MILEAGE_INVALID (a quilometragem não se encaixa no histórico do veículo), VEHICLE_NOT_FUELABLE (veículo que não está ativo nem em rota), REFUELING_DATE_IN_FUTURE, BRANCH_REQUIRED (o gestor deixou a filial em branco e nada a resolve: nem o veículo, nem o motorista informado, nem uma única filial ativa da empresa; para o abastecimento do motorista, a mesma falta responde 409), DRIVER_REQUIRED, LOCATION_REQUIRED, LOCATION_ORIGINAL_REQUIRED ou LOCATION_ADJUSTMENT_TOO_FAR (o ponto ajustado à mão está a mais de 500 m do capturado pelo GPS).",
   ),
   updateFuelErrors: errorResponse.describe(
     "Recusa com `code`: VALIDATION_ERROR, USER_NOT_FOUND, VEHICLE_NOT_FOUND, DRIVER_NOT_FOUND ou FUEL_TYPE_NOT_FOUND (vínculo inexistente ou de outra empresa, a mesma resposta), VEHICLE_MILEAGE_INVALID (a quilometragem não se encaixa no histórico do veículo), VEHICLE_NOT_FUELABLE (mover para um veículo que não está ativo nem em rota) ou REFUELING_DATE_IN_FUTURE.",
@@ -177,7 +217,7 @@ const fuelResponses = {
   // The use case's 404s; the route guards add theirs (TENANT_NOT_FOUND,
   // BRANCH_NOT_FOUND) to the same status in the published document.
   createNotFound: errorResponse.describe(
-    "BRANCH_NOT_FOUND: a filial não existe ou é de outra empresa (a mesma resposta, também para o MASTER). BUSINESS_NOT_FOUND: a empresa informada não existe.",
+    "BRANCH_NOT_FOUND: a filial não existe ou é de outra empresa (a mesma resposta, também para o MASTER). DELIVERY_ROUTE_NOT_FOUND: a rota enviada (`routeId`) não existe ou é de outra empresa (a mesma resposta). BUSINESS_NOT_FOUND: a empresa informada não existe.",
   ),
   writeForbidden: errorResponse.describe(
     "PERMISSION_DENIED, MODULE_NOT_ENABLED, TENANT_INACTIVE, TENANT_ACCESS_DENIED, VEHICLE_NOT_ASSIGNED_TO_DRIVER (o motorista só abastece o veículo em que é responsável ou o da sua rota liberada ou em andamento), DRIVER_CANNOT_UPDATE_FUEL ou DRIVER_CANNOT_DELETE_FUEL (motoristas só criam).",
@@ -201,15 +241,36 @@ const fuelResponses = {
     "VALIDATION_ERROR, BUSINESS_NOT_IDENTIFIED (o MASTER não informou a empresa), USER_NOT_FOUND ou NOTHING_TO_EXPORT (o filtro não trouxe nenhum abastecimento).",
   ),
 
-  // The two refusals the app's outbox has to tell apart from a plain 400.
+  // The refusals the app's outbox has to tell apart from a plain 400.
   // `code` is listed so the serializer keeps it: the outbox branches on it.
   writeConflict: z
     .object({
-      code: z.string().describe("SUBMISSION_OWNER_MISMATCH ou BRANCH_INACTIVE"),
+      code: z
+        .string()
+        .describe(
+          "SUBMISSION_OWNER_MISMATCH, BRANCH_REQUIRED, BRANCH_INACTIVE ou FUEL_RECENT_REFUEL",
+        ),
       message: z.string(),
+      // Sent by replyFuelWriteError with FUEL_RECENT_REFUEL only.
+      previous_refuel: z
+        .object({
+          id: z.string().describe("ID do outro abastecimento."),
+          refueling_date: z.string().describe("Data e hora dele (ISO 8601)."),
+          liters_amount: z.number().describe("Litros abastecidos nele."),
+          current_mileage: z
+            .number()
+            .describe("Quilometragem registrada nele."),
+        })
+        .optional()
+        .describe(
+          "FUEL_RECENT_REFUEL: o outro abastecimento do veículo, o mais próximo da data deste, para o app mostrar na pergunta.",
+        ),
     })
     .describe(
-      "SUBMISSION_OWNER_MISMATCH: a chave de idempotência já foi usada por outro motorista desta empresa — gere uma chave nova e reenvie; repetir a mesma nunca passa. BRANCH_INACTIVE: a filial do abastecimento está desativada.",
+      "SUBMISSION_OWNER_MISMATCH: a chave de idempotência já foi usada por outro motorista desta empresa — gere uma chave nova e reenvie; repetir a mesma nunca passa. " +
+        "BRANCH_REQUIRED: não há filial ATIVA para registrar o abastecimento do motorista: nem a do veículo, nem a dele, nem uma única filial ativa da empresa (as desativadas são puladas). Com `routeId`, quem opera as entregas é avisado uma vez por rota (`route.record_branch_missing`, na caixa de entrada e na atividade da rota); reenvie depois que o gestor corrigir a filial: os reenvios não repetem o aviso. " +
+        "BRANCH_INACTIVE: a filial do abastecimento do gestor está desativada. O abastecimento do motorista nunca vai para uma filial desativada: a filial que o app dele envia no corpo é ignorada. " +
+        "FUEL_RECENT_REFUEL: o veículo já tem outro abastecimento a menos de 30 minutos da data deste (antes ou depois), e o motorista não confirmou. Só para o motorista cujo app manda `contract` 5 ou maior em `x-trajetto-client-version` e não é a fila offline (sem X-Client-Queued-At); o app de versão anterior, o reenvio da fila e o escritório têm o abastecimento gravado com o alerta RECENT_REFUEL. `previous_refuel` traz o outro abastecimento. Nada foi gravado e a foto continua no storage: reenvie o mesmo corpo, com a mesma chave e a mesma foto, mais `confirm_recent: true` e `recent_reason` (3 a 300 caracteres). O reenvio de um abastecimento já gravado é respondido com ele antes dessa regra.",
     ),
   driverInactive: z
     .object({
@@ -218,6 +279,15 @@ const fuelResponses = {
     })
     .describe(
       "O motorista informado está inativo. Definitivo: repetir não muda a resposta.",
+    ),
+  // The create's 422: an inactive driver, or a route that cannot carry it.
+  createUnprocessable: z
+    .object({
+      code: z.string().describe("DRIVER_INACTIVE ou ROUTE_LINK_MISMATCH"),
+      message: z.string(),
+    })
+    .describe(
+      "DRIVER_INACTIVE: o motorista informado está inativo. ROUTE_LINK_MISMATCH: a rota informada é de outro motorista, ainda não tem veículo ou tem outro veículo (plano de 02/11/2026, C5/F3). Definitivos: repetir não muda a resposta.",
     ),
   // The edit's only conflict: it carries no idempotency key to collide with.
   branchInactive: z

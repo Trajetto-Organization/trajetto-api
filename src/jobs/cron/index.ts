@@ -5,7 +5,7 @@ import { cleanupNotificationPipelineJob } from "./cleanup-notification-pipeline-
 
 import { cleanupAIPipelineJob } from "./cleanup-ai-pipeline-job";
 import { cleanupUserHistoryJob } from "./cleanup-user-history-job";
-import { driverPositionPartitionsJob } from "./driver-position-partitions-job";
+import { partitionMaintenanceJob } from "./partition-maintenance-job";
 import { cleanupOrphanUploadsJob } from "./cleanup-orphan-uploads-job";
 import { checkPushReceiptsJob } from "./check-push-receipts-job";
 import { cleanupWebhookDeliveriesJob } from "./cleanup-webhook-deliveries-job";
@@ -16,6 +16,15 @@ import { reconcileRecordAnalysisJob } from "./reconcile-record-analysis-job";
 import { closeAbandonedImportsJob } from "./close-abandoned-imports-job";
 import { escalateOccurrenceAuthorizationsJob } from "./escalate-occurrence-authorizations-job";
 import { repairUnticketedMessagesJob } from "./repair-unticketed-messages-job";
+import { geocodeDeliveriesJob } from "./geocode-deliveries-job";
+import { alertRoutesLeftOpenJob } from "./alert-routes-left-open-job";
+import { snapshotQueryStatsJob } from "./snapshot-query-stats-job";
+import { purgeOpsSeriesJob } from "./purge-ops-series-job";
+import { cleanupDeliveryEventSubmissionsJob } from "./cleanup-delivery-event-submissions-job";
+import { cleanupBackgroundJobsJob } from "./cleanup-background-jobs-job";
+import { remindBusinessPurgeJob } from "./remind-business-purge-job";
+import { purgeChatMessagesJob } from "./purge-chat-messages-job";
+import { tenantDayRollupJob } from "./tenant-day-rollup-job";
 
 /**
  * It records all the application's cron jobs.
@@ -32,16 +41,29 @@ function registerCronJobs(): void {
   scheduler.registerJob(cleanupAIPipelineJob);
   scheduler.registerJob(cleanupUserHistoryJob);
 
+  // Finished durable jobs past their retention (plano-escala F3-22): 30
+  // days a success, 90 a failure.
+  scheduler.registerJob(cleanupBackgroundJobsJob);
+
+  // Daily: the administrators of a company whose purge is 7 days away are
+  // reminded, while a MASTER can still reactivate it (F3-25).
+  scheduler.registerJob(remindBusinessPurgeJob);
+
   // Settled webhook rows past the replay window (+1 day of grace).
   scheduler.registerJob(cleanupWebhookDeliveriesJob);
+
+  // Nightly (04:25): the chat's messages past CHAT_MESSAGE_RETENTION_DAYS,
+  // with their attachments. Opt-in: unset, it deletes nothing (U-08).
+  scheduler.registerJob(purgeChatMessagesJob);
 
   // API usage counts past 400 days (the screen reads 90): the table had no
   // bound at all (db-perf 10/2026).
   scheduler.registerJob(cleanupApiUsageJob);
 
-  // Both halves of one invariant: a partition for every day we care
-  // about. A missing one is not a warning — the insert is refused.
-  scheduler.registerJob(driverPositionPartitionsJob);
+  // Both halves of one invariant, for every partitioned table of the
+  // registry: a partition for every grain we care about, none past the
+  // retention. A missing one is not a warning — the insert is refused.
+  scheduler.registerJob(partitionMaintenanceJob);
 
   // Dry-run unless UPLOAD_ORPHAN_GC says otherwise: counts stored objects
   // that never became a row, and removes them only when switched on.
@@ -74,6 +96,32 @@ function registerCronJobs(): void {
   // Every minute, during the ticket rollout: messages the previous image
   // wrote without a ticket are filed (decision 14.5, design §9.3).
   scheduler.registerJob(repairUnticketedMessagesJob);
+
+  // Every minute: the address points of new deliveries, within the day's
+  // provider budget (plan of 02/11/2026, E1).
+  scheduler.registerJob(geocodeDeliveriesJob);
+
+  // Hourly (:07): a route left "Em andamento" since an earlier day or for
+  // more than 16 h goes to the admins, once (plan of 02/11/2026, K11, D26).
+  scheduler.registerJob(alertRoutesLeftOpenJob);
+
+  // Hourly (:13): the hour's cost of the top statements, from
+  // pg_stat_statements into pgss_snapshot (plano-escala F1-12). A no-op
+  // with a warning until the server preloads the library.
+  scheduler.registerJob(snapshotQueryStatsJob);
+
+  // Nightly (04:40): the series past their retention (30 days), ops_sample
+  // and pgss_snapshot, in batches and partial when rows are left (F1-13).
+  scheduler.registerJob(purgeOpsSeriesJob);
+
+  // Nightly (04:45): the trail's submission keys past their retention (90
+  // days), in batches and partial when rows are left (F2-14).
+  scheduler.registerJob(cleanupDeliveryEventSubmissionsJob);
+
+  // Every 15 min (:09, :24, :39, :54): each company's closed days of
+  // deliveries into tenant_day_count, for the dashboard (F4-21). Partial
+  // while the history is still being filled.
+  scheduler.registerJob(tenantDayRollupJob);
 }
 
 export { registerCronJobs };

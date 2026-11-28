@@ -7,20 +7,12 @@
  */
 
 type SupportTicketKind =
-  | "OCCURRENCE"
-  | "DELIVERY"
-  | "ROUTE"
-  | "DRIVER"
-  | "LEGACY";
+  "OCCURRENCE" | "DELIVERY" | "ROUTE" | "DRIVER" | "LEGACY";
 
 type SupportTicketStatus = "OPEN" | "CLOSED";
 
 type SupportTicketOpenedVia =
-  | "OCCURRENCE_REPORT"
-  | "DRIVER_APP"
-  | "PANEL"
-  | "LEGACY_ROUTING"
-  | "MIGRATION";
+  "OCCURRENCE_REPORT" | "DRIVER_APP" | "PANEL" | "LEGACY_ROUTING" | "MIGRATION";
 
 type SupportTicketOutcome = "RESOLVED" | "APPROVED" | "DENIED" | "MIGRATED";
 
@@ -37,11 +29,7 @@ type SupportTicketEventType =
 type SupportTicketActorKind = "USER" | "DRIVER_APP" | "SYSTEM";
 
 type OccurrenceAuthorizationState =
-  | "NOT_REQUIRED"
-  | "PENDING"
-  | "APPROVED"
-  | "DENIED"
-  | "SUPERSEDED";
+  "NOT_REQUIRED" | "PENDING" | "APPROVED" | "DENIED" | "SUPERSEDED";
 
 /** The row, exactly as stored. */
 interface SupportTicket {
@@ -86,7 +74,17 @@ interface SupportTicketRow extends SupportTicket {
   /** The driver's app account; null when he has none. */
   driverUserId: string | null;
   delivery: { id: string; recipient_name: string; status: string } | null;
-  route: { id: string; code: number; name: string | null } | null;
+  /**
+   * `status` says when the route behind a ROUTE ticket was cancelled or has
+   * ended. Null with a `routeId` gone: the route was removed (an import
+   * reversal) and the FK set it null; the subject keeps its name.
+   */
+  route: {
+    id: string;
+    code: number;
+    name: string | null;
+    status: string;
+  } | null;
   occurrence: {
     id: string;
     typeName: string;
@@ -142,10 +140,7 @@ interface CreateSupportTicketEventProps {
 
 type SupportTicketStatusFilter = "OPEN" | "CLOSED" | "ALL";
 type SupportTicketScope =
-  | "ALL"
-  | "MINE"
-  | "UNASSIGNED"
-  | "PENDING_AUTHORIZATION";
+  "ALL" | "MINE" | "UNASSIGNED" | "PENDING_AUTHORIZATION";
 
 interface ListSupportTicketsProps {
   businessId: string;

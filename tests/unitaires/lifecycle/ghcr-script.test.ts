@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -11,7 +11,7 @@ import {
 } from "./support/shell-harness";
 
 /**
- * .github/scripts/ghcr.sh: how deploy.yml reads and moves tags in GHCR.
+ * .github/scripts/ghcr.sh: how the CI reads and moves tags in GHCR.
  *
  * Every query was `docker buildx imagetools inspect … 2>/dev/null || true`:
  * a 5xx, a timeout or a missing login read as "this tag does not exist". The
@@ -237,6 +237,138 @@ describe.skipIf(!hasShell("bash"))("ghcr.sh", { timeout: 30_000 }, () => {
     });
   });
 
+  // For the jobs that can go on without GHCR (the AI pytest, the audit base
+  // of staging's Changes): docker/login-action failed them before their
+  // fallback ran.
+  describe("login", () => {
+    const TOKEN = "ghs_token-never-on-the-command-line";
+    const login = () => {
+      const result = run("bash", SCRIPT, ["login"], {
+        bin: box.bin,
+        env: { GHCR_USER: "trajetto-bot", GHCR_TOKEN: TOKEN },
+      });
+
+      return { ...result, calls: box.calls("docker") };
+    };
+
+    it("logs in once, with the token through stdin", () => {
+      // What docker read on stdin.
+      box.stub("docker", `cat > "${box.root}/stdin"\necho "Login Succeeded"`);
+
+      const result = login();
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.calls).toEqual([
+        "docker login ghcr.io --username trajetto-bot --password-stdin",
+      ]);
+      expect(readFileSync(`${box.root}/stdin`, "utf8")).toBe(TOKEN);
+      expect(result.stdout + result.stderr).not.toContain(TOKEN);
+    });
+
+    it("tries a failed login again, and ends with a warning, never an error, when it keeps failing", () => {
+      docker([
+        [1, "", "Error response from daemon: Get https://ghcr.io/v2/: 503"],
+        [0, "Login Succeeded", ""],
+      ]);
+
+      const flaky = login();
+
+      expect(flaky.status, flaky.stderr).toBe(0);
+      expect(flaky.calls).toHaveLength(2);
+      expect(flaky.stderr).toMatch(
+        /::warning::GHCR: falha ao entrar no ghcr\.io \(tentativa 1 de 5\)/,
+      );
+
+      docker([
+        [1, "", "Error response from daemon: Get https://ghcr.io/v2/: 503"],
+      ]);
+
+      const down = login();
+
+      expect(down.status).toBe(1);
+      expect(down.stderr).toMatch(
+        /::warning::GHCR indisponível: não deu para entrar no ghcr\.io depois de 5 tentativas/,
+      );
+      expect(down.stderr).not.toContain("::error::");
+      expect(down.stdout + down.stderr).not.toContain(TOKEN);
+    });
+  });
+
+  /**
+   * The labels of an image (plano-escala F3-31c): the realtime's deploy
+   * reads the source and the contract epoch of the image it runs and of
+   * the new one, and "no such tag" must stay apart from "GHCR is down"
+   * here too.
+   */
+  describe("labels", () => {
+    const API_REF =
+      "ghcr.io/trajetto-organization/trajetto-api:staging-realtime";
+    const NAMES = [
+      "trajetto.realtime-source",
+      "trajetto.contract-epoch",
+      "org.opencontainers.image.created",
+    ];
+
+    /** docker answering one fixed line (the replies table splits on `|`). */
+    function dockerPrints(line: string) {
+      writeFileSync(`${box.root}/line`, `${line}`);
+      box.stub("docker", `cat "${box.root}/line"; echo`);
+    }
+
+    it("prints the labels in the order asked, joined by `|`, asking once", () => {
+      dockerPrints("abc123|10|2026-11-19T12:00:00.000Z");
+
+      const result = ghcr("labels", API_REF, ...NAMES);
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toBe("abc123|10|2026-11-19T12:00:00.000Z\n");
+      expect(result.calls).toEqual([
+        `docker buildx imagetools inspect ${API_REF} --format {{index .Image.Config.Labels "trajetto.realtime-source"}}|{{index .Image.Config.Labels "trajetto.contract-epoch"}}|{{index .Image.Config.Labels "org.opencontainers.image.created"}}`,
+      ]);
+    });
+
+    it("keeps an absent label as an empty field: an image from before the labels", () => {
+      dockerPrints("||2026-11-01T00:00:00.000Z");
+
+      const result = ghcr("labels", API_REF, ...NAMES);
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toBe("||2026-11-01T00:00:00.000Z\n");
+    });
+
+    it("answers nothing, at once, when the tag does not exist", () => {
+      docker([[1, "", "ERROR: MANIFEST_UNKNOWN: manifest unknown"]]);
+
+      const result = ghcr("labels", API_REF, ...NAMES);
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toBe("");
+      expect(result.calls).toHaveLength(1);
+    });
+
+    it("tries a transport error again, and fails naming GHCR when it persists", () => {
+      docker([[1, "", "ERROR: 503 Service Unavailable"]]);
+
+      const result = ghcr("labels", API_REF, ...NAMES);
+
+      expect(result.status).toBe(1);
+      expect(result.calls).toHaveLength(5);
+      expect(result.stderr).toContain(
+        `::error::GHCR indisponível: não deu para ler os labels de ${API_REF}`,
+      );
+    });
+
+    it("refuses a label name that would break the template", () => {
+      docker([[0, "x", ""]]);
+
+      for (const name of ['a"}}{{.', "a b", ""]) {
+        expect(ghcr("labels", API_REF, name).status, name).toBe(2);
+      }
+
+      expect(box.calls("docker")).toEqual([]);
+    });
+  });
+
   it("refuses a call it does not know", () => {
     docker([[0, DIGEST, ""]]);
 
@@ -244,7 +376,9 @@ describe.skipIf(!hasShell("bash"))("ghcr.sh", { timeout: 30_000 }, () => {
       [],
       ["digest"],
       ["tag", TARGET_ONLY],
+      ["login", REF],
       ["inspect", REF],
+      ["labels", REF],
     ]) {
       const result = ghcr(...args);
 

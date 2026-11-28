@@ -19,6 +19,7 @@ class ListMyDeliveriesController {
       deliveredTypes,
       pauseTypes,
       journey,
+      settings,
     } = await listMyDeliveriesUseCase.execute({
       userId: id,
       businessId,
@@ -31,6 +32,7 @@ class ListMyDeliveriesController {
       delivered_types: deliveredTypes,
       pause_types: pauseTypes,
       journey,
+      settings,
     });
   }
 }

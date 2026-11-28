@@ -15,11 +15,12 @@ import { AppError } from "@/shared/errors/AppError";
 import { WebhookFanOutService } from "@/shared/integration/webhook-fan-out-service";
 import { deliveryAssignedPayload } from "@/shared/integration/announce";
 
-import { isVehicleOutOfOperation } from "@/shared/vehicle/vehicle-rules";
 import { ROUTE_STATUS_LABELS, isStopOpen } from "@/shared/route/route-rules";
 
 import { assertRoutePlan } from "../shared/route-plan";
 import { assertDriverStillActive } from "../shared/driver-still-active";
+import { assertCrewFit } from "../shared/route-crew";
+import { RouteBranchGuard } from "../shared/route-branch-guard";
 import {
   announcePlanChange,
   planWriteFailure,
@@ -29,7 +30,6 @@ import {
   RouteDriverInactiveError,
   RouteNotFoundError,
   RouteStatusConflictError,
-  RouteVehicleUnavailableError,
 } from "../errors/route-errors";
 
 import type { Route } from "../../dtos/route-dto";
@@ -84,6 +84,11 @@ class UpdateRouteUseCase {
     private notificationService: NotificationService,
     @inject("WebhookFanOutService")
     private webhooks: WebhookFanOutService,
+    // Contract C1 (03/11/2026): a released route's new crew must still let
+    // the checklist be filed. Optional so callers built before it keep
+    // working; the container always provides it.
+    @inject(RouteBranchGuard)
+    private branchGuard?: Pick<RouteBranchGuard, "assertResolvable">,
   ) {}
 
   async execute({
@@ -125,13 +130,8 @@ class UpdateRouteUseCase {
         );
       }
 
-      if (findDriver.status !== "ACTIVE") {
-        throw new AppError(
-          new RouteDriverInactiveError().message,
-          400,
-          "ROUTE_DRIVER_INACTIVE",
-        );
-      }
+      // The same rule as the create (route-crew).
+      assertCrewFit({ driver: findDriver });
     }
 
     if (vehicleId) {
@@ -141,13 +141,19 @@ class UpdateRouteUseCase {
         throw new AppError("Veículo não encontrado.", 404, "VEHICLE_NOT_FOUND");
       }
 
-      if (isVehicleOutOfOperation(findVehicle.status)) {
-        throw new AppError(
-          new RouteVehicleUnavailableError().message,
-          400,
-          "ROUTE_VEHICLE_UNAVAILABLE",
-        );
-      }
+      assertCrewFit({ vehicle: findVehicle });
+    }
+
+    // Decision D10 (plan of 02/11/2026): a released route keeps a vehicle.
+    // Releasing requires one (canReleaseRoute), and the departure checklist
+    // the app holds "Iniciar rota" for (C4) is about it; clearing it after
+    // the release left the driver a route with no truck to inspect.
+    if (vehicleId === null && findRoute.status === "RELEASED") {
+      throw new AppError(
+        "Uma rota liberada precisa de veículo. Para retirá-lo, volte a rota ao planejamento.",
+        400,
+        "ROUTE_VEHICLE_REQUIRED",
+      );
     }
 
     /**
@@ -180,6 +186,17 @@ class UpdateRouteUseCase {
     const reassigned =
       (driverId !== undefined && driverId !== findRoute.driverId) ||
       (vehicleId !== undefined && vehicleId !== findRoute.vehicleId);
+
+    // The release asked whether the checklist's branch resolves (C1); a new
+    // vehicle or driver on the released route must not undo that. A planned
+    // route is asked when it is released.
+    if (reassigned && findRoute.status === "RELEASED") {
+      await this.branchGuard?.assertResolvable({
+        businessId,
+        vehicleId: vehicleId !== undefined ? vehicleId : findRoute.vehicleId,
+        driverId: driverId ?? findRoute.driverId,
+      });
+    }
 
     try {
       const updated = await database.$transaction(async (tx) => {
@@ -248,6 +265,7 @@ class UpdateRouteUseCase {
         planVersion: updated.plan_version,
         status: updated.status,
         driverId: updated.driverId,
+        actorId: userId,
       });
 
       this.notificationService.createActivityIfEnabled({

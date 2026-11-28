@@ -1,6 +1,10 @@
 import { inject, injectable } from "tsyringe";
 
 import { IDashboardRepository } from "../../repositories/IDashboard-repository";
+import type {
+  DashboardEntity,
+  PeriodCountBucket,
+} from "../../dtos/dashboard-dto";
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
 
@@ -36,11 +40,23 @@ import {
   visibleDashboardEntities,
   type DashboardModule,
 } from "../shared/dashboard-entities";
+import {
+  dashboardRollupMode,
+  deliveriesFromRollup,
+  readWithRollup,
+  shadowDeliveryRollup,
+} from "../shared/delivery-rollup";
+import {
+  overviewVariant,
+  readDashboardNumbers,
+  type OverviewVisibility,
+} from "../shared/dashboard-snapshot";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
 import { AppError } from "@/shared/errors/AppError";
 import { boundedAll } from "@/shared/utils/bounded-all";
 import type { SnapshotCache } from "@/shared/cache/snapshot-cache";
+import type { TenantSnapshot } from "@/shared/cache/tenant-snapshot";
 
 /** Six trend months: the current one and the five before it. */
 const TREND_MONTHS = 6;
@@ -61,6 +77,58 @@ const MASTER_OVERVIEW_TTL_MS = 60 * 1000;
 type OverviewNumbers = Omit<DashboardOverviewResponse, "recentActivity">;
 
 type Viewer = NonNullable<Awaited<ReturnType<IUserRepository["findUserById"]>>>;
+
+type Entitlements = NonNullable<DashboardOverviewRequest["entitlements"]>;
+
+/**
+ * What the overview shows this viewer, and nothing else about them: the
+ * numbers are computed from it and the company alone, so it is also what
+ * tells two copies of a company's overview apart (F4-23).
+ *
+ * A permission is what a PERSON may read, an entitlement is what the
+ * company bought (visibleDashboardEntities). `entitlements` is null for a
+ * MASTER's global view: no single company, nothing to ask.
+ */
+function overviewVisibility(
+  viewer: Viewer,
+  businessId: string | undefined,
+  entitlements: Entitlements | null,
+): OverviewVisibility {
+  const moduleEnabled = entitlements
+    ? (module: DashboardModule) => isModuleEnabled(entitlements, module)
+    : null;
+
+  const deliveriesEnabled = moduleEnabled?.("DELIVERIES") ?? true;
+  const fleetEnabled = moduleEnabled?.("FLEET") ?? true;
+
+  const vehicles = canReadKey(viewer, "vehicle_manage");
+
+  return {
+    entities: visibleDashboardEntities(viewer, moduleEnabled).map(
+      (entity) => entity.key,
+    ),
+    vehicles,
+
+    // Maintenance planning is Frotas; the vehicles themselves are not.
+    maintenance: vehicles && fleetEnabled,
+
+    // Service orders are Frotas: no costs without the module (DASH-MOD-1).
+    costs: fleetEnabled && canReadKey(viewer, "service_order_manage"),
+
+    /**
+     * The operation as it stands, for the company this user works in. Off
+     * in three cases, each for its own reason: no company to summarise
+     * (MASTER), the module was never hired, or this profile may not read
+     * deliveries. A driver never reaches here: the route is a manager
+     * surface.
+     */
+    operation:
+      Boolean(businessId) &&
+      deliveriesEnabled &&
+      !viewer.driverId &&
+      canReadKey(viewer, "delivery_manage"),
+  };
+}
 
 @injectable()
 class GetDashboardOverviewUseCase {
@@ -84,11 +152,19 @@ class GetDashboardOverviewUseCase {
      */
     @inject("MasterOverviewSnapshots")
     private masterSnapshots?: SnapshotCache<OverviewNumbers>,
+    /**
+     * A company's numbers, kept a minute per company and visibility in this
+     * process (F4-23, DASHBOARD_SNAPSHOT_TTL_MS; registered in
+     * src/shared/index.ts). Absent, every view reads them.
+     */
+    @inject("DashboardOverviewSnapshots")
+    private companySnapshots?: TenantSnapshot<OverviewNumbers>,
   ) {}
 
   async execute({
     userId,
     entitlements,
+    refresh = false,
   }: DashboardOverviewRequest): Promise<DashboardOverviewResponse> {
     const user = await this.userRepository.findUserById(userId);
 
@@ -112,10 +188,16 @@ class GetDashboardOverviewUseCase {
         user.role === "MASTER" && this.masterSnapshots
           ? (
               await this.masterSnapshots.read({
-                compute: () => this.numbersFor(user, undefined, null),
+                refresh,
+                compute: () => this.numbersOf(user, undefined, null),
               })
             ).value
-          : await this.numbersFor(user, businessId, entitlements ?? null);
+          : await this.numbersOf(
+              user,
+              businessId,
+              entitlements ?? null,
+              refresh,
+            );
 
       // The five newest lines, without a total: this screen has no pager,
       // and the paginated listing's COUNT walked the whole activity trail
@@ -134,13 +216,17 @@ class GetDashboardOverviewUseCase {
     }
   }
 
-  private async numbersFor(
+  /**
+   * The numbers this viewer is shown: what the profile may see is worked
+   * out on every view, then the company's copy for that visibility is read
+   * (or computed, once per DASHBOARD_SNAPSHOT_TTL_MS in this process).
+   */
+  private async numbersOf(
     user: Viewer,
     businessId: string | undefined,
-    sessionEntitlements: DashboardOverviewRequest["entitlements"] | null,
+    sessionEntitlements: Entitlements | null,
+    refresh = false,
   ): Promise<OverviewNumbers> {
-    const now = new Date();
-
     /**
      * Months, "this month" and "today" in the company's calendar
      * (`Business.timezone`), never the server's: the container runs in UTC,
@@ -150,7 +236,8 @@ class GetDashboardOverviewUseCase {
      * And what this company hired. A MASTER has no single company, so there
      * is nothing to ask — their counts are global and stay that way. The
      * session lookup of this request already loaded the modules
-     * (request.user.entitlements); they are read again only without it.
+     * (request.user.entitlements) and the zone; they are read again only
+     * without it.
      */
     const [timeZone, entitlements] = await Promise.all([
       loadBusinessTimeZone(this.businessRepository, businessId),
@@ -159,50 +246,53 @@ class GetDashboardOverviewUseCase {
         : null,
     ]);
 
+    const visibility = overviewVisibility(user, businessId, entitlements);
+
+    return readDashboardNumbers(this.companySnapshots, {
+      businessId,
+      variant: overviewVariant(visibility, timeZone),
+      compute: () => this.numbersFor(businessId, visibility, timeZone),
+      refresh,
+    });
+  }
+
+  /**
+   * The numbers of a company (every company, for the MASTER) as a
+   * visibility shows them. Nothing here may depend on who asks: two viewers
+   * with the same visibility are handed one computation's numbers.
+   */
+  private async numbersFor(
+    businessId: string | undefined,
+    visibility: OverviewVisibility,
+    timeZone: string,
+  ): Promise<OverviewNumbers> {
+    const now = new Date();
+
     const months = businessMonthWindow(now, timeZone, TREND_MONTHS);
     const currentMonth = months.keys[TREND_MONTHS - 1];
     const lastMonth = months.keys[TREND_MONTHS - 2];
 
-    const moduleEnabled = entitlements
-      ? (module: DashboardModule) => isModuleEnabled(entitlements, module)
-      : null;
-
-    const deliveriesEnabled = moduleEnabled?.("DELIVERIES") ?? true;
-    const fleetEnabled = moduleEnabled?.("FLEET") ?? true;
-
-    const visible = visibleDashboardEntities(user, moduleEnabled);
+    const visible: readonly DashboardEntity[] = visibility.entities;
 
     /**
      * What each card shows (count-comparison): a catalogue's total against
      * the total when the month began, an operation's month so far against
      * last month up to the same point.
      */
-    const stocks = visible.filter((entity) => basisOf(entity.key) === "total");
-    const flows = visible.filter(
-      (entity) => basisOf(entity.key) === "month_to_date",
-    );
+    const stocks = visible.filter((key) => basisOf(key) === "total");
+    const flows = visible.filter((key) => basisOf(key) === "month_to_date");
 
     const lastSpan = samePointLastMonth(now, timeZone);
 
-    const readsVehicles = canReadKey(user, "vehicle_manage");
-    const readsCosts = fleetEnabled && canReadKey(user, "service_order_manage");
-
     /**
-     * The operation as it stands, for the company this user works in.
-     *
-     * Deliberately the same read the monitoring panel makes, on the tower's
-     * documents of the company's business day (decision 7.1): two queries
-     * that are supposed to agree and are written twice eventually disagree.
-     *
-     * Null in three cases, each for its own reason — no company to summarise
-     * (MASTER), the module was never hired, or this profile may not read
-     * deliveries. A driver never reaches here: the route is a manager surface.
+     * The "Entregas" series (plano-escala F4-22, DASHBOARD_ROLLUP_MODE):
+     * with "on", its arm of the two grouped reads below adds up the closed
+     * days the rollup job stored instead of counting months of deliveries;
+     * with "shadow", it is counted live as before and compared on the side.
      */
-    const readsOperation =
-      Boolean(businessId) &&
-      deliveriesEnabled &&
-      !user.driverId &&
-      canReadKey(user, "delivery_manage");
+    const rollupMode = dashboardRollupMode();
+    const showsDeliveries = visible.includes("delivery");
+    const rollup = deliveriesFromRollup(rollupMode, showsDeliveries, now);
 
     /**
      * Every independent read of the screen, two at a time (see
@@ -224,63 +314,77 @@ class GetDashboardOverviewUseCase {
       operationSummary,
     ] = await boundedAll(OVERVIEW_READ_LANES, [
       () =>
-        this.dashboardRepository.countManyByMonth(
-          {
-            entities: visible.map((entity) => entity.key),
-            from: months.start,
-            to: months.end,
-            timeZone,
-          },
-          businessId,
+        readWithRollup(
+          rollup,
+          (deliveries) =>
+            this.dashboardRepository.countManyByMonth(
+              {
+                entities: [...visible],
+                from: months.start,
+                to: months.end,
+                timeZone,
+                deliveriesFromRollup: deliveries,
+              },
+              businessId,
+            ),
+          "overview",
         ),
       () =>
         this.dashboardRepository.countManyTotals(
           {
-            entities: stocks.map((entity) => entity.key),
+            entities: stocks,
             before: currentMonthStart(now, timeZone),
           },
           businessId,
         ),
       async () =>
         flows.length > 0
-          ? this.dashboardRepository.countManyByPeriod(
-              {
-                entities: flows.map((entity) => entity.key),
-                from: lastSpan.from,
-                to: lastSpan.to,
-                granularity: "month",
-                timeZone,
-              },
-              businessId,
+          ? readWithRollup(
+              rollup,
+              (deliveries) =>
+                this.dashboardRepository.countManyByPeriod(
+                  {
+                    entities: flows,
+                    from: lastSpan.from,
+                    to: lastSpan.to,
+                    granularity: "month",
+                    timeZone,
+                    deliveriesFromRollup: deliveries,
+                  },
+                  businessId,
+                ),
+              "overview",
             )
           : {},
       async () =>
-        readsVehicles
+        visibility.vehicles
           ? this.dashboardRepository.countVehiclesByStatus(businessId)
           : { ACTIVE: 0, INACTIVE: 0, BLOCKED: 0, IN_ROUTE: 0 },
-      // Maintenance planning is Frotas; the vehicles themselves are not.
       // Due days are the company's civil days, checked against its today.
       async () =>
-        readsVehicles && fleetEnabled
+        visibility.maintenance
           ? this.dashboardRepository.getMaintenanceStats(
               { today: businessDateKey(now, timeZone), timeZone },
               businessId,
             )
           : { pending: 0, recent: 0, overdue: 0, unrecorded: 0 },
       async () =>
-        readsVehicles
+        visibility.vehicles
           ? this.dashboardRepository.countVehiclesByType(businessId)
           : { data: [] },
-      // Service orders are Frotas: no costs without the module (DASH-MOD-1).
       async () =>
-        readsCosts
+        visibility.costs
           ? this.dashboardRepository.getCostsByMonth(
               { from: months.start, to: months.end, timeZone },
               businessId,
             )
           : [],
+      // Deliberately the same read the monitoring panel makes, on the
+      // tower's documents of the company's business day (decision 7.1):
+      // two queries that are supposed to agree and are written twice
+      // eventually disagree.
       async () =>
-        readsOperation
+        visibility.operation
           ? readOperationSummary(
               {
                 operation: this.operationDayRepository,
@@ -291,6 +395,37 @@ class GetDashboardOverviewUseCase {
             )
           : null,
     ] as const);
+
+    // The card's months and its "same point last month", both served live
+    // and compared with the rollup after the answer, off the request.
+    if (rollupMode === "shadow" && showsDeliveries) {
+      shadowDeliveryRollup({
+        repository: this.dashboardRepository,
+        screen: "overview",
+        businessId,
+        timeZone,
+        now,
+        windows: [
+          {
+            from: months.start,
+            to: months.end,
+            granularity: "month",
+            served: (monthly.delivery ?? []).map((bucket) => ({
+              period: bucket.month,
+              count: bucket.count,
+            })),
+          },
+          {
+            from: lastSpan.from,
+            to: lastSpan.to,
+            granularity: "month",
+            served:
+              (lastSpanCounts as Record<string, PeriodCountBucket[]>)
+                .delivery ?? [],
+          },
+        ],
+      });
+    }
 
     const byEntity = new Map<string, Map<string, number>>(
       Object.entries(monthly).map(([key, buckets]) => [
@@ -343,8 +478,8 @@ class GetDashboardOverviewUseCase {
         month: monthLabel(month),
       };
 
-      for (const entity of visible) {
-        point[SERIES_KEY[entity.key]] = countFor(entity.key, month);
+      for (const key of visible) {
+        point[SERIES_KEY[key]] = countFor(key, month);
       }
 
       return point;
@@ -352,7 +487,7 @@ class GetDashboardOverviewUseCase {
 
     const maintenanceCosts: DashboardOverviewResponse["maintenanceCosts"] = [];
 
-    if (readsCosts) {
+    if (visibility.costs) {
       const costsByMonth = new Map(
         costBuckets.map((bucket) => [bucket.month, bucket]),
       );

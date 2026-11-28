@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { EnumUserRole } from "@/modules/user/dtos/user-dto";
+import { businessSettingsValuesSchema } from "@/schemas/business-settings-schema";
 
 const profileAccessSchema = z
   .object({
@@ -30,8 +31,26 @@ const getUserSchema = z.object({
   role: z.nativeEnum(EnumUserRole),
   // A response, not an input: the address was validated when it was written.
   // Re-validating here turned one legacy value into a 500 on /user/me.
-  email: z.string(),
+  // Nullable: a driver's login may have no e-mail (plan of 02/11/2026, D2),
+  // and a required field would make the serializer fail their /user/me.
+  email: z
+    .string()
+    .nullable()
+    .describe(
+      "Nulo só no login de um motorista sem e-mail (entra por QR Code ou CPF e senha).",
+    ),
   two_factor_enabled: z.boolean().optional(),
+  /**
+   * Wave 2: the manager set the password; the client asks for the person's
+   * own before anything else. Optional so a response without it reads as
+   * false.
+   */
+  must_change_password: z
+    .boolean()
+    .optional()
+    .describe(
+      "A senha foi definida pelo gestor (senha inicial ou redefinição): o app e a web pedem a senha da própria pessoa antes de seguir. A API não recusa nada por isso.",
+    ),
   email_notifications_enabled: z.boolean().optional(),
   activity_notifications_enabled: z.boolean().optional(),
   access_revoked: z.boolean(),
@@ -61,6 +80,16 @@ const getUserSchema = z.object({
     .optional()
     .describe(
       "Pré-checagem offline no celular (decisão 14.2): `precheck` liga a leitura no aparelho; ela só vale com a leitura automática contratada, ligada no servidor e com saldo no período. `reason` diz por que está desligada (só para diagnóstico).",
+    ),
+  /**
+   * Plan of 02/11/2026 (M1, M6): the company's settings as this session
+   * applies them. Optional so a response without it reads as the defaults.
+   */
+  businessSettings: businessSettingsValuesSchema
+    .nullable()
+    .optional()
+    .describe(
+      "Configurações da empresa (checklist da rota e geocerca), já com a regra dos módulos: sem Frota e Entregas, o checklist vale NONE; sem Entregas, a geocerca vale DISABLED. Nulo para o MASTER, que não pertence a uma empresa.",
     ),
 });
 

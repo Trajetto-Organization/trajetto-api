@@ -1,19 +1,65 @@
 import ExcelJS from "exceljs";
 
 import { FastifyReply } from "fastify";
+
+import { cpuPool } from "@/shared/cpu-pool";
+import type { CpuPool, WorkbookSession } from "@/shared/cpu-pool/cpu-pool";
+
 import { ExportColumn, ExportWriter } from "../types";
 
 import { ExportAbortedError } from "./csv-writer";
 
+/**
+ * Rows per message to the CPU pool's thread: big enough that the messages
+ * cost nothing next to the rows, small enough that the thread never holds
+ * more than a few hundred rows' worth of text.
+ */
+const ROWS_PER_BATCH = 500;
+
+/**
+ * The Excel export's writer.
+ *
+ * Since plano-escala F3-29 the workbook is built on a thread of the CPU
+ * pool (src/shared/cpu-pool): ExcelJS turns every row into XML and zips the
+ * file synchronously, on whichever thread runs it, for the whole download.
+ * Here the rows go to the thread in batches, and its bytes come back to be
+ * written on the socket. The pool is asked before the headers: a thread
+ * that fails to start the workbook is still a plain 503 the client can
+ * show. With no thread free for a workbook (the others held by exports),
+ * with CPU_POOL_THREADS=0, or without the thread's file, the workbook is
+ * built here, as before: an export never waits for another one's download.
+ */
 class ExcelWriter implements ExportWriter {
-  private workbook!: ExcelJS.stream.xlsx.WorkbookWriter;
-  private worksheet!: ExcelJS.Worksheet;
+  private workbook: ExcelJS.stream.xlsx.WorkbookWriter | null = null;
+  private worksheet: ExcelJS.Worksheet | null = null;
+
+  private session: WorkbookSession | null = null;
+  private batch: Array<Record<string, unknown>> = [];
 
   private reply!: FastifyReply;
+
+  constructor(private readonly pool: CpuPool = cpuPool) {}
 
   async start(reply: FastifyReply, columns: ExportColumn[], filename: string) {
     this.reply = reply;
     const res = reply.raw;
+
+    if (this.pool.enabled()) {
+      this.session = await this.pool.openWorkbook(
+        columns.map((column) => ({
+          header: column.header,
+          key: column.key,
+          width: column.width,
+        })),
+        (bytes) => {
+          if (!res.destroyed) res.write(bytes);
+        },
+      );
+
+      // A download that ends early (the client left, a failure after the
+      // 200) gives the thread back at once.
+      if (this.session) res.once("close", () => this.session?.abort());
+    }
 
     // 1. Configure headers at the Node.js level
     res.setHeader(
@@ -29,6 +75,8 @@ class ExcelWriter implements ExportWriter {
 
     // 2. Send the headers before starting ExcelJS
     res.writeHead(200);
+
+    if (this.session) return;
 
     /**
      * 3. Initializes WorkbookWriter, pointing to the already open stream.
@@ -69,8 +117,19 @@ class ExcelWriter implements ExportWriter {
 
     if (res.destroyed) throw new ExportAbortedError("Client disconnected");
 
-    // In stream writing, the commit() function is essential to send the line to the stream
-    this.worksheet.addRow(row).commit();
+    if (this.session) {
+      this.batch.push(row);
+
+      if (this.batch.length >= ROWS_PER_BATCH) {
+        const rows = this.batch;
+
+        this.batch = [];
+        await this.session.write(rows);
+      }
+    } else {
+      // In stream writing, the commit() function is essential to send the line to the stream
+      this.worksheet!.addRow(row).commit();
+    }
 
     if (!res.writableNeedDrain) return;
 
@@ -98,8 +157,24 @@ class ExcelWriter implements ExportWriter {
   }
 
   async end() {
+    if (this.session) {
+      if (this.batch.length > 0) {
+        const rows = this.batch;
+
+        this.batch = [];
+        await this.session.write(rows);
+      }
+
+      // Resolves after the workbook's last byte was handed to the socket.
+      await this.session.end();
+
+      if (!this.reply.raw.writableEnded) this.reply.raw.end();
+
+      return;
+    }
+
     // Committing the spreadsheet finalizes the Excel structures
-    await Promise.all([this.worksheet.commit(), this.workbook.commit()]);
+    await Promise.all([this.worksheet!.commit(), this.workbook!.commit()]);
 
     // ExcelJS WorkbookWriter usually closes the stream automatically,
     // but if it doesn't close, raw.end() ensures it closes
@@ -109,4 +184,4 @@ class ExcelWriter implements ExportWriter {
   }
 }
 
-export { ExcelWriter };
+export { ExcelWriter, ROWS_PER_BATCH };

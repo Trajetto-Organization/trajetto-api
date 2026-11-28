@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { responseDateTime } from "./response-date";
 
 import { internalErrorResponse } from "./common-responses";
 
@@ -7,6 +8,8 @@ import { updateAccountPayableSchema } from "@/schemas/update-account-payable-sch
 
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 import { cursorPaginationSchema } from "@/schemas/cursor-pagination-schema";
+import { updateDeleteAccountPayableSchema } from "@/schemas/update-delete-account-payable-schema";
+import { selectedCompanyQuerySchema } from "@/schemas/selected-company-query-schema";
 
 import {
   exportAccountPayableSchema,
@@ -40,6 +43,8 @@ const accountPayableSchemas = {
   businessIdParam: updateDeleteBusinessSchema,
   accountPayableBusinessParams: accountPayableBusinessParams,
   searchAccountPayableCursor: cursorPaginationSchema,
+  accountPayableIdParam: updateDeleteAccountPayableSchema,
+  selectedCompanyQuery: selectedCompanyQuerySchema,
 };
 
 const namedRef = (fields: z.ZodRawShape) =>
@@ -48,13 +53,11 @@ const namedRef = (fields: z.ZodRawShape) =>
 /** A bill as every read returns it: its columns, the names, the situation. */
 const accountPayableRow = z.object({
   id: z.string(),
-  issue_date: z.union([z.string(), z.date()]),
-  due_date: z
-    .union([z.string(), z.date()])
-    .describe(
-      "Instante em que começa o dia do vencimento, no fuso da empresa.",
-    ),
-  payment_date: z.union([z.string(), z.date()]).nullable(),
+  issue_date: responseDateTime(),
+  due_date: responseDateTime().describe(
+    "Instante em que começa o dia do vencimento, no fuso da empresa.",
+  ),
+  payment_date: responseDateTime().nullable(),
   amount: z.number(),
   amount_paid: z.number().nullable(),
   category: z
@@ -80,8 +83,8 @@ const accountPayableRow = z.object({
     .string()
     .nullable()
     .describe("Quem registrou; nulo em contas antigas."),
-  created_at: z.union([z.string(), z.date()]),
-  updated_at: z.union([z.string(), z.date()]),
+  created_at: responseDateTime(),
+  updated_at: responseDateTime(),
   branch: namedRef({
     id: z.string(),
     corporate_reason: z.string(),
@@ -89,7 +92,7 @@ const accountPayableRow = z.object({
   }),
   serviceOrder: namedRef({
     id: z.string(),
-    date: z.union([z.string(), z.date()]),
+    date: responseDateTime(),
     maintenance_type: z.string(),
     vehicle: z.object({
       license_plate: z.string(),
@@ -152,6 +155,15 @@ const accountPayableResponses = {
   accountPayableRow,
   accountPayableSearchMeta: accountPayableSearchMetaDoc,
 
+  /** GET /account-payable/:accountPayableId (wave 3). */
+  accountPayableRead: z.object({ accountPayable: accountPayableRow }),
+  readErrors: codedError(
+    "VALIDATION_ERROR: o ID ou a empresa informada é inválido. BUSINESS_NOT_IDENTIFIED: o MASTER não informou `businessId`.",
+  ),
+  readNotFound: codedError(
+    "ACCOUNT_PAYABLE_NOT_FOUND: a conta não existe, é de outra empresa ou não está ao alcance de quem pede (sem leitura de contas a pagar, só as contas em que é o responsável) — sempre o mesmo corpo. TENANT_NOT_FOUND: a empresa informada pelo MASTER não existe. USER_NOT_FOUND: o usuário da sessão não existe mais.",
+  ),
+
   accountPayableCreated: z.object({
     message: z.string().default("Conta a pagar criada com sucesso!"),
     id: z.string().uuid().describe("O ID da conta criada."),
@@ -174,7 +186,7 @@ const accountPayableResponses = {
   internalServerError: internalErrorResponse,
 
   writeErrors: codedError(
-    "VALIDATION_ERROR (com `issues`: favorecido ausente ou duplo, datas, valores, textos). ACCOUNT_PAYABLE_INVALID_REFERENCE: filial, ordem de serviço, fornecedor, veículo ou responsável não encontrado NESTA empresa (a resposta é a mesma quando o registro é de outra empresa). ACCOUNT_PAYABLE_INVALID_AMOUNT, ACCOUNT_PAYABLE_PAYMENT_REQUIRED: valor pago acima do total, ou data de pagamento sem valor pago. ACCOUNT_PAYABLE_PAYEE_REQUIRED (edição): a conta já tem favorecido e a alteração o deixaria vazio.",
+    "VALIDATION_ERROR (com `issues`: favorecido ausente ou duplo, datas, valores, textos). ACCOUNT_PAYABLE_INVALID_REFERENCE: filial, ordem de serviço, fornecedor, veículo ou responsável não encontrado NESTA empresa (a resposta é a mesma quando o registro é de outra empresa). USER_NOT_ASSIGNABLE: o responsável escolhido não tem mais acesso (revogado ou removido); na edição, manter o responsável que a conta já tem continua valendo. ACCOUNT_PAYABLE_INVALID_AMOUNT, ACCOUNT_PAYABLE_PAYMENT_REQUIRED: valor pago acima do total, ou data de pagamento sem valor pago. ACCOUNT_PAYABLE_PAYEE_REQUIRED (edição): a conta já tem favorecido e a alteração o deixaria vazio.",
   ),
   listErrors: codedError(
     "VALIDATION_ERROR: ordenação ou filtro inválido. BUSINESS_NOT_IDENTIFIED: o MASTER não informou `businessId`.",

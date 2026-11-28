@@ -15,6 +15,10 @@ import {
   resolveOccurredAt,
 } from "@/shared/delivery/occurred-at";
 import { proofCaptureOf } from "@/shared/delivery/proof-capture";
+import {
+  geofencePositionAgeMs,
+  readAccuracy,
+} from "@/shared/delivery/geofence/geofence-check";
 
 import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-schema";
 import { updateDeleteDeliverySchema } from "@/schemas/update-delete-delivery-schema";
@@ -34,6 +38,10 @@ const DELIVERED_MESSAGES = {
     "Entrega registrada. A entrega já estava resolvida, então não há o que autorizar.",
   default: "Entrega registrada com sucesso!",
 } as const;
+
+/** K7: a proof that arrived after the delivery left the driver. */
+const LATE_PROOF_MESSAGE =
+  "Entrega enviada para análise da central: a entrega tinha saído das suas mãos enquanto você estava sem sinal.";
 
 class ReportDeliveryOccurrenceController {
   async handle(request: FastifyRequest, reply: FastifyReply): Promise<void> {
@@ -57,6 +65,8 @@ class ReportDeliveryOccurrenceController {
       device_precheck,
       photo_taken_at,
       device_id,
+      accuracy,
+      position_recorded_at,
     } = reportDeliveryOccurrenceSchema.parse(request.body);
 
     // The report in the street, moved onto the server's clock by the phone's
@@ -64,6 +74,13 @@ class ReportDeliveryOccurrenceController {
     const occurredAt = resolveOccurredAt({
       occurredAt: occurred_at,
       clientSentAt: request.headers[CLIENT_SENT_AT_HEADER],
+    });
+
+    // How old the fix was at the tap, on the phone's own clock (E4).
+    const positionAgeMs = geofencePositionAgeMs({
+      tappedAt: occurred_at,
+      sentAt: request.headers[CLIENT_SENT_AT_HEADER],
+      positionRecordedAt: position_recorded_at,
     });
 
     // The key is optional here (the web reports occurrences without one), so
@@ -104,14 +121,19 @@ class ReportDeliveryOccurrenceController {
           deviceId: device_id,
           occurredAt,
         }),
+        accuracy: readAccuracy(accuracy),
+        positionAgeMs,
       });
 
       const messages =
         result.category === "DELIVERED" ? DELIVERED_MESSAGES : MESSAGES;
 
-      const message =
-        result.authorization_status === "PENDING" ||
-        result.authorization_status === "SUPERSEDED"
+      // A late proof (K7) goes to the tower whatever it did: the sentence
+      // the app shows says so.
+      const message = result.late_proof
+        ? LATE_PROOF_MESSAGE
+        : result.authorization_status === "PENDING" ||
+            result.authorization_status === "SUPERSEDED"
           ? messages[result.authorization_status]
           : messages.default;
 
@@ -125,6 +147,9 @@ class ReportDeliveryOccurrenceController {
           delivery_status: result.delivery_status,
           // Decision 14.5: the support ticket of this occurrence, if any.
           ticket: result.ticket ?? null,
+          // K7: only on a proof that arrived after the delivery left the
+          // driver (APPLIED or EVIDENCE).
+          ...(result.late_proof && { late_proof: result.late_proof }),
         },
       });
     } catch (error) {

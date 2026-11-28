@@ -97,28 +97,31 @@ function findEndOfCentralDirectory(buffer: Buffer): number {
   return -1;
 }
 
-/**
- * Returns what the worksheets hold (cells and rows, every sheet together),
- * counted on the same inflated bytes, so the caller can refuse a sheet too big
- * to load BEFORE exceljs builds it: the inflated size alone let a 2.6 MB,
- * 20k × 50 workbook through, and loading it cost +329 MB of heap and a second
- * of frozen event loop.
- */
-function assertZipInflatesWithin(
-  buffer: Buffer,
-  maxTotalBytes: number,
-): WorksheetTally {
-  if (buffer.length < 22) throw new Error("Not a zip archive");
+/** One file of the archive, as its central directory describes it. */
+interface ZipEntry {
+  /** The name as stored (latin1), folders ending in `/`. */
+  name: string;
 
-  const tally: WorksheetTally = { cells: 0, rows: 0 };
+  /** 0 stored, 8 deflated; anything else is refused before it is yielded. */
+  method: number;
+
+  /** The entry's bytes as stored: inflate with `inflateZipEntry`. */
+  data: Buffer;
+}
+
+/**
+ * The archive's entries, from its central directory, one at a time: what
+ * the size guard counts and what the row-at-a-time reader opens
+ * (xlsx-row-reader.ts). Throws a plain Error for a file that is not a zip.
+ */
+function* zipEntries(buffer: Buffer): Generator<ZipEntry> {
+  if (buffer.length < 22) throw new Error("Not a zip archive");
 
   const eocd = findEndOfCentralDirectory(buffer);
   if (eocd < 0) throw new Error("Not a zip archive");
 
   const entries = buffer.readUInt16LE(eocd + 10);
   let cursor = buffer.readUInt32LE(eocd + 16);
-
-  let remaining = maxTotalBytes;
 
   for (let entry = 0; entry < entries; entry += 1) {
     if (cursor + 46 > buffer.length) throw new Error("Truncated zip archive");
@@ -132,7 +135,7 @@ function assertZipInflatesWithin(
     const extraLength = buffer.readUInt16LE(cursor + 30);
     const commentLength = buffer.readUInt16LE(cursor + 32);
     const localOffset = buffer.readUInt32LE(cursor + 42);
-    const entryName = buffer
+    const name = buffer
       .subarray(cursor + 46, cursor + 46 + nameLength)
       .toString("latin1");
 
@@ -154,36 +157,64 @@ function assertZipInflatesWithin(
     const localExtraLength = buffer.readUInt16LE(localOffset + 28);
     const dataStart = localOffset + 30 + localNameLength + localExtraLength;
 
-    const data = buffer.subarray(dataStart, dataStart + compressedSize);
-
-    let inflated: number;
-
-    if (method === STORED) {
-      inflated = data.length;
-
-      if (WORKSHEET_ENTRY.test(entryName)) tallyWorksheet(data, tally);
-    } else if (method === DEFLATED) {
-      try {
-        const bytes = inflateRawSync(data, {
-          maxOutputLength: remaining + 1,
-        });
-
-        inflated = bytes.length;
-
-        if (WORKSHEET_ENTRY.test(entryName)) tallyWorksheet(bytes, tally);
-      } catch (error) {
-        // Past the ceiling, Node refuses with a RangeError before allocating.
-        if (error instanceof RangeError) {
-          throw new SpreadsheetTooLargeError("Spreadsheet inflates too large");
-        }
-
-        throw error;
-      }
-    } else {
+    if (method !== STORED && method !== DEFLATED) {
       throw new Error(`Unsupported zip compression method ${method}`);
     }
 
-    remaining -= inflated;
+    yield {
+      name,
+      method,
+      data: buffer.subarray(dataStart, dataStart + compressedSize),
+    };
+  }
+}
+
+/**
+ * An entry's contents, refused past `maxBytes` with the guard's own error
+ * (Node's `maxOutputLength` stops the inflate before it allocates more).
+ */
+function inflateZipEntry(entry: ZipEntry, maxBytes: number): Buffer {
+  if (entry.method === STORED) {
+    if (entry.data.length > maxBytes) {
+      throw new SpreadsheetTooLargeError("Spreadsheet inflates too large");
+    }
+
+    return entry.data;
+  }
+
+  try {
+    return inflateRawSync(entry.data, { maxOutputLength: maxBytes + 1 });
+  } catch (error) {
+    // Past the ceiling, Node refuses with a RangeError before allocating.
+    if (error instanceof RangeError) {
+      throw new SpreadsheetTooLargeError("Spreadsheet inflates too large");
+    }
+
+    throw error;
+  }
+}
+
+/**
+ * Returns what the worksheets hold (cells and rows, every sheet together),
+ * counted on the same inflated bytes, so the caller can refuse a sheet too big
+ * to load BEFORE exceljs builds it: the inflated size alone let a 2.6 MB,
+ * 20k × 50 workbook through, and loading it cost +329 MB of heap and a second
+ * of frozen event loop.
+ */
+function assertZipInflatesWithin(
+  buffer: Buffer,
+  maxTotalBytes: number,
+): WorksheetTally {
+  const tally: WorksheetTally = { cells: 0, rows: 0 };
+
+  let remaining = maxTotalBytes;
+
+  for (const entry of zipEntries(buffer)) {
+    const bytes = inflateZipEntry(entry, remaining);
+
+    if (WORKSHEET_ENTRY.test(entry.name)) tallyWorksheet(bytes, tally);
+
+    remaining -= bytes.length;
 
     if (remaining < 0) {
       throw new SpreadsheetTooLargeError("Spreadsheet inflates too large");
@@ -196,6 +227,9 @@ function assertZipInflatesWithin(
 export {
   SpreadsheetTooLargeError,
   assertZipInflatesWithin,
+  inflateZipEntry,
   tallyWorksheet,
+  zipEntries,
   type WorksheetTally,
+  type ZipEntry,
 };

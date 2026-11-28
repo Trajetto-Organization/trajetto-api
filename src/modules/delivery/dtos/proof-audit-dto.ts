@@ -11,12 +11,7 @@ type ProofAuditStatus = "PENDING" | "APPROVED" | "REJECTED";
 
 /** AIAnalysisRequest.status of the latest DELIVERY_PROOF request. */
 type ProofAnalysisStatus =
-  | "PENDING"
-  | "PROCESSING"
-  | "COMPLETED"
-  | "PARTIAL"
-  | "FAILED"
-  | "SKIPPED";
+  "PENDING" | "PROCESSING" | "COMPLETED" | "PARTIAL" | "FAILED" | "SKIPPED";
 
 /**
  * What the card says about the automatic reading. "No reading" used to cover
@@ -154,6 +149,12 @@ interface ListProofAuditsResult {
      * computing it never scans a tenant's whole history (DLVB-04).
      */
     agreementWindowDays: number;
+
+    /**
+     * The company's zone (IANA), the one the window counts in: the
+     * Auditoria tab prints its times in it (plan of 02/11/2026, H6; D22).
+     */
+    timeZone: string;
   };
 }
 

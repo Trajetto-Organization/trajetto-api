@@ -749,6 +749,83 @@ describe("a report that waits for the tower", () => {
     expect(peeking.status).toBe(403);
   });
 
+  // Wave 4: the app's list (summary, polled every 30 s) and the one request
+  // a push opens (occurrenceId), through the real serializer.
+  it("is in the app's summary without a signed URL, and alone by its id", async () => {
+    const summary = await call(
+      "GET",
+      "/delivery/occurrence-authorizations?view=summary",
+      users.operator.token,
+    );
+
+    expect(summary.status).toBe(200);
+    expect(summary.body.view).toBe("summary");
+
+    const row = (summary.body.data as Array<Record<string, any>>).find(
+      (entry) => entry.id === occurrenceId,
+    );
+
+    expect(row).toMatchObject({
+      deliveryId,
+      reportedBy: { name: "João Motorista" },
+      delivery: { recipient_name: "Aguardando torre" },
+      has_receipt_photo: false,
+      has_signature: false,
+    });
+    expect(typeof row?.photos_count).toBe("number");
+
+    for (const field of [
+      "photos",
+      "receipt_photo_url",
+      "signature_url",
+      "form_fields",
+      "form_answers",
+      "answers",
+      "latitude",
+      "longitude",
+    ]) {
+      expect(row, field).not.toHaveProperty(field);
+    }
+
+    const full = await call(
+      "GET",
+      "/delivery/occurrence-authorizations",
+      users.operator.token,
+    );
+
+    expect(full.body.view).toBe("full");
+
+    const one = await call(
+      "GET",
+      `/delivery/occurrence-authorizations?occurrenceId=${occurrenceId}`,
+      users.operator.token,
+    );
+
+    expect(one.status).toBe(200);
+    expect(one.body).toMatchObject({ view: "full", total: 1 });
+    expect(one.body.data.map((entry: { id: string }) => entry.id)).toEqual([
+      occurrenceId,
+    ]);
+    expect(one.body.data[0].answers).toHaveLength(3);
+
+    // Another company asking for this id: the answer of a missing id.
+    const foreign = await call(
+      "GET",
+      `/delivery/occurrence-authorizations?occurrenceId=${occurrenceId}`,
+      users.otherAdmin.token,
+    );
+
+    expect(foreign.body).toMatchObject({ data: [], total: 0 });
+
+    const invalid = await call(
+      "GET",
+      "/delivery/occurrence-authorizations?view=tudo",
+      users.operator.token,
+    );
+
+    expect(invalid.status).toBe(400);
+  });
+
   it("is decided only by the company's dispatchers", async () => {
     const driver = await decide(
       occurrenceId,
@@ -1380,9 +1457,15 @@ describe("who files a request, and when its attempt is over (review r1)", () => 
 
     expect(after.status).toBe("PENDING");
     expect(await webhooksAbout(deliveryId, "delivery.failed")).toHaveLength(0);
+    // No one moved its status: the only line is the route's own, the load
+    // back to the base when it was cancelled (F2-06).
     expect(
       await prisma.deliveryEvent.count({
-        where: { deliveryId, type: "STATUS_CHANGE" },
+        where: {
+          deliveryId,
+          type: "STATUS_CHANGE",
+          actor: { not: "SYSTEM" },
+        },
       }),
     ).toBe(0);
   });
@@ -1640,9 +1723,8 @@ describe("who files a request, and when its attempt is over (review r1)", () => 
   });
 
   it("a request decided before its notice fans out rings nobody; one still waiting reaches the tower", async () => {
-    const { NotificationPipelineService } = await import(
-      "@/shared/notifications/notification-pipeline-service"
-    );
+    const { NotificationPipelineService } =
+      await import("@/shared/notifications/notification-pipeline-service");
     const pipeline = NotificationPipelineService.getInstance();
 
     // The order under test is "decided, THEN expanded". A publish wakes this

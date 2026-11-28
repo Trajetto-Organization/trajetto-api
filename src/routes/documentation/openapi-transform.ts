@@ -1,10 +1,11 @@
 import type { FastifySchema, RouteOptions } from "fastify";
 import { jsonSchemaTransform } from "fastify-type-provider-zod";
-import { z, type ZodTypeAny } from "zod";
+import { z } from "zod";
 
 import { ensureApiKey } from "@/modules/middlewares/ensure-api-key";
 import { ensureAuthenticated } from "@/modules/middlewares/ensure-authenticated";
 import {
+  ignoreDriverBranchChoice,
   verifyBranchActive,
   verifyBusinessActive,
 } from "@/modules/middlewares/verify-tenant-active";
@@ -12,6 +13,11 @@ import { isUpgradeExempt } from "@/shared/http/client-version";
 import { MAX_API_KEY_AUTH_FAILURES_PER_MINUTE } from "@/shared/integration/integration-rate-guard";
 import { BUSINESS_API_RATE_PER_MINUTE } from "@/shared/integration/api-key-rules";
 import { DATABASE_RETRY_AFTER_SECONDS } from "@/shared/errors/database-unavailable";
+import {
+  LOAD_SHED_DESCRIPTION,
+  LOAD_SHED_NOTE,
+  SERVICE_BUSY_DESCRIPTION,
+} from "./database-busy-documentation";
 import { EXPORTS_PER_REPLICA } from "@/shared/services/export/export-slots";
 
 import { ndjsonDocFor, type NdjsonDoc } from "./ndjson";
@@ -27,6 +33,10 @@ import {
   codeList,
   codesOf,
 } from "./common-responses";
+
+// The documented ceiling is the default: the env may move it per
+// environment, and the document is one for all of them.
+const LIST_MAX_OFFSET_TEXT = "10.000";
 
 /**
  * The OpenAPI document, completed from what the routes actually run.
@@ -45,10 +55,33 @@ import {
  */
 type JsonSchema = Record<string, unknown>;
 
+/**
+ * The document being built, as @fastify/swagger hands it to a transform:
+ * fastify-type-provider-zod reads its `openapi` to pick the JSON Schema
+ * dialect (3.0's `nullable: true`, 3.1's type lists).
+ */
+interface OpenapiObject {
+  openapi?: string;
+}
+
+/**
+ * What @fastify/swagger writes when http.ts names no version. Only a test
+ * that calls the transform by hand leaves `openapiObject` out.
+ */
+const DEFAULT_OPENAPI_OBJECT: OpenapiObject = { openapi: "3.0.3" };
+
 interface TransformInput {
   schema: FastifySchema;
   url: string;
   route: RouteOptions;
+  openapiObject?: OpenapiObject;
+}
+
+/** The route and document every conversion of one route is made against. */
+interface TransformContext {
+  url: string;
+  route: RouteOptions;
+  openapiObject: OpenapiObject;
 }
 
 /** What a guard factory attaches to the hook it returns. */
@@ -223,9 +256,25 @@ function mergedCodes(
 }
 
 /**
+ * Whether the route's text already explains each code the hook adds, in the
+ * document's `CODE: what it means` form. The hook's sentence then says the
+ * same thing a second time, in other words: on every keyed route the
+ * database outage read twice, and on the cancel the second version gave the
+ * Idempotency-Key advice of a route that takes none.
+ */
+function explainsEveryCode(own: string, hookCodes: string[] | null): boolean {
+  return (
+    !!hookCodes?.length &&
+    hookCodes.every((code) => new RegExp(`(^|[^A-Z0-9_])${code}:`).test(own))
+  );
+}
+
+/**
  * Adds a response the route does not document, or completes the description
  * of one it does. The route's own schema always wins: it is what the
- * serializer validates.
+ * serializer validates. So does its text, when it explains every code the
+ * hook's would (explainsEveryCode); prose that only mentions a code
+ * ("RATE_LIMITED também quando...") still gets the hook's after it.
  */
 function mergeResponse(
   responses: Record<string, JsonSchema>,
@@ -241,6 +290,9 @@ function mergeResponse(
 
   const own = descriptionOf(existing);
   const extra = descriptionOf(generated);
+  const ownSaysIt =
+    own.includes(extra) ||
+    explainsEveryCode(own, codesOf(codeDescriptionOf(generated) ?? ""));
 
   // The codes the hooks produce join the ones the route lists, so the
   // rebuilt schema (canonicalizeErrorResponses) names both.
@@ -266,7 +318,7 @@ function mergeResponse(
         }
       : {}),
     [RESPONSE_DESCRIPTION]:
-      own && !own.includes(extra) ? `${own} ${extra}` : own || extra,
+      own && !ownSaysIt ? `${own} ${extra}` : own || extra,
     headers: {
       ...(generated.headers as JsonSchema | undefined),
       ...(existing.headers as JsonSchema | undefined),
@@ -326,10 +378,13 @@ function guardsOf(route: RouteOptions): GuardDoc[] {
 }
 
 /** A zod schema as the JSON Schema the rest of the document is made of. */
-function toJsonSchema(schema: ZodTypeAny, url: string): JsonSchema {
+function toJsonSchema(
+  schema: z.ZodType,
+  context: TransformContext,
+): JsonSchema {
   const converted = jsonSchemaTransform({
+    ...context,
     schema: { response: { 200: schema } } as FastifySchema,
-    url,
   }) as { schema: { response: Record<string, JsonSchema> } };
 
   return converted.schema.response["200"];
@@ -382,10 +437,10 @@ function openEnded(schema: unknown): void {
   }
 }
 
-function ndjsonResponse(doc: NdjsonDoc, url: string): JsonSchema {
+function ndjsonResponse(doc: NdjsonDoc, context: TransformContext): JsonSchema {
   const item = toJsonSchema(
     doc.item.describe("Cada linha seguinte: um item."),
-    url,
+    context,
   );
 
   openEnded(item);
@@ -410,7 +465,7 @@ function ndjsonResponse(doc: NdjsonDoc, url: string): JsonSchema {
               z
                 .object({ meta: doc.meta })
                 .describe("Primeira linha: os metadados da página."),
-              url,
+              context,
             ),
             item,
           ],
@@ -436,8 +491,7 @@ function withDocumentedInputs(
 ): FastifySchema {
   const documented = (
     route.config as
-      | { openapi?: { body?: unknown; headers?: unknown } }
-      | undefined
+      { openapi?: { body?: unknown; headers?: unknown } } | undefined
   )?.openapi;
 
   if (!schema || !documented) return schema;
@@ -489,8 +543,7 @@ const RETRY_AFTER_HEADER: JsonSchema = {
 
 function codeDescriptionOf(response: JsonSchema): string | undefined {
   const code = (response.properties as JsonSchema | undefined)?.code as
-    | JsonSchema
-    | undefined;
+    JsonSchema | undefined;
 
   if (!code) return undefined;
 
@@ -596,8 +649,7 @@ function internalErrorSchema(response: JsonSchema): JsonSchema {
 
 function unavailableSchema(response: JsonSchema): JsonSchema {
   const own = (response.properties as JsonSchema | undefined)?.code as
-    | JsonSchema
-    | undefined;
+    JsonSchema | undefined;
   // A route that can only be refused by the database outage (the keyed
   // routes) says so with an enum and a required requestId; both stay.
   const requiresRequestId =
@@ -612,13 +664,13 @@ function unavailableSchema(response: JsonSchema): JsonSchema {
         ...(Array.isArray(own?.enum) ? { enum: own.enum } : {}),
         description:
           codeDescriptionOf(response) ??
-          "SERVICE_UNAVAILABLE (banco indisponível) ou o código da dependência que caiu.",
+          "SERVICE_UNAVAILABLE (banco indisponível), SERVICE_BUSY (banco ocupado) ou o código da dependência que caiu.",
       },
       message: MESSAGE_PROPERTY,
       requestId: {
         ...REQUEST_ID_PROPERTY,
         description:
-          "Só em SERVICE_UNAVAILABLE: o mesmo valor do cabeçalho `x-request-id`.",
+          "Só em SERVICE_UNAVAILABLE e SERVICE_BUSY: o mesmo valor do cabeçalho `x-request-id`.",
       },
     },
     required: ["code", "message", ...(requiresRequestId ? ["requestId"] : [])],
@@ -670,10 +722,15 @@ function openapiTransform(input: TransformInput): {
   url: string;
 } {
   const { route, url } = input;
+  const context: TransformContext = {
+    url,
+    route,
+    openapiObject: input.openapiObject ?? DEFAULT_OPENAPI_OBJECT,
+  };
 
   const result = jsonSchemaTransform({
+    ...context,
     schema: withDocumentedInputs(input.schema, route),
-    url,
   }) as {
     schema: JsonSchema & {
       hide?: boolean;
@@ -708,9 +765,9 @@ function openapiTransform(input: TransformInput): {
     const file = fileDocFor(runtime);
     const documented = documentedDocFor(runtime);
 
-    if (ndjson) responses[status] = ndjsonResponse(ndjson, url);
+    if (ndjson) responses[status] = ndjsonResponse(ndjson, context);
     else if (file) responses[status] = fileResponse(file);
-    else if (documented) responses[status] = toJsonSchema(documented, url);
+    else if (documented) responses[status] = toJsonSchema(documented, context);
   }
 
   // Example success bodies (response-examples.ts). A one-element JSON Schema
@@ -728,10 +785,14 @@ function openapiTransform(input: TransformInput): {
 
   const businessGate = preHandler.includes(verifyBusinessActive);
   const branchGate = preHandler.includes(verifyBranchActive);
+  // A driver's record whose branch the server resolves (wave 3.7): the
+  // driver's body branch never reaches the gate.
+  const driverBranchIgnored = preHandler.includes(ignoreDriverBranchChoice);
 
   const config = (route.config ?? {}) as {
     rateLimit?: unknown;
     openapi?: { module?: string };
+    shedClass?: string;
   };
 
   const permissions = guards.flatMap((guard) =>
@@ -863,7 +924,9 @@ function openapiTransform(input: TransformInput): {
     if (branchGate) {
       forbiddenCodes.push("BRANCH_INACTIVE");
       forbiddenReasons.push(
-        "BRANCH_INACTIVE: a filial informada está desativada.",
+        driverBranchIgnored
+          ? "BRANCH_INACTIVE: a filial informada está desativada. A filial enviada por um motorista é ignorada (o servidor a resolve entre as filiais ativas), então o motorista não recebe este código."
+          : "BRANCH_INACTIVE: a filial informada está desativada.",
       );
     }
 
@@ -900,8 +963,8 @@ function openapiTransform(input: TransformInput): {
       responses,
       "503",
       errorBody(
-        "AUTH_SESSION_UNAVAILABLE: não foi possível verificar a sessão agora (banco indisponível). SERVICE_UNAVAILABLE: o banco caiu depois da sessão conferida (traz `requestId`). Transitório: espere o `retry-after` e repita; numa escrita, com o mesmo `Idempotency-Key`. NÃO é logout — não descarte a sessão.",
-        ["AUTH_SESSION_UNAVAILABLE", "SERVICE_UNAVAILABLE"],
+        `AUTH_SESSION_UNAVAILABLE: não foi possível verificar a sessão agora (banco indisponível). SERVICE_UNAVAILABLE: o banco caiu depois da sessão conferida (traz \`requestId\`). ${SERVICE_BUSY_DESCRIPTION} ${LOAD_SHED_NOTE} Transitório: espere o \`retry-after\` e repita; numa escrita, com o mesmo \`Idempotency-Key\`. NÃO é logout — não descarte a sessão.`,
+        ["AUTH_SESSION_UNAVAILABLE", "SERVICE_UNAVAILABLE", "SERVICE_BUSY"],
         { "retry-after": RETRY_AFTER_HEADER },
       ),
     );
@@ -953,8 +1016,8 @@ function openapiTransform(input: TransformInput): {
       responses,
       "503",
       errorBody(
-        `SERVICE_UNAVAILABLE: o banco de dados está indisponível por instantes. Transitório: espere o \`retry-after\` (${DATABASE_RETRY_AFTER_SECONDS} s) e repita. Numa escrita, repita com o mesmo \`Idempotency-Key\`: um 503 não garante que nada foi gravado. O corpo traz \`requestId\`.`,
-        ["SERVICE_UNAVAILABLE"],
+        `SERVICE_UNAVAILABLE: o banco de dados está indisponível por instantes. Transitório: espere o \`retry-after\` (${DATABASE_RETRY_AFTER_SECONDS} s) e repita. ${SERVICE_BUSY_DESCRIPTION} Um 503 não garante que nada foi gravado: numa escrita que pede \`Idempotency-Key\`, repita com o mesmo valor. O corpo traz \`requestId\`.`,
+        ["SERVICE_UNAVAILABLE", "SERVICE_BUSY"],
         { "retry-after": RETRY_AFTER_HEADER },
       ),
     );
@@ -974,6 +1037,24 @@ function openapiTransform(input: TransformInput): {
     );
   }
 
+  // The companies' panel budget (shared/integration/panel-budget.ts),
+  // charged inside ensureAuthenticated and refused only in enforce. Never
+  // on a MASTER-only route: the MASTER never pays.
+  if (
+    onRequest.includes(ensureAuthenticated) &&
+    !(roles.length > 0 && roles.every((role) => role === "MASTER"))
+  ) {
+    mergeResponse(
+      responses,
+      "429",
+      errorBody(
+        "TENANT_BUSY: a sua empresa gastou o orçamento de requisições do painel neste minuto, ou você sozinho gastou a sua parte dele (um quarto, por padrão); a Torre, as listas e as exportações custam mais que um detalhe. Só com o orçamento ligado (`TENANT_PANEL_BUDGET_MODE=enforce`) e nunca para a sessão do motorista nem do MASTER. Espere o `retry-after` (o fim do minuto) e repita.",
+        ["TENANT_BUSY"],
+        { "retry-after": RETRY_AFTER_HEADER },
+      ),
+    );
+  }
+
   // Every export streams through ExportPipeline, which takes a slot first
   // (shared/services/export/export-slots.ts): one export per company and
   // three per replica at a time.
@@ -986,6 +1067,73 @@ function openapiTransform(input: TransformInput): {
         ["EXPORT_BUSY"],
         { "retry-after": RETRY_AFTER_HEADER },
       ),
+    );
+  }
+
+  // The CPU pool (plano-escala F3-29, shared/cpu-pool): the Excel workbook
+  // of every export and the NF-e of the XML import run on its threads.
+  if (/\/export-[a-z-]+$/.test(url) || /\/import-xml\//.test(url)) {
+    mergeResponse(
+      responses,
+      "503",
+      errorBody(
+        "CPU_POOL_BUSY: as threads que leem as NF-e da importação neste servidor estão ocupadas e a fila está cheia (a exportação em Excel não espera nem é recusada por isso: sem thread livre, a planilha é montada como antes); CPU_POOL_TIMEOUT: o arquivo demorou demais para ser processado; CPU_POOL_UNAVAILABLE: o processamento foi interrompido. Chega antes de qualquer gravação e antes do primeiro byte do arquivo. Espere o `retry-after` e repita.",
+        ["CPU_POOL_BUSY", "CPU_POOL_TIMEOUT", "CPU_POOL_UNAVAILABLE"],
+        { "retry-after": RETRY_AFTER_HEADER },
+      ),
+    );
+  }
+
+  // The offset ceiling (shared/pagination/offset-ceiling.ts): every route
+  // whose querystring pages by `page` and `pageSize`, unless the route caps
+  // its own pages with its own code (`config.ownOffsetCeiling`).
+  const queryFields = ((schema as { querystring?: JsonSchema }).querystring
+    ?.properties ?? {}) as Record<string, unknown>;
+  const ownCeiling = (
+    route.config as { ownOffsetCeiling?: { code: string; message: string } }
+  )?.ownOffsetCeiling;
+
+  if (ownCeiling && "page" in queryFields && "pageSize" in queryFields) {
+    mergeResponse(
+      responses,
+      "400",
+      errorBody(`${ownCeiling.code}: ${ownCeiling.message}`, [ownCeiling.code]),
+    );
+  } else if ("page" in queryFields && "pageSize" in queryFields) {
+    mergeResponse(
+      responses,
+      "400",
+      errorBody(
+        `LIST_OFFSET_TOO_DEEP: a página começa na linha ${LIST_MAX_OFFSET_TEXT} ou depois (\`LIST_MAX_OFFSET\`): ninguém lê a lista tão longe virando páginas. Filtre (o período, o status ou a busca) ou use a exportação para ver além.`,
+        ["LIST_OFFSET_TOO_DEEP"],
+      ),
+    );
+  }
+
+  // Load shedding (shared/http/load-shedding.ts): with SHED_MODE=enforce a
+  // pressed replica answers any route that is not critical with 503
+  // SERVICE_BUSY before anything runs. Merged last, and only into a 503
+  // that does not name SERVICE_BUSY yet: one that does (the session's, the
+  // API key's) already tells the client to wait for Retry-After, and the
+  // public reference does not change.
+  const unavailable = responses["503"];
+
+  if (
+    config.shedClass &&
+    config.shedClass !== "critical" &&
+    !(
+      unavailable &&
+      `${descriptionOf(unavailable)} ${codeDescriptionOf(unavailable) ?? ""}`.includes(
+        "SERVICE_BUSY",
+      )
+    )
+  ) {
+    mergeResponse(
+      responses,
+      "503",
+      errorBody(LOAD_SHED_DESCRIPTION, ["SERVICE_BUSY"], {
+        "retry-after": RETRY_AFTER_HEADER,
+      }),
     );
   }
 

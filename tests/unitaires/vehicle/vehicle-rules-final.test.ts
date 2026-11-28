@@ -2,11 +2,14 @@ import { describe, expect, it } from "vitest";
 
 import {
   canDriverOperateVehicle,
+  canDriverReadVehicle,
+  ENDED_ROUTE_CHECKLIST_WINDOW_MS,
   ROUTE_STATUSES_HANDING_OVER_VEHICLE,
 } from "@/shared/vehicle/driver-vehicle-access";
 import {
   decideVehicleStatusChange,
   describeOpenRoutes,
+  statusChangeNotice,
 } from "@/shared/vehicle/vehicle-status-change";
 import { vehicleUniqueFieldOf } from "@/shared/vehicle/vehicle-conflicts";
 import {
@@ -69,6 +72,108 @@ describe("canDriverOperateVehicle", () => {
   });
 });
 
+describe("canDriverReadVehicle", () => {
+  // The arrival checklist (C4, D08) is asked right after the route closes
+  // itself on its last stop: the app reads the vehicle (mileage, branch) at
+  // that moment. The substitute was refused that read as soon as the route
+  // turned COMPLETED, so he could never send the checklist the create
+  // accepts. Only the read widens; the writes keep canDriverOperateVehicle.
+  const NOW = new Date("2026-11-03T18:00:00.000Z");
+  const ended = (msAgo: number) => new Date(NOW.getTime() - msAgo);
+
+  it("lets the substitute read the truck of the route he just completed", () => {
+    expect(
+      canDriverReadVehicle(
+        TRUCK,
+        "bruno",
+        [
+          {
+            vehicleId: "truck",
+            driverId: "bruno",
+            status: "COMPLETED",
+            completed_at: ended(10 * 60_000),
+          },
+        ],
+        NOW,
+      ),
+    ).toBe(true);
+  });
+
+  it("stops at the end of the arrival checklist window", () => {
+    expect(
+      canDriverReadVehicle(
+        TRUCK,
+        "bruno",
+        [
+          {
+            vehicleId: "truck",
+            driverId: "bruno",
+            status: "COMPLETED",
+            completed_at: ended(ENDED_ROUTE_CHECKLIST_WINDOW_MS + 60_000),
+          },
+        ],
+        NOW,
+      ),
+    ).toBe(false);
+  });
+
+  it("never reads through a cancelled route, another driver's or another truck's", () => {
+    expect(
+      canDriverReadVehicle(
+        TRUCK,
+        "bruno",
+        [
+          {
+            vehicleId: "truck",
+            driverId: "bruno",
+            status: "CANCELLED",
+            completed_at: ended(60_000),
+          },
+          {
+            vehicleId: "truck",
+            driverId: "carla",
+            status: "COMPLETED",
+            completed_at: ended(60_000),
+          },
+          {
+            vehicleId: "van",
+            driverId: "bruno",
+            status: "COMPLETED",
+            completed_at: ended(60_000),
+          },
+          { vehicleId: "truck", driverId: "bruno", status: "COMPLETED" },
+        ],
+        NOW,
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps everything the operate rule allows", () => {
+    expect(canDriverReadVehicle(TRUCK, "ana", [], NOW)).toBe(true);
+    expect(
+      canDriverReadVehicle(
+        TRUCK,
+        "bruno",
+        [{ vehicleId: "truck", driverId: "bruno", status: "IN_PROGRESS" }],
+        NOW,
+      ),
+    ).toBe(true);
+  });
+
+  it("does not widen the operate rule (fuel, checklist, list) at all", () => {
+    expect(
+      canDriverOperateVehicle(TRUCK, "bruno", [
+        {
+          vehicleId: "truck",
+          driverId: "bruno",
+          status: "COMPLETED",
+          completed_at: ended(60_000),
+        },
+      ]),
+    ).toBe(false);
+  });
+});
+
 describe("decideVehicleStatusChange", () => {
   it("treats an echo of the stored status as no change", () => {
     expect(
@@ -110,6 +215,68 @@ describe("decideVehicleStatusChange", () => {
         openRoutes: running,
       }),
     ).toEqual({ kind: "allowed", status: "BLOCKED" });
+  });
+
+  it("unblocks a truck still on the road back to Em rota, never to Ativo", () => {
+    // Red before: refused until the route ended, and a blocked truck cannot
+    // be refuelled — a breakdown fixed on the road stranded the driver.
+    expect(
+      decideVehicleStatusChange({
+        current: "BLOCKED",
+        requested: "ACTIVE",
+        openRoutes: { ...NO_ROUTES, inProgress: 1 },
+      }),
+    ).toEqual({ kind: "allowed", status: "IN_ROUTE", fromRunningRoute: true });
+  });
+
+  it("refuses to inactivate a truck blocked on the road, saying what it can do instead", () => {
+    // Red before: "Só é possível bloqueá-lo", to a truck already blocked.
+    const verdict = decideVehicleStatusChange({
+      current: "BLOCKED",
+      requested: "INACTIVE",
+      openRoutes: { ...NO_ROUTES, inProgress: 1 },
+    });
+
+    expect(verdict).toEqual({
+      kind: "refused",
+      code: "VEHICLE_IN_ACTIVE_ROUTE",
+      message:
+        "Este veículo está bloqueado durante uma rota em andamento. Enquanto " +
+        "ela não termina, ele pode continuar bloqueado ou ser desbloqueado " +
+        "(volta para “Em rota”). Para inativá-lo, conclua ou cancele a rota.",
+    });
+  });
+
+  it("keeps the sentence for a truck on the road that is not blocked", () => {
+    const verdict = decideVehicleStatusChange({
+      current: "IN_ROUTE",
+      requested: "ACTIVE",
+      openRoutes: { ...NO_ROUTES, inProgress: 1 },
+    });
+
+    expect(verdict.kind === "refused" && verdict.message).toContain(
+      "Só é possível bloqueá-lo",
+    );
+  });
+
+  it("unblocks to Ativo when no route is on the road", () => {
+    expect(
+      decideVehicleStatusChange({
+        current: "BLOCKED",
+        requested: "ACTIVE",
+        openRoutes: { planned: 1, released: 1, inProgress: 0 },
+      }),
+    ).toEqual({ kind: "allowed", status: "ACTIVE" });
+  });
+
+  it("still refuses IN_ROUTE asked for by hand, on the road too", () => {
+    expect(
+      decideVehicleStatusChange({
+        current: "BLOCKED",
+        requested: "IN_ROUTE",
+        openRoutes: { ...NO_ROUTES, inProgress: 1 },
+      }),
+    ).toMatchObject({ kind: "refused", code: "VEHICLE_STATUS_DERIVED" });
   });
 
   it("lets a stale IN_ROUTE with no running route be corrected by hand", () => {
@@ -155,6 +322,87 @@ describe("decideVehicleStatusChange", () => {
     expect(describeOpenRoutes({ planned: 0, released: 2, inProgress: 1 })).toBe(
       "1 rota em andamento e 2 rotas liberadas",
     );
+  });
+});
+
+describe("statusChangeNotice", () => {
+  it("says why an unblocked truck reads Em rota", () => {
+    expect(
+      statusChangeNotice({
+        requested: "ACTIVE",
+        written: "IN_ROUTE",
+        openRoutes: { ...NO_ROUTES, inProgress: 1 },
+      }),
+    ).toBe(
+      "Veículo desbloqueado. Como ele está numa rota em andamento, o status " +
+        "voltou para “Em rota”.",
+    );
+  });
+
+  it("adds nothing when the route ended before the unblocking was written", () => {
+    expect(
+      statusChangeNotice({
+        requested: "ACTIVE",
+        written: "ACTIVE",
+        openRoutes: { ...NO_ROUTES, inProgress: 1 },
+      }),
+    ).toBeNull();
+  });
+
+  it("warns about the routes still ahead of a truck being blocked", () => {
+    expect(
+      statusChangeNotice({
+        requested: "BLOCKED",
+        written: "BLOCKED",
+        openRoutes: { planned: 0, released: 1, inProgress: 0 },
+      }),
+    ).toBe(
+      "Veículo bloqueado. Ele está em 1 rota liberada: troque o veículo " +
+        "dessa rota antes da saída.",
+    );
+
+    expect(
+      statusChangeNotice({
+        requested: "BLOCKED",
+        written: "BLOCKED",
+        openRoutes: { planned: 2, released: 1, inProgress: 0 },
+      }),
+    ).toBe(
+      "Veículo bloqueado. Ele está em 1 rota liberada e 2 rotas planejadas: " +
+        "troque o veículo dessas rotas antes da saída.",
+    );
+  });
+
+  it("tells how to go on when the truck is blocked on the road", () => {
+    expect(
+      statusChangeNotice({
+        requested: "BLOCKED",
+        written: "BLOCKED",
+        openRoutes: { planned: 0, released: 1, inProgress: 1 },
+      }),
+    ).toBe(
+      "Veículo bloqueado durante a rota em andamento. Se ele não puder " +
+        "seguir, encerre a rota com pendências e monte outra com outro " +
+        "veículo. Ele também está em 1 rota liberada: troque o veículo dessa " +
+        "rota antes da saída.",
+    );
+  });
+
+  it("adds nothing to a block with no route, nor to any other change", () => {
+    expect(
+      statusChangeNotice({
+        requested: "BLOCKED",
+        written: "BLOCKED",
+        openRoutes: NO_ROUTES,
+      }),
+    ).toBeNull();
+    expect(
+      statusChangeNotice({
+        requested: "INACTIVE",
+        written: "INACTIVE",
+        openRoutes: NO_ROUTES,
+      }),
+    ).toBeNull();
   });
 });
 

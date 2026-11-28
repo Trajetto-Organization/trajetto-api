@@ -3,19 +3,29 @@ import { v7 as uuidV7 } from "uuid";
 import { VEHICLE_CHECKLIST_COLUMN_DEFAULTS } from "@/shared/in-memory/column-defaults";
 import {
   IVehicleChecklistRepository,
+  ROUTES_AWAITING_END_CHECKLIST_LIMIT,
   type ChecklistMileageUpdate,
   type ChecklistPlacement,
 } from "../IVehicle-checklist-repository";
+import type {
+  RouteAwaitingEndChecklist,
+  RouteChecklistSummary,
+} from "../../dtos/vehicle-checklist-dto";
 import { VehicleMileageInvalidError } from "@/modules/vehicle/usecases/errors/vehicle-mileage-invalid-error";
 import { editedReadingRefusal } from "@/modules/vehicle/usecases/errors/vehicle-mileage-out-of-order-error";
 import { VehicleChecklistBusinessNotFoundError } from "../../usecases/errors/vehicle-checklist-business-not-found-error";
 import {
   END_OF_TIME,
+  checklistReading,
+  fuelReading,
+  neighboursAmong,
   type OdometerNeighbours,
   type OdometerTimeline,
 } from "@/shared/vehicle/odometer-timeline";
 import { placeReading } from "@/modules/fuel/usecases/fuel-rules";
+import type { Fuel } from "@/modules/fuel/dtos/fuel-dto";
 import { businessDayRange, resolveTimeZone } from "@/shared/time/business-day";
+import { listedPhase, listedRoute } from "@/shared/vehicle/route-columns";
 
 import {
   VehicleChecklist,
@@ -60,10 +70,21 @@ function compareNullable(
   return order === "asc" ? base : -base;
 }
 
-class InMemoryVehicleChecklistRepository
-  implements IVehicleChecklistRepository
-{
+class InMemoryVehicleChecklistRepository implements IVehicleChecklistRepository {
   public checklists: VehicleChecklist[] = [];
+
+  /**
+   * The routes the twin can see, seeded by the tests (it has no route
+   * table): what listRoutesAwaitingEndChecklist reads, with the vehicle
+   * already joined as the real query selects it.
+   */
+  public routes: Array<
+    RouteAwaitingEndChecklist & {
+      businessId: string;
+      driverId: string;
+      status: string;
+    }
+  > = [];
 
   /**
    * The rows behind the relations the real query joins, seeded by the tests
@@ -85,42 +106,50 @@ class InMemoryVehicleChecklistRepository
   /**
    * The vehicles' odometers, seeded by the tests that exercise the mileage
    * rule (the twin has no vehicle table). An unseeded vehicle is not checked.
-   * Fuelings live in another twin, so only this twin's checklists bound a
-   * reading on the timeline.
+   * Fuelings live in another twin: only this twin's checklists bound a
+   * reading on the timeline, unless a test links that twin's rows in `fuels`.
    */
   public vehicleMileage: Record<string, number> = {};
 
   /** Vehicles' last maintenance km (Vehicle.last_maintenance_mileage). */
   public vehicleMaintenanceMileage: Record<string, number> = {};
 
-  /** odometerNeighbours over this twin's checklists, one left out. */
+  /**
+   * Refuelings on the same timeline (odometerNeighbours reads both kinds).
+   * Empty unless a test links the fuel twin's rows, and its odometers with
+   * `vehicleMileage`, to cross the two kinds of record.
+   */
+  public fuels: Array<
+    Pick<
+      Fuel,
+      "id" | "businessId" | "vehicleId" | "current_mileage" | "refueling_date"
+    >
+  > = [];
+
+  /**
+   * odometerNeighbours over this twin's checklists, one left out, and the
+   * linked refuelings, each reading with the record that holds it.
+   */
   private neighboursOf(
     { businessId, vehicleId }: { businessId: string; vehicleId: string },
     at: Date,
     excludeChecklistId?: string,
   ): OdometerNeighbours {
-    const around = this.checklists.filter(
-      (checklist) =>
-        checklist.businessId === businessId &&
-        checklist.vehicleId === vehicleId &&
-        checklist.id !== excludeChecklistId,
-    );
-    const instant = at.getTime();
-    const before = around
-      .filter(
-        (checklist) => new Date(checklist.checklist_date).getTime() <= instant,
-      )
-      .map((checklist) => checklist.current_mileage);
-    const after = around
-      .filter(
-        (checklist) => new Date(checklist.checklist_date).getTime() > instant,
-      )
-      .map((checklist) => checklist.current_mileage);
+    const ofVehicle = (row: { businessId: string; vehicleId: string }) =>
+      row.businessId === businessId && row.vehicleId === vehicleId;
 
-    return {
-      before: before.length > 0 ? Math.max(...before) : null,
-      after: after.length > 0 ? Math.min(...after) : null,
-    };
+    return neighboursAmong(
+      [
+        ...this.fuels.filter(ofVehicle).map(fuelReading),
+        ...this.checklists
+          .filter(
+            (checklist) =>
+              ofVehicle(checklist) && checklist.id !== excludeChecklistId,
+          )
+          .map(checklistReading),
+      ],
+      at,
+    );
   }
 
   /** odometerTimeline over this twin's checklists. */
@@ -160,6 +189,8 @@ class InMemoryVehicleChecklistRepository
       maintenanceFloor:
         this.vehicleMaintenanceMileage[update.vehicleId] ?? null,
       previousMileage: null,
+      at: update.at,
+      timeZone: resolveTimeZone(update.timeZone),
     });
 
     if (!placed.fits) throw new VehicleMileageInvalidError();
@@ -191,6 +222,10 @@ class InMemoryVehicleChecklistRepository
       );
       const previousMileage =
         stored.vehicleId === update.vehicleId ? stored.current_mileage : null;
+      const record = {
+        at: update.at,
+        timeZone: resolveTimeZone(update.timeZone),
+      };
 
       const placement = placeReading({
         mileage: update.currentMileage,
@@ -199,10 +234,11 @@ class InMemoryVehicleChecklistRepository
         maintenanceFloor:
           this.vehicleMaintenanceMileage[update.vehicleId] ?? null,
         previousMileage,
+        ...record,
       });
 
       if (!placement.fits) {
-        throw editedReadingRefusal(previousMileage !== null, timeline);
+        throw editedReadingRefusal(previousMileage !== null, timeline, record);
       }
 
       const nextOdometer =
@@ -275,6 +311,11 @@ class InMemoryVehicleChecklistRepository
       branchId: checklistData.branchId || "",
       vehicleId: checklistData.vehicleId,
       driverId: checklistData.driverId || "",
+      routeId: checklistData.routeId ?? null,
+      phase: checklistData.phase ?? VEHICLE_CHECKLIST_COLUMN_DEFAULTS.phase,
+      created_from:
+        checklistData.created_from ??
+        VEHICLE_CHECKLIST_COLUMN_DEFAULTS.created_from,
       ai_verification_status: "",
       created_at: new Date(),
       updated_at: new Date(),
@@ -473,7 +514,17 @@ class InMemoryVehicleChecklistRepository
     };
 
     return {
-      data: rows.slice(skip, skip + pageSize),
+      data: rows.slice(skip, skip + pageSize).map((checklist) => {
+        const route = this.routes.find((row) => row.id === checklist.routeId);
+
+        // Contract C3, as the real query's LEFT JOIN and listedRoute.
+        return {
+          ...checklist,
+          routeId: checklist.routeId ?? null,
+          route: listedRoute(checklist, route),
+          phase: listedPhase(checklist.phase),
+        };
+      }),
       conditionCounts,
       branchCounts: this.namedCounts(
         this.checklists.filter((checklist) =>
@@ -631,6 +682,7 @@ class InMemoryVehicleChecklistRepository
         overall_condition: checklist.overall_condition,
         notes: checklist.notes,
         branchName: this.branchNames[checklist.branchId] ?? null,
+        created_from: checklist.created_from,
         created_at: checklist.created_at,
         updated_at: checklist.updated_at,
       };
@@ -643,6 +695,80 @@ class InMemoryVehicleChecklistRepository
     return this.checklists.filter((checklist) =>
       this.matches(checklist, filters),
     ).length;
+  }
+
+  async listRouteChecklists(
+    businessId: string,
+    routeIds: string[],
+  ): Promise<RouteChecklistSummary[]> {
+    const wanted = new Set(routeIds);
+    const time = (value: Date | string) => new Date(value).getTime();
+
+    return this.checklists
+      .flatMap((checklist) =>
+        checklist.businessId === businessId &&
+        checklist.routeId &&
+        wanted.has(checklist.routeId) &&
+        checklist.phase &&
+        checklist.phase !== "STANDALONE"
+          ? [
+              {
+                id: checklist.id,
+                routeId: checklist.routeId,
+                phase: checklist.phase,
+                checklist_date: checklist.checklist_date,
+                overall_condition: checklist.overall_condition,
+              },
+            ]
+          : [],
+      )
+      .sort(
+        (a, b) =>
+          time(b.checklist_date) - time(a.checklist_date) ||
+          (a.id < b.id ? 1 : a.id > b.id ? -1 : 0),
+      );
+  }
+
+  async listRoutesAwaitingEndChecklist({
+    businessId,
+    driverId,
+    completedSince,
+  }: {
+    businessId: string;
+    driverId: string;
+    completedSince: Date;
+  }): Promise<RouteAwaitingEndChecklist[]> {
+    const ended = (route: (typeof this.routes)[number]) =>
+      route.completed_at ? route.completed_at.getTime() : 0;
+
+    return this.routes
+      .filter(
+        (route) =>
+          route.businessId === businessId &&
+          route.driverId === driverId &&
+          route.status === "COMPLETED" &&
+          route.completed_at !== null &&
+          route.completed_at.getTime() >= completedSince.getTime() &&
+          // Only an arrival checklist of the route's own company counts.
+          !this.checklists.some(
+            (checklist) =>
+              checklist.businessId === businessId &&
+              checklist.routeId === route.id &&
+              checklist.phase === "ROUTE_END",
+          ),
+      )
+      .sort(
+        (a, b) =>
+          ended(b) - ended(a) || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0),
+      )
+      .slice(0, ROUTES_AWAITING_END_CHECKLIST_LIMIT)
+      .map(({ id, code, plan_version, vehicle, completed_at }) => ({
+        id,
+        code,
+        plan_version,
+        vehicle: vehicle ? { ...vehicle } : null,
+        completed_at,
+      }));
   }
 }
 

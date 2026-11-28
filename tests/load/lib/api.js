@@ -39,6 +39,14 @@ const failures = new Rate("surface_failures");
 const throttled = new Rate("surface_throttled");
 
 /**
+ * How often the server shed the request: a 503 that says when to come back
+ * (Retry-After). Under load shedding in enforce (plano-escala F2-24) that is
+ * the API refusing work it cannot do in time, the answer the spike's
+ * acceptance asks for; a 503 without the header is a failure.
+ */
+const shed = new Rate("surface_shed");
+
+/**
  * Which part of the run a measurement belongs to.
  *
  * A soak exists to find what only shows up after hours — a connection opened
@@ -74,23 +82,89 @@ function phaseOf() {
   return total >= plannedMs * LATE_FRACTION ? "late" : "early";
 }
 
-function record(surface, response, expected) {
-  const phase = phaseOf();
+/** Whether the answer says when to come back. */
+function retryAfterOf(response) {
+  const headers = response?.headers ?? {};
+  const value = headers["Retry-After"] ?? headers["retry-after"];
+  const seconds = Number(value);
 
-  latency.add(response.timings.duration, { surface, phase });
+  return Number.isFinite(seconds) && seconds >= 0 ? seconds : null;
+}
+
+/**
+ * One answer, measured.
+ *
+ * A 429 or a 503 that carries Retry-After is a refusal the server meant
+ * (the limiter, the panel budget, load shedding): it counts in
+ * `surface_throttled` or `surface_shed`, never in `surface_failures`, on
+ * every surface. It used to be a failure everywhere but the three surfaces
+ * that listed 429, so load shedding doing its job (plano-escala F2-24)
+ * would have read as the product breaking. The ceilings on throttled and
+ * shed stay in the scenes, because a flood of refusals IS worth knowing.
+ *
+ * `tags` adds the scene's own dimensions (a tenant's class, a stage of the
+ * run) to every sample.
+ */
+function record(surface, response, expected, tags = {}) {
+  const phase = phaseOf();
+  const sampleTags = { surface, phase, ...tags };
+
+  latency.add(response.timings.duration, sampleTags);
+
+  const refused =
+    (response.status === 429 || response.status === 503) &&
+    retryAfterOf(response) !== null;
 
   const ok = check(
     response,
     {
-      [`${surface}: status`]: (r) => expected.includes(r.status),
+      [`${surface}: status`]: (r) => expected.includes(r.status) || refused,
     },
     { surface },
   );
 
-  failures.add(!ok, { surface, phase });
-  throttled.add(response.status === 429, { surface });
+  failures.add(!ok, sampleTags);
+  throttled.add(response.status === 429, { surface, ...tags });
+  shed.add(response.status === 503 && refused, { surface, ...tags });
 
   return ok;
+}
+
+/** A key per request, for the routes that take an Idempotency-Key. */
+function idempotencyKey(prefix) {
+  return `${prefix}-${__VU}-${__ITER}-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
+}
+
+/** The business day as the API keys it (YYYY-MM-DD), on the São Paulo clock. */
+function businessDay() {
+  return new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+/**
+ * The header every build of the driver's app sends; `contract` is what the
+ * positions' load shedding counts (F2-25).
+ */
+function appHeaders(token, contract) {
+  return {
+    Authorization: `Bearer ${token}`,
+    "Content-Type": "application/json",
+    "x-trajetto-client": "mobile",
+    "x-trajetto-client-version": `platform=android; version=load; contract=${contract}; outbox=1`,
+  };
+}
+
+/** `count` points ending now, one per 15 s, as the app records them. */
+function pingsEndingNow(count, seed) {
+  const now = Date.now();
+
+  return Array.from({ length: count }, (_, index) => ({
+    latitude: -23.55 + (seed % 100) * 0.001 + index * 0.00002,
+    longitude: -46.63 + (seed % 100) * 0.001 + index * 0.00002,
+    accuracy: 12,
+    speed: 40,
+    heading: 90,
+    recorded_at: new Date(now - (count - index) * 15000).toISOString(),
+  }));
 }
 
 /**
@@ -184,8 +258,9 @@ const surfaces = {
   /**
    * The heaviest write on the platform.
    *
-   * At the reference scale: twenty thousand drivers pinging every thirty
-   * seconds is ~670 inserts a second, and each request carries a small batch.
+   * At the 5M step the ruler is ~333 POST/s, each carrying a small batch:
+   * ~1,333 points a second (an estimate, the scale plan's decision D11; see
+   * lib/mix.js).
    */
   recordPositions(vu) {
     const now = Date.now();
@@ -208,6 +283,236 @@ const surfaces = {
     // 429 is a pass, not a failure: the route declares a limit and the point
     // of the run is to find where the limit bites, not to pretend it is absent.
     return record("route.positions", response, [200, 429]);
+  },
+
+  /**
+   * One phone's flush, as the app sends it (positions.js, outage.js): its
+   * own driver's token, the contract it runs, `count` points. The response
+   * is returned, so the caller can honour `nextFlushAfterMs` and
+   * Retry-After the way that contract does.
+   */
+  flushPositions(driverIndex, contract, count, tags = {}, base = BASE) {
+    const token =
+      context.driverTokens[driverIndex % context.driverTokens.length];
+
+    const response = http.post(
+      `${base}/route/positions`,
+      JSON.stringify({ pings: pingsEndingNow(count, driverIndex) }),
+      {
+        headers: appHeaders(token, contract),
+        tags: { surface: "route.positions" },
+        timeout: "30s",
+      },
+    );
+
+    record("route.positions", response, [200], tags);
+
+    return response;
+  },
+
+  /**
+   * A delivery created by hand on the panel (write-mix.js): the board's
+   * own write, with the shipper the seed created.
+   */
+  createDelivery() {
+    const response = http.post(
+      `${BASE}/delivery/create-delivery/${context.businessId}`,
+      JSON.stringify({
+        shipperId: context.shipperId,
+        recipient_name: `Cliente da carga ${__VU}-${__ITER}`,
+        cep: "01001000",
+        city: "São Paulo",
+        uf: "SP",
+        street: "Rua da Carga",
+        address_number: String(__ITER % 1000),
+        scheduled_date: businessDay(),
+      }),
+      {
+        headers: {
+          ...managerHeaders(),
+          "Idempotency-Key": idempotencyKey("delivery"),
+        },
+        tags: { surface: "delivery.create" },
+      },
+    );
+
+    return record("delivery.create", response, [201]);
+  },
+
+  /** A proof photo's presigned PUT, asked by the phone (signed locally). */
+  presignUpload(vu) {
+    const response = http.post(
+      `${BASE}/uploads/presign/${context.businessId}`,
+      JSON.stringify({
+        uploadType: "deliveryPhotos",
+        files: [
+          {
+            originalFilename: "canhoto.jpg",
+            contentType: "image/jpeg",
+            size: 350000,
+          },
+        ],
+      }),
+      { headers: driverHeaders(vu), tags: { surface: "upload.presign" } },
+    );
+
+    return record("upload.presign", response, [201]);
+  },
+
+  /** The office writing to one driver (the chat's commonest write). */
+  sendChat(vu) {
+    const driverId = context.driverIds[vu % context.driverIds.length];
+
+    const response = http.post(
+      `${BASE}/chat/send-message`,
+      JSON.stringify({
+        driverIds: [driverId],
+        kind: "TEXT",
+        body: `Mensagem da carga ${__VU}-${__ITER}`,
+      }),
+      {
+        headers: {
+          ...managerHeaders(),
+          "Idempotency-Key": idempotencyKey("chat"),
+        },
+        tags: { surface: "chat.send" },
+      },
+    );
+
+    return record("chat.send", response, [201]);
+  },
+
+  /**
+   * The bell's NDJSON list, as every open tab reads it at its tick. The
+   * response is returned (tower.js honours its Retry-After).
+   */
+  notificationStream(token = null, tags = {}) {
+    const response = http.get(`${BASE}/notification/stream?limit=50`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : managerHeaders(),
+      tags: { surface: "notification.stream" },
+    });
+
+    record("notification.stream", response, [200], tags);
+
+    return response;
+  },
+
+  /**
+   * One session's refresh (write-mix.js): the token rotates, so the caller
+   * keeps the one this returns; a session is never shared between VUs, or
+   * the reuse detection would end it.
+   */
+  refreshSession(refreshToken) {
+    const response = http.post(
+      `${BASE}/user/refresh-token`,
+      JSON.stringify({ token: refreshToken }),
+      {
+        headers: { "Content-Type": "application/json" },
+        tags: { surface: "user.refresh" },
+      },
+    );
+
+    record("user.refresh", response, [200]);
+
+    if (response.status !== 200) return refreshToken;
+
+    try {
+      return response.json("refresh_token") || refreshToken;
+    } catch {
+      return refreshToken;
+    }
+  },
+
+  /**
+   * The tower of ANY company, with that company's own session (tower.js,
+   * noisy-tenant.js). One function per surface, each with its own record,
+   * so the harness test reads which surface a scene runs.
+   */
+  tenantTower(businessId, token, tags = {}) {
+    const response = http.get(
+      `${BASE}/route/control-tower?businessId=${businessId}`,
+      {
+        headers: { Authorization: `Bearer ${token}` },
+        tags: { surface: "route.tower" },
+      },
+    );
+
+    record("route.tower", response, [200], tags);
+
+    return response;
+  },
+
+  /** The board of ANY company, without a period (the panel budget's 10). */
+  tenantDeliveries(businessId, token, tags = {}) {
+    const response = http.get(
+      `${BASE}/delivery/list-delivery?page=1&pageSize=20&businessId=${businessId}`,
+      {
+        headers: { Authorization: `Bearer ${token}` },
+        tags: { surface: "delivery.list" },
+      },
+    );
+
+    record("delivery.list", response, [200], tags);
+
+    return response;
+  },
+
+  /** The route list of ANY company. */
+  tenantRoutes(businessId, token, tags = {}) {
+    const response = http.get(
+      `${BASE}/route/list-routes?page=1&pageSize=20&businessId=${businessId}`,
+      {
+        headers: { Authorization: `Bearer ${token}` },
+        tags: { surface: "route.list" },
+      },
+    );
+
+    record("route.list", response, [200], tags);
+
+    return response;
+  },
+
+  /**
+   * A spreadsheet upload (plano-escala LOAD-04): the 202 with the import's
+   * id; the rows are processed after the answer, one import at a time per
+   * replica. 429 IMPORT_BUSY with Retry-After is the queue being full.
+   */
+  importSpreadsheet(file, token, tags = {}) {
+    const response = http.post(
+      `${BASE}/import/import-spreadsheet/${context.businessId}`,
+      JSON.stringify({
+        filename: file.filename,
+        content: file.content,
+        shipperId: context.shipperId,
+      }),
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        tags: { surface: "import.spreadsheet" },
+        timeout: "120s",
+      },
+    );
+
+    record("import.spreadsheet", response, [202], tags);
+
+    return response;
+  },
+
+  /** An import's status and counters, polled until it leaves IN_PROGRESS. */
+  getImport(importId, token, tags = {}) {
+    const response = http.get(
+      `${BASE}/import/get-import/${importId}/business/${context.businessId}`,
+      {
+        headers: { Authorization: `Bearer ${token}` },
+        tags: { surface: "import.get" },
+      },
+    );
+
+    record("import.get", response, [200], tags);
+
+    return response;
   },
 
   /** The driver's working list, offline-first — one payload per app open. */
@@ -324,6 +629,11 @@ const SURFACE_NAMES = [
   "chat.threads",
   "chat.messages",
   "system.health",
+  "delivery.create",
+  "upload.presign",
+  "chat.send",
+  "notification.stream",
+  "user.refresh",
 ];
 
 function perSurfaceBreakdown() {
@@ -333,9 +643,55 @@ function perSurfaceBreakdown() {
     thresholds[`surface_latency{surface:${surface}}`] = ["max>=0"];
     thresholds[`surface_failures{surface:${surface}}`] = ["rate>=0"];
     thresholds[`surface_throttled{surface:${surface}}`] = ["rate>=0"];
+    thresholds[`surface_shed{surface:${surface}}`] = ["rate>=0"];
   }
 
   return thresholds;
 }
 
-export { BASE, context, perSurfaceBreakdown, planRun, surfaces };
+/**
+ * The same always-holding thresholds for a scene's own tags, so the
+ * summary-export carries the numbers its acceptance compares
+ * (lib/verdicts.mjs): `breakdownOf("class", ["noisy", "normal"])`, or with
+ * a second tag for each pair of values.
+ */
+function breakdownOf(tag, values, otherTag = null, otherValues = []) {
+  const thresholds = {};
+  const keys = otherTag
+    ? values.flatMap((value) =>
+        otherValues.map((other) => `${tag}:${value},${otherTag}:${other}`),
+      )
+    : values.map((value) => `${tag}:${value}`);
+
+  for (const key of keys) {
+    thresholds[`surface_latency{${key}}`] = ["max>=0"];
+    thresholds[`surface_failures{${key}}`] = ["rate>=0"];
+    thresholds[`surface_throttled{${key}}`] = ["rate>=0"];
+    thresholds[`surface_shed{${key}}`] = ["rate>=0"];
+  }
+
+  return thresholds;
+}
+
+/** p50/p95/p99 in every scene's summary and summary-export. */
+const SUMMARY_TREND_STATS = [
+  "avg",
+  "min",
+  "med",
+  "max",
+  "p(90)",
+  "p(95)",
+  "p(99)",
+  "count",
+];
+
+export {
+  BASE,
+  SUMMARY_TREND_STATS,
+  breakdownOf,
+  context,
+  perSurfaceBreakdown,
+  planRun,
+  retryAfterOf,
+  surfaces,
+};

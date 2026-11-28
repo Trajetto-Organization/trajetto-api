@@ -8,11 +8,15 @@ import { InMemoryDriverRepository } from "@/modules/driver/repositories/in-memor
 import { InMemoryOccurrenceTypeRepository } from "@/modules/occurrence-type/repositories/in-memory/in-memory-occurrence-type-repository";
 import { InMemoryRouteRepository } from "@/modules/route/repositories/in-memory/in-memory-route-repository";
 import { InMemoryVehicleTypeRepository } from "@/modules/vehicle-type/repositories/in-memory/in-memory-vehicle-type-repository";
+import { InMemoryVehicleChecklistRepository } from "@/modules/vehicle-checklist/repositories/in-memory/in-memory-vehicle-checklist-repository";
+import { InMemoryFuelRepository } from "@/modules/fuel/repositories/in-memory/in-memory-fuel-repository";
+import { FUEL_COLUMN_DEFAULTS } from "@/shared/in-memory/column-defaults";
 
 import type { CreateBusinessProps } from "@/modules/business/dtos/business-dto";
 import type { CreateOccurrenceProps } from "@/modules/delivery/dtos/delivery-dto";
 import type { CreateDriverProps } from "@/modules/driver/dtos/driver-dto";
 import type { CreateOccurrenceTypeProps } from "@/modules/occurrence-type/dtos/occurrence-type-dto";
+import type { CreateVehicleChecklistProps } from "@/modules/vehicle-checklist/dtos/vehicle-checklist-dto";
 
 /**
  * The final-phase migrations gave existing tables NOT NULL columns with a
@@ -180,6 +184,73 @@ describe("in-memory repositories apply the columns' defaults", () => {
       "NOT_REQUIRED",
     );
   });
+
+  it("vehicle checklist: WEB_DASHBOARD when no origin is sent (20261105120000)", async () => {
+    // The web's form sends no origin; the app's does. Before the column
+    // existed neither the fake nor Postgres kept it, and the panel badged
+    // every checklist "Web".
+    const checklists = new InMemoryVehicleChecklistRepository();
+    const answers = {
+      businessId: "business-defaults",
+      vehicleId: "vehicle-1",
+      branchId: "branch-1",
+      driverId: "driver-1",
+      current_mileage: 1_000,
+      tires_condition: "good",
+      bumpers_condition: "good",
+      windshield_condition: "good",
+      mirrors_condition: "good",
+      steering_wheel_condition: "good",
+      battery_condition: "good",
+      spare_tire_condition: "good",
+      overall_condition: "approved",
+    } as CreateVehicleChecklistProps;
+
+    const fromTheWeb = await checklists.createVehicleChecklist({
+      ...answers,
+      created_from: undefined,
+    });
+    const fromTheApp = await checklists.createVehicleChecklist({
+      ...answers,
+      created_from: "MOBILE_APP",
+    });
+
+    expect(fromTheWeb.created_from).toBe("WEB_DASHBOARD");
+    expect(fromTheApp.created_from).toBe("MOBILE_APP");
+  });
+
+  it("fuel: no alert and nothing behind one (20261105130000)", async () => {
+    // Postgres gives every INSERT that leaves them out an empty array and
+    // two NULLs; the previous image's INSERTs rely on it.
+    const fuels = new InMemoryFuelRepository();
+    const refuelling = {
+      businessId: "business-defaults",
+      branchId: "branch-1",
+      vehicleId: "vehicle-1",
+      driverId: "driver-1",
+      fuelTypeId: "diesel",
+      current_mileage: 1_000,
+      liters_amount: 40,
+      price_per_liter: 6,
+      refueling_date: new Date("2026-11-05T12:00:00.000Z"),
+      created_from: "WEB_DASHBOARD",
+    } as const;
+
+    const first = await fuels.createFuel(refuelling);
+    const second = await fuels.createFuel({
+      ...refuelling,
+      refueling_date: new Date("2026-11-06T12:00:00.000Z"),
+    });
+
+    expect(asRecord(first)).toMatchObject({
+      alerts: [],
+      recent_refuel_reason: null,
+      recent_refuel_previous_at: null,
+    });
+    // Each row has its own array: one row's alerts are never another's.
+    expect(first.alerts).not.toBe(second.alerts);
+    expect(first.alerts).not.toBe(FUEL_COLUMN_DEFAULTS.alerts);
+  });
 });
 
 /**
@@ -232,7 +303,10 @@ describe("in-memory repositories return null for the new nullable columns", () =
       occurrenceId: "occurrence-1",
     } as never);
 
-    expect(asRecord(deliveries.events[1]).occurrenceId).toBe("occurrence-1");
+    // The last one: the create wrote the trail's first line (F2-06).
+    expect(
+      asRecord(deliveries.events[deliveries.events.length - 1]).occurrenceId,
+    ).toBe("occurrence-1");
   });
 
   it("occurrence type: no form yet", async () => {

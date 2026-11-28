@@ -1,0 +1,421 @@
+{
+  "$comment": "Shared cases of the geofence rule (plan of 02/11/2026, item E2; decisions D12-D14 and the owner's calls of 03/11/2026): src/shared/delivery/geofence/geofence-rules.ts in the API and its copy in the driver's app (trajetto-mobile, E3) run this same file. The address of every case is Praça da Sé, São Paulo (-23.55052, -46.633308); the positions move north by a fraction of a degree. distance_m is the haversine distance (Earth radius 6,371,000 m) rounded to 0.1 m, null when either point is missing or the address is coarse. Change a case only together with both copies.",
+  "verdict": [
+    {
+      "name": "geofence off: never evaluated, the distance is still recorded",
+      "input": {
+        "mode": "DISABLED",
+        "radius_m": 500,
+        "position": { "latitude": -23.54332, "longitude": -46.633308 },
+        "accuracy_m": 15,
+        "position_age_ms": 10000,
+        "address": { "latitude": -23.55052, "longitude": -46.633308 },
+        "address_precision": null
+      },
+      "expected": {
+        "outcome": "NOT_EVALUATED",
+        "distance_m": 800.6,
+        "reason": "DISABLED"
+      }
+    },
+    {
+      "name": "300 m away with a good fix: inside",
+      "input": {
+        "mode": "ALERT",
+        "radius_m": 500,
+        "position": { "latitude": -23.54782, "longitude": -46.633308 },
+        "accuracy_m": 20,
+        "position_age_ms": 5000,
+        "address": { "latitude": -23.55052, "longitude": -46.633308 },
+        "address_precision": null
+      },
+      "expected": { "outcome": "INSIDE", "distance_m": 300.2, "reason": null }
+    },
+    {
+      "name": "800 m away with a good fix: outside",
+      "input": {
+        "mode": "BLOCK",
+        "radius_m": 500,
+        "position": { "latitude": -23.54332, "longitude": -46.633308 },
+        "accuracy_m": 20,
+        "position_age_ms": 5000,
+        "address": { "latitude": -23.55052, "longitude": -46.633308 },
+        "address_precision": null
+      },
+      "expected": { "outcome": "OUTSIDE", "distance_m": 800.6, "reason": null }
+    },
+    {
+      "name": "past the radius by less than the accuracy: the benefit of the doubt is inside",
+      "input": {
+        "mode": "BLOCK",
+        "radius_m": 500,
+        "position": { "latitude": -23.54592, "longitude": -46.633308 },
+        "accuracy_m": 12,
+        "position_age_ms": 5000,
+        "address": { "latitude": -23.55052, "longitude": -46.633308 },
+        "address_precision": null
+      },
+      "expected": { "outcome": "INSIDE", "distance_m": 511.5, "reason": null }
+    },
+    {
+      "name": "past the radius by more than the accuracy: outside",
+      "input": {
+        "mode": "BLOCK",
+        "radius_m": 500,
+        "position": { "latitude": -23.54592, "longitude": -46.633308 },
+        "accuracy_m": 11,
+        "position_age_ms": 5000,
+        "address": { "latitude": -23.55052, "longitude": -46.633308 },
+        "address_precision": null
+      },
+      "expected": { "outcome": "OUTSIDE", "distance_m": 511.5, "reason": null }
+    },
+    {
+      "name": "an address without a point is not evaluated",
+      "input": {
+        "mode": "BLOCK",
+        "radius_m": 500,
+        "position": { "latitude": -23.54332, "longitude": -46.633308 },
+        "accuracy_m": 20,
+        "position_age_ms": 5000,
+        "address": null,
+        "address_precision": null
+      },
+      "expected": {
+        "outcome": "NOT_EVALUATED",
+        "distance_m": null,
+        "reason": "NO_ADDRESS_POINT"
+      }
+    },
+    {
+      "name": "an address at (0, 0) is a missing point",
+      "input": {
+        "mode": "BLOCK",
+        "radius_m": 500,
+        "position": { "latitude": -23.54332, "longitude": -46.633308 },
+        "accuracy_m": 20,
+        "position_age_ms": 5000,
+        "address": { "latitude": 0, "longitude": 0 },
+        "address_precision": null
+      },
+      "expected": {
+        "outcome": "NOT_EVALUATED",
+        "distance_m": null,
+        "reason": "NO_ADDRESS_POINT"
+      }
+    },
+    {
+      "name": "an address found only at the city level is not evaluated",
+      "input": {
+        "mode": "BLOCK",
+        "radius_m": 500,
+        "position": { "latitude": -23.54332, "longitude": -46.633308 },
+        "accuracy_m": 20,
+        "position_age_ms": 5000,
+        "address": { "latitude": -23.55052, "longitude": -46.633308 },
+        "address_precision": "CITY"
+      },
+      "expected": {
+        "outcome": "NOT_EVALUATED",
+        "distance_m": null,
+        "reason": "COARSE_ADDRESS"
+      }
+    },
+    {
+      "name": "an address found only at the neighbourhood level is not evaluated",
+      "input": {
+        "mode": "BLOCK",
+        "radius_m": 500,
+        "position": { "latitude": -23.54332, "longitude": -46.633308 },
+        "accuracy_m": 20,
+        "position_age_ms": 5000,
+        "address": { "latitude": -23.55052, "longitude": -46.633308 },
+        "address_precision": "NEIGHBORHOOD"
+      },
+      "expected": {
+        "outcome": "NOT_EVALUATED",
+        "distance_m": null,
+        "reason": "COARSE_ADDRESS"
+      }
+    },
+    {
+      "name": "an address found at the street is evaluated",
+      "input": {
+        "mode": "ALERT",
+        "radius_m": 500,
+        "position": { "latitude": -23.54332, "longitude": -46.633308 },
+        "accuracy_m": 20,
+        "position_age_ms": 5000,
+        "address": { "latitude": -23.55052, "longitude": -46.633308 },
+        "address_precision": "STREET"
+      },
+      "expected": { "outcome": "OUTSIDE", "distance_m": 800.6, "reason": null }
+    },
+    {
+      "name": "an address found at the house number is evaluated",
+      "input": {
+        "mode": "ALERT",
+        "radius_m": 500,
+        "position": { "latitude": -23.54782, "longitude": -46.633308 },
+        "accuracy_m": 20,
+        "position_age_ms": 5000,
+        "address": { "latitude": -23.55052, "longitude": -46.633308 },
+        "address_precision": "ADDRESS"
+      },
+      "expected": { "outcome": "INSIDE", "distance_m": 300.2, "reason": null }
+    },
+    {
+      "name": "no position is not evaluated",
+      "input": {
+        "mode": "BLOCK",
+        "radius_m": 500,
+        "position": null,
+        "accuracy_m": 20,
+        "position_age_ms": 5000,
+        "address": { "latitude": -23.55052, "longitude": -46.633308 },
+        "address_precision": null
+      },
+      "expected": {
+        "outcome": "NOT_EVALUATED",
+        "distance_m": null,
+        "reason": "NO_POSITION"
+      }
+    },
+    {
+      "name": "a position at (0, 0) is a missing fix",
+      "input": {
+        "mode": "BLOCK",
+        "radius_m": 500,
+        "position": { "latitude": 0, "longitude": 0 },
+        "accuracy_m": 20,
+        "position_age_ms": 5000,
+        "address": { "latitude": -23.55052, "longitude": -46.633308 },
+        "address_precision": null
+      },
+      "expected": {
+        "outcome": "NOT_EVALUATED",
+        "distance_m": null,
+        "reason": "NO_POSITION"
+      }
+    },
+    {
+      "name": "a position without accuracy (an older app) is not evaluated",
+      "input": {
+        "mode": "BLOCK",
+        "radius_m": 500,
+        "position": { "latitude": -23.54332, "longitude": -46.633308 },
+        "accuracy_m": null,
+        "position_age_ms": null,
+        "address": { "latitude": -23.55052, "longitude": -46.633308 },
+        "address_precision": null
+      },
+      "expected": {
+        "outcome": "NOT_EVALUATED",
+        "distance_m": 800.6,
+        "reason": "NO_ACCURACY"
+      }
+    },
+    {
+      "name": "a negative accuracy is no accuracy",
+      "input": {
+        "mode": "BLOCK",
+        "radius_m": 500,
+        "position": { "latitude": -23.54332, "longitude": -46.633308 },
+        "accuracy_m": -5,
+        "position_age_ms": 5000,
+        "address": { "latitude": -23.55052, "longitude": -46.633308 },
+        "address_precision": null
+      },
+      "expected": {
+        "outcome": "NOT_EVALUATED",
+        "distance_m": 800.6,
+        "reason": "NO_ACCURACY"
+      }
+    },
+    {
+      "name": "accuracy worse than the radius is not evaluated",
+      "input": {
+        "mode": "BLOCK",
+        "radius_m": 500,
+        "position": { "latitude": -23.54332, "longitude": -46.633308 },
+        "accuracy_m": 600,
+        "position_age_ms": 5000,
+        "address": { "latitude": -23.55052, "longitude": -46.633308 },
+        "address_precision": null
+      },
+      "expected": {
+        "outcome": "NOT_EVALUATED",
+        "distance_m": 800.6,
+        "reason": "POOR_ACCURACY"
+      }
+    },
+    {
+      "name": "accuracy equal to the radius is still evaluated",
+      "input": {
+        "mode": "BLOCK",
+        "radius_m": 300,
+        "position": { "latitude": -23.54332, "longitude": -46.633308 },
+        "accuracy_m": 300,
+        "position_age_ms": 5000,
+        "address": { "latitude": -23.55052, "longitude": -46.633308 },
+        "address_precision": null
+      },
+      "expected": { "outcome": "OUTSIDE", "distance_m": 800.6, "reason": null }
+    },
+    {
+      "name": "a fix older than two minutes is not evaluated",
+      "input": {
+        "mode": "BLOCK",
+        "radius_m": 500,
+        "position": { "latitude": -23.54332, "longitude": -46.633308 },
+        "accuracy_m": 20,
+        "position_age_ms": 120001,
+        "address": { "latitude": -23.55052, "longitude": -46.633308 },
+        "address_precision": null
+      },
+      "expected": {
+        "outcome": "NOT_EVALUATED",
+        "distance_m": 800.6,
+        "reason": "STALE_POSITION"
+      }
+    },
+    {
+      "name": "a fix exactly two minutes old is still fresh",
+      "input": {
+        "mode": "BLOCK",
+        "radius_m": 500,
+        "position": { "latitude": -23.54332, "longitude": -46.633308 },
+        "accuracy_m": 20,
+        "position_age_ms": 120000,
+        "address": { "latitude": -23.55052, "longitude": -46.633308 },
+        "address_precision": null
+      },
+      "expected": { "outcome": "OUTSIDE", "distance_m": 800.6, "reason": null }
+    },
+    {
+      "name": "an unknown fix age (the server without the stamp) counts as fresh",
+      "input": {
+        "mode": "BLOCK",
+        "radius_m": 500,
+        "position": { "latitude": -23.54332, "longitude": -46.633308 },
+        "accuracy_m": 20,
+        "position_age_ms": null,
+        "address": { "latitude": -23.55052, "longitude": -46.633308 },
+        "address_precision": null
+      },
+      "expected": { "outcome": "OUTSIDE", "distance_m": 800.6, "reason": null }
+    }
+  ],
+  "decision": [
+    {
+      "name": "inside is allowed",
+      "input": {
+        "mode": "BLOCK",
+        "outcome": "INSIDE",
+        "action": "ARRIVAL",
+        "recent": true
+      },
+      "expected": "ALLOW"
+    },
+    {
+      "name": "not evaluated never blocks",
+      "input": {
+        "mode": "BLOCK",
+        "outcome": "NOT_EVALUATED",
+        "action": "PROOF",
+        "recent": true
+      },
+      "expected": "ALLOW"
+    },
+    {
+      "name": "geofence off allows anything",
+      "input": {
+        "mode": "DISABLED",
+        "outcome": "OUTSIDE",
+        "action": "ARRIVAL",
+        "recent": true
+      },
+      "expected": "ALLOW"
+    },
+    {
+      "name": "alert asks to confirm an arrival outside",
+      "input": {
+        "mode": "ALERT",
+        "outcome": "OUTSIDE",
+        "action": "ARRIVAL",
+        "recent": true
+      },
+      "expected": "CONFIRM"
+    },
+    {
+      "name": "alert asks to confirm a proof outside",
+      "input": {
+        "mode": "ALERT",
+        "outcome": "OUTSIDE",
+        "action": "PROOF",
+        "recent": true
+      },
+      "expected": "CONFIRM"
+    },
+    {
+      "name": "alert asks to confirm an occurrence outside",
+      "input": {
+        "mode": "ALERT",
+        "outcome": "OUTSIDE",
+        "action": "OCCURRENCE",
+        "recent": true
+      },
+      "expected": "CONFIRM"
+    },
+    {
+      "name": "block refuses a fresh arrival outside",
+      "input": {
+        "mode": "BLOCK",
+        "outcome": "OUTSIDE",
+        "action": "ARRIVAL",
+        "recent": true
+      },
+      "expected": "REFUSE"
+    },
+    {
+      "name": "block refuses a fresh proof outside",
+      "input": {
+        "mode": "BLOCK",
+        "outcome": "OUTSIDE",
+        "action": "PROOF",
+        "recent": true
+      },
+      "expected": "REFUSE"
+    },
+    {
+      "name": "block never refuses an occurrence, it is flagged",
+      "input": {
+        "mode": "BLOCK",
+        "outcome": "OUTSIDE",
+        "action": "OCCURRENCE",
+        "recent": true
+      },
+      "expected": "CONFIRM"
+    },
+    {
+      "name": "block never refuses a queued arrival, it is flagged",
+      "input": {
+        "mode": "BLOCK",
+        "outcome": "OUTSIDE",
+        "action": "ARRIVAL",
+        "recent": false
+      },
+      "expected": "CONFIRM"
+    },
+    {
+      "name": "block never refuses a queued proof, it is flagged",
+      "input": {
+        "mode": "BLOCK",
+        "outcome": "OUTSIDE",
+        "action": "PROOF",
+        "recent": false
+      },
+      "expected": "CONFIRM"
+    }
+  ]
+}

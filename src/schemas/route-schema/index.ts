@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { optionalMultilineText } from "@/shared/delivery/text-rules";
 import { tenantLockedShape } from "@/shared/validation/tenant-locked-field";
 
 import { listPagesSchema } from "@/schemas/list-pages-schema";
@@ -23,10 +24,16 @@ import {
 } from "@/shared/route/route-plan-rules";
 import { dateOnlyFromKey, dateOnlyKey } from "@/shared/time/business-day";
 import {
+  MAX_CUSTOM_PERIOD_DAYS,
+  listPeriodFields,
+  refineListPeriod,
+} from "@/shared/time/list-period";
+import {
   hasConsecutiveSpaces,
   hasSpaceAtEdges,
   isEmptyOrWhitespace,
 } from "@/shared/utils/zod-schema-helpers";
+import { fieldError } from "@/shared/validation/field-error";
 
 /**
  * Every schema of the route module, in one place.
@@ -53,13 +60,13 @@ const routeStopStatusEnum = z.enum([
 
 const routeIdParamSchema = z.object({
   routeId: z
-    .string({ required_error: "ID da rota é obrigatório!" })
+    .string(fieldError({ required: "ID da rota é obrigatório!" }))
     .uuid("ID da rota é inválido."),
 });
 
 const routeStopIdParamSchema = z.object({
   stopId: z
-    .string({ required_error: "ID da parada é obrigatório!" })
+    .string(fieldError({ required: "ID da parada é obrigatório!" }))
     .uuid("ID da parada é inválido."),
 });
 
@@ -73,7 +80,7 @@ const optionalRouteText = (label: string, max: number) =>
   z.preprocess(
     (value) => (value === "" ? null : value),
     z
-      .string({ invalid_type_error: `${label} deve ser um texto.` })
+      .string(fieldError({ invalid: `${label} deve ser um texto.` }))
       .max(max, `${label} deve ter no máximo ${max} caracteres.`)
       .superRefine((value, ctx) => {
         if (isEmptyOrWhitespace(value)) {
@@ -142,7 +149,7 @@ const routeDayField = (required: string) =>
   z.preprocess(
     (value) => (value instanceof Date ? dateOnlyKey(value) : value),
     z
-      .string({ required_error: required, invalid_type_error: required })
+      .string(fieldError({ required: required, invalid: required }))
       // One refusal per value: a wrong shape is not ALSO an invalid day.
       .superRefine((value, ctx) => {
         if (!DATE_KEY.test(value)) {
@@ -175,7 +182,7 @@ const plannedInstantField = (label: string) =>
     (value) =>
       value === "" ? null : value instanceof Date ? value.toISOString() : value,
     z
-      .string({ invalid_type_error: `${label} deve ser uma data e hora.` })
+      .string(fieldError({ invalid: `${label} deve ser uma data e hora.` }))
       .datetime({
         offset: true,
         message: `${label} deve ter data, hora e fuso (ex.: 2026-09-17T08:00:00-03:00).`,
@@ -224,7 +231,7 @@ const routePlanFields = {
  * 409 ROUTE_PLAN_STALE.
  */
 const expectedPlanVersionField = z
-  .number({ invalid_type_error: "A versão da rota deve ser um número." })
+  .number(fieldError({ invalid: "A versão da rota deve ser um número." }))
   .int("A versão da rota deve ser um número inteiro.")
   .min(0, "A versão da rota não pode ser negativa.")
   .optional()
@@ -235,7 +242,7 @@ const expectedPlanVersionField = z
 const createRouteSchema = z
   .object({
     driverId: z
-      .string({ required_error: "O motorista é obrigatório." })
+      .string(fieldError({ required: "O motorista é obrigatório." }))
       .uuid("O motorista deve ter um identificador válido.")
       .describe("Motorista ativo da mesma empresa."),
     vehicleId: z
@@ -293,35 +300,55 @@ const updateRouteSchema = z
     "Envie ao menos um campo para alterar.",
   );
 
-const listRoutesSchema = listPagesSchema.extend({
-  businessId: z
-    .string()
-    .uuid("ID da empresa é inválido.")
-    .optional()
-    .describe(
-      "Só o MASTER envia: escolhe a empresa. Ausente, a empresa do usuário autenticado é usada.",
+/**
+ * The period of the routes (plan of 09/11/2026), by the route's day: the
+ * list's and the Torre's board's querystring say it the same way.
+ */
+const ROUTE_PERIOD_DESCRIPTION = `Período pelo dia da rota (scheduled_date), em dias civis no fuso da empresa: today (hoje), 7d, 14d ou 30d (os últimos N dias, hoje incluído) ou custom (com from e to, até ${MAX_CUSTOM_PERIOD_DAYS} dias, inclusive dias futuros). Quando o período inclui hoje, entram também as rotas ainda em andamento de dias anteriores (rotas esquecidas). Ausente, todas as datas.`;
+
+/** The list's order: newest created first, or by the route's day with a period. */
+const routeSortFields = sortFields(ROUTE_SORT_KEYS, ROUTE_SORT_FALLBACK);
+
+const listRoutesSchema = listPagesSchema
+  .extend({
+    businessId: z
+      .string()
+      .uuid("ID da empresa é inválido.")
+      .optional()
+      .describe(
+        "Só o MASTER envia: escolhe a empresa. Ausente, a empresa do usuário autenticado é usada.",
+      ),
+    ...routeSortFields,
+    sort: routeSortFields.sort.describe(
+      `Coluna da ordenação: ${ROUTE_SORT_KEYS.join(", ")}. Ausente, created_at desc; com um período, scheduled_date desc (o dia da rota, a coluna que o período lê) e, no mesmo dia, created_at desc.`,
     ),
-  ...sortFields(ROUTE_SORT_KEYS, ROUTE_SORT_FALLBACK),
-  status: facetField(ROUTE_LIST_STATUSES, "Status da rota."),
-  driverId: idFacetField(
-    "Motoristas. Ignorado para usuários motoristas: eles veem sempre e apenas as próprias rotas.",
-  ),
-  vehicleId: idFacetField("Veículos."),
-  scheduled_date: routeDayField("A data da rota é inválida.")
-    .optional()
-    .describe("Filtra pelo dia, AAAA-MM-DD."),
-  search: z
-    .string()
-    .optional()
-    .describe(
-      "Nome da rota, destino, nome do motorista, código (“12”, “Rota 12”, “#12”) ou ID da rota (inteiro ou só o final que a tabela mostra, com pelo menos 8 caracteres hexadecimais). Números longos, como uma chave de NF-e, não são lidos como código.",
+    status: facetField(ROUTE_LIST_STATUSES, "Status da rota."),
+    driverId: idFacetField(
+      "Motoristas. Ignorado para usuários motoristas: eles veem sempre e apenas as próprias rotas.",
     ),
-});
+    vehicleId: idFacetField("Veículos."),
+    scheduled_date: routeDayField("A data da rota é inválida.")
+      .optional()
+      .describe(
+        "Filtra pelo dia, AAAA-MM-DD. Com um período, vale junto com ele.",
+      ),
+    ...listPeriodFields(
+      `${ROUTE_PERIOD_DESCRIPTION} Na lista, com hoje no período, entram ainda as rotas de dias anteriores que não saíram (PLANNED ou RELEASED). Uma busca que é exatamente o número ou o ID inteiro de uma rota ignora o período (searchMeta.period.applied = false).`,
+    ),
+    search: z
+      .string()
+      .optional()
+      .describe(
+        "Nome da rota, destino, nome do motorista, código (“12”, “Rota 12”, “#12”) ou ID da rota (inteiro ou só o final que a tabela mostra, com pelo menos 8 caracteres hexadecimais). Números longos, como uma chave de NF-e, não são lidos como código.",
+      ),
+  })
+  // No export advice past the cap: the routes have no export.
+  .superRefine(refineListPeriod());
 
 /** The pair the assignment dialog is about to choose (FLEET-ASSIGN-2). */
 const assignmentPreviewSchema = z.object({
   driverId: z
-    .string({ required_error: "O motorista é obrigatório." })
+    .string(fieldError({ required: "O motorista é obrigatório." }))
     .uuid("O motorista deve ter um identificador válido.")
     .describe("Motorista da mesma empresa."),
   vehicleId: z
@@ -362,22 +389,41 @@ const assignmentPreviewSchema = z.object({
 const addRouteStopsSchema = z.object({
   ...tenantLockedShape,
   deliveryIds: z
-    .array(z.string().uuid("Cada entrega deve ter um identificador válido."), {
-      required_error: "Selecione ao menos uma entrega para adicionar.",
-    })
+    .array(
+      z.string().uuid("Cada entrega deve ter um identificador válido."),
+      fieldError({
+        required: "Selecione ao menos uma entrega para adicionar.",
+      }),
+    )
     .min(1, "Selecione ao menos uma entrega para adicionar.")
     .max(100, "Adicione no máximo 100 paradas por vez.")
-    .describe("Entregas pendentes; entram no fim da ordem atual."),
+    .describe(
+      "Entregas pendentes (ou com insucesso, com `redelivery`); entram no fim da ordem atual.",
+    ),
   expectedPlanVersion: expectedPlanVersionField,
+  redelivery: z
+    .object({
+      reasonId: z
+        .string(fieldError({ required: "Informe o motivo da nova tentativa." }))
+        .uuid("O motivo deve ter um identificador válido."),
+      // The same note a status change by hand takes.
+      note: optionalMultilineText("A anotação", 500),
+    })
+    .strict()
+    .optional()
+    .describe(
+      '"Reentregar" (K12): as entregas com INSUCESSO da lista voltam a PENDENTE com este motivo do catálogo de motivos de status (e a observação), e entram na rota na mesma transação. Sem este campo, uma entrega com insucesso é recusada (400 DELIVERY_NOT_ROUTABLE).',
+    ),
 });
 
 /** Several stops off the plan at once (decision 14.7, §4.4). */
 const removeRouteStopsSchema = z.object({
   ...tenantLockedShape,
   stopIds: z
-    .array(z.string().uuid("Cada parada deve ter um identificador válido."), {
-      required_error: "Selecione ao menos uma parada para remover.",
-    })
+    .array(
+      z.string().uuid("Cada parada deve ter um identificador válido."),
+      fieldError({ required: "Selecione ao menos uma parada para remover." }),
+    )
     .min(1, "Selecione ao menos uma parada para remover.")
     .max(200, "Remova no máximo 200 paradas por vez.")
     .describe("Paradas PENDING desta rota."),
@@ -391,9 +437,10 @@ const removeRouteStopsSchema = z.object({
 const moveRouteStopsSchema = z.object({
   ...tenantLockedShape,
   deliveryIds: z
-    .array(z.string().uuid("Cada entrega deve ter um identificador válido."), {
-      required_error: "Selecione ao menos uma entrega para mover.",
-    })
+    .array(
+      z.string().uuid("Cada entrega deve ter um identificador válido."),
+      fieldError({ required: "Selecione ao menos uma entrega para mover." }),
+    )
     .min(1, "Selecione ao menos uma entrega para mover.")
     .max(100, "Mova no máximo 100 entregas por vez.")
     .describe(
@@ -407,12 +454,12 @@ const setDeliveryLocationSchema = z
   .object({
     ...tenantLockedShape,
     latitude: z
-      .number({ invalid_type_error: "A latitude deve ser um número." })
+      .number(fieldError({ invalid: "A latitude deve ser um número." }))
       .min(-90, "Latitude inválida.")
       .max(90, "Latitude inválida.")
       .optional(),
     longitude: z
-      .number({ invalid_type_error: "A longitude deve ser um número." })
+      .number(fieldError({ invalid: "A longitude deve ser um número." }))
       .min(-180, "Longitude inválida.")
       .max(180, "Longitude inválida.")
       .optional(),
@@ -447,16 +494,12 @@ const setDeliveryLocationSchema = z
 
 const deliveryIdParamSchema = z.object({
   deliveryId: z
-    .string({ required_error: "ID da entrega é obrigatório!" })
+    .string(fieldError({ required: "ID da entrega é obrigatório!" }))
     .uuid("ID da entrega é inválido."),
 });
 
 /** A comma list or the repeated form, trimmed, empty dropped. */
-const listParam = <T extends z.ZodTypeAny>(
-  item: T,
-  max: number,
-  label: string,
-) =>
+const listParam = <T extends z.ZodType>(item: T, max: number, label: string) =>
   z.preprocess(
     (raw) =>
       raw === undefined || raw === ""
@@ -483,6 +526,14 @@ const listUnroutedDeliveriesSchema = z.object({
     .max(100, "No máximo 100 por página.")
     .default(50)
     .describe("Itens por página (até 100)."),
+  cursor: z
+    .string()
+    .min(1, "Cursor inválido.")
+    .max(512, "Cursor inválido.")
+    .optional()
+    .describe(
+      "O `meta.nextCursor` da página anterior (plano de 02/11/2026, G9): a página seguinte começa depois da última linha vista, mesmo que colegas roteiem entregas no meio, sem repetir nem pular. Com cursor, `page` é ignorado e a resposta não traz `total` nem `facets` (valem os da primeira página).",
+    ),
   search: z
     .string()
     .max(120, "A busca deve ter no máximo 120 caracteres.")
@@ -539,9 +590,10 @@ const openStopsQuerySchema = z.object({
 const reorderRouteStopsSchema = z.object({
   ...tenantLockedShape,
   orderedStopIds: z
-    .array(z.string().uuid("Cada parada deve ter um identificador válido."), {
-      required_error: "Envie a ordem completa das paradas.",
-    })
+    .array(
+      z.string().uuid("Cada parada deve ter um identificador válido."),
+      fieldError({ required: "Envie a ordem completa das paradas." }),
+    )
     .min(1, "Envie a ordem completa das paradas.")
     .max(200, "Uma rota tem no máximo 200 paradas.")
     .describe(
@@ -577,7 +629,9 @@ const startRouteSchema = z.object({
 const cancelRouteSchema = z.object({
   ...tenantLockedShape,
   reason: z
-    .string({ required_error: "Informe o motivo do cancelamento da rota." })
+    .string(
+      fieldError({ required: "Informe o motivo do cancelamento da rota." }),
+    )
     .trim()
     .min(3, "O motivo deve ter no mínimo 3 caracteres.")
     .max(255, "O motivo deve ter no máximo 255 caracteres.")
@@ -586,7 +640,29 @@ const cancelRouteSchema = z.object({
     ),
 });
 
+/**
+ * "Encerrar com pendências" (plan of 02/11/2026, K11; decision D26): the
+ * reason is mandatory, like a cancellation's.
+ */
+const closeRouteWithPendingSchema = z.object({
+  ...tenantLockedShape,
+  reason: z
+    .string(
+      fieldError({
+        required: "Informe o motivo para encerrar a rota com pendências.",
+      }),
+    )
+    .trim()
+    .min(3, "O motivo deve ter no mínimo 3 caracteres.")
+    .max(255, "O motivo deve ter no máximo 255 caracteres.")
+    .describe(
+      "Obrigatório: por que a rota é encerrada com paradas em aberto (ex.: o motorista esqueceu a rota aberta). Fica na rota (`closure_reason`), na linha do tempo de cada entrega devolvida e na atividade.",
+    ),
+});
+
 export {
+  ROUTE_PERIOD_DESCRIPTION,
+  closeRouteWithPendingSchema,
   deliveryIdParamSchema,
   listUnroutedDeliveriesSchema,
   moveRouteStopsSchema,

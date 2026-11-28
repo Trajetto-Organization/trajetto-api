@@ -5,10 +5,12 @@ import { getRateLimiterConfig } from "@/modules/middlewares/rate-limiter";
 
 import { logger } from "@/shared/logging/logger";
 import {
+  logTemplateCategoryUpdates,
   logTemplateUpdates,
   recordMetaStatuses,
 } from "@/shared/notifications/provider-receipts";
 import {
+  extractMetaCategoryUpdates,
   extractMetaStatuses,
   extractMetaTemplateUpdates,
   isMetaVerifyTokenValid,
@@ -134,6 +136,11 @@ async function providerWebhookRoutes(app: FastifyInstance) {
       const templateUpdates = extractMetaTemplateUpdates(body);
 
       logTemplateUpdates(templateUpdates);
+
+      // Plan of 02/11/2026 (B7): Meta recategorizing one of our templates
+      // out of UTILITY is an alarm (an error line), a day ahead and when it
+      // happens. Subscribe the app to template_category_update at Meta.
+      logTemplateCategoryUpdates(extractMetaCategoryUpdates(body));
 
       // Meta paused (or reinstated) a template: the lane stops before a send
       // is refused, here and on every other replica (OUTBOX-07 d, OUTBOX-16).

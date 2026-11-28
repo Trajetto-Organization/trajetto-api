@@ -8,6 +8,7 @@ import { DeleteNotificationController } from "@/modules/notification/usecases/de
 import { CountUnreadNotificationsController } from "@/modules/notification/usecases/count-unread-notifications/count-unread-notifications-controller";
 
 import { MarkAllNotificationsReadController } from "@/modules/notification/usecases/mark-all-notifications-read/mark-all-notifications-read-controller";
+import { MarkNotificationsReadByEntityController } from "@/modules/notification/usecases/mark-notifications-read-by-entity/mark-notifications-read-by-entity-controller";
 import { NotificationPreferencesController } from "@/modules/notification/usecases/manage-preferences/notification-preferences-controller";
 import {
   RegisterPushTokenController,
@@ -36,6 +37,8 @@ const removePushTokenController = new RemovePushTokenController();
 
 const markAllNotificationsReadController =
   new MarkAllNotificationsReadController();
+const markNotificationsReadByEntityController =
+  new MarkNotificationsReadByEntityController();
 
 const notificationPreferencesController =
   new NotificationPreferencesController();
@@ -153,6 +156,33 @@ async function notificationRoutes(app: FastifyInstance) {
       },
     },
     markAllNotificationsReadController.handle,
+  );
+
+  app.post(
+    "/read-by-entity",
+    {
+      // The app calls it once per detail it opens; a loop calling it is a
+      // bug, not a reader.
+      config: {
+        rateLimit: getRateLimiterConfig({ max: 30 }),
+      },
+      onRequest: [ensureAuthenticated],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["notification"],
+        summary: "Marca como lidos os avisos de um item",
+        description:
+          "Marca como lidas as notificações não lidas do usuário autenticado com este `type` e este `entityId` (onda 3): o app abre um item pelo push, que não sabe o ID da linha da caixa de avisos, e marca o item. Só as notificações da própria pessoa; nenhum usuário ou empresa vem do corpo (um `businessId` enviado responde 400 VALIDATION_ERROR, como em toda edição). Idempotente: repetir responde 200 com `count: 0`. Cada linha que mudou é anunciada aos outros aparelhos da pessoa (`notificationsRead` com o ID da linha).",
+        body: notificationSchemas.readByEntity,
+        response: {
+          200: notificationResponses.notificationsReadByEntity,
+          400: notificationResponses.validationError,
+          404: notificationResponses.sessionUserNotFound,
+          500: notificationResponses.internalServerError,
+        },
+      },
+    },
+    markNotificationsReadByEntityController.handle,
   );
 
   app.post(

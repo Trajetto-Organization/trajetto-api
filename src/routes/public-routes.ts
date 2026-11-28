@@ -1,9 +1,15 @@
 import { FastifyInstance } from "fastify";
+import { z } from "zod";
 
 import { VerifyProofDocumentController } from "@/modules/delivery/usecases/verify-proof-document/verify-proof-document-controller";
 
 import { TrackDeliveryController } from "@/modules/delivery/usecases/track-delivery/track-delivery-controller";
 import { OptOutTrackingController } from "@/modules/delivery/usecases/opt-out-tracking/opt-out-tracking-controller";
+import { OpenProofLinkController } from "@/modules/integration/usecases/proof-link/open-proof-link-controller";
+
+import { proofLinkParamsSchema } from "@/schemas/integration-schema";
+import { PROOF_LINK_ROUTE } from "@/shared/integration/proof-link";
+import { codedRefusal } from "./documentation/common-responses";
 
 import {
   proofDocumentSchemas,
@@ -14,6 +20,7 @@ const verifyProofDocumentController = new VerifyProofDocumentController();
 
 const trackDeliveryController = new TrackDeliveryController();
 const optOutTrackingController = new OptOutTrackingController();
+const openProofLinkController = new OpenProofLinkController();
 
 /**
  * What the product answers to somebody with no account.
@@ -92,9 +99,10 @@ async function publicRoutes(app: FastifyInstance) {
       },
       schema: {
         tags: ["public"],
-        summary: "Deixa de receber mensagens sobre esta entrega",
+        summary:
+          "Deixa de receber mensagens desta transportadora neste telefone e e-mail",
         description:
-          "Um clique a partir da própria mensagem, sem login — pedir que alguém se autentique para ser deixado em paz é como uma empresa ganha denúncia de spam. Responde a mesma frase com token válido ou não: uma resposta diferente transformaria isto num oráculo de quais links existem.",
+          "Um clique a partir da própria mensagem, sem login — pedir que alguém se autentique para ser deixado em paz é como uma empresa ganha denúncia de spam. Para esta entrega e, na mesma transação, para o telefone (WhatsApp) e o e-mail do destinatário dentro da transportadora dona da entrega (plano de 02/11/2026, D38): nenhuma mensagem ao cliente dessa transportadora sai mais para eles, inclusive as que já estavam na fila; outras transportadoras não são afetadas. Repetir o clique não muda nada. Responde a mesma frase com token válido ou não: uma resposta diferente transformaria isto num oráculo de quais links existem.",
         params: proofDocumentSchemas.publicTokenParams,
         response: {
           200: proofDocumentResponses.optedOut,
@@ -105,6 +113,52 @@ async function publicRoutes(app: FastifyInstance) {
       },
     },
     optOutTrackingController.handle,
+  );
+
+  app.get(
+    // The path proof_url points at, under this plugin's /public prefix.
+    `${PROOF_LINK_ROUTE}/:token`,
+    {
+      config: {
+        rateLimit: {
+          // The verify-proof budget: a person or an ERP opening receipts one
+          // by one fits; walking the 2^256 signature space does not.
+          max: 30,
+          timeWindow: "1 minute",
+        },
+      },
+      schema: {
+        tags: ["public"],
+        summary: "Abre o comprovante pelo `proof_url` da API pública",
+        description:
+          "O `proof_url` que a API de integração e os webhooks entregam (plano de 02/11/2026, L7). Sem login nem chave: o link assinado é a autorização (link de portador, ADR 0009), preso à entrega e à empresa dona dela. Redireciona (302) para o PDF do comprovante, gerado na primeira abertura, por um endereço de curta duração. Vale enquanto o comprovante vale (`PROOF_VERIFICATION_TTL_DAYS`, contados da criação da entrega) e só para uma entrega que terminou (DELIVERED ou FAILED). Toda recusa — link malformado, adulterado, de outra empresa, vencido ou de uma entrega que não terminou — é o mesmo 404 PROOF_NOT_FOUND.",
+        params: proofLinkParamsSchema,
+        response: {
+          302: z
+            .null()
+            .describe(
+              "Redireciona para o PDF do comprovante (cabeçalho `Location`, endereço de curta duração).",
+            ),
+          400: proofDocumentResponses.genericError,
+          404: proofDocumentResponses.genericError,
+          429: proofDocumentResponses.genericError,
+          500: proofDocumentResponses.internalServerError,
+          503: codedRefusal(
+            "O comprovante não pôde ser gerado agora; nada foi gravado. Transitório: espere o `retry-after` e repita.",
+            [
+              "PROOF_RENDER_BUSY",
+              "PROOF_RENDER_TIMEOUT",
+              "PROOF_RENDER_UNAVAILABLE",
+              "PROOF_SIGNING_FAILED",
+              "STORAGE_UNAVAILABLE",
+              "SERVICE_UNAVAILABLE",
+              "SERVICE_BUSY",
+            ],
+          ),
+        },
+      },
+    },
+    openProofLinkController.handle,
   );
 }
 

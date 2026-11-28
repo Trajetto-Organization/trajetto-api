@@ -4,10 +4,7 @@ import { randomUUID } from "node:crypto";
 
 import { quotaPeriodFor } from "@/shared/ai/ai-period";
 import { ODOMETER_UNIT_KEY } from "@/shared/ai/ai-rules";
-import {
-  DELIVERY_BATCH_SIZE,
-  DELIVERY_CONCURRENCY,
-} from "@/shared/notifications/pipeline-rules";
+import { DELIVERY_CONCURRENCY } from "@/shared/notifications/pipeline-rules";
 
 import { FakeProvider } from "./support/fake-provider";
 import {
@@ -402,23 +399,23 @@ describe("a replica killed in the middle of a batch (case E)", () => {
     async () => {
       await publishAccountPayables(prisma, seed, 20);
 
-      // Every e-mail is held: the first wave of the batch is on the wire, the
-      // rest of the batch is claimed behind it and never started.
+      // Every e-mail is held: each of the lane's slots holds one call. The
+      // lanes are continuous pools that claim a row only for a slot that can
+      // run it (plano-escala F3-06, prefetch 0): nothing is claimed behind
+      // the wire any more, so what the crash leaves PROCESSING is exactly
+      // what the provider already got.
       fake.behave("email", () => ({ kind: "hold" }));
       fake.behave("whatsapp", () => ({ kind: "hold" }));
 
       const first = await replica(["notifications"]);
 
-      // A state, not a stopwatch. It used to be "five calls, then 500 ms",
-      // and under load the kill landed while the batch was still being
-      // claimed. Now: every worker holds a call, and the whole batch is
-      // claimed behind them. It lasts until the first held call times out
-      // (10 s), far more than one 50 ms poll.
+      // A state, not a stopwatch: every slot holds a call. It lasts until
+      // the first held call times out (10 s), far more than one 50 ms poll.
       await until(
         async () =>
           fake.calls.length >= DELIVERY_CONCURRENCY &&
-          (await externalProcessing()) === DELIVERY_BATCH_SIZE,
-        `${DELIVERY_CONCURRENCY} envios no provedor e ${DELIVERY_BATCH_SIZE} entregas reivindicadas`,
+          (await externalProcessing()) === DELIVERY_CONCURRENCY,
+        `${DELIVERY_CONCURRENCY} envios no provedor e ${DELIVERY_CONCURRENCY} entregas reivindicadas`,
       );
 
       await first.kill();
@@ -430,10 +427,14 @@ describe("a replica killed in the middle of a batch (case E)", () => {
       ];
 
       expect(external).toHaveLength(40);
-      // Claimed but not started is the bulk of the batch, not the wire.
-      expect(onTheWire.size).toBeLessThan(
-        external.filter((row) => row.status === "PROCESSING").length,
-      );
+      // Claimed is what was on the wire, no more: the rest of the batch
+      // stayed PENDING, and only these can be sent twice.
+      const processing = external
+        .filter((row) => row.status === "PROCESSING")
+        .map((row) => row.id);
+
+      expect(processing).toHaveLength(DELIVERY_CONCURRENCY);
+      expect(processing.filter((id) => !onTheWire.has(id))).toEqual([]);
 
       fake.reset();
       await expireLeases(prisma);

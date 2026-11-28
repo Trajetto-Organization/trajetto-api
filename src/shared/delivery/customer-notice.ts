@@ -1,3 +1,5 @@
+import type { Prisma } from "@prisma/client";
+
 import type { DeliveryCustomerPayload } from "@/shared/notifications/notification-types";
 
 /**
@@ -82,5 +84,131 @@ function hasSomebodyToTell(delivery: {
   return Boolean(delivery.recipient_email || delivery.recipient_telephone);
 }
 
-export { buildDeliveryCustomerPayload, hasSomebodyToTell };
+const CUSTOMER_TOPICS: ReadonlySet<string> = new Set([
+  "delivery.dispatched",
+  "delivery.on_the_way",
+  "delivery.delivered",
+  "delivery.failed",
+]);
+
+/**
+ * How long "entregue" and "insucesso" wait for the stop's other NF-e
+ * (decision D37): a driver proves three receipts at one door in a minute or
+ * so, and the customer gets one message about the three. The cost is that
+ * message arriving about 90 s later.
+ */
+const STOP_MERGE_WINDOW_MS = 90_000;
+
+/**
+ * How a customer moment is published once per STOP rather than per NF-e
+ * (plan of 02/11/2026, B6; decision D37), or null to publish it as before.
+ * Read by OutboxService.publish, in the publisher's transaction, so every
+ * use case that announces a moment gets it without knowing.
+ *
+ * A delivery whose current stop shares its group (RouteStop.stop_group_key)
+ * with another stop of its route publishes into the group's row:
+ *
+ *  - "saiu" and "a caminho" carry every delivery of the group (the render
+ *    keeps the ones the moment is still true of), go out at once, and merge
+ *    what the rest of the group publishes in the same transaction — the
+ *    departure's loop, the mark that also marked the siblings. A group
+ *    already told "a caminho" is not told again; a "saiu" for a NF-e added
+ *    after the group's went out (K12) goes on its own;
+ *  - "entregue" and "insucesso" open a 90 s window from the first sibling,
+ *    and the siblings resolved inside it join the message; one resolved
+ *    after it goes out on its own.
+ *
+ * Any other delivery costs one indexed lookup and publishes exactly as
+ * before, its own event key included.
+ */
+async function customerStopGroup(
+  tx: Prisma.TransactionClient,
+  input: {
+    topic: string;
+    businessId?: string | null;
+    payload: unknown;
+  },
+): Promise<{
+  payload: DeliveryCustomerPayload;
+  mergeKey: string;
+  delayMs: number;
+  whenTaken: "separate" | "skip";
+} | null> {
+  if (!CUSTOMER_TOPICS.has(input.topic) || !input.businessId) return null;
+
+  const payload = input.payload as DeliveryCustomerPayload;
+
+  // The delivery's current stop: its most recent one, of this company.
+  const stop = await tx.routeStop.findFirst({
+    where: {
+      deliveryId: payload.deliveryId,
+      route: { businessId: input.businessId },
+    },
+    orderBy: { created_at: "desc" },
+    select: { id: true, routeId: true, stop_group_key: true },
+  });
+
+  if (!stop?.stop_group_key) return null;
+
+  const resolved =
+    input.topic === "delivery.delivered" || input.topic === "delivery.failed";
+
+  // "Saiu" and "a caminho" speak of the whole visit: every open stop of the
+  // group. "Entregue" and "insucesso" of this delivery; the siblings bring
+  // theirs when they are resolved.
+  const group = await tx.routeStop.findMany({
+    where: {
+      routeId: stop.routeId,
+      stop_group_key: stop.stop_group_key,
+      ...(resolved ? {} : { status: { in: ["PENDING", "ARRIVED"] } }),
+    },
+    orderBy: { sequence: "asc" },
+    select: {
+      deliveryId: true,
+      delivery: { select: { invoice_number: true, code: true } },
+    },
+  });
+
+  // A stop of its own after all: today's single message.
+  if (group.length < 2) return null;
+
+  const own = {
+    deliveryId: payload.deliveryId,
+    invoiceNumber: payload.invoiceNumber,
+    code: payload.code,
+  };
+
+  const deliveries = resolved
+    ? [own]
+    : [
+        own,
+        ...group
+          .filter((member) => member.deliveryId !== payload.deliveryId)
+          .map((member) => ({
+            deliveryId: member.deliveryId,
+            invoiceNumber: member.delivery.invoice_number,
+            code: member.delivery.code,
+          })),
+      ];
+
+  return {
+    payload: {
+      ...payload,
+      routeId: stop.routeId,
+      stopGroupKey: stop.stop_group_key,
+      deliveries,
+    },
+    mergeKey: `${input.topic}:${stop.routeId}:${stop.stop_group_key}`,
+    delayMs: resolved ? STOP_MERGE_WINDOW_MS : 0,
+    whenTaken: input.topic === "delivery.on_the_way" ? "skip" : "separate",
+  };
+}
+
+export {
+  CUSTOMER_TOPICS,
+  STOP_MERGE_WINDOW_MS,
+  buildDeliveryCustomerPayload,
+  customerStopGroup,
+  hasSomebodyToTell,
+};
 export type { CustomerNoticeSource };

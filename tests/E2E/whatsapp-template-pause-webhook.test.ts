@@ -19,6 +19,10 @@ import { container } from "tsyringe";
 import { env } from "@/env";
 import { MetaCloudApiProvider } from "@/shared/providers/whatsapp-provider/implementations/meta-cloud-api-provider";
 import { socketAdapterOptions } from "@/shared/socket/adapter-redis";
+import {
+  MESSAGE_VERSIONS,
+  readTemplateLaneFrame,
+} from "@/shared/socket/messages";
 
 /**
  * Meta says a template is paused — and the lane stops before a send is
@@ -33,7 +37,8 @@ import { socketAdapterOptions } from "@/shared/socket/adapter-redis";
  * listening on the same Redis adapter.
  */
 const APP_SECRET = "segredo-do-app-de-teste";
-const TEMPLATE = "trajetto_notification";
+// One of the 21 approved templates (plan of 02/11/2026, B1/B2).
+const TEMPLATE = "trajetto_cliente_saiu_para_entrega";
 
 /** The adapter event the replicas announce lane changes on. */
 const LANE_EVENT = "trajetto:whatsapp-template-lane";
@@ -42,8 +47,6 @@ const saved = {
   secret: env.META_WHATSAPP_APP_SECRET,
   token: env.META_WHATSAPP_ACCESS_TOKEN,
   phone: env.META_WHATSAPP_PHONE_NUMBER_ID,
-  template: env.META_WHATSAPP_TEMPLATE_NAME,
-  customerTemplate: env.META_WHATSAPP_CUSTOMER_TEMPLATE_NAME,
   adapterKey: env.SOCKET_ADAPTER_KEY,
 };
 
@@ -121,7 +124,11 @@ function stubFetch() {
 const send = () =>
   provider.sendMessage({
     phoneNumber: "11999990000",
-    message: "Sua entrega saiu.",
+    template: {
+      name: TEMPLATE,
+      parameters: ["Mercado", "Transportes Serra Azul", "NF-e 4521"],
+      urlButtonSuffixes: ["0f".repeat(32), "0f".repeat(32)],
+    },
   });
 
 /**
@@ -129,8 +136,13 @@ const send = () =>
  * a previous test published can still be on its way when the next one runs.
  */
 function heard(change: unknown): boolean {
+  // The frame carries its version since plano-escala F3-31c; the change is
+  // what is left, read as any replica reads it.
   return otherReplica.heard.some(
-    (entry) => JSON.stringify(entry) === JSON.stringify(change),
+    (entry) =>
+      (entry as { v?: unknown }).v ===
+        MESSAGE_VERSIONS["whatsapp-template-lane"] &&
+      JSON.stringify(readTemplateLaneFrame(entry)) === JSON.stringify(change),
   );
 }
 
@@ -158,8 +170,6 @@ beforeAll(async () => {
   env.META_WHATSAPP_APP_SECRET = APP_SECRET;
   env.META_WHATSAPP_ACCESS_TOKEN = "token-de-teste";
   env.META_WHATSAPP_PHONE_NUMBER_ID = "1234567890";
-  env.META_WHATSAPP_TEMPLATE_NAME = TEMPLATE;
-  env.META_WHATSAPP_CUSTOMER_TEMPLATE_NAME = undefined;
 
   // A channel prefix of this file's own: E2E files run in parallel on one
   // Redis, and Pub/Sub ignores the database number.
@@ -225,8 +235,6 @@ afterAll(async () => {
   env.META_WHATSAPP_APP_SECRET = saved.secret;
   env.META_WHATSAPP_ACCESS_TOKEN = saved.token;
   env.META_WHATSAPP_PHONE_NUMBER_ID = saved.phone;
-  env.META_WHATSAPP_TEMPLATE_NAME = saved.template;
-  env.META_WHATSAPP_CUSTOMER_TEMPLATE_NAME = saved.customerTemplate;
   env.SOCKET_ADAPTER_KEY = saved.adapterKey;
 
   vi.unstubAllGlobals();

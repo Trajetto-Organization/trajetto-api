@@ -1,13 +1,18 @@
 import { Prisma } from "@prisma/client";
 
-import database from "@/../infra/database";
+import { databaseBatch } from "@/../infra/database";
+import { env } from "@/env";
+import { throwIfPartial } from "@/shared/errors/partial-run-error";
 import { CronJobDefinition } from "@/shared/services/cron-scheduler-service";
 import { logger } from "@/shared/logging/logger";
+import { notificationFamilyLegacyBound } from "@/shared/notifications/notification-family-retention";
+import { UNTIED_RECEIPT_RETENTION_DAYS } from "@/shared/notifications/receipt-id";
 
 import {
+  anyLeft,
   DELETE_BATCH_SIZE,
   deleteInBatches,
-  PURGE_RUN_BUDGET_MS,
+  purgeDeadline,
 } from "./batch-delete";
 import { OPS_HEARTBEAT_JOB } from "./ops-heartbeat-job";
 
@@ -18,20 +23,35 @@ const log = logger.child({
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** Published events have served their purpose; a month covers any audit look. */
-const PUBLISHED_RETENTION_DAYS = 30;
-
-/**
- * Failures stay longer — they are the ones someone may still investigate.
+/*
+ * Published events have served their purpose; a month covers any audit
+ * look: OUTBOX_PUBLISHED_RETENTION_DAYS (30). A FAILED event leaves the
+ * queue table at the same age, moved to its dead letter (plano-escala
+ * F5-10).
  *
- * Both kinds: an event that failed to fan out (kept in domain_outbox_event),
- * and a delivery that failed to send. The latter belongs to a PUBLISHED event,
- * whose purge at 30 days cascades to it, so it is copied to
- * notification_dead_letter by the same statement that deletes the event
- * (publishedPurgeBatchSql) and kept there for these 90 days, counted from the
- * failure.
+ * Once the swap of F5-09 made the family (events, deliveries, receipts)
+ * partitioned by day, a day leaves whole at that age, by DETACH and DROP
+ * in the partition-maintenance job (F5-11, the notification-family gate:
+ * settled, its failures copied, its keys dropped). The purges in batches
+ * below then only reach the legacy partitions, the plain tables of before
+ * the swap (every id under notificationFamilyLegacyBound): a DELETE in the
+ * days the DROP takes would be the dead rows and the WAL the partitions
+ * exist to avoid. Once the legacy partitions are dropped too, nothing is
+ * under the bound, and the batches find nothing.
  */
-const FAILED_RETENTION_DAYS = 90;
+
+/*
+ * Failures stay longer — they are the ones someone may still investigate:
+ * OUTBOX_FAILED_RETENTION_DAYS (90), counted from the failure, read on
+ * every run.
+ *
+ * Both kinds, each in its dead letter: an event that failed to fan out,
+ * moved to outbox_event_dead_letter at 30 days (failedPurgeBatchSql), and
+ * a delivery that failed to send. The latter belongs to a PUBLISHED event,
+ * whose purge at 30 days takes it with it, so it is copied to
+ * notification_dead_letter by the same statement that deletes the event
+ * (publishedPurgeBatchSql).
+ */
 
 const JOB_EXECUTION_RETENTION_DAYS = 30;
 
@@ -50,8 +70,8 @@ const HEARTBEAT_EXECUTION_RETENTION_DAYS = 2;
  * a "~400k events/day" figure that was off by a factor of three to four — sat
  * BELOW the inflow: the table would have grown every night. 5M is about three
  * days of inflow, so a skipped night is caught up by the next run. In
- * practice the run's deadline (PURGE_RUN_BUDGET_MS) is the bound that bites
- * first; a run stopped by either one says so in the log.
+ * practice the run's deadline (CRON_PURGE_RUN_BUDGET_MS) is the bound that
+ * bites first; a run stopped by either one with events still due is partial.
  */
 const MAX_PUBLISHED_PER_RUN = 5_000_000;
 
@@ -71,11 +91,12 @@ const MAX_JOB_EXECUTIONS_PER_RUN = 100_000;
 /**
  * Provider receipts no delivery claims (deliveryId NULL: a callback for a
  * message sent before the delivery id travelled with it, or for a row
- * already purged). The cascade that takes the tied ones never reaches them,
- * so they get the same 30 days here. The ceiling is belt and braces: they are
- * a small fraction of the callbacks.
+ * already purged). The purge that takes the tied ones never reaches them,
+ * so they get the same 30 days here (UNTIED_RECEIPT_RETENTION_DAYS, in
+ * receipt-id.ts: the day such a receipt's id starts with is held inside
+ * it). The ceiling is belt and braces: they are a small fraction of the
+ * callbacks.
  */
-const UNTIED_RECEIPT_RETENTION_DAYS = 30;
 const MAX_UNTIED_RECEIPTS_PER_RUN = 100_000;
 
 /**
@@ -84,6 +105,24 @@ const MAX_UNTIED_RECEIPTS_PER_RUN = 100_000;
  * without a write is a replica that is gone. A handful of rows per replica.
  */
 const HEARTBEAT_RETENTION_DAYS = 1;
+
+/**
+ * Keys of outbox_event_key whose event is gone (plano-escala F5-02): a
+ * FAILED event moved to its dead letter at 30 days (F5-10), or an event the
+ * previous image purged during a rolling deploy without its key. Only keys
+ * older than the failures' retention, so a key keeps saying "already
+ * published" as long as the failure is kept anywhere; the PUBLISHED purge
+ * takes the keys of its own events with them.
+ */
+const MAX_ORPHAN_KEYS_PER_RUN = 100_000;
+
+/** The keys of outbox_event_key whose event no longer exists. */
+function orphanKeysSql(createdBefore: Date): Prisma.Sql {
+  return Prisma.sql`"created_at" < ${createdBefore} AND NOT EXISTS (
+    SELECT 1 FROM "domain_outbox_event" e
+    WHERE e."id" = "outbox_event_key"."event_id"
+  )`;
+}
 
 interface PurgeResult {
   deleted: number;
@@ -94,35 +133,84 @@ interface PurgeResult {
 }
 
 /**
+ * The deliveries of the events in `batch` and their receipts, deleted in
+ * the batch's own statement (plano-escala F5-05): `deliveries` returns
+ * their ids and `receipts` deletes by them.
+ *
+ * The foreign keys of today cascade the same rows when the event goes;
+ * wave 10 (F5-06) drops them, and a purge that counted on them would leave
+ * every delivery behind. With the keys still there, the cascade at the end
+ * of the statement finds nothing left to delete. `= ANY (ARRAY(...))` and
+ * not a join: the ids go to the outboxEventId and deliveryId indexes as
+ * one array each, where a join let the planner hash the whole index of a
+ * table that keeps a month of rows (pinned in
+ * tests/E2E/notification-purge-plan.test.ts).
+ */
+function eventFamilySql(idBelow: string | null): Prisma.Sql {
+  return Prisma.sql`
+    deliveries AS (
+      DELETE FROM "notification_delivery"
+      WHERE "outboxEventId" = ANY (ARRAY(SELECT "id" FROM batch))${below(idBelow)}
+      RETURNING "id"
+    ),
+    receipts AS (
+      DELETE FROM "notification_provider_receipt"
+      WHERE "deliveryId" = ANY (ARRAY(SELECT "id" FROM deliveries))${below(idBelow)}
+    )`;
+}
+
+/**
+ * ` AND "id" < bound` (of `alias`) when the family is partitioned (F5-11):
+ * the legacy partitions only, which the planner prunes to. A delivery's
+ * and a receipt's id carry their event's millisecond, so the deliveries
+ * and receipts of an event under the bound are under it too. Nothing when
+ * the family is plain, so the statement is the one it always was.
+ */
+function below(idBelow: string | null, alias?: string): Prisma.Sql {
+  if (idBelow === null) return Prisma.empty;
+
+  return alias
+    ? Prisma.sql` AND ${Prisma.raw(`"${alias}"."id"`)} < ${idBelow}`
+    : Prisma.sql` AND "id" < ${idBelow}`;
+}
+
+/**
  * One batch of the PUBLISHED purge, with the dead-letter archive inside it
  * (OUTBOX-18).
  *
- * Deliveries belong to their event and go with it by cascade, 30 days after
- * the event was processed — the failed ones and their providerMessageId
+ * A delivery belongs to its event and goes with it, 30 days after the
+ * event was processed — the failed ones and their providerMessageId
  * included, which is what support needs five weeks later. So the batch
  * copies the FAILED deliveries of the events it is about to delete into
  * notification_dead_letter, with everything needed to answer "what failed,
  * for whom and why" without the event, the delivery or the recipient.
  *
- * One statement, so the copy and the delete commit together: data-modifying
- * CTEs share one snapshot, and the cascade runs as an end-of-statement
- * trigger, after the INSERT has read the deliveries. The archive used to be a
- * separate walk before the purge, and its last statement read EVERY retained
- * failure (to find the few whose event was due) — past the 30 s
- * statement_timeout at the target scale, which stopped the purge every night.
- * Now the cost follows what is purged: the due events come from the partial
- * index on processedAt, and their deliveries from the outboxEventId index.
- * Idempotent: the archive's key is the delivery id (ON CONFLICT DO NOTHING).
+ * One statement, so the copy and the deletes commit together:
+ * data-modifying CTEs share one snapshot, so the INSERT reads the
+ * deliveries the `deliveries` CTE deletes (eventFamilySql). The archive
+ * used to be a separate walk before the purge, and its last statement read
+ * EVERY retained failure (to find the few whose event was due) — past the
+ * 30 s statement_timeout at the target scale, which stopped the purge every
+ * night. Now the cost follows what is purged: the due events come from the
+ * partial index on processedAt, and their deliveries from the outboxEventId
+ * index. Idempotent: the archive's key is the delivery id (ON CONFLICT DO
+ * NOTHING).
+ *
+ * The events' keys go in the same statement (plano-escala F5-02): a key row
+ * of outbox_event_key outliving its event would say "already published"
+ * forever. Through the key's primary key, and only the row that names this
+ * event.
  */
 function publishedPurgeBatchSql(
   publishedBefore: Date,
   limit: number,
+  idBelow: string | null = null,
 ): Prisma.Sql {
   return Prisma.sql`
     WITH batch AS (
-      SELECT "id", "topic", "businessId"
+      SELECT "id", "eventKey", "topic", "businessId"
       FROM "domain_outbox_event"
-      WHERE "status" = 'PUBLISHED' AND "processedAt" < ${publishedBefore}
+      WHERE "status" = 'PUBLISHED' AND "processedAt" < ${publishedBefore}${below(idBelow)}
       ORDER BY "processedAt"
       LIMIT ${limit}
       FOR UPDATE SKIP LOCKED
@@ -144,16 +232,129 @@ function publishedPurgeBatchSql(
       CROSS JOIN LATERAL (
         SELECT *
         FROM "notification_delivery" f
-        WHERE f."outboxEventId" = b."id" AND f."status" = 'FAILED'
+        WHERE f."outboxEventId" = b."id" AND f."status" = 'FAILED'${below(idBelow, "f")}
         OFFSET 0
       ) d
       ON CONFLICT ("id") DO NOTHING
       RETURNING 1
     ),
+    ${eventFamilySql(idBelow)},
     removed AS (
       DELETE FROM "domain_outbox_event" e
       USING batch b
-      WHERE e."id" = b."id"
+      WHERE e."id" = b."id"${below(idBelow, "e")}
+      RETURNING 1
+    ),
+    keys AS (
+      DELETE FROM "outbox_event_key" k
+      USING batch b
+      WHERE k."event_key" = b."eventKey" AND k."event_id" = b."id"
+      RETURNING 1
+    )
+    SELECT
+      (SELECT count(*) FROM removed)::int AS deleted,
+      (SELECT count(*) FROM archived)::int AS archived
+  `;
+}
+
+/** What the PUBLISHED purge matches, for the probe before a partial. */
+function duePublishedSql(
+  publishedBefore: Date,
+  idBelow: string | null = null,
+): Prisma.Sql {
+  return Prisma.sql`"status" = 'PUBLISHED' AND "processedAt" < ${publishedBefore}${below(idBelow)}`;
+}
+
+/** What the FAILED move matches: events that gave up long enough ago. */
+function dueFailedSql(
+  failedBefore: Date,
+  idBelow: string | null = null,
+): Prisma.Sql {
+  return Prisma.sql`"status" = 'FAILED' AND "updated_at" < ${failedBefore}${below(idBelow)}`;
+}
+
+/**
+ * One batch of the FAILED move: the events that gave up before
+ * `failedBefore` go to outbox_event_dead_letter and leave the queue table
+ * (plano-escala F5-10), in one statement — the copy and the delete share
+ * one snapshot and commit together, so an event is always in exactly one
+ * of the two places. Idempotent: the copy's key is the event's id (ON
+ * CONFLICT DO NOTHING). The copy is kept OUTBOX_FAILED_RETENTION_DAYS from
+ * the failure, and replayed as a new event (outbox-dead-letter.ts); an
+ * event that failed before `keptFrom` is already past that and is only
+ * deleted (a night the purge did not run, or a retention just lowered).
+ *
+ * An event that failed to expand usually has no delivery; one that a
+ * replica expanded after losing its lease, and that then failed under the
+ * new owner, does. The cascade took those with the event, so the batch
+ * takes them explicitly, with their receipts (eventFamilySql, F5-05).
+ * The ones that already went out (DELIVERED) or gave up (FAILED) are
+ * recorded in the copy first (settled_deliveries): the replay gives them
+ * back to the new event, whose expansion then skips them, so a recipient
+ * who had the message does not get it again. The keys of these events are
+ * left to the orphan-key sweep, as before.
+ */
+function failedPurgeBatchSql(
+  failedBefore: Date,
+  keptFrom: Date,
+  limit: number,
+  idBelow: string | null = null,
+): Prisma.Sql {
+  return Prisma.sql`
+    WITH batch AS (
+      SELECT
+        "id", "eventKey", "topic", "aggregateType", "aggregateId",
+        "businessId", "actorId", "payload", "attempts", "lastError",
+        "correlationId", "created_at", "updated_at"
+      FROM "domain_outbox_event"
+      WHERE ${dueFailedSql(failedBefore, idBelow)}
+      LIMIT ${limit}
+      FOR UPDATE SKIP LOCKED
+    ),
+    archived AS (
+      INSERT INTO "outbox_event_dead_letter" (
+        "id", "eventKey", "topic", "aggregateType", "aggregateId",
+        "businessId", "actorId", "payload", "attempts", "lastError",
+        "correlationId", "created_at", "failedAt", "settled_deliveries"
+      )
+      SELECT
+        b."id", b."eventKey", b."topic", b."aggregateType", b."aggregateId",
+        b."businessId", b."actorId", b."payload", b."attempts", b."lastError",
+        b."correlationId", b."created_at", b."updated_at",
+        -- Read in the statement's snapshot, before the deliveries CTE
+        -- deletes them; per event, through the outboxEventId index.
+        (
+          SELECT jsonb_agg(
+            jsonb_build_object(
+              'userId', d."userId",
+              'externalRecipientId', d."externalRecipientId",
+              'channel', d."channel",
+              'status', d."status",
+              'attempts', d."attempts",
+              'deliveredAt',
+                (extract(epoch FROM d."deliveredAt") * 1000)::bigint,
+              'lastError', d."lastError",
+              'providerMessageId', d."providerMessageId",
+              'providerStatus', d."providerStatus",
+              'providerStatusAt',
+                (extract(epoch FROM d."providerStatusAt") * 1000)::bigint
+            )
+            ORDER BY d."id"
+          )
+          FROM "notification_delivery" d
+          WHERE d."outboxEventId" = b."id"
+            AND d."status" IN ('DELIVERED', 'FAILED')${below(idBelow, "d")}
+        )
+      FROM batch b
+      WHERE b."updated_at" >= ${keptFrom}
+      ON CONFLICT ("id") DO NOTHING
+      RETURNING 1
+    ),
+    ${eventFamilySql(idBelow)},
+    removed AS (
+      DELETE FROM "domain_outbox_event" e
+      USING batch b
+      WHERE e."id" = b."id"${below(idBelow, "e")}
       RETURNING 1
     )
     SELECT
@@ -163,27 +364,38 @@ function publishedPurgeBatchSql(
 }
 
 /**
- * Deletes due PUBLISHED events in batches, archiving their failed deliveries
- * on the way, until none is left, the cap is reached or the deadline passes.
- * Each batch is its own statement, so no transaction outlives a batch.
+ * Deletes due events in batches of one statement each (`batchSql`), with
+ * their family, until none is left, the cap is reached or the deadline
+ * passes. Each batch is its own statement, so no transaction outlives a
+ * batch. Stopped by the cap or the deadline, it asks whether an event is
+ * still due before calling the run partial (as deleteInBatches does).
  */
-async function purgePublishedEvents(
-  publishedBefore: Date,
-  deadline: number,
-): Promise<PurgeResult> {
+async function purgeEvents({
+  batchSql,
+  due,
+  maxRows,
+  deadline,
+}: {
+  batchSql: (limit: number) => Prisma.Sql;
+  due: Prisma.Sql;
+  maxRows: number;
+  deadline: number;
+}): Promise<PurgeResult> {
   let deleted = 0;
   let archived = 0;
 
-  while (deleted < MAX_PUBLISHED_PER_RUN) {
+  const table = Prisma.sql`"domain_outbox_event"`;
+
+  while (deleted < maxRows) {
     if (Date.now() >= deadline) {
-      return { deleted, archived, stoppedEarly: true };
+      return { deleted, archived, stoppedEarly: await anyLeft(table, due) };
     }
 
-    const limit = Math.min(DELETE_BATCH_SIZE, MAX_PUBLISHED_PER_RUN - deleted);
+    const limit = Math.min(DELETE_BATCH_SIZE, maxRows - deleted);
 
-    const [batch] = await database.$queryRaw<
+    const [batch] = await databaseBatch.$queryRaw<
       Array<{ deleted: number; archived: number }>
-    >(publishedPurgeBatchSql(publishedBefore, limit));
+    >(batchSql(limit));
 
     deleted += batch.deleted;
     archived += batch.archived;
@@ -195,7 +407,7 @@ async function purgePublishedEvents(
     }
   }
 
-  return { deleted, archived, stoppedEarly: true };
+  return { deleted, archived, stoppedEarly: await anyLeft(table, due) };
 }
 
 /**
@@ -204,9 +416,10 @@ async function purgePublishedEvents(
  * These tables are work queues, not archives: every event and delivery row
  * exists to be processed once and consulted rarely. Without pruning, the
  * `FOR UPDATE SKIP LOCKED` claims scan an ever-growing table for the same
- * handful of pending rows. Deliveries go with their event via cascade — the
- * FAILED ones copied to notification_dead_letter in the same statement, where
- * they stay 90 days (publishedPurgeBatchSql).
+ * handful of pending rows. Deliveries and their receipts go with their
+ * event, in the event's own statement and not by cascade (F5-05) — the
+ * FAILED ones copied to notification_dead_letter in the same statement,
+ * where they stay 90 days (publishedPurgeBatchSql).
  *
  * Deletes run in bounded batches (see batch-delete.ts) rather than one
  * `deleteMany`: at the target volume a single statement would be a
@@ -225,39 +438,25 @@ const cleanupNotificationPipelineJob: CronJobDefinition = {
   schedule: "30 3 * * *",
 
   async handler() {
-    const deadline = Date.now() + PURGE_RUN_BUDGET_MS;
+    const deadline = purgeDeadline();
 
     const publishedBefore = new Date(
-      Date.now() - PUBLISHED_RETENTION_DAYS * DAY_MS,
+      Date.now() - env.OUTBOX_PUBLISHED_RETENTION_DAYS * DAY_MS,
     );
 
-    const failedBefore = new Date(Date.now() - FAILED_RETENTION_DAYS * DAY_MS);
+    // Null while the family is plain: every row, as always (F5-11).
+    const idBelow = await notificationFamilyLegacyBound(databaseBatch);
+
+    const failedBefore = new Date(
+      Date.now() - env.OUTBOX_FAILED_RETENTION_DAYS * DAY_MS,
+    );
     const executionsBefore = new Date(
       Date.now() - JOB_EXECUTION_RETENTION_DAYS * DAY_MS,
     );
 
-    // Each batch copies the failed deliveries of the events it deletes, in
-    // the same statement: the cascade from a purged event takes its
-    // deliveries (publishedPurgeBatchSql).
-    const published = await purgePublishedEvents(publishedBefore, deadline);
-
-    // The archive's own retention, counted from the failure. failedAt is
-    // indexed, so the scan starts at the oldest rows and stops at the batch.
-    const archiveExpired = await deleteInBatches({
-      table: Prisma.sql`"notification_dead_letter"`,
-      where: Prisma.sql`"failedAt" < ${failedBefore}`,
-      orderBy: Prisma.sql`"failedAt"`,
-      maxRows: MAX_FAILED_PER_RUN,
-      deadline,
-    });
-
-    const failed = await deleteInBatches({
-      table: Prisma.sql`"domain_outbox_event"`,
-      where: Prisma.sql`"status" = 'FAILED' AND "updated_at" < ${failedBefore}`,
-      maxRows: MAX_FAILED_PER_RUN,
-      deadline,
-    });
-
+    // The small purges first, the big one last (F1-17): they share one
+    // budget, and the PUBLISHED purge alone can spend all of it. Each one
+    // that stops with rows left makes the run partial, at the end.
     const executions = await deleteInBatches({
       table: Prisma.sql`"scheduled_job_execution"`,
       where: Prisma.sql`"created_at" < ${executionsBefore}`,
@@ -275,21 +474,70 @@ const cleanupNotificationPipelineJob: CronJobDefinition = {
       deadline,
     });
 
-    const untiedReceipts = await deleteInBatches({
-      table: Prisma.sql`"notification_provider_receipt"`,
-      where: Prisma.sql`"deliveryId" IS NULL AND "created_at" < ${new Date(
-        Date.now() - UNTIED_RECEIPT_RETENTION_DAYS * DAY_MS,
-      )}`,
-      maxRows: MAX_UNTIED_RECEIPTS_PER_RUN,
-      deadline,
-    });
-
-    const goneReplicas = await database.workerHeartbeat.deleteMany({
+    const goneReplicas = await databaseBatch.workerHeartbeat.deleteMany({
       where: {
         updated_at: {
           lt: new Date(Date.now() - HEARTBEAT_RETENTION_DAYS * DAY_MS),
         },
       },
+    });
+
+    const untiedReceipts = await deleteInBatches({
+      table: Prisma.sql`"notification_provider_receipt"`,
+      where: Prisma.sql`"deliveryId" IS NULL AND "created_at" < ${new Date(
+        Date.now() - UNTIED_RECEIPT_RETENTION_DAYS * DAY_MS,
+      )}${below(idBelow)}`,
+      maxRows: MAX_UNTIED_RECEIPTS_PER_RUN,
+      deadline,
+    });
+
+    // The archives' own retention, counted from the failure. failedAt is
+    // indexed, so the scan starts at the oldest rows and stops at the batch.
+    const archiveExpired = await deleteInBatches({
+      table: Prisma.sql`"notification_dead_letter"`,
+      where: Prisma.sql`"failedAt" < ${failedBefore}`,
+      orderBy: Prisma.sql`"failedAt"`,
+      maxRows: MAX_FAILED_PER_RUN,
+      deadline,
+    });
+
+    const eventArchiveExpired = await deleteInBatches({
+      table: Prisma.sql`"outbox_event_dead_letter"`,
+      where: Prisma.sql`"failedAt" < ${failedBefore}`,
+      orderBy: Prisma.sql`"failedAt"`,
+      maxRows: MAX_FAILED_PER_RUN,
+      deadline,
+    });
+
+    // FAILED events leave the queue table at the PUBLISHED events' age,
+    // copied to their dead letter (F5-10).
+    const failed = await purgeEvents({
+      batchSql: (limit) =>
+        failedPurgeBatchSql(publishedBefore, failedBefore, limit, idBelow),
+      due: dueFailedSql(publishedBefore, idBelow),
+      maxRows: MAX_FAILED_PER_RUN,
+      deadline,
+    });
+
+    // The keys the FAILED moves left without their event (F5-02).
+    const orphanKeys = await deleteInBatches({
+      table: Prisma.sql`"outbox_event_key"`,
+      where: orphanKeysSql(failedBefore),
+      orderBy: Prisma.sql`"created_at"`,
+      key: Prisma.sql`"event_key"`,
+      maxRows: MAX_ORPHAN_KEYS_PER_RUN,
+      deadline,
+    });
+
+    // Each batch copies the failed deliveries of the events it deletes and
+    // deletes the deliveries and their receipts, in the same statement
+    // (publishedPurgeBatchSql).
+    const published = await purgeEvents({
+      batchSql: (limit) =>
+        publishedPurgeBatchSql(publishedBefore, limit, idBelow),
+      due: duePublishedSql(publishedBefore, idBelow),
+      maxRows: MAX_PUBLISHED_PER_RUN,
+      deadline,
     });
 
     if (goneReplicas.count > 0) {
@@ -310,19 +558,33 @@ const cleanupNotificationPipelineJob: CronJobDefinition = {
       {
         publishedEvents: published.deleted,
         failedEvents: failed.deleted,
+        orphanOutboxKeys: orphanKeys.deleted,
         cronExecutions: executions.deleted + heartbeatExecutions.deleted,
         archivedDeadLetters: published.archived,
         expiredDeadLetters: archiveExpired.deleted,
+        archivedFailedEvents: failed.archived,
+        expiredFailedEvents: eventArchiveExpired.deleted,
       },
       "notification pipeline purged",
     );
 
-    if (published.stoppedEarly || failed.stoppedEarly) {
-      log.warn(
-        "notification pipeline purge stopped at the run's cap or deadline; the rest waits for the next window",
-      );
-    }
+    // Every purge above ran; one that stopped with rows left makes the run
+    // FAILED "[partial]", for the catch-up sweep's partial window.
+    throwIfPartial({
+      "scheduled_job_execution (30 dias)": executions,
+      "scheduled_job_execution (ops-heartbeat)": heartbeatExecutions,
+      notification_provider_receipt: untiedReceipts,
+      notification_dead_letter: archiveExpired,
+      outbox_event_dead_letter: eventArchiveExpired,
+      "domain_outbox_event (FAILED)": failed,
+      outbox_event_key: orphanKeys,
+      "domain_outbox_event (PUBLISHED)": published,
+    });
   },
 };
 
-export { cleanupNotificationPipelineJob, publishedPurgeBatchSql };
+export {
+  cleanupNotificationPipelineJob,
+  failedPurgeBatchSql,
+  publishedPurgeBatchSql,
+};

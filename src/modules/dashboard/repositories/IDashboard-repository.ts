@@ -1,5 +1,8 @@
 import {
   DashboardEntity,
+  DeliveriesFromRollup,
+  DeliveryCountSource,
+  DeliveryWindow,
   PeriodGranularity,
   PeriodCountBucket,
   PeriodCostBucket,
@@ -43,6 +46,7 @@ interface IDashboardRepository {
       from: Date;
       to: Date;
       timeZone: string;
+      deliveriesFromRollup?: DeliveriesFromRollup;
     },
     businessId?: string,
   ) => Promise<Record<string, MonthlyCountBucket[]>>;
@@ -50,6 +54,13 @@ interface IDashboardRepository {
   /**
    * Every entity of a trend, every bucket, in ONE round trip — at whatever
    * granularity the window calls for.
+   *
+   * With `deliveriesFromRollup` (DASHBOARD_ROLLUP_MODE=on, plano-escala
+   * F4-22) the "delivery" arm of that same statement adds up the closed days
+   * stored in tenant_day_count and counts live only the days it cannot
+   * trust (not stored, marked dirty or pending, still open, clipped by the
+   * window, or of a company being purged): the same numbers, without
+   * reading months of deliveries on every view.
    */
   countManyByPeriod: (
     params: {
@@ -58,9 +69,30 @@ interface IDashboardRepository {
       to: Date;
       granularity: PeriodGranularity;
       timeZone: string;
+      deliveriesFromRollup?: DeliveriesFromRollup;
     },
     businessId?: string,
   ) => Promise<Record<string, PeriodCountBucket[]>>;
+
+  /**
+   * The deliveries of each window, per bucket, from each source asked, in
+   * ONE statement: one snapshot, so a live count and a rollup read side by
+   * side can only differ if the stored days are wrong. The shadow of
+   * DASHBOARD_ROLLUP_MODE (F4-22) compares them. Answers one entry per
+   * window, in order, with the sources asked; empty buckets are left out,
+   * as countManyByPeriod leaves them out.
+   */
+  countDeliveryWindows: (
+    params: {
+      windows: readonly DeliveryWindow[];
+      timeZone: string;
+      now: Date;
+      sources: readonly DeliveryCountSource[];
+    },
+    businessId?: string,
+  ) => Promise<
+    Array<Partial<Record<DeliveryCountSource, PeriodCountBucket[]>>>
+  >;
 
   /**
    * Every catalogue of the overview as a stock, in ONE round trip: how many

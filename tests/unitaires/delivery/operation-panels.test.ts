@@ -146,6 +146,8 @@ describe("occurrence feed", () => {
       repos.userRepository,
       repos.deliveryRepository,
       uploadStub,
+      // The company's zone (H6): a row without it reads the default.
+      { findBusinessById: async () => null },
     );
   }
 

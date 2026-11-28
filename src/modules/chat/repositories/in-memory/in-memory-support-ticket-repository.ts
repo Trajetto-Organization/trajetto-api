@@ -204,7 +204,12 @@ class InMemorySupportTicketRepository implements ISupportTicketRepository {
           ? { id: ticket.deliveryId, ...delivery }
           : null,
       route: route
-        ? { id: route.id, code: route.code, name: route.name }
+        ? {
+            id: route.id,
+            code: route.code,
+            name: route.name,
+            status: route.status,
+          }
         : null,
       occurrence:
         ticket.occurrenceId && occurrence
@@ -300,6 +305,29 @@ class InMemorySupportTicketRepository implements ISupportTicketRepository {
           ticket.status === "OPEN",
       )
       .sort((a, b) => this.byLastMessage(a, b))[0];
+
+    return found ? { ...found } : null;
+  }
+
+  async findEmptyOpenDriverTicket(
+    businessId: string,
+    driverId: string,
+    subject: string,
+  ) {
+    // Case-insensitive and literal, like insensitiveEquals on the real table.
+    const wanted = subject.toLocaleLowerCase("pt-BR");
+
+    const found = this.tickets
+      .filter(
+        (ticket) =>
+          ticket.businessId === businessId &&
+          ticket.driverId === driverId &&
+          ticket.kind === "DRIVER" &&
+          ticket.status === "OPEN" &&
+          ticket.last_message_at === null &&
+          ticket.subject.toLocaleLowerCase("pt-BR") === wanted,
+      )
+      .sort((a, b) => this.newestFirst(a, b))[0];
 
     return found ? { ...found } : null;
   }

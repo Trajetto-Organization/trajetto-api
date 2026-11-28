@@ -12,7 +12,6 @@ import {
 
 import { AppError } from "@/shared/errors/AppError";
 import { RouteNotFoundError } from "../errors/route-errors";
-import { downsample } from "@/shared/route/driver-position-rules";
 import { operationDay } from "@/shared/route/operation-day-rules";
 
 interface DriverTrailRequest {
@@ -131,20 +130,25 @@ class DriverTrailUseCase {
       throw new AppError("Data inválida.", 400, "INVALID_DAY");
     }
 
-    const recorded = await this.positions.listTrail({
+    const trail = await this.positions.listTrail({
       businessId: resolvedBusinessId,
       driverId,
       from: window.start,
       to: window.end,
+      max: TRAIL_POINT_LIMIT,
     });
 
-    return this.shape(driverId, window.date, recorded);
+    return this.shape(driverId, window.date, trail);
   }
 
   /**
    * The route's own window, departure to end: a route can cross midnight and
    * the day's window would cut it. A route not yet departed has no trail.
    * Another company's route, or another driver's, is the same 404.
+   *
+   * Only the route's window is read (plan of 02/11/2026, G9): the whole
+   * route with up to two hundred stops and their deliveries was loaded here
+   * for three of its columns.
    */
   private async routeTrail(
     businessId: string,
@@ -153,7 +157,7 @@ class DriverTrailUseCase {
     timeZone: Parameters<typeof operationDay>[0],
     now: Date,
   ): Promise<DriverTrail> {
-    const route = await this.routes.findRouteById(routeId, businessId);
+    const route = await this.routes.findRouteWindow(routeId, businessId);
 
     if (!route || route.driverId !== driverId) {
       throw new RouteNotFoundError();
@@ -161,24 +165,30 @@ class DriverTrailUseCase {
 
     const date = operationDay(timeZone, route.started_at ?? now).date;
 
-    if (!route.started_at) return this.shape(driverId, date, []);
+    if (!route.started_at) {
+      return this.shape(driverId, date, { recorded: 0, points: [] });
+    }
 
-    const recorded = await this.positions.listTrail({
+    const trail = await this.positions.listTrail({
       businessId,
       driverId,
       routeId,
       from: route.started_at,
       // Half-open: one millisecond past the end keeps the last point.
       to: new Date((route.completed_at ?? now).getTime() + 1),
+      max: TRAIL_POINT_LIMIT,
     });
 
-    return this.shape(driverId, date, recorded);
+    return this.shape(driverId, date, trail);
   }
 
   private shape(
     driverId: string,
     day: string,
-    recorded: Awaited<ReturnType<IDriverPositionRepository["listTrail"]>>,
+    {
+      recorded,
+      points,
+    }: Awaited<ReturnType<IDriverPositionRepository["listTrail"]>>,
   ): DriverTrail {
     return {
       driverId,
@@ -187,9 +197,10 @@ class DriverTrailUseCase {
       // The real count, alongside the thinned points. A screen that showed
       // only what it drew would have somebody conclude the phone stopped
       // reporting.
-      recorded: recorded.length,
+      recorded,
 
-      points: downsample(recorded, TRAIL_POINT_LIMIT).map((point) => ({
+      // Already thinned to TRAIL_POINT_LIMIT by the repository.
+      points: points.map((point) => ({
         latitude: point.latitude,
         longitude: point.longitude,
         speed: point.speed,

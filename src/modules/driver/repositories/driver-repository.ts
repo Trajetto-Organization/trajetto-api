@@ -13,7 +13,7 @@ import {
   CursorPaginatedDriver,
 } from "../dtos/driver-dto";
 
-import database from "@/../infra/database";
+import database, { readDatabase, readDatabaseWalk } from "@/../infra/database";
 
 import { buildSearchOr } from "@/shared/pagination/search-or";
 import { resolveOrderBy } from "@/shared/pagination/list-query";
@@ -49,11 +49,16 @@ function definedOnly<T extends object>(data: T): Partial<T> {
 
 async function openRoutesOf(
   client: Client,
-  driverId: string,
+  driverId: string | { branchId: string },
 ): Promise<OpenRouteCounts> {
   const grouped = await client.route.groupBy({
     by: ["status"],
-    where: { driverId, status: { in: [...OPEN_ROUTE_STATUSES] } },
+    where: {
+      ...(typeof driverId === "string"
+        ? { driverId }
+        : { driver: { branchId: driverId.branchId } }),
+      status: { in: [...OPEN_ROUTE_STATUSES] },
+    },
     _count: { _all: true },
   });
 
@@ -68,7 +73,8 @@ async function openRoutesOf(
 
 /**
  * Every row that still points at the driver, in one round trip. Each table
- * has an index leading with driverId.
+ * has an index leading with driverId (the chat messages through the thread's
+ * own driverId index, then the messages' threadId one).
  */
 async function driverHistoryOf(
   client: Client,
@@ -82,7 +88,11 @@ async function driverHistoryOf(
       (SELECT count(*) FROM "vehicle_checklist" WHERE "driverId" = ${driverId})::int AS "checklists",
       (SELECT count(*) FROM "delivery"          WHERE "driverId" = ${driverId})::int AS "deliveries",
       (SELECT count(*) FROM "route"             WHERE "driverId" = ${driverId})::int AS "routes",
-      (SELECT count(*) FROM "driver_pause"      WHERE "driverId" = ${driverId})::int AS "pauses"
+      (SELECT count(*) FROM "driver_pause"      WHERE "driverId" = ${driverId})::int AS "pauses",
+      (SELECT count(*) FROM "chat_message" m
+         JOIN "chat_thread" t ON t."id" = m."threadId"
+        WHERE t."driverId" = ${driverId})::int AS "chatMessages",
+      (SELECT count(*) FROM "support_ticket"    WHERE "driverId" = ${driverId})::int AS "supportTickets"
   `;
 
   return row ?? { ...NO_DRIVER_HISTORY };
@@ -90,6 +100,33 @@ async function driverHistoryOf(
 
 class DriverRepository implements IDriverRepository {
   constructor(private prisma = database) {}
+
+  /**
+   * The heavy reads' bulkhead (plano-escala F3-17), for the export: a pool of
+   * its own, 3 connections and 10 s a statement, so a burst of them waits
+   * among itself instead of taking the connections every other request needs.
+   * A repository built on another client (a test's) reads on that client. A
+   * getter, so a module that mocks infra/database without it only needs it
+   * when one of these reads runs.
+   * With DATABASE_REPLICA_URL, readDatabase() sends them to the standby
+   * while the replica guard vouches for it: lists only (plano-escala F4-42,
+   * tests/unitaires/database/read-routing-guard.test.ts).
+   */
+  private get read(): typeof this.prisma {
+    return this.prisma === database ? readDatabase() : this.prisma;
+  }
+
+  /**
+   * The export's batches on the same bulkhead (or standby), one walk per
+   * export (plano-escala F4-42): they page with Prisma's cursor, the last
+   * row of the batch before, and a standby that has not replayed a row
+   * read on the primary would answer an empty batch and end the export
+   * early. So the walk never goes from the primary back to the standby
+   * (readDatabaseWalk).
+   */
+  private readWalk(): () => typeof this.prisma {
+    return this.prisma === database ? readDatabaseWalk() : () => this.prisma;
+  }
 
   async createDriver(driverData: CreateDriverProps): Promise<Driver> {
     const driverCreated = await this.prisma.driver.create({
@@ -200,7 +237,10 @@ class DriverRepository implements IDriverRepository {
      * NULL without a word. Any row that points at the driver takes the
      * driver row's KEY SHARE lock through its foreign key, so it either
      * committed before this lock (and is counted here) or waits for the
-     * delete and then fails on its own key.
+     * delete and then fails on its own key. A message added to a thread
+     * that already exists points at the thread, not at the driver: one that
+     * lands between this count and the DELETE still goes with the thread:
+     * a window of milliseconds, where every message used to go unannounced.
      */
     return this.prisma.$transaction(async (tx) => {
       const [locked] = await tx.$queryRaw<Array<{ id: string }>>`
@@ -306,13 +346,14 @@ class DriverRepository implements IDriverRepository {
     const orderBy = resolveOrderBy(DRIVER_SORT, { sort, order });
 
     const batchSize = 1000;
+    const read = this.readWalk();
     let cursor: string | undefined = undefined;
 
     while (true) {
       // The list's own order: the id tiebreaker keeps the cursor stable.
       const drivers: Array<
         Driver & { branch: { corporate_reason: string } | null }
-      > = await this.prisma.driver.findMany({
+      > = await read().driver.findMany({
         where,
         include: { branch: { select: { corporate_reason: true } } },
         orderBy,
@@ -416,7 +457,7 @@ class DriverRepository implements IDriverRepository {
   ): Promise<number> {
     // The stream's own where: a count of something else answered a filter
     // that kept nothing with a header-only file.
-    return this.prisma.driver.count({
+    return this.read.driver.count({
       where: driverListWhere(filters, { withFacets: true }),
     });
   }
@@ -425,8 +466,23 @@ class DriverRepository implements IDriverRepository {
     return openRoutesOf(this.prisma, driverId);
   }
 
+  async countOpenRoutesOfBranch(branchId: string): Promise<OpenRouteCounts> {
+    return openRoutesOf(this.prisma, { branchId });
+  }
+
   async countDriverPauses(driverId: string): Promise<number> {
     return this.prisma.driverPause.count({ where: { driverId } });
+  }
+
+  async countDriverConversation(
+    driverId: string,
+  ): Promise<{ chatMessages: number; supportTickets: number }> {
+    const { chatMessages, supportTickets } = await driverHistoryOf(
+      this.prisma,
+      driverId,
+    );
+
+    return { chatMessages, supportTickets };
   }
 }
 

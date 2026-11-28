@@ -1,4 +1,5 @@
 import { inject, injectable } from "tsyringe";
+import { accountPayableNoticeFields } from "@/shared/notifications/whatsapp-parameters";
 import {
   assertTenantAccess,
   foreignRecordRefusal,
@@ -136,6 +137,7 @@ class UpdateAccountPayableUseCase {
         supplierId: accountPayableData.supplierId,
         vehicleId: accountPayableData.vehicleId,
         registrationUserId: accountPayableData.registrationUserId,
+        keptRegistrationUserId: findAccountPayable.registrationUserId,
       },
     );
 
@@ -244,6 +246,11 @@ class UpdateAccountPayableUseCase {
               registrationUserChanged && accountPayableData.registrationUserId
                 ? accountPayableData.registrationUserId
                 : null,
+            // What the WhatsApp template prints (B1).
+            ...accountPayableNoticeFields(
+              updated,
+              (findBusiness as { timezone?: string | null }).timezone,
+            ),
           },
         });
 

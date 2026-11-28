@@ -1,0 +1,512 @@
+name: Production
+
+# The road to production (docs/deploy.md):
+#
+#   merge into main ─▶ Staging evidence: the exact build staging ran for the
+#                      merged commit (`staged-<sha>`), its Gate green, its
+#                      digests read — before anyone is asked to approve
+#                   ─▶ Deploy (the `production` environment: its required
+#                      reviewers approve here; .github/actions/deploy, the
+#                      same one staging runs): the PgBouncer when its
+#                      digest changed, migrations when needed, then
+#                      the AI, then the API, each `stable` tag moved by digest
+#                      right before its deploy; then wait until Swarm runs it
+#                   ─▶ Release (tag, CHANGELOG, GitHub Release)
+#
+#   Run workflow on main ─▶ the same promote with an older immutable tag:
+#                           the rollback button (no Release).
+#
+# Never a rebuild: production gets the bytes staging ran.
+on:
+  push:
+    branches: [main]
+  # The ROLLBACK button (or a manual re-promote): dispatch it on main with
+  # the immutable tag of the build to ship. `image_tag` has no default on
+  # purpose — a moving default (`latest` used to be one) ships whatever was
+  # built last, not the build someone chose — and an invalid one is refused
+  # by the evidence before anything else runs. `force_ai_build` redeploys
+  # production's AI even when its digest did not change (nothing is ever
+  # built here). `force_release` runs the release step even when
+  # production's database already applied the build's release image: a
+  # pending step (the queue swap), or a database just restored
+  # (plano-escala U-11). With the tag production runs now, it changes
+  # nothing else.
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Tag imutável do build a publicar em produção: sha-<sha> (builds antigos: main-<sha>)"
+        required: true
+      force_ai_build:
+        description: "Reimplanta a trajetto-ai mesmo sem mudança"
+        type: boolean
+        required: false
+      force_release:
+        description: "Roda a etapa de release (migrations e passos) mesmo com a imagem de migração já aplicada"
+        type: boolean
+        required: false
+      force_realtime:
+        description: "Implanta a trajetto-realtime mesmo sem mudança no código que ela executa (num rollback, leva ela junto)"
+        type: boolean
+        required: false
+
+# Least privilege by default; the jobs that move tags or write releases ask
+# for more themselves.
+permissions:
+  contents: read
+
+# `bash -eo pipefail` for every `run:` (GitHub's default for a step with no
+# `shell:` is `bash -e`, without pipefail).
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # Which build ships, and the proof staging ran it — all before the
+  # approval, so the reviewer approves a build that can actually go out, and
+  # a merge that cannot fails here, before anyone waits on it.
+  evidence:
+    name: Staging evidence
+    runs-on: ubuntu-24.04
+    # Promotes only from main: the button elsewhere does nothing.
+    if: github.ref == 'refs/heads/main'
+    # The staging check waits up to 20 min (40 rounds of 30 s), and the Gate
+    # of a documentation head up to 20 more.
+    timeout-minutes: 50
+    # `actions: read`: check-gate.sh reads which workflow and branch ran
+    # each Gate.
+    permissions:
+      contents: read
+      packages: read
+      checks: read
+      actions: read
+    outputs:
+      tag: ${{ steps.staged.outputs.tag }}
+      expected: ${{ steps.digests.outputs.expected }}
+      api_digest: ${{ steps.digests.outputs.api }}
+      migrate_digest: ${{ steps.digests.outputs.migrate }}
+      migrate_presplit: ${{ steps.digests.outputs.presplit }}
+      ai_digest: ${{ steps.digests.outputs.ai }}
+      postgres_digest: ${{ steps.digests.outputs.postgres }}
+      pgbouncer_digest: ${{ steps.digests.outputs.pgbouncer }}
+
+    steps:
+      # Which build ships. On a merge commit, its second parent: the PR head,
+      # the commit staging built. On a fast-forward, the commit itself. A
+      # squash or rebase merge creates a commit staging never built, and the
+      # check below fails on it, by design. On the manual button, the typed
+      # tag — through `env`, never as `${{ }}` inside `run:`: it is free
+      # text typed into a form.
+      - name: Resolve the build to promote
+        id: target
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.image_tag }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            case "$INPUT_TAG" in
+              *[!a-z0-9-]* | "") tag="invalid" ;;
+              *) tag="$INPUT_TAG" ;;
+            esac
+            echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+            echo "Promoção manual (rollback) de \`${tag}\`." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          parents=""
+          for attempt in 1 2 3; do
+            if parents=$(gh api "repos/${REPO}/commits/${GITHUB_SHA}" --jq '[.parents[].sha] | join(" ")'); then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::A API do GitHub não respondeu os pais de ${GITHUB_SHA} depois de 3 tentativas: nada foi promovido. Não é um problema do código."
+              exit 1
+            fi
+            echo "::warning::A API do GitHub falhou ao ler os pais de ${GITHUB_SHA} (tentativa ${attempt} de 3). De novo em $((attempt * 10))s."
+            sleep $((attempt * 10))
+          done
+          read -r -a list <<< "$parents"
+          case ${#list[@]} in
+            2) candidate="${list[1]}"; how="segundo pai do merge commit ${GITHUB_SHA::7} (a cabeça do PR)" ;;
+            1) candidate="$GITHUB_SHA"; how="o próprio commit (fast-forward)" ;;
+            *) echo "::error::O commit ${GITHUB_SHA} tem ${#list[@]} pais; não sei qual build promover."; exit 1 ;;
+          esac
+          echo "tag=sha-${candidate::7}" >> "$GITHUB_OUTPUT"
+          echo "commit=${candidate}" >> "$GITHUB_OUTPUT"
+          echo "Commit a promover: \`${candidate::7}\`, ${how}." >> "$GITHUB_STEP_SUMMARY"
+
+      # First, before anything is read or moved. Only an immutable build:
+      # `staging`/`stable` move under our feet.
+      - name: Validate the tag to promote
+        env:
+          IMAGE_TAG: ${{ steps.target.outputs.tag }}
+        run: |
+          if ! grep -Eq '^(sha|main)-[0-9a-f]{7,40}$' <<< "$IMAGE_TAG"; then
+            echo "::error::image_tag precisa ser sha-<sha> (ou main-<sha>, builds antigos); recebido: '$IMAGE_TAG'"
+            exit 1
+          fi
+
+      # Full history (blobless, scripts only): the documentation rule below
+      # compares the merged commit with the commits staging ran, and the
+      # migration rule reads old trees.
+      - name: Check out the scripts
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          sparse-checkout: .github/scripts
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # A merge promotes only what staging actually ran: the build must carry
+      # the `staged-<commit>` marker the staging deploy writes last, on the
+      # same digests. The image alone is not enough — it is pushed before the
+      # scan, and stays in GHCR when the scan, the staging deploy or its
+      # check fails. The same rule as trajetto-ui.
+      #
+      # A commit that only changes documentation (*.md, docs/**) since a
+      # commit staging ran is promoted with THAT commit's build — the same
+      # image content — so a documentation commit at the tip of staging,
+      # which runs no build, does not block the promote
+      # (.github/scripts/staged-build.sh, the same rule as the PR check). Its
+      # output names the build every step below promotes.
+      #
+      # A merge that lands while staging still deploys its head (possible
+      # only if the ruleset does not require the PR check) waits here, up to
+      # 20 min, instead of failing into a re-run.
+      #
+      # The Run workflow (rollback) is exempt: it targets older builds, some
+      # made before the marker existed, and a person approves the tag typed.
+      - name: Check that staging ran this build
+        id: staged
+        env:
+          EVENT: ${{ github.event_name }}
+          TARGET_TAG: ${{ steps.target.outputs.tag }}
+          CANDIDATE: ${{ steps.target.outputs.commit }}
+        run: |
+          if [ "$EVENT" != "push" ]; then
+            echo "tag=${TARGET_TAG}" >> "$GITHUB_OUTPUT"
+            echo "Rollback por Run workflow: \`${TARGET_TAG}\` é promovido sem exigir o marcador staged-<7>." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          why=""
+          for attempt in $(seq 1 40); do
+            code=0
+            why=$(bash .github/scripts/staged-build.sh "$CANDIDATE" 2>&1 > /dev/null) || code=$?
+            case "$code" in
+              0)
+                printf '%s\n' "$why"
+                exit 0
+                ;;
+              3 | 4)
+                # A GHCR retry (ghcr.sh) stays visible while this waits.
+                grep '^::warning::' <<< "$why" || true
+                ;;
+              *)
+                printf '%s\n' "$why"
+                exit "$code"
+                ;;
+            esac
+            echo "tentativa ${attempt}/40: o staging ainda não rodou ${CANDIDATE::7} ($(printf '%s' "$why" | tail -n 1))"
+            sleep 30
+          done
+          echo "::error::O staging nunca rodou ${CANDIDATE::7} (falta o marcador staged-${CANDIDATE::7} no digest de sha-${CANDIDATE::7}: o scan, o deploy de staging ou a conferência falhou), e o commit muda mais que documentação desde o último que o staging rodou. Nada foi promovido. Corrija em staging e faça o merge de novo. Último motivo: $(printf '%s' "$why" | tail -n 1)"
+          exit 1
+
+      # The marker says staging deployed the build; this says the validation
+      # that let it through was green (check-gate.sh). A rollback is exempt,
+      # as above: a person approves the tag typed.
+      - name: Check the staging gate of this build
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ steps.staged.outputs.commit }}
+        run: |
+          code=0
+          bash .github/scripts/check-gate.sh "$COMMIT" || code=$?
+          case "$code" in
+            0) ;;
+            3 | 4)
+              echo "::error::O Gate da staging de ${COMMIT::7} não está verde: nada foi promovido. Rode o pipeline de staging desse commit de novo e faça o merge depois."
+              exit 1
+              ;;
+            *) exit "$code" ;;
+          esac
+
+      # A merged head that only adds documentation to the build promoted
+      # above: its own staging run validated that documentation (`Docs`),
+      # and its Gate must be green too — the same rule as the PR check. A
+      # rollback is exempt, as above.
+      - name: Check the staging gate of the merged head
+        if: github.event_name == 'push' && steps.staged.outputs.commit != steps.target.outputs.commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE: ${{ steps.target.outputs.commit }}
+          GATE_WAIT_ROUNDS: "40"
+        run: |
+          code=0
+          bash .github/scripts/check-gate.sh "$CANDIDATE" || code=$?
+          case "$code" in
+            0) ;;
+            3 | 4)
+              echo "::error::O Gate da staging de ${CANDIDATE::7} (só documentação desde o build promovido) não está verde: o Docs dele não passou, e nada foi promovido. Corrija a documentação na staging e faça o merge de novo."
+              exit 1
+              ;;
+            *) exit "$code" ;;
+          esac
+
+      # The promote never builds: no staging image for this commit means it
+      # never went through staging, and nothing ships. "Does not exist" and
+      # "GHCR did not answer" are told apart (ghcr.sh): only the first is
+      # about the merge.
+      - name: Check the build exists in GHCR
+        env:
+          IMAGE_TAG: ${{ steps.staged.outputs.tag }}
+        run: |
+          found=$(bash .github/scripts/ghcr.sh digest "ghcr.io/trajetto-organization/trajetto-api:${IMAGE_TAG}")
+          if [ -z "$found" ]; then
+            echo "::error::ghcr.io/trajetto-organization/trajetto-api:${IMAGE_TAG} não existe. O commit não passou pelo pipeline de staging (ou o merge foi squash/rebase, que cria um commit que o staging nunca construiu). Use merge commit a partir de staging (docs/deploy.md)."
+            exit 1
+          fi
+
+      # Informational, never blocking: a rollback promotes an OLDER build on
+      # purpose. The summary says whether the build going out is the one
+      # staging is running. GHCR not answering only leaves a "?" here: the
+      # steps that move tags read again, strictly.
+      - name: Compare with what staging runs
+        env:
+          IMAGE_TAG: ${{ steps.staged.outputs.tag }}
+        run: |
+          promoted=$(bash .github/scripts/ghcr.sh digest "ghcr.io/trajetto-organization/trajetto-api:${IMAGE_TAG}") || promoted="?"
+          staging=$(bash .github/scripts/ghcr.sh digest ghcr.io/trajetto-organization/trajetto-api:staging) || staging="?"
+          if [ "$promoted" = "$staging" ]; then
+            echo "${IMAGE_TAG} é o build que está em staging." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::${IMAGE_TAG} não é o build que está em staging agora (rollback, ou staging já andou)."
+            echo "${IMAGE_TAG} NÃO é o build de staging (${staging})." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # The digests the deploy ships, read once from the immutable tags,
+      # before the approval: what `stable` moves to, what the rollout check
+      # waits for, and what a later rollback or incident review needs to know
+      # was live.
+      #
+      # The release image of the build: a build without one is let through
+      # only when it provably predates it — a `main-<sha>` build, or a Run
+      # workflow rollback to a commit whose tree has no
+      # infra/scripts/schema-guard.ts (it came with the release image).
+      # Production has applied every migration such a build knows, and the
+      # deploy skips the release step (presplit). Any other build without one
+      # lost its push (the API image is pushed first): that fails here,
+      # before anything moves, instead of shipping a build whose replicas
+      # refuse the database.
+      #
+      # The AI: a build older than the service has no trajetto-ai image, and
+      # the AI stays where it is. GHCR not answering is not "no image":
+      # ghcr.sh fails the step. The PgBouncer's the same way (plano-escala
+      # F4-35): its `sha-<7>`, the digest staging ran (staged-build.sh
+      # checked its marker), rolled out only when production runs another.
+      #
+      # The Database's image of the same commit (its infra/postgres, by the
+      # `src-<tree>` staging published): only what `trajetto-postgres:stable`
+      # will point at, as a reference. Nothing deploys the Database; a commit
+      # older than the image, or a tree never published, has none.
+      - name: Read the digests to promote
+        id: digests
+        env:
+          EVENT: ${{ github.event_name }}
+          IMAGE_TAG: ${{ steps.staged.outputs.tag }}
+        run: |
+          api=$(bash .github/scripts/ghcr.sh digest "ghcr.io/trajetto-organization/trajetto-api:${IMAGE_TAG}")
+          if [ -z "$api" ]; then
+            echo "::error::ghcr.io/trajetto-organization/trajetto-api:${IMAGE_TAG} sumiu do GHCR entre a conferência e a leitura dos digests."
+            exit 1
+          fi
+          migrate=$(bash .github/scripts/ghcr.sh digest "ghcr.io/trajetto-organization/trajetto-api-migrate:${IMAGE_TAG}")
+          presplit=false
+          if [ -z "$migrate" ]; then
+            case "$IMAGE_TAG" in
+              main-*) presplit=true ;;
+              sha-*)
+                if [ "$EVENT" = workflow_dispatch ] \
+                  && commit=$(git rev-parse --verify --quiet "${IMAGE_TAG#sha-}^{commit}") \
+                  && [ -z "$(git ls-tree --name-only "$commit" -- infra/scripts/schema-guard.ts)" ]; then
+                  presplit=true
+                fi
+                ;;
+            esac
+            if [ "$presplit" != true ]; then
+              echo "::error::ghcr.io/trajetto-organization/trajetto-api-migrate:${IMAGE_TAG} não existe, e o build é posterior à imagem de migração (o push dela falhou). Nada foi promovido: rode o pipeline de staging desse commit de novo."
+              exit 1
+            fi
+            echo "::notice::${IMAGE_TAG} é anterior à imagem de migração (trajetto-api-migrate): a produção já aplicou todas as migrations desse build, e a etapa de release não roda."
+          fi
+          ai=$(bash .github/scripts/ghcr.sh digest "ghcr.io/trajetto-organization/trajetto-ai:${IMAGE_TAG}")
+          pgbouncer=$(bash .github/scripts/ghcr.sh digest "ghcr.io/trajetto-organization/trajetto-pgbouncer:${IMAGE_TAG}")
+          postgres=""
+          if commit=$(git rev-parse --verify --quiet "${IMAGE_TAG#*-}^{commit}") \
+            && tree=$(git rev-parse --verify --quiet "${commit}:infra/postgres"); then
+            # A reference only: GHCR not answering here never holds the promote.
+            postgres=$(bash .github/scripts/ghcr.sh digest "ghcr.io/trajetto-organization/trajetto-postgres:src-${tree}") || {
+              postgres=""
+              echo "::warning::O GHCR não respondeu sobre trajetto-postgres:src-${tree::12}: trajetto-postgres:stable fica onde está."
+            }
+          fi
+          {
+            echo "api=${api}"
+            echo "migrate=${migrate}"
+            echo "presplit=${presplit}"
+            echo "ai=${ai}"
+            echo "postgres=${postgres}"
+            echo "pgbouncer=${pgbouncer}"
+            echo "expected=${IMAGE_TAG#*-}"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "A promover: \`${IMAGE_TAG}\`."
+            echo "trajetto-api@${api}"
+            echo "trajetto-api-migrate@${migrate:-(anterior à imagem de migração)}"
+            echo "trajetto-ai@${ai:-(anterior ao serviço de IA)}"
+            echo "trajetto-pgbouncer@${pgbouncer:-(anterior à imagem do PgBouncer)}"
+            echo "trajetto-postgres@${postgres:-(nenhuma para este commit)} (só referência: a troca do Database é do dono)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Required reviewers on this environment (Settings → Environments →
+  # production) make every promote and rollback wait for an approval here.
+  # The production Applications are pinned to `stable`: a redeploy pulls the
+  # tag again and the Swarm service resolves it to its digest, so the moved
+  # tag is what runs (docs/deploy.md).
+  promote-production:
+    name: Deploy
+    needs: evidence
+    runs-on: ubuntu-24.04
+    environment: production
+    # Counted from the approval: the release step up to 30 min, six Dokploy
+    # attempts per service with pauses up to 160 s, and the rollout check.
+    timeout-minutes: 120
+
+    # One promote at a time, never cancelled midway: two would race on
+    # `stable`, and the wait on a migration must not be cut off.
+    concurrency:
+      group: promote-production
+      cancel-in-progress: false
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Check out the deploy scripts
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          sparse-checkout: |
+            .github/actions
+            .github/scripts
+
+      # Secrets and variables of the `production` environment, the same as
+      # always, handed to the action as inputs. The commit the public check
+      # waits for is the tag's (`sha-<7>` is all a rollback knows; the
+      # script takes a prefix).
+      - name: Deploy to production
+        uses: ./.github/actions/deploy
+        with:
+          environment: production
+          tag: stable
+          api-digest: ${{ needs.evidence.outputs.api_digest }}
+          migrate-digest: ${{ needs.evidence.outputs.migrate_digest }}
+          migrate-presplit: ${{ needs.evidence.outputs.migrate_presplit }}
+          ai-digest: ${{ needs.evidence.outputs.ai_digest }}
+          pgbouncer-digest: ${{ needs.evidence.outputs.pgbouncer_digest }}
+          force-ai: ${{ inputs.force_ai_build == true }}
+          expected-commit: ${{ needs.evidence.outputs.expected }}
+          verify-default: ssh
+          rollout-verify: ${{ vars.ROLLOUT_VERIFY }}
+          api-public-url: ${{ vars.API_PUBLIC_URL }}
+          swarm-api-service: ${{ vars.SWARM_API_SERVICE }}
+          swarm-worker-service: ${{ vars.SWARM_WORKER_SERVICE }}
+          swarm-scheduler-service: ${{ vars.SWARM_SCHEDULER_SERVICE }}
+          swarm-worker-external-service: ${{ vars.SWARM_WORKER_EXTERNAL_SERVICE }}
+          swarm-ingest-service: ${{ vars.SWARM_INGEST_SERVICE }}
+          swarm-realtime-service: ${{ vars.SWARM_REALTIME_SERVICE }}
+          swarm-pgbouncer-service: ${{ vars.SWARM_PGBOUNCER_SERVICE }}
+          release-timeout-seconds: ${{ vars.RELEASE_TIMEOUT_SECONDS }}
+          force-release: ${{ inputs.force_release == true }}
+          force-realtime: ${{ inputs.force_realtime == true }}
+          rollout-status-token: ${{ secrets.ROLLOUT_STATUS_TOKEN }}
+          rollout-roles-expected: ${{ vars.ROLLOUT_ROLES_EXPECTED }}
+          release-serialize-with-application-id: ${{ vars.RELEASE_SERIALIZE_WITH_APPLICATION_ID }}
+          require-branch-head: "false"
+          restore-api-tag: "false"
+          mark-staged: "false"
+          dokploy-url: ${{ secrets.DOKPLOY_URL }}
+          dokploy-api-key: ${{ secrets.DOKPLOY_API_KEY }}
+          dokploy-api-application-id: ${{ secrets.DOKPLOY_API_APPLICATION_ID }}
+          dokploy-migrate-application-id: ${{ secrets.DOKPLOY_MIGRATE_APPLICATION_ID }}
+          dokploy-ai-application-id: ${{ secrets.DOKPLOY_AI_APPLICATION_ID }}
+          dokploy-pgbouncer-application-id: ${{ secrets.DOKPLOY_PGBOUNCER_APPLICATION_ID }}
+          dokploy-worker-application-id: ${{ secrets.DOKPLOY_WORKER_APPLICATION_ID }}
+          dokploy-scheduler-application-id: ${{ secrets.DOKPLOY_SCHEDULER_APPLICATION_ID }}
+          dokploy-worker-external-application-id: ${{ secrets.DOKPLOY_WORKER_EXTERNAL_APPLICATION_ID }}
+          dokploy-ingest-application-id: ${{ secrets.DOKPLOY_INGEST_APPLICATION_ID }}
+          dokploy-realtime-application-id: ${{ secrets.DOKPLOY_REALTIME_APPLICATION_ID }}
+          deploy-ssh-host: ${{ secrets.DEPLOY_SSH_HOST }}
+          deploy-ssh-user: ${{ secrets.DEPLOY_SSH_USER }}
+          deploy-verify-ssh-key: ${{ secrets.DEPLOY_VERIFY_SSH_KEY }}
+          deploy-ssh-known-hosts: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+
+      # `stable` of the Database's image follows the promoted build, as a
+      # reference only: what production's Database should run with this
+      # API. Nothing is deployed; the owner swaps the Database by digest.
+      # After the deploy, and never failing it: GHCR not answering here
+      # leaves the old reference, with a warning.
+      - name: Move the Postgres reference tag
+        if: needs.evidence.outputs.postgres_digest != ''
+        env:
+          DIGEST: ${{ needs.evidence.outputs.postgres_digest }}
+        run: |
+          if bash .github/scripts/ghcr.sh tag \
+            ghcr.io/trajetto-organization/trajetto-postgres:stable \
+            "ghcr.io/trajetto-organization/trajetto-postgres@${DIGEST}"; then
+            echo "trajetto-postgres:stable → ${DIGEST} (só referência; a troca do Database é ação do dono)." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::O GHCR não moveu trajetto-postgres:stable para ${DIGEST}: a referência ficou na anterior. A produção não muda por isso."
+          fi
+
+  # After the promote, never before: the release (tag, CHANGELOG, GitHub
+  # Release) is the only irreversible step, and it announces a version that
+  # is actually live. Its commit (only CHANGELOG.md) carries the skip-CI
+  # marker of @semantic-release/git, so it does not start another promote.
+  release:
+    name: Release
+    needs: promote-production
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    # Measured ~2 min.
+    timeout-minutes: 20
+    permissions:
+      contents: write # create the tag and the release, and commit the CHANGELOG
+      issues: write # comment on the issues closed by this version
+      pull-requests: write # comment on the PRs included in this version
+
+    steps:
+      - name: Check out the full history
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # semantic-release needs the full history: it finds the last tag and reads
+          # the commits since then to decide whether the version goes up by patch,
+          # minor or major. With the default shallow clone there is nothing to
+          # analyse and no release is ever created.
+          fetch-depth: 0
+
+      - name: Set up dependencies
+        uses: ./.github/actions/setup
+        with:
+          generate: "false"
+
+      - name: Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx semantic-release

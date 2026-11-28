@@ -12,6 +12,7 @@ import {
   getQuotaUsage,
   getQuotaUsageByType,
 } from "@/shared/ai/ai-quota-service";
+import { isAIAnalysisEnabled } from "@/shared/entitlements/entitlement-rules";
 
 interface GetAIUsageRequest {
   userId: string;
@@ -69,7 +70,8 @@ class GetAIUsageUseCase {
       ai_analysis_next_reset_at: usage?.resetAt.toISOString() ?? null,
       ai_analysis_timezone: usage?.timeZone ?? null,
       ai_analysis_remaining: usage?.remaining ?? business.ai_analysis_limit,
-      ai_analysis_enabled: business.ai_analysis_limit > 0,
+      // 0 = AI switched off (plan M2: LIMIT_ZERO_MEANING).
+      ai_analysis_enabled: isAIAnalysisEnabled(business.ai_analysis_limit),
       ai_analysis_used_by_type: byType,
     };
   }

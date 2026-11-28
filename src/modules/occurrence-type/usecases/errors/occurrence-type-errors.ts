@@ -1,6 +1,7 @@
-import { ZodError } from "zod";
+import type { ZodError } from "zod";
 
 import { AppError } from "@/shared/errors/AppError";
+import { validationError } from "@/shared/validation/validation-error";
 import type { CategoryIssue } from "../../rules/occurrence-category-rules";
 
 /**
@@ -24,6 +25,21 @@ class OccurrenceTypeNameAlreadyExistsError extends AppError {
       "Já existe um tipo de ocorrência com este nome nesta empresa.",
       409,
       "OCCURRENCE_TYPE_NAME_TAKEN",
+    );
+  }
+}
+
+/**
+ * The company's ERP code for a type (L8) is already another type's. Said
+ * "nesta empresa": the same code at another carrier is not a conflict, and
+ * the answer must not suggest one exists there.
+ */
+class OccurrenceTypeCodeTakenError extends AppError {
+  constructor() {
+    super(
+      "Já existe um tipo de ocorrência com este código nesta empresa.",
+      409,
+      "OCCURRENCE_TYPE_CODE_TAKEN",
     );
   }
 }
@@ -100,7 +116,7 @@ class OccurrenceTypeDefaultError extends AppError {
  * one sentence per issue, through the global handler (a ZodError).
  */
 function categoryValidationError(issues: CategoryIssue[]): ZodError {
-  return new ZodError(
+  return validationError(
     issues.map((issue) => ({
       code: "custom" as const,
       path: [issue.field],
@@ -112,6 +128,7 @@ function categoryValidationError(issues: CategoryIssue[]): ZodError {
 export {
   categoryValidationError,
   OccurrenceTypeCategoryLockedError,
+  OccurrenceTypeCodeTakenError,
   OccurrenceTypeDefaultError,
   OccurrenceTypeLastOfCategoryError,
   OccurrenceTypeNotFoundError,

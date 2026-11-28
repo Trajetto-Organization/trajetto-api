@@ -1,8 +1,9 @@
 import { z } from "zod";
+import { fieldError } from "@/shared/validation/field-error";
 
 const updateDeleteAccountPayableSchema = z.object({
   accountPayableId: z
-    .string({ required_error: "ID da conta a pagar é obrigatório!" })
+    .string(fieldError({ required: "ID da conta a pagar é obrigatório!" }))
     .uuid("ID da conta a pagar é inválido."),
 });
 

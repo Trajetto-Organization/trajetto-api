@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { TENANT_MOVE_REFUSED } from "@/shared/validation/tenant-locked-field";
-import type { ZodTypeAny } from "zod";
+import type { ZodType } from "zod";
 
 import { createUserSchema } from "@/schemas/create-user-schema";
 import { updateUserSchema } from "@/schemas/update-user-schema";
@@ -17,7 +17,7 @@ import { createPartSchema } from "@/schemas/create-part-schema";
 const UUID = "018f0000-0000-7000-8000-000000000001";
 const OTHER_UUID = "018f0000-0000-7000-8000-000000000002";
 
-function messages(schema: ZodTypeAny, body: unknown): string[] {
+function messages(schema: ZodType, body: unknown): string[] {
   const result = schema.safeParse(body);
 
   return result.success
@@ -91,10 +91,25 @@ describe("createUserSchema", () => {
     );
   });
 
-  it("never carries a password: the user sets it from a single-use link (decision 4.9)", () => {
-    const parsed = createUserSchema.parse({ ...base, password: "Senha@123" });
+  // Decision 4.9, with the one exception of decision D04 (plan of 02/11/2026,
+  // D2): an office user sets the password from a single-use link, so a
+  // password in the body is refused, not dropped; only a driver's login
+  // carries the initial password the manager set.
+  it("refuses a password for an office user, and keeps a driver's (decision 4.9, D04)", () => {
+    expect(
+      messages(createUserSchema, { ...base, password: "Senha@123" }),
+    ).toEqual([
+      "A senha inicial só pode ser definida no login de um motorista.",
+    ]);
 
-    expect(parsed).not.toHaveProperty("password");
+    const driver = createUserSchema.parse({
+      ...base,
+      profileAccessId: "",
+      driverId: UUID,
+      password: "Senha@123",
+    });
+
+    expect(driver.password).toBe("Senha@123");
   });
 });
 

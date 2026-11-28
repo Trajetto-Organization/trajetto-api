@@ -16,9 +16,10 @@
 ## Uma imagem, dois ambientes
 
 Staging e produção rodam a **mesma imagem** de cada serviço, promovida por
-digest (decisão 12.2): o `deploy.yml` da API publica só `sha-<sha>` a cada
-push na branch `staging`, move a tag `staging` para o digest recém-construído
-e, na promoção (o merge em `main`), move `stable` para o mesmo digest. A web também: a URL da API, a do socket, a chave do Turnstile, os
+digest (decisão 12.2): o `staging.yml` da API publica só `sha-<sha>` (job
+`Build`) a cada push na branch `staging`, a ação `.github/actions/deploy` move
+a tag `staging` para o digest recém-construído e, na promoção (o merge em
+`main`, pelo `production.yml`), move `stable` para o mesmo digest. A web também: a URL da API, a do socket, a chave do Turnstile, os
 tiles do mapa e o `APP_ENV` são lidos em runtime do Environment do
 Application, não embutidos no build. Diante deste Traefik, o que diferencia
 staging de produção é o domínio configurado em cada Application (o Dokploy dá
@@ -66,6 +67,20 @@ Conferir no host antes de aplicar (são os padrões do Dokploy, não garantia):
 | resolver de certificados             | `letsencrypt` (o que o Dokploy usa quando o domínio pede HTTPS)                               |
 | rede                                 | `dokploy-network` (onde o Dokploy põe todo Application e Database)                            |
 | roteador de cada Application         | `/etc/dokploy/traefik/dynamic/<appName>.yml` (_Advanced → Traefik_ no Application)            |
+
+## Os papéis por _Path_ no host da API
+
+O realtime e o ingest (plano de escala F5-26) entram no host da API por uma
+_Domain_ com _Path_ (`/socket.io`, `/route/positions`). O Dokploy escreve o
+roteador deles no mesmo arquivo dinâmico de cada Application, com a regra
+`Host(...) && PathPrefix(...)` e **sem prioridade**: o Traefik ordena pelo
+tamanho da regra, e o caminho mais longo ganha do host puro da API. Nada
+disso é configuração estática, então nada vai para `traefik.reference.yaml`.
+O formato está reproduzido em `tests/load/traefik/dokploy-roles.yml`, que o
+Traefik da bancada carrega, e o `tests/load/roles-routing.sh` prova a
+ordem e o 502 de um _Path_ sem réplica pelo access log. O passo a passo, a
+conferência no host e o que fazer quando um caminho cai no papel errado:
+[`docs/runbooks/roteamento-por-path.md`](../../docs/runbooks/roteamento-por-path.md).
 
 ## Aplicar
 

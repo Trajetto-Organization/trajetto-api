@@ -2,8 +2,10 @@ import { Prisma } from "@prisma/client";
 
 import { DeliveryStatus } from "@/shared/delivery/delivery-rules";
 import type { OperationDay } from "@/modules/route/repositories/IOperation-day-repository";
+import type { ReusedAddressPoint } from "@/shared/delivery/geocoding/address-point-reuse";
 import {
   Delivery,
+  DeliveryItemInput,
   CreateDeliveryProps,
   UpdateDeliveryProps,
   ListDeliveriesProps,
@@ -11,6 +13,7 @@ import {
   CreateOccurrenceProps,
   CreateDeliveryEventProps,
   DeliveryEventRecord,
+  DepartureHook,
   ListOccurrencesProps,
   ListOccurrencesResult,
   OccurrenceAuthorizationStatus,
@@ -50,10 +53,31 @@ interface OperationBacklog {
 }
 
 interface IDeliveryRepository {
+  /**
+   * The row with its address key (address-key.ts) and its point: the one
+   * given (MANUAL) or, without one, the point another delivery of the
+   * company has at the same address (address-point-reuse.ts), read in the
+   * same transaction. The one door of the panel, the NF-e XML, the
+   * spreadsheet and the public API.
+   */
   createDelivery: (
     deliveryData: CreateDeliveryProps,
     tx?: Prisma.TransactionClient,
   ) => Promise<Delivery>;
+  /**
+   * The point another delivery of the company has at this address key, as
+   * the columns a delivery takes it with (pickReusablePoint: MANUAL first,
+   * then the most recent; never another company's), with the root it came
+   * from (geo_copied_from; a copy whose root dropped the point lends
+   * nothing); null when none qualifies. `excludeDeliveryId`: the delivery
+   * being edited, never recorded as its own root.
+   */
+  findReusablePoint: (
+    businessId: string,
+    addressKey: string,
+    excludeDeliveryId?: string | null,
+    tx?: Prisma.TransactionClient,
+  ) => Promise<ReusedAddressPoint | null>;
   /** The delivery a submission with this key already created, in this company. */
   findDeliveryBySubmissionId: (
     businessId: string,
@@ -79,7 +103,17 @@ interface IDeliveryRepository {
     deliveryId: string,
     deliveryData: UpdateDeliveryProps,
     expectedStatus?: DeliveryStatus,
+    /**
+     * The caller's transaction, when it has one: an edit of a delivery on a
+     * route commits with the route's lock and plan version (K9).
+     */
+    tx?: Prisma.TransactionClient,
   ) => Promise<Delivery>;
+  /**
+   * The delivery's item list as stored (quantity 1 and empty unit NULL),
+   * in insertion order. An edit compares the list it got against it (K9).
+   */
+  findDeliveryItems: (deliveryId: string) => Promise<DeliveryItemInput[]>;
   /**
    * Where the delivery came from: the source of the upload that created it,
    * or null for one typed in the panel (or whose upload was reversed).
@@ -132,6 +166,11 @@ interface IDeliveryRepository {
     businessId: string,
   ) => Promise<{
     id: string;
+    /**
+     * The delivery the key was spent on: the same key on another delivery
+     * is a reused key (409), never a replay (K13).
+     */
+    deliveryId: string;
     /** A replay answers with where the first submission stands (6.3). */
     authorization_status: OccurrenceAuthorizationStatus;
     /** Decision 14.3: a delivered replay also answers the delivery's status. */
@@ -172,12 +211,15 @@ interface IDeliveryRepository {
   ) => Promise<number>;
   /**
    * PENDING -> IN_TRANSIT for the driver's batch; returns how many moved.
-   * `createdUpTo`: only deliveries created at or before it (the tap).
+   * `createdUpTo`: only deliveries created at or before it (the tap). Each
+   * one that moved gets its STATUS_CHANGE line, and `onStarted` gets them
+   * inside the same transaction (its webhooks), F2-06.
    */
   startDriverRoute: (
     businessId: string,
     driverId: string,
     createdUpTo?: Date,
+    onStarted?: DepartureHook,
   ) => Promise<number>;
   /** Same scoping, and the same reason, as `findOccurrenceBySubmissionId`. */
   findEventBySubmissionId: (
@@ -228,6 +270,29 @@ interface IDeliveryRepository {
   ) => Promise<void>;
 
   /**
+   * Which of these NF-e access keys the company already has: the import's
+   * duplicate check for a batch of rows in one read (plano-escala F3-23c),
+   * the same answer findDeliveryByInvoiceKey gives one at a time.
+   */
+  findExistingInvoiceKeys: (
+    businessId: string,
+    invoiceKeys: readonly string[],
+  ) => Promise<Set<string>>;
+
+  /**
+   * Which of these order numbers the company already has for the shipper
+   * (plano-escala F3-23c), as findDeliveryByShipperAndCode answers one at a
+   * time; with `tx`, inside the caller's transaction (after
+   * lockOrderIdentity).
+   */
+  findExistingOrderCodes: (
+    businessId: string,
+    shipperId: string,
+    codes: readonly string[],
+    tx?: Prisma.TransactionClient,
+  ) => Promise<Set<string>>;
+
+  /**
    * The operation, one batch at a time.
    *
    * A generator rather than a list, because an export is the one screen where
@@ -272,6 +337,12 @@ interface IDeliveryRepository {
     eventData: CreateDeliveryEventProps,
     expectedStatus: DeliveryStatus,
     tx?: Prisma.TransactionClient,
+    /**
+     * A late proof (K7, decision D27) of a delivery the driver lost after
+     * the tap: the driver and vehicle that delivered it go back on the row,
+     * as a resolved delivery keeps who resolved it.
+     */
+    owner?: { driverId: string; vehicleId: string | null },
   ) => Promise<string[]>;
 }
 

@@ -61,6 +61,7 @@ const allEnabled = {
   emailNotificationsEnabled: true,
   whatsappNotificationsEnabled: true,
   hasWhatsAppPhone: true,
+  hasEmail: true,
 };
 
 const fullContent = {
@@ -186,6 +187,20 @@ describe("channel gating", () => {
     ).not.toContain(NotificationChannel.WHATSAPP);
   });
 
+  /**
+   * Decision D02 (plan of 02/11/2026): a driver's login may have no e-mail.
+   * Like WhatsApp without a phone, an EMAIL row could only fail.
+   */
+  it("skips e-mail when the recipient has no address, whatever the preference", () => {
+    const channels = channelsForRecipient(
+      { ...allEnabled, hasEmail: false },
+      fullContent,
+    );
+
+    expect(channels).not.toContain(NotificationChannel.EMAIL);
+    expect(channels).toContain(NotificationChannel.IN_APP);
+  });
+
   it("skips WhatsApp when the topic has no WhatsApp content", () => {
     expect(
       channelsForRecipient(allEnabled, {
@@ -236,6 +251,7 @@ describe("channel gating", () => {
           emailNotificationsEnabled: false,
           whatsappNotificationsEnabled: false,
           hasWhatsAppPhone: false,
+          hasEmail: true,
         },
         { ...fullContent, isMandatory: true },
       ),
@@ -261,6 +277,7 @@ describe("preference layering", () => {
       emailNotificationsEnabled: true,
       whatsappNotificationsEnabled: true,
       hasWhatsAppPhone: true,
+      hasEmail: true,
     });
   });
 
@@ -276,6 +293,7 @@ describe("preference layering", () => {
       emailNotificationsEnabled: false,
       whatsappNotificationsEnabled: false,
       hasWhatsAppPhone: true,
+      hasEmail: true,
     });
   });
 
@@ -335,6 +353,87 @@ describe("preference layering", () => {
    * A preference can want WhatsApp all it likes — without a configured
    * number there is nowhere to send, and the phone gate stays in charge.
    */
+  /**
+   * The e-mail gate reads the address itself: null or blank is a driver's
+   * login without one (D2); a caller that did not load the column keeps the
+   * old answer (every account had an address until then).
+   */
+  it("reads a null or blank e-mail as no address, and an absent one as an address", () => {
+    expect(
+      resolveRecipientChannelFlags({ ...legacyAllOn, email: null }, undefined)
+        .hasEmail,
+    ).toBe(false);
+    expect(
+      resolveRecipientChannelFlags({ ...legacyAllOn, email: "" }, undefined)
+        .hasEmail,
+    ).toBe(false);
+    expect(
+      resolveRecipientChannelFlags(
+        { ...legacyAllOn, email: "ana@alfa.com.br" },
+        { inApp: true, email: true, whatsapp: true },
+      ).hasEmail,
+    ).toBe(true);
+    expect(resolveRecipientChannelFlags(legacyAllOn, undefined).hasEmail).toBe(
+      true,
+    );
+  });
+
+  /**
+   * The general WhatsApp card is the master key (decision D-53): a row only
+   * narrows it. A row saved with WhatsApp on overrode the card, so turning
+   * the card off kept those categories sending — to a number that stays
+   * stored after the card goes off and may belong to someone else by then.
+   */
+  it("sends no WhatsApp from a saved row to someone who switched the card off", () => {
+    const flags = resolveRecipientChannelFlags(
+      { ...legacyAllOn, whatsapp_notifications_enabled: false },
+      { inApp: true, email: true, whatsapp: true },
+    );
+
+    expect(flags.whatsappNotificationsEnabled).toBe(false);
+    expect(flags.hasWhatsAppPhone).toBe(true);
+    expect(channelsForRecipient(flags, fullContent)).not.toContain(
+      NotificationChannel.WHATSAPP,
+    );
+    // Only WhatsApp: the row still decides the bell and the e-mail.
+    expect(channelsForRecipient(flags, fullContent)).toEqual(
+      expect.arrayContaining([
+        NotificationChannel.IN_APP,
+        NotificationChannel.EMAIL,
+      ]),
+    );
+  });
+
+  it("sends no WhatsApp with the card on and the row off, and sends with both on", () => {
+    expect(
+      resolveRecipientChannelFlags(legacyAllOn, {
+        inApp: true,
+        email: true,
+        whatsapp: false,
+      }).whatsappNotificationsEnabled,
+    ).toBe(false);
+
+    const both = resolveRecipientChannelFlags(legacyAllOn, {
+      inApp: true,
+      email: true,
+      whatsapp: true,
+    });
+
+    expect(both.whatsappNotificationsEnabled).toBe(true);
+    expect(channelsForRecipient(both, fullContent)).toContain(
+      NotificationChannel.WHATSAPP,
+    );
+  });
+
+  it("reads a card never switched on as off, row or no row", () => {
+    expect(
+      resolveRecipientChannelFlags(
+        { whatsapp_phone: "24999999999" },
+        { inApp: true, email: true, whatsapp: true },
+      ).whatsappNotificationsEnabled,
+    ).toBe(false);
+  });
+
   it("keeps WhatsApp blocked without a phone even when the row wants it", () => {
     const flags = resolveRecipientChannelFlags(
       { ...legacyAllOn, whatsapp_phone: null },

@@ -1,5 +1,6 @@
 import database from "@/../infra/database";
 import { env } from "@/env";
+import { consumesQueue } from "@/shared/lifecycle/process-role";
 import { AIAnalysisType, AIAnalysisUnit, Prisma } from "@prisma/client";
 
 import { sendAIVerificationEvent } from "@/websocket";
@@ -13,6 +14,12 @@ import { workerHeartbeat } from "@/shared/health/worker-heartbeat";
 import { withoutRequestContext } from "@/shared/http/request-context";
 import { logger } from "@/shared/logging/logger";
 import { escapeLikePattern } from "@/shared/utils/like-pattern";
+import {
+  columnOf,
+  fairClaimSql,
+  nextFairCursor,
+  type FairQueue,
+} from "@/shared/queue/fair-claim";
 
 import {
   assessProof,
@@ -95,6 +102,13 @@ const log = logger.child({ component: "ai-pipeline" });
 const SWEEP_INTERVAL_MS = env.PIPELINE_SWEEP_INTERVAL_MS;
 
 /**
+ * How long shutdown() waits, at most, for the reads in flight. The shutdown
+ * plan's workers deadline can only shorten it (shared/lifecycle/
+ * shutdown-plan.ts).
+ */
+const AI_PIPELINE_SHUTDOWN_WAIT_MS = 10_000;
+
+/**
  * A replica dying mid-request only delays the retry by this window —
  * consumed units keep their results and are not re-billed. Renewed before
  * every provider call, so it covers one unit however long the checklist.
@@ -118,8 +132,11 @@ assertAILeaseInvariant({
  * other, so the second row sat with its lease running behind the first
  * (GAP2-2). The reader lowers it (maxConcurrency): the local OCR reads one
  * photo at a time, so a replica keeps AI_LOCAL_MAX_CONCURRENCY in flight.
+ * AI_CONCURRENCY in the environment (plano-escala F3-05), the 4 of before
+ * by default; the lease is renewed before every call, so it enters no lease
+ * invariant.
  */
-const AI_CONCURRENCY = 4;
+const AI_CONCURRENCY = env.AI_CONCURRENCY;
 
 /**
  * How long a request the reader turned away as busy (its queue full, HTTP
@@ -163,6 +180,58 @@ const AI_MAX_INVALID_ANSWERS = 2;
 
 /** The outbox topic that tells the driver about a receipt that looks wrong. */
 const PROOF_FEEDBACK_TOPIC = "delivery-proof.ai-flagged";
+
+/**
+ * The AI queue as the fair claim walks it (plano-escala F3-12; shared/
+ * queue/fair-claim.ts): company by company, and inside a company the
+ * receipt before the other kinds. A receipt is read while the driver is
+ * still at the customer's door, and its verdict is what tells them to
+ * shoot the photo again; a refuelling or a checklist read a few minutes
+ * later costs nobody a trip. Each class has its own partial index
+ * ("businessId", "availableAt"), so a company's share is two short probes
+ * whatever its backlog, and a refuelling behind a thousand receipts of
+ * the same company is still found in one probe once the receipts are
+ * spent. The due rule is the claim's of before, written as one range on
+ * "availableAt" (a request in flight keeps its due time in the past, so
+ * the lease check stays); the SET and the RETURNING are the same.
+ */
+const AI_FAIR_QUEUE: FairQueue = {
+  table: "ai_analysis_request",
+  tenant: "businessId",
+  dueAt: "availableAt",
+  indexed: (alias) =>
+    Prisma.sql`${columnOf(alias, "status")} IN ('PENDING', 'PROCESSING')`,
+  due: (alias) =>
+    Prisma.sql`${columnOf(alias, "availableAt")} <= now() AND (${columnOf(alias, "status")} = 'PENDING' OR ${columnOf(alias, "leaseExpiresAt")} < now())`,
+  classes: [
+    (alias) => Prisma.sql`${columnOf(alias, "type")} = 'DELIVERY_PROOF'`,
+    (alias) => Prisma.sql`${columnOf(alias, "type")} <> 'DELIVERY_PROOF'`,
+  ],
+  set: Prisma.sql`
+      "status" = 'PROCESSING',
+      "leaseExpiresAt" = now() + make_interval(secs => ${CLAIM_LEASE_SECONDS}),
+      "attempts" = "attempts" + 1`,
+  returning: `"id", "type", "recordId", "businessId", "periodId", "requestedById", "input", "attempts"`,
+};
+
+/**
+ * The AI queue's fair claim, company by company from `cursor` (see
+ * claimRequests). Exported for the plan tests, which measure this very
+ * statement.
+ */
+function aiFairClaimSql(input: {
+  cursor: string;
+  limit: number;
+  rowsPerTenant: number;
+  maxTenants: number;
+}): Prisma.Sql {
+  // The AI queue is not partitioned: no claim floor.
+  return fairClaimSql(AI_FAIR_QUEUE, {
+    ...input,
+    floor: Prisma.empty,
+    rowFloor: Prisma.empty,
+  });
+}
 
 interface ClaimedRequest {
   id: string;
@@ -239,6 +308,9 @@ class AIAnalysisPipelineService {
   /** Set by shutdown: the cycle stops claiming and lets in-flight work end. */
   private stopping = false;
 
+  /** Where this process's next fair claim starts (F3-12). */
+  private fairCursor = "";
+
   /**
    * Something the running cycle has to look at the queue for: a slot freed,
    * or a wake or sweep that found the cycle already running. Reset by every
@@ -292,9 +364,10 @@ class AIAnalysisPipelineService {
    * on the alerts published for all of them (OBS-06).
    */
   public wake(): void {
-    // On an HTTP-only replica (WORKERS_ENABLED=false) a request queues its
+    // On a process that does not claim the ai queue (WORKERS_ENABLED=false,
+    // or WORKER_QUEUES without it: plano-escala F3-01) a request queues its
     // analysis and drains nothing: the worker service's sweep takes it.
-    if (!env.WORKERS_ENABLED) return;
+    if (!consumesQueue(env, "ai")) return;
 
     withoutRequestContext(() => {
       this.runCycle().catch((error) => {
@@ -303,14 +376,20 @@ class AIAnalysisPipelineService {
     });
   }
 
-  public async shutdown(): Promise<void> {
+  /**
+   * `deadlineMs` is the shutdown plan's (shared/lifecycle/shutdown-plan.ts):
+   * it can only shorten the pipeline's own 10 s.
+   */
+  public async shutdown(options: { deadlineMs?: number } = {}): Promise<void> {
     if (this.sweepTimer) clearInterval(this.sweepTimer);
     this.sweepTimer = null;
 
     this.stopping = true;
 
     // Let in-flight requests finish; the lease covers anything interrupted.
-    const deadline = Date.now() + 10_000;
+    const deadline =
+      Date.now() +
+      Math.min(AI_PIPELINE_SHUTDOWN_WAIT_MS, options.deadlineMs ?? Infinity);
 
     while (this.running && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 50));
@@ -477,6 +556,30 @@ class AIAnalysisPipelineService {
    * the partial ai_analysis_request_fair_claim_idx is provable.
    */
   private async claimRequests(limit: number): Promise<ClaimedRequest[]> {
+    // With QUEUE_FAIR_CLAIM_ENABLED (plano-escala F3-12): company by company
+    // from this process's cursor, at most QUEUE_FAIR_ROWS_PER_TENANT of
+    // each and the receipts first, the oldest due requests filling what the
+    // walk did not. The window below ranks the whole backlog on every
+    // claim, so a carrier's flood of receipts is read by every claim.
+    if (env.QUEUE_FAIR_CLAIM_ENABLED) {
+      const claimed = await database.$queryRaw<
+        Array<ClaimedRequest & { fairCursor?: string | null }>
+      >(
+        aiFairClaimSql({
+          cursor: this.fairCursor,
+          limit,
+          rowsPerTenant: env.QUEUE_FAIR_ROWS_PER_TENANT,
+          maxTenants: env.QUEUE_FAIR_MAX_TENANTS,
+        }),
+      );
+
+      this.fairCursor = nextFairCursor(claimed, this.fairCursor);
+
+      for (const request of claimed) delete request.fairCursor;
+
+      return claimed;
+    }
+
     return database.$queryRaw<ClaimedRequest[]>`
       UPDATE "ai_analysis_request" SET
         "status" = 'PROCESSING',
@@ -1883,5 +1986,6 @@ export {
   AI_BUSY_RETRY_SPREAD_MS,
   AI_CONCURRENCY,
   PROOF_FEEDBACK_TOPIC,
+  aiFairClaimSql,
   busyRetryDelayMs,
 };

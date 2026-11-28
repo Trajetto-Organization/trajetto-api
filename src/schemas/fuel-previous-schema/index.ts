@@ -1,15 +1,16 @@
 import { z } from "zod";
+import { fieldError } from "@/shared/validation/field-error";
 
 const getPreviousFuelParamsSchema = z.object({
   vehicleId: z.string().uuid("O ID do veículo é obrigatório!"),
 });
 
 const getPreviousFuelQuerySchema = z.object({
-  date: z.string({
-    required_error: "A data do abastecimento atual é obrigatória!",
-  }),
+  date: z.string(
+    fieldError({ required: "A data do abastecimento atual é obrigatória!" }),
+  ),
   businessId: z
-    .string({ required_error: "ID da empresa é obrigatório!" })
+    .string(fieldError({ required: "ID da empresa é obrigatório!" }))
     .uuid("ID da empresa é inválido."),
 });
 

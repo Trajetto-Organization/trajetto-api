@@ -2,11 +2,7 @@ import type { WebhookDelivery, WebhookDeliveryStatus } from "@prisma/client";
 
 /** The monitor's status chip: "QUEUED" is PENDING and PROCESSING together. */
 type MonitorStatusFilter =
-  | "QUEUED"
-  | "PENDING"
-  | "PROCESSING"
-  | "DELIVERED"
-  | "FAILED";
+  "QUEUED" | "PENDING" | "PROCESSING" | "DELIVERED" | "FAILED";
 
 interface WebhookMonitorQuery {
   businessId: string;
@@ -78,6 +74,16 @@ interface IWebhookDeliveryRepository {
    * window; the number of rows released.
    */
   releaseParked: (endpointId: string) => Promise<number>;
+
+  /**
+   * "Enviar teste" (L1): one signed `ping` row for this company's endpoint
+   * only, sent by the dispatcher like any event. Null when the endpoint is
+   * not this company's.
+   */
+  queuePing: (
+    endpointId: string,
+    businessId: string,
+  ) => Promise<{ id: string; eventId: string } | null>;
 
   /** Releases one held row when its endpoint is back on since it was read. */
   releaseHeldIfEndpointBack: (

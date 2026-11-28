@@ -2,6 +2,8 @@ import { z } from "zod";
 
 import { DATABASE_RETRY_AFTER_SECONDS } from "@/shared/errors/database-unavailable";
 
+import { SERVICE_BUSY_DESCRIPTION } from "./database-busy-documentation";
+
 declare module "fastify" {
   interface FastifySchema {
     /**
@@ -45,7 +47,7 @@ const publicBadRequestResponse = publicErrorBody([
     message: z
       .string()
       .describe(
-        "Em VALIDATION_ERROR é a frase em português do primeiro campo recusado; a lista completa, uma frase por problema, está em `issues`. Em MALFORMED_REQUEST é o motivo dado pelo leitor de JSON, em inglês (por exemplo, a posição em que o JSON quebrou).",
+        "Em VALIDATION_ERROR é a frase em português do primeiro campo recusado; a lista completa, uma frase por problema, está em `issues`. Em MALFORMED_REQUEST é a frase do servidor HTTP, em inglês (por exemplo, `Body is not valid JSON but content-type is set to 'application/json'`).",
       ),
     issues: z
       .array(z.string())
@@ -56,6 +58,25 @@ const publicBadRequestResponse = publicErrorBody([
   })
   .describe(
     "Requisição recusada: VALIDATION_ERROR (um campo ou parâmetro inválido; uma frase por campo em `issues`) ou MALFORMED_REQUEST (corpo que não é JSON válido). Corrija antes de repetir.",
+  );
+
+/**
+ * /integration/v1/events also refuses a cursor it cannot read (plano-escala
+ * F2-04): the legacy id or a v2 cursor, nothing else. A garbage cursor used
+ * to come back as an empty last page, which an integrator reads as "up to
+ * date".
+ */
+const publicEventsBadRequestResponse = publicErrorBody([
+  "VALIDATION_ERROR",
+  "MALFORMED_REQUEST",
+  "INVALID_CURSOR",
+])
+  .extend({
+    message: publicBadRequestResponse.shape.message,
+    issues: publicBadRequestResponse.shape.issues,
+  })
+  .describe(
+    "Requisição recusada: VALIDATION_ERROR (um parâmetro inválido; uma frase por parâmetro em `issues`), MALFORMED_REQUEST ou INVALID_CURSOR (um `cursor` que não é o `next_cursor` de uma página: recomece sem cursor, ou com `updated_since`). Corrija antes de repetir.",
   );
 
 const publicNotFoundResponse = publicErrorBody(["NOT_FOUND"]).describe(
@@ -89,19 +110,20 @@ const publicInternalErrorResponse = z
 
 const publicServiceUnavailableResponse = z
   .object({
-    code: z.enum(["SERVICE_UNAVAILABLE"]),
+    code: z.enum(["SERVICE_UNAVAILABLE", "SERVICE_BUSY"]),
     message: z.string(),
     requestId: z
       .string()
       .describe("O mesmo valor do cabeçalho `x-request-id`."),
   })
   .describe(
-    `SERVICE_UNAVAILABLE: o banco de dados está indisponível por instantes. Transitório: espere o \`retry-after\` (${DATABASE_RETRY_AFTER_SECONDS} s) e repita. Numa escrita, repita com o mesmo \`Idempotency-Key\`: um 503 não garante que nada foi gravado.`,
+    `SERVICE_UNAVAILABLE: o banco de dados está indisponível por instantes. Transitório: espere o \`retry-after\` (${DATABASE_RETRY_AFTER_SECONDS} s) e repita. ${SERVICE_BUSY_DESCRIPTION} Um 503 não garante que nada foi gravado: numa escrita que pede \`Idempotency-Key\`, repita com o mesmo valor. O corpo traz \`requestId\`.`,
   );
 
 export {
   publicBadRequestResponse,
   publicBusinessRateLimitResponse,
+  publicEventsBadRequestResponse,
   publicErrorBody,
   publicInternalErrorResponse,
   publicNotFoundResponse,

@@ -9,6 +9,10 @@ import {
 
 import type { IDriverPauseRepository } from "../../repositories/IDriver-pause-repository";
 import type { DriverPause } from "../../dtos/driver-pause-dto";
+import {
+  pauseCooldownView,
+  type PauseCooldownView,
+} from "../../rules/pause-rules";
 
 import { assertPauseDriver } from "../pause-ownership";
 
@@ -31,14 +35,21 @@ interface CurrentDriverPause {
   today: DriverPause[];
 
   /**
-   * Decision 14.4: whether a pause may start now (a route released or in
-   * progress today). The app hides the action otherwise; an open pause can
-   * always be ended.
+   * Decision 14.4: whether a pause may start now — a route of the driver's
+   * started and not finished (revised 12/11/2026; a route only released is
+   * none). An open pause can always be ended.
    */
   pauseAllowed: boolean;
 
   /** The journey's route now; null outside a journey. */
   journeyRouteId: string | null;
+
+  /**
+   * Owner, 05/11/2026: the driver's latest ended pause (any day) and when
+   * the next may start (pause-rules.ts pauseCooldownView), so the app holds
+   * the wait after a reinstall or on a new phone too.
+   */
+  cooldown: PauseCooldownView;
 
   /** The type names of `open` and `today`, by id. */
   typeNames: Map<string, string>;
@@ -81,8 +92,13 @@ class CurrentDriverPauseUseCase {
       businessId,
       driver,
       now,
-      day,
     );
+
+    const lastEnded = await this.pauses.findLastEndedPause({
+      businessId,
+      driverId: driver,
+      before: now,
+    });
 
     const typeNames = await this.pauses.pauseTypeNames(businessId, [
       ...(open ? [open.occurrenceTypeId] : []),
@@ -96,6 +112,7 @@ class CurrentDriverPauseUseCase {
       today,
       pauseAllowed: journeyRouteId !== null,
       journeyRouteId,
+      cooldown: pauseCooldownView(lastEnded?.ended_at ?? null, now),
       typeNames,
     };
   }

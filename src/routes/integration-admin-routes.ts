@@ -13,7 +13,10 @@ import {
   MAX_WEBHOOK_ENDPOINTS_PER_BUSINESS,
   REPLAY_WINDOW_DAYS,
 } from "@/shared/integration/webhook-dispatch-rules";
-import { TOPIC_WILDCARDS } from "@/shared/integration/webhook-catalogue";
+import {
+  PING_TOPIC,
+  TOPIC_WILDCARDS,
+} from "@/shared/integration/webhook-catalogue";
 
 import {
   integrationSchemas,
@@ -236,6 +239,38 @@ async function integrationAdminRoutes(app: FastifyInstance) {
   );
 
   app.post(
+    "/webhook-endpoint/:id/business/:businessId/test",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [
+        verifyBusinessActive,
+        deliveriesModule,
+        verifyPermission("integration_manage", "write"),
+      ],
+      // Each call is one more POST to the customer's system, from ours.
+      config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["integration-admin"],
+        summary: "Enviar um evento de teste (ping) ao endpoint",
+        description: `Coloca na fila UM evento de tópico \`${PING_TOPIC}\` para este endpoint, e só para ele: assinado, numerado (\`sequence\`) e registrado no monitor de envios exatamente como um evento real, com o mesmo \`X-Trajetto-Signature\` — o receptor confere a assinatura do teste como conferirá a de cada evento. \`data\` traz \`endpoint_id\` e uma frase. \`${PING_TOPIC}\` fica fora do catálogo: nenhuma inscrição o assina e nenhum curinga o alcança, então ele nunca chega a outro endpoint. O resultado (status e corpo da resposta do receptor) aparece no monitor em instantes; uma falha segue as retentativas de um evento comum. Endpoint pausado → 409 WEBHOOK_ENDPOINT_PAUSED; desligado por falhas → 409 WEBHOOK_ENDPOINT_DISABLED (reative antes; nada é enfileirado). Até 10 testes por minuto.`,
+        params: integrationSchemas.idParam.merge(updateDeleteBusinessSchema),
+        response: {
+          200: integrationResponses.webhookTestScheduled,
+          400: errorResponse,
+          403: errorResponse,
+          404: sessionAware(
+            "WEBHOOK_ENDPOINT_NOT_FOUND (inexistente ou de outra empresa — a mesma resposta)",
+          ),
+          409: errorResponse,
+          500: integrationResponses.internalServerError,
+        },
+      },
+    },
+    controller.sendWebhookTest,
+  );
+
+  app.post(
     "/webhook-endpoint/:id/business/:businessId/rotate-secret",
     {
       onRequest: [ensureAuthenticated],
@@ -327,6 +362,15 @@ async function integrationAdminRoutes(app: FastifyInstance) {
   app.get(
     "/webhook-deliveries",
     {
+      // Pages only as far as it counts (MONITOR_LIST_CAP) and refuses a
+      // deeper page with its own code, the one it answered before the
+      // global offset ceiling (F2-30) existed.
+      config: {
+        ownOffsetCeiling: {
+          code: "MONITOR_PAGE_OUT_OF_RANGE",
+          message: `a página começa no envio ${MONITOR_LIST_CAP.toLocaleString("pt-BR")} ou depois: a lista mostra só os primeiros. Filtre por status, endpoint ou período para ver os demais.`,
+        },
+      },
       onRequest: [ensureAuthenticated],
       preHandler: [
         deliveriesModule,

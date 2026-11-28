@@ -16,9 +16,8 @@ class AddRouteStopsController {
     const { businessId } = updateDeleteBusinessSchema.parse(request.params);
     const { routeId } = routeIdParamSchema.parse(request.params);
 
-    const { deliveryIds, expectedPlanVersion } = addRouteStopsSchema.parse(
-      request.body,
-    );
+    const { deliveryIds, expectedPlanVersion, redelivery } =
+      addRouteStopsSchema.parse(request.body);
 
     const addRouteStopsUseCase = container.resolve(AddRouteStopsUseCase);
 
@@ -29,6 +28,7 @@ class AddRouteStopsController {
         routeId,
         deliveryIds,
         expectedPlanVersion,
+        redelivery,
       });
 
     return reply.status(201).send({

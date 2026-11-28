@@ -3,6 +3,7 @@ import { container } from "tsyringe";
 
 import { z } from "zod";
 
+import { parseEventCursor } from "../../cursor";
 import { IIntegrationRepository } from "../../repositories/IIntegration-repository";
 
 import {
@@ -10,7 +11,35 @@ import {
   integrationListSchema,
 } from "@/schemas/integration-schema";
 
+import { env } from "@/env";
+import { REPLICA_MAX_STALENESS_MS } from "@/shared/database/replica-guard";
 import { AppError } from "@/shared/errors/AppError";
+
+/**
+ * The updated_since for an integrator's next sync of /deliveries or
+ * /routes (plano-escala F2-05): SYNC_WATERMARK_MARGIN_MS before this read
+ * began. Taken BEFORE the read, because a row's updated_at is the moment
+ * its writer built it: a write that commits during or after this read
+ * carries an updated_at at most the margin behind it (the longest
+ * transaction, plus the clocks of the replicas), so the next sync from
+ * here sees it. The integrator keeps the watermark of the FIRST page of a
+ * walk, not of the last one: a row of an early page that changes while
+ * the walk goes on is above it.
+ *
+ * With DATABASE_REPLICA_URL these lists may read on the standby
+ * (plano-escala F4-42), which shows the primary of up to
+ * REPLICA_MAX_STALENESS_MS before: a write the primary committed in that
+ * time is not in this read, and the margin, sized for the writes alone,
+ * would put the next sync past it for good. So the watermark goes back
+ * that much more, whatever the margin is set to (the review of wave 17).
+ * A sync then reads up to 24 s again: duplicates, deduplicated by id,
+ * never a gap.
+ */
+function syncWatermark(nowMs: number = Date.now()): string {
+  const standby = env.DATABASE_REPLICA_URL ? REPLICA_MAX_STALENESS_MS : 0;
+
+  return new Date(nowMs - env.SYNC_WATERMARK_MARGIN_MS - standby).toISOString();
+}
 
 /**
  * Everything an outside system reads.
@@ -52,9 +81,10 @@ class IntegrationReadController {
     request: FastifyRequest,
     reply: FastifyReply,
   ): Promise<void> => {
+    const sync_watermark = syncWatermark();
     const result = await this.repository().listDeliveries(this.scope(request));
 
-    return reply.status(200).send(result);
+    return reply.status(200).send({ ...result, sync_watermark });
   };
 
   getDelivery = async (
@@ -81,9 +111,10 @@ class IntegrationReadController {
     request: FastifyRequest,
     reply: FastifyReply,
   ): Promise<void> => {
+    const sync_watermark = syncWatermark();
     const result = await this.repository().listRoutes(this.scope(request));
 
-    return reply.status(200).send(result);
+    return reply.status(200).send({ ...result, sync_watermark });
   };
 
   getRoute = async (
@@ -108,10 +139,19 @@ class IntegrationReadController {
     request: FastifyRequest,
     reply: FastifyReply,
   ): Promise<void> => {
-    const result = await this.repository().listEvents(this.scope(request));
+    const { businessId, limit, cursor, updated_since } = this.scope(request);
+
+    // The legacy id or v2 (F2-04); anything else is 400 INVALID_CURSOR, not
+    // the empty page that read as "up to date".
+    const result = await this.repository().listEvents({
+      businessId,
+      limit,
+      position: cursor ? parseEventCursor(cursor) : null,
+      updated_since,
+    });
 
     return reply.status(200).send(result);
   };
 }
 
-export { IntegrationReadController };
+export { IntegrationReadController, syncWatermark };

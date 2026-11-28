@@ -13,10 +13,16 @@
 # the src tree's digest changed while the batches ran (an added function can
 # leave every statement map intact, so the reports alone cannot show it).
 #
-# The files that start API replicas (tests/E2E/support/replica-files.ts) run
-# after the batches, one file per batch, as `yarn test:e2e` runs them: beside
-# seven other files, the processes they start were load the timing-sensitive
-# tests felt.
+# The files of the one-file-at-a-time phase (tests/E2E/support/replica-files.ts)
+# run after the batches, one file per batch, as `yarn test:e2e` runs them: the
+# ones that start API replicas (beside seven other files, the processes they
+# start were load the timing-sensitive tests felt) and the cluster-sensitive
+# ones (SERIAL_E2E_FILES: a write transaction open in another batch's
+# database holds back the pruning a HOT update needs, plano-escala F2-13).
+#
+# The infra phase's files (tests/E2E/infra) are left out: they need the real
+# PgBouncer and standby that `yarn test:e2e:infra` starts (plano-escala
+# F4-38), and they fail without them.
 #
 # Usage: bash infra/scripts/coverage-e2e.sh [batch-size]
 #   coverage/unit     — from `yarn test:coverage` (run it first to merge it in)
@@ -35,7 +41,16 @@ src_digest() {
 }
 start_digest=$(src_digest)
 
-mapfile -t replica_names < <(tr -d '\r' < tests/E2E/support/replica-files.ts | sed -n 's/^  "\([^"]*\.test\.ts\)",$/\1/p')
+# Every name in each `const <NAME>_E2E_FILES = [...] as const;` list, whether
+# Prettier spreads it over lines or keeps it on one: a pattern for the spread
+# form alone never read SERIAL_E2E_FILES, a list of one, and its file ran in
+# a batch of eight. tests/unitaires/quality/coverage-e2e-script.test.ts runs
+# this against every file of the phase vite.config.mts builds.
+mapfile -t replica_names < <(
+  tr -d '\r' < tests/E2E/support/replica-files.ts |
+    awk '/^const [A-Z_]+_E2E_FILES = \[/ { on = 1 } on { print } on && /\] as const;/ { on = 0 }' |
+    grep -o '"[^"]*\.test\.ts"' | tr -d '"'
+)
 if [ "${#replica_names[@]}" -eq 0 ]; then
   echo "tests/E2E/support/replica-files.ts: no file read from the list" >&2
   exit 1
@@ -57,7 +72,7 @@ while IFS= read -r file; do
   else
     files+=("$file")
   fi
-done < <(find tests/E2E -name '*.test.ts' | sort)
+done < <(find tests/E2E -path tests/E2E/infra -prune -o -name '*.test.ts' -print | sort)
 failed=0
 batch=0
 

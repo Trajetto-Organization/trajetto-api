@@ -268,7 +268,10 @@ describe("auth and tenant security", () => {
       expires_in: new Date(now.getTime() + 60_000),
     });
 
-    await expect(tokens.deleteExpiredUserRefreshTokens(now)).resolves.toBe(1);
+    await expect(tokens.deleteExpiredUserRefreshTokens(now)).resolves.toEqual({
+      deleted: 1,
+      stoppedEarly: false,
+    });
     await expect(
       tokens.hasActiveRefreshTokenFamily("user-1", "active-family"),
     ).resolves.toBe(true);

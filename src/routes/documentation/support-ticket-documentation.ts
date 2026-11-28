@@ -16,10 +16,10 @@ import {
 import { documentedAs } from "./doc-only-responses";
 import { errorResponse } from "./common-responses";
 import { chatDocumented } from "./chat-documentation";
+import { responseDateTime } from "./response-date";
 
 import {
   authorizationStatus,
-  isoDateTime,
   person,
   ticketOutcome,
   ticketSummary,
@@ -54,13 +54,13 @@ const occurrenceDetail = z
     receipt_photo_url: z.string().nullable(),
     answers: z.array(z.object({ label: z.string(), value: z.string() })),
     reportedBy: person,
-    occurred_at: isoDateTime.nullable(),
-    created_at: isoDateTime,
+    occurred_at: responseDateTime().nullable(),
+    created_at: responseDateTime(),
     authorization_status: authorizationStatus,
     authorizedBy: person.nullable(),
-    authorized_at: isoDateTime.nullable(),
+    authorized_at: responseDateTime().nullable(),
     authorization_note: z.string().nullable(),
-    escalated_at: isoDateTime.nullable(),
+    escalated_at: responseDateTime().nullable(),
     blocks_delivery: z.boolean(),
   })
   .nullable();
@@ -86,7 +86,7 @@ const ticketEvent = z.object({
   target_user_name: z.string().nullable(),
   outcome: ticketOutcome.nullable(),
   note: z.string().nullable(),
-  created_at: isoDateTime,
+  created_at: responseDateTime(),
 });
 
 const sentMessage = chatDocumented.message.extend({
@@ -149,22 +149,36 @@ const supportTicketSchemas = {
   }),
 };
 
+// The runtime halves pass the rows through, typed only in the document
+// (`documentedAs`). Each `z.unknown()` field is `.optional()`, as zod 3 read
+// it: zod 4 refuses an absent key under a bare one, and the serializer would
+// answer 500.
 const supportTicketResponses = {
   list: documentedAs(
     z.object({
       data: z.array(z.unknown()),
       total: z.number(),
-      counts: z.unknown(),
+      counts: z.unknown().optional(),
+      meta: z.object({ timeZone: z.string() }).optional(),
     }),
     z.object({
       data: z.array(ticketSummary),
       total: z.number().int(),
       counts: ticketCounts,
+      meta: z
+        .object({
+          timeZone: z
+            .string()
+            .describe(
+              "O fuso da empresa (IANA), ex.: America/Sao_Paulo: a aba da torre mostra os horários nele, com a nota, como o detalhe da rota (plano de 02/11/2026, H6; decisão D22). Sem ele (versão anterior da API), o navegador.",
+            ),
+        })
+        .optional(),
     }),
   ),
   summary: documentedAs(z.object({}).passthrough(), ticketCounts),
   detail: documentedAs(
-    z.object({ data: z.unknown() }),
+    z.object({ data: z.unknown().optional() }),
     z.object({
       data: ticketSummary.extend({
         occurrenceDetail,
@@ -173,7 +187,11 @@ const supportTicketResponses = {
     }),
   ),
   opened: documentedAs(
-    z.object({ data: z.unknown(), created: z.boolean(), message: z.unknown() }),
+    z.object({
+      data: z.unknown().optional(),
+      created: z.boolean(),
+      message: z.unknown().optional(),
+    }),
     z.object({
       message: sentMessage
         .nullable()
@@ -188,7 +206,11 @@ const supportTicketResponses = {
   ),
   closed: documentedAs(
     z
-      .object({ message: z.string(), data: z.unknown(), replayed: z.boolean() })
+      .object({
+        message: z.string(),
+        data: z.unknown().optional(),
+        replayed: z.boolean(),
+      })
       .passthrough(),
     z.object({
       message: z.string(),
@@ -198,7 +220,7 @@ const supportTicketResponses = {
           id: z.string(),
           deliveryId: z.string(),
           authorization_status: z.enum(["APPROVED", "DENIED"]),
-          authorized_at: isoDateTime,
+          authorized_at: responseDateTime(),
           authorizedBy: person,
           authorization_note: z.string().nullable(),
           deliveryStatus: z.string(),
@@ -212,7 +234,11 @@ const supportTicketResponses = {
     }),
   ),
   ticket: documentedAs(
-    z.object({ message: z.string(), data: z.unknown(), replayed: z.boolean() }),
+    z.object({
+      message: z.string(),
+      data: z.unknown().optional(),
+      replayed: z.boolean(),
+    }),
     z.object({
       message: z.string(),
       data: ticketSummary,
@@ -224,17 +250,17 @@ const supportTicketResponses = {
     z.object({ data: z.array(ticketEvent) }),
   ),
   messageSent: documentedAs(
-    z.object({ message: z.string(), data: z.unknown() }),
+    z.object({ message: z.string(), data: z.unknown().optional() }),
     z.object({ message: z.string(), data: sentMessage }),
   ),
   markRead: documentedAs(
     z.object({
       message: z.string(),
-      data: z.object({ last_read_at: z.unknown() }),
+      data: z.object({ last_read_at: z.unknown().optional() }),
     }),
     z.object({
       message: z.string(),
-      data: z.object({ last_read_at: isoDateTime }),
+      data: z.object({ last_read_at: responseDateTime() }),
     }),
   ),
   assignees: z.object({ data: z.array(person) }),

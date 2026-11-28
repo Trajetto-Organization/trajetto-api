@@ -94,10 +94,13 @@ class ListProofAuditsUseCase {
     const now = new Date();
 
     // Civil days in the company's zone (decision 1.1), not the server's:
-    // the window opens at midnight there.
+    // the window opens at midnight there. The same zone goes back with the
+    // cards: the Auditoria tab prints its times in it (H6, D22).
+    const timeZone = resolveTimeZone(settings?.timezone);
+
     const agreementSince = businessDaysRange(
       now,
-      resolveTimeZone(settings?.timezone),
+      timeZone,
       AGREEMENT_WINDOW_DAYS,
     ).start;
 
@@ -148,7 +151,11 @@ class ListProofAuditsUseCase {
     return {
       data,
       total: result.total,
-      meta: { ...result.meta, agreementWindowDays: AGREEMENT_WINDOW_DAYS },
+      meta: {
+        ...result.meta,
+        agreementWindowDays: AGREEMENT_WINDOW_DAYS,
+        timeZone,
+      },
     };
   }
 }

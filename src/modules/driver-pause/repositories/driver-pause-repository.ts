@@ -1,4 +1,5 @@
 import database from "@/../infra/database";
+import { storedBusinessZone } from "@/shared/time/business-time-zone";
 import {
   DEFAULT_PAUSE_TYPE_KEY,
   ensureDefaultOccurrenceTypes,
@@ -6,10 +7,9 @@ import {
 
 import type { IDriverPauseRepository } from "./IDriver-pause-repository";
 import { pauseConflictOf } from "./pause-conflicts";
-import { dateOnlyFromKey, dateOnlyKey } from "@/shared/time/business-day";
 import {
+  PAUSE_ROUTE_START_SLACK_MS,
   journeyRouteAt,
-  type JourneyRoute,
 } from "../rules/pause-journey-rules";
 
 import type {
@@ -31,6 +31,7 @@ const PAUSE_TYPE_SELECT = {
   category: true,
   pause_kind: true,
   is_active: true,
+  system_key: true,
 } as const;
 
 /** Route states in which a route has been on the street. */
@@ -39,13 +40,17 @@ const LEFT_STATUSES = ["IN_PROGRESS", "COMPLETED", "CANCELLED"] as const;
 class DriverPauseRepository implements IDriverPauseRepository {
   constructor(private prisma = database) {}
 
+  // Once per request, and none on the driver's own company: the session
+  // lookup brought its zone (storedBusinessZone).
   async timeZoneOf(businessId: string): Promise<string | null> {
-    const business = await this.prisma.business.findUnique({
-      where: { id: businessId },
-      select: { timezone: true },
-    });
+    return storedBusinessZone(businessId, async () => {
+      const business = await this.prisma.business.findUnique({
+        where: { id: businessId },
+        select: { timezone: true },
+      });
 
-    return business?.timezone ?? null;
+      return business?.timezone ?? null;
+    });
   }
 
   async findByStartSubmission(
@@ -85,76 +90,62 @@ class DriverPauseRepository implements IDriverPauseRepository {
     });
   }
 
-  async findRouteRunningAt(
-    businessId: string,
-    driverId: string,
-    at: Date,
-  ): Promise<string | null> {
-    // A cancelled route has no completed_at: it left the street when it was
-    // cancelled, which is its updated_at (the tower reads it the same way).
-    const route = await this.prisma.route.findFirst({
+  async findLastEndedPause({
+    businessId,
+    driverId,
+    before,
+  }: {
+    businessId: string;
+    driverId: string;
+    before: Date;
+  }): Promise<DriverPause | null> {
+    // A backward walk of (driverId, started_at) that stops at the first
+    // closed one: at most the one open pause is skipped.
+    return this.prisma.driverPause.findFirst({
       where: {
         businessId,
         driverId,
-        started_at: { lte: at },
-        OR: [
-          { status: "IN_PROGRESS" },
-          { status: "COMPLETED", completed_at: { gte: at } },
-          { status: "CANCELLED", updated_at: { gte: at } },
-        ],
+        ended_at: { not: null },
+        started_at: { lt: before },
       },
       orderBy: [{ started_at: "desc" }, { id: "desc" }],
-      select: { id: true },
     });
-
-    return route?.id ?? null;
   }
 
   async findJourneyRouteAt(
     businessId: string,
     driverId: string,
     at: Date,
-    dayKey: string,
   ): Promise<string | null> {
     // The candidates by index (businessId, driverId, status), narrowed to
-    // routes not finished at `at` and of that day or already started; the
-    // pure rule then decides, the same one the twin runs.
+    // routes started by `at` (with the clock slack) and not finished by
+    // then; the pure rule then decides, the same one the twin runs. A route
+    // only released (no started_at) never comes back.
     const rows = await this.prisma.route.findMany({
       where: {
         businessId,
         driverId,
+        started_at: {
+          not: null,
+          lte: new Date(at.getTime() + PAUSE_ROUTE_START_SLACK_MS),
+        },
         OR: [
-          { status: { in: ["RELEASED", "IN_PROGRESS"] } },
+          { status: "IN_PROGRESS" },
           { status: "COMPLETED", completed_at: { gte: at } },
           { status: "COMPLETED", completed_at: null, updated_at: { gte: at } },
           { status: "CANCELLED", updated_at: { gte: at } },
-        ],
-        AND: [
-          {
-            OR: [
-              { scheduled_date: dateOnlyFromKey(dayKey) },
-              { started_at: { lte: at } },
-            ],
-          },
         ],
       },
       select: {
         id: true,
         status: true,
-        released_at: true,
         started_at: true,
         completed_at: true,
         updated_at: true,
-        scheduled_date: true,
       },
     });
 
-    const routes: JourneyRoute[] = rows.map((row) => ({
-      ...row,
-      scheduled_date: dateOnlyKey(row.scheduled_date),
-    }));
-
-    return journeyRouteAt(routes, at, dayKey)?.id ?? null;
+    return journeyRouteAt(rows, at)?.id ?? null;
   }
 
   async findPauseType(

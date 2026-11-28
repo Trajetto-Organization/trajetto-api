@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import pg from "pg";
 
 import {
+  DEFAULT_APPLICATION_NAME,
   DatabaseUnavailableError,
   createPool,
   endsTheConnection,
@@ -263,6 +264,63 @@ describe("createPool", () => {
     } finally {
       await pool.end();
     }
+  });
+});
+
+describe("the sessions' name", () => {
+  /**
+   * The release step holds a contraction back while a session with no
+   * name is connected (plano-escala F5-07): it can only be the image from
+   * before this one. So every pool of this build names its sessions, and a
+   * name the URL sets on purpose still wins.
+   */
+  async function nameOf(
+    url: string,
+    applicationName?: string,
+  ): Promise<string | undefined> {
+    const pool = createPool({ ...poolSettingsFrom(url), applicationName });
+
+    try {
+      // pg-pool builds each client as `new this.Client(this.options)`.
+      const { Client, options } = pool as unknown as {
+        Client: new (config: unknown) => pg.Client;
+        options: unknown;
+      };
+      const client = new Client(options) as pg.Client & {
+        connectionParameters: { application_name?: string };
+      };
+
+      return client.connectionParameters.application_name;
+    } finally {
+      await pool.end();
+    }
+  }
+
+  it("is trajetto-api when the URL names none", async () => {
+    expect(DEFAULT_APPLICATION_NAME).toBe("trajetto-api");
+    expect(await nameOf("postgresql://u:p@127.0.0.1:1/d")).toBe("trajetto-api");
+  });
+
+  it("is the URL's own when it sets one", async () => {
+    expect(
+      await nameOf(
+        "postgresql://u:p@127.0.0.1:1/d?application_name=psql-a-mao",
+      ),
+    ).toBe("psql-a-mao");
+  });
+
+  // The runtime's pools name their role (plano-escala F3-02), only where
+  // the URL names nothing.
+  it("is the role's when the runtime gives one, and the URL's still wins", async () => {
+    expect(
+      await nameOf("postgresql://u:p@127.0.0.1:1/d", "trajetto-worker"),
+    ).toBe("trajetto-worker");
+    expect(
+      await nameOf(
+        "postgresql://u:p@127.0.0.1:1/d?application_name=psql-a-mao",
+        "trajetto-worker",
+      ),
+    ).toBe("psql-a-mao");
   });
 });
 

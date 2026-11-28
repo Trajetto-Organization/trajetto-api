@@ -263,6 +263,62 @@ class RotateWebhookSecretUseCase {
   }
 }
 
+/**
+ * "Enviar teste" (plan of 02/11/2026, L1, decision D48): a signed `ping`
+ * to the one endpoint chosen, sent by the dispatcher like any event and
+ * recorded in the monitor with what the receiver answered. Before this, the
+ * first real event was the customer's first test.
+ *
+ * Refused for an endpoint that would hold it: paused by the customer or
+ * switched off by our breaker. A test parked until a reactivation would
+ * arrive days later as a surprise, which is the opposite of a test.
+ */
+@injectable()
+class SendWebhookTestUseCase {
+  constructor(
+    @inject("WebhookEndpointRepository")
+    private endpoints: IWebhookEndpointRepository,
+    @inject("WebhookDeliveryRepository")
+    private deliveries: IWebhookDeliveryRepository,
+    @inject("UserRepository") private users: IUserRepository,
+  ) {}
+
+  async execute(
+    userId: string,
+    businessId: string,
+    id: string,
+  ): Promise<{ id: string; event_id: string }> {
+    await scopedBusiness(this.users, userId, businessId);
+
+    const endpoint = await this.endpoints.find(id, businessId);
+
+    if (!endpoint) throw endpointNotFound();
+
+    if (!endpoint.is_active) {
+      throw new AppError(
+        "Este endpoint está pausado. Ative-o na edição para enviar um teste.",
+        409,
+        "WEBHOOK_ENDPOINT_PAUSED",
+      );
+    }
+
+    if (endpoint.disabled_at !== null) {
+      throw new AppError(
+        "Este endpoint foi desligado depois de falhas seguidas. Reative-o para enviar um teste: os eventos retidos saem junto.",
+        409,
+        "WEBHOOK_ENDPOINT_DISABLED",
+      );
+    }
+
+    const queued = await this.deliveries.queuePing(id, businessId);
+
+    // Deleted between the read and the write.
+    if (!queued) throw endpointNotFound();
+
+    return { id: queued.id, event_id: queued.eventId };
+  }
+}
+
 @injectable()
 class ListWebhookEndpointsUseCase {
   constructor(
@@ -314,5 +370,6 @@ export {
   ReactivateWebhookEndpointUseCase,
   RotateWebhookSecretUseCase,
   SaveWebhookEndpointUseCase,
+  SendWebhookTestUseCase,
 };
 export type { SaveWebhookEndpointRequest };

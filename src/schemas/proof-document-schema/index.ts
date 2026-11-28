@@ -1,11 +1,12 @@
 import { z } from "zod";
+import { fieldError } from "@/shared/validation/field-error";
 
 const proofDocumentParamsSchema = z.object({
   deliveryId: z
-    .string({ required_error: "ID da entrega é obrigatório!" })
+    .string(fieldError({ required: "ID da entrega é obrigatório!" }))
     .uuid("ID da entrega é inválido."),
   businessId: z
-    .string({ required_error: "ID da empresa é obrigatório!" })
+    .string(fieldError({ required: "ID da empresa é obrigatório!" }))
     .uuid("ID da empresa é inválido."),
 });
 
@@ -36,7 +37,7 @@ const proofDocumentQuerySchema = z.object({
  */
 const verifyProofParamsSchema = z.object({
   token: z
-    .string({ required_error: "Código de verificação é obrigatório!" })
+    .string(fieldError({ required: "Código de verificação é obrigatório!" }))
     .regex(/^[0-9a-f]{64}$/, "Código de verificação inválido."),
 });
 
@@ -50,7 +51,7 @@ const verifyProofParamsSchema = z.object({
  */
 const publicTokenParamsSchema = z.object({
   token: z
-    .string({ required_error: "Código de acompanhamento é obrigatório!" })
+    .string(fieldError({ required: "Código de acompanhamento é obrigatório!" }))
     .regex(/^[0-9a-f]{64}$/, "Código de acompanhamento inválido."),
 });
 

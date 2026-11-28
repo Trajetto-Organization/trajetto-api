@@ -1,9 +1,14 @@
 import { afterCursor, newestFirst } from "@/shared/in-memory/cursor";
 import { Prisma } from "@prisma/client";
 import { USER_COLUMN_DEFAULTS } from "@/shared/in-memory/column-defaults";
+import { DEFAULT_BUSINESS_TIMEZONE } from "@/shared/time/business-day";
 import { v7 as uuidV7 } from "uuid";
 
-import { IUserRepository } from "../IUser-repository";
+import {
+  DRIVER_LOGINS_BY_CPF_LIMIT,
+  IUserRepository,
+  KeptSessionEndedError,
+} from "../IUser-repository";
 
 import {
   afterFailedLogin,
@@ -12,6 +17,7 @@ import {
 
 import {
   CreateUserProps,
+  DriverLoginByCpf,
   ListUsersByRoleAndBusinessProps,
   ListUsersPage,
   ListUsersProps,
@@ -27,6 +33,8 @@ import {
   User,
   SearchUserWithCursorProps,
   CursorPaginatedUser,
+  UpdateUserPasswordKeepingSession,
+  PasswordKeptSession,
 } from "../../dtos/user-dto";
 
 import {
@@ -42,11 +50,22 @@ import { compareForOrder } from "@/shared/pagination/in-memory-order";
 
 import type { InMemoryUserTokensRepository } from "./in-memory-user-tokens-repository";
 
+import {
+  NO_USER_HISTORY,
+  type UserHistoryCounts,
+} from "../../user-history-rules";
+import { isAssignableUser } from "../../user-assignable-rules";
+
 type StoredUser = User & { created_at?: Date; updated_at?: Date };
 
 /** What the user row owns and Prisma deletes through its relations. */
 interface OwnedRow {
   userId: string;
+}
+
+/** A push device: owned by the user, registered by one session (A9). */
+interface PushDeviceSeed extends OwnedRow {
+  session_family_id?: string | null;
 }
 
 /** A profile as the listing needs it: its name, and whose it is. */
@@ -67,7 +86,14 @@ interface PermissionSeed {
 /** The company as the session lookup selects it. */
 interface BusinessSeed {
   is_active: boolean;
+
+  /** The column; the database default when a test gives none. */
+  timezone?: string;
   entitlements: { module: string; enabled: boolean }[];
+
+  /** The names the CPF login's company picker shows (D8). */
+  fantasy_name?: string | null;
+  corporate_reason?: string;
 }
 
 /** The driver as the session lookup selects it. */
@@ -77,6 +103,19 @@ interface DriverSeed {
   businessId: string;
   branchId: string | null;
   branch: { is_active: boolean } | null;
+
+  /** The 11 digits the CPF login looks the driver up by (D8). */
+  cpf?: string;
+}
+
+/**
+ * A row that names the user on a RESTRICT key (a service order they answer
+ * for, a delivery event they reported…): what countUserHistory counts and
+ * what makes the delete fail with P2003, as in Postgres.
+ */
+interface AuthoredRowSeed {
+  userId: string;
+  kind: keyof UserHistoryCounts;
 }
 
 /** A notification delivery addressed to a user (Prisma: NotificationDelivery). */
@@ -107,10 +146,11 @@ function recordNotFound(): Prisma.PrismaClientKnownRequestError {
   );
 }
 
-function withoutPassword<T extends { password?: unknown }>(
+/** As the real listings: no hash, no removal bookkeeping on the line. */
+function listedUser<T extends { password?: unknown; anonymized_at?: unknown }>(
   user: T,
-): Omit<T, "password"> {
-  const { password: _password, ...listed } = user;
+): Omit<T, "password" | "anonymized_at"> {
+  const { password: _password, anonymized_at: _anonymizedAt, ...listed } = user;
 
   return listed;
 }
@@ -138,7 +178,7 @@ class InMemoryUserRepository implements IUserRepository {
   public user: StoredUser[] = [];
 
   /** Push devices each user registered (Prisma: PushDeviceToken). */
-  public pushDeviceTokens: OwnedRow[] = [];
+  public pushDeviceTokens: PushDeviceSeed[] = [];
 
   /** The in-app inbox (Prisma: Notification). */
   public notifications: OwnedRow[] = [];
@@ -160,6 +200,9 @@ class InMemoryUserRepository implements IUserRepository {
 
   /** The notification ledger rows addressed to each user. */
   public notificationDeliveries: DeliverySeed[] = [];
+
+  /** The rows that keep each user from being deleted (RESTRICT keys). */
+  public authoredRows: AuthoredRowSeed[] = [];
 
   private readonly tokens?: InMemoryUserTokensRepository;
 
@@ -194,9 +237,12 @@ class InMemoryUserRepository implements IUserRepository {
     driverId,
     whatsapp_notifications_enabled,
     whatsapp_phone,
+    email_verified,
+    must_change_password,
   }: CreateUserProps): Promise<User> {
-    // The table's unique indexes, as Postgres raises them.
-    if (this.user.some((user) => user.email === email)) {
+    // The table's unique indexes, as Postgres raises them: NULLs never
+    // collide (a driver's login without an e-mail, D02).
+    if (email && this.user.some((user) => user.email === email)) {
       throw uniqueViolation("email");
     }
 
@@ -209,7 +255,7 @@ class InMemoryUserRepository implements IUserRepository {
       ...USER_COLUMN_DEFAULTS,
       id: uuidV7(),
       role: role || "BUSINESS_USER",
-      email,
+      email: email ?? null,
       name,
       password: password || "default-password",
       businessId,
@@ -218,7 +264,8 @@ class InMemoryUserRepository implements IUserRepository {
       two_factor_enabled: false,
       access_revoked: false,
       session_version: 0,
-      email_verified: null,
+      email_verified: email_verified ?? null,
+      must_change_password: must_change_password ?? false,
       avatar: null,
       whatsapp_notifications_enabled: whatsapp_notifications_enabled ?? false,
       email_notifications_enabled: true,
@@ -241,7 +288,7 @@ class InMemoryUserRepository implements IUserRepository {
       : undefined;
 
     const row = {
-      ...withoutPassword(user),
+      ...listedUser(user),
       // The real query selects only these names from the relations.
       profileAccess: profile ? { name: profile.name } : null,
       driver: driverName ? { name: driverName } : null,
@@ -441,8 +488,14 @@ class InMemoryUserRepository implements IUserRepository {
     } = userData;
 
     // Only skip undefined values — null is a valid value (means "clear/disconnect")
+    // — except a null e-mail, "not sent" as in UserRepository.updateUser
+    // (an edit never clears an e-mail; only a driver's creation writes NULL,
+    // D2).
     const filteredData = Object.fromEntries(
-      Object.entries(columns).filter(([, value]) => value !== undefined),
+      Object.entries(columns).filter(
+        ([key, value]) =>
+          value !== undefined && !(key === "email" && value === null),
+      ),
     );
 
     if (
@@ -499,6 +552,15 @@ class InMemoryUserRepository implements IUserRepository {
       throw recordNotFound();
     }
 
+    // The RESTRICT keys: a row that names the user refuses the delete. The
+    // twin used to delete anyway, so no unit test reached the P2003 path.
+    if (this.authoredRows.some((row) => row.userId === userId)) {
+      throw new Prisma.PrismaClientKnownRequestError(
+        "Foreign key constraint violated on the constraint: `user_id_fkey`",
+        { code: "P2003", clientVersion: "in-memory" },
+      );
+    }
+
     const deletedUser = this.user.splice(index, 1)[0];
 
     // ON DELETE CASCADE of what the row owns.
@@ -530,7 +592,7 @@ class InMemoryUserRepository implements IUserRepository {
 
     return (
       this.user.find(
-        (user) => user.email.toLocaleLowerCase("en-US") === wanted,
+        (user) => user.email?.toLocaleLowerCase("en-US") === wanted,
       ) ?? null
     );
   }
@@ -569,7 +631,15 @@ class InMemoryUserRepository implements IUserRepository {
         : undefined;
 
       if (!user.businessId) relations.business = null;
-      else if (business) relations.business = business;
+      else if (business) {
+        // What the session lookup selects, never the picker's names.
+        relations.business = {
+          is_active: business.is_active,
+          // The column's default when the test gives none, as the database.
+          timezone: business.timezone ?? DEFAULT_BUSINESS_TIMEZONE,
+          entitlements: business.entitlements,
+        };
+      }
     }
 
     if (user.driver === undefined) {
@@ -578,15 +648,139 @@ class InMemoryUserRepository implements IUserRepository {
         : undefined;
 
       if (!user.driverId) relations.driver = null;
-      else if (driver) relations.driver = driver;
+      else if (driver) {
+        // The session lookup never selects the CPF.
+        const { cpf: _cpf, ...selected } = driver;
+
+        relations.driver = selected;
+      }
     }
 
     return { ...user, ...relations };
   }
 
+  async findDriverLoginsByCpf(cpf: string): Promise<DriverLoginByCpf[]> {
+    const matches = this.user
+      .filter((user) => {
+        const driver = user.driverId ? this.drivers.get(user.driverId) : null;
+
+        return driver?.cpf === cpf;
+      })
+      .sort(
+        (left, right) =>
+          (time(left.created_at) ?? 0) - (time(right.created_at) ?? 0) ||
+          left.id.localeCompare(right.id),
+      )
+      .slice(0, DRIVER_LOGINS_BY_CPF_LIMIT);
+
+    const logins: DriverLoginByCpf[] = [];
+
+    for (const match of matches) {
+      const loaded = (await this.findUserById(match.id))!;
+      const seed = match.businessId
+        ? this.businesses.get(match.businessId)
+        : undefined;
+      const { cpf: _cpf, ...driver } = this.drivers.get(match.driverId!)!;
+
+      logins.push({
+        ...loaded,
+        // The real query selects these from the rows, never from a relation a
+        // test left on the user.
+        business: seed ? { is_active: seed.is_active } : null,
+        driver,
+        companyName: seed?.fantasy_name?.trim() || seed?.corporate_reason || "",
+      });
+    }
+
+    return logins;
+  }
+
+  async updateUserPasswordKeepingSession({
+    userId,
+    password,
+    keepFamilyId,
+    replacement,
+    effects,
+  }: UpdateUserPasswordKeepingSession): Promise<PasswordKeptSession> {
+    const user = this.user.find((user) => user.id === userId);
+
+    // Prisma's update() raises P2025 for a missing row; it never answers null.
+    if (!user) throw recordNotFound();
+
+    const now = new Date();
+
+    // The kept session ended after the caller checked it: refused before
+    // anything changes, as the real transaction rolls back (see there).
+    if (
+      this.tokens &&
+      !this.tokens.refreshTokenItems.some(
+        (item) =>
+          item.userId === userId &&
+          item.family_id === keepFamilyId &&
+          !item.revoked_at &&
+          item.expires_in > now,
+      )
+    ) {
+      throw new KeptSessionEndedError();
+    }
+
+    user.password = password;
+    user.session_version = (user.session_version ?? 0) + 1;
+    user.must_change_password = false;
+    user.failed_login_attempts = 0;
+    user.failed_login_at = null;
+    user.login_locked_until = null;
+
+    const kept = (row: { session_family_id?: string | null }) =>
+      row.session_family_id === keepFamilyId;
+
+    this.pushDeviceTokens = this.pushDeviceTokens.filter(
+      (row) => row.userId !== userId || kept(row),
+    );
+
+    let endedFamilies: string[] = [];
+
+    if (this.tokens) {
+      const mine = this.tokens.refreshTokenItems.filter(
+        (item) => item.userId === userId,
+      );
+
+      endedFamilies = [
+        ...new Set(
+          mine
+            .filter((item) => item.family_id !== keepFamilyId)
+            .map((item) => item.family_id),
+        ),
+      ];
+
+      // The other families go whole; the kept one loses only its live rows
+      // (a late renewal of it must find nothing, see the real repository).
+      this.tokens.refreshTokenItems = this.tokens.refreshTokenItems.filter(
+        (item) =>
+          item.userId !== userId ||
+          (item.family_id === keepFamilyId &&
+            (Boolean(item.revoked_at) || item.expires_in <= now)),
+      );
+      this.tokens.pushDeviceTokens = this.tokens.pushDeviceTokens.filter(
+        (row) => row.userId !== userId || kept(row),
+      );
+
+      await this.tokens.createUserRefreshToken(replacement(user));
+    } else {
+      // Minted all the same, as the database would store it.
+      replacement(user);
+    }
+
+    if (effects) await effects({} as Prisma.TransactionClient, user);
+
+    return { user, endedFamilies };
+  }
+
   async updateUserPassword({
     userId,
     password,
+    markEmailVerifiedAt,
+    mustChangePassword = false,
   }: UpdateUserPassword): Promise<User | null> {
     const user = this.user.find((user) => user.id === userId);
 
@@ -594,6 +788,8 @@ class InMemoryUserRepository implements IUserRepository {
     if (!user) throw recordNotFound();
 
     user.password = password;
+    if (markEmailVerifiedAt) user.email_verified = markEmailVerifiedAt;
+    user.must_change_password = mustChangePassword;
     user.session_version = (user.session_version ?? 0) + 1;
     user.failed_login_attempts = 0;
     user.failed_login_at = null;
@@ -670,7 +866,7 @@ class InMemoryUserRepository implements IUserRepository {
     return (
       this.user.find(
         (user) =>
-          user.email.toLocaleLowerCase("en-US") === wanted &&
+          user.email?.toLocaleLowerCase("en-US") === wanted &&
           user.businessId === businessId,
       ) ?? null
     );
@@ -683,6 +879,15 @@ class InMemoryUserRepository implements IUserRepository {
   async countUsersWithProfile(profileAccessId: string): Promise<number> {
     return this.user.filter((user) => user.profileAccessId === profileAccessId)
       .length;
+  }
+  async countUserHistory(userId: string): Promise<UserHistoryCounts> {
+    const counts: UserHistoryCounts = { ...NO_USER_HISTORY };
+
+    for (const row of this.authoredRows) {
+      if (row.userId === userId) counts[row.kind] += 1;
+    }
+
+    return counts;
   }
 
   /**
@@ -771,12 +976,12 @@ class InMemoryUserRepository implements IUserRepository {
     const writesDeliveries = (user: StoredUser): boolean =>
       Boolean(
         user.profileAccessId &&
-          (this.profilePermissions.get(user.profileAccessId) ?? []).some(
-            (permission) =>
-              permission.permissionKey === "delivery_manage" &&
-              permission.canRead &&
-              permission.canWrite,
-          ),
+        (this.profilePermissions.get(user.profileAccessId) ?? []).some(
+          (permission) =>
+            permission.permissionKey === "delivery_manage" &&
+            permission.canRead &&
+            permission.canWrite,
+        ),
       );
 
     // created_at asc, id asc: the Prisma order, tiebreaker included.
@@ -916,7 +1121,7 @@ class InMemoryUserRepository implements IUserRepository {
     return {
       data: this.sorted(filtered, sort, order)
         .slice(skip, skip + pageSize)
-        .map((user) => withoutPassword(user) as unknown as ListUsersProps),
+        .map((user) => listedUser(user) as unknown as ListUsersProps),
       groups: this.groupsOf(base),
       profileNames: new Map(),
       emailVerified: filtered.filter((user) => user.email_verified).length,
@@ -935,6 +1140,7 @@ class InMemoryUserRepository implements IUserRepository {
       this.user.filter(
         (user) =>
           user.businessId === businessId &&
+          isAssignableUser(user) &&
           (!term ||
             containsInsensitive(user.name, term) ||
             containsInsensitive(user.email, term)),
@@ -952,7 +1158,7 @@ class InMemoryUserRepository implements IUserRepository {
     const data = filtered.slice(0, limit);
     const nextCursor = hasMore ? (data[data.length - 1]?.id ?? null) : null;
 
-    return { data: data.map(withoutPassword), nextCursor, hasMore };
+    return { data: data.map(listedUser), nextCursor, hasMore };
   }
 }
 

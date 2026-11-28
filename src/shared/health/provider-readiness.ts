@@ -12,6 +12,23 @@ import {
 import { logger } from "@/shared/logging/logger";
 import { senderDomain } from "@/shared/providers/mail-provider/message-id";
 import { TEMPLATE_LANGUAGE } from "@/shared/providers/whatsapp-provider/implementations/meta-cloud-api-provider";
+import { CUSTOMER_WHATSAPP_TEMPLATES } from "@/shared/delivery/customer-whatsapp-templates";
+import {
+  INTERNAL_WHATSAPP_TEMPLATES,
+  bodyVariableCount,
+  type WhatsAppTemplateDefinition,
+} from "@/shared/notifications/whatsapp-templates";
+import {
+  pauseDeadlineOf,
+  pauseReasonOf,
+  pauseStatusOf,
+  type GeocodingPauseReason,
+} from "@/shared/delivery/geocoding/geocoding-gate";
+import { GEOCODING_KEYS } from "@/shared/delivery/geocoding/geocoding-keys";
+import {
+  DEFAULT_BUSINESS_TIMEZONE,
+  wallClock,
+} from "@/shared/time/business-day";
 import {
   lastHeartbeatOutcome,
   type HeartbeatOutcome,
@@ -33,11 +50,7 @@ import type { ProofSigningService } from "@/shared/services/proof-signing/proof-
  */
 
 type ReadinessStatus =
-  | "ok"
-  | "warning"
-  | "error"
-  | "not_configured"
-  | "disabled";
+  "ok" | "warning" | "error" | "not_configured" | "disabled";
 
 type ProviderKey =
   | "email"
@@ -45,6 +58,8 @@ type ProviderKey =
   | "push"
   | "storage"
   | "ai_ocr"
+  | "geocoding"
+  | "address_search"
   | "proof_certificate"
   | "heartbeat";
 
@@ -55,11 +70,7 @@ type DetailValue = string | number | boolean | null;
  * the provider: it may clear by itself on the next attempt.
  */
 type ProbeFailureKind =
-  | "timeout"
-  | "network"
-  | "http_5xx"
-  | "throttled"
-  | "invalid_response";
+  "timeout" | "network" | "http_5xx" | "throttled" | "invalid_response";
 
 interface ProviderReadiness {
   key: ProviderKey;
@@ -109,12 +120,12 @@ interface ReadinessEnv {
   RESEND_WEBHOOK_SECRET?: string;
   META_WHATSAPP_ACCESS_TOKEN?: string;
   META_WHATSAPP_PHONE_NUMBER_ID?: string;
-  META_WHATSAPP_TEMPLATE_NAME: string;
-  META_WHATSAPP_CUSTOMER_TEMPLATE_NAME?: string;
+  META_WHATSAPP_TEMPLATE_NAME?: string;
   META_WHATSAPP_API_VERSION: string;
   META_WHATSAPP_BUSINESS_ACCOUNT_ID?: string;
   META_WHATSAPP_APP_SECRET?: string;
   META_WHATSAPP_WEBHOOK_VERIFY_TOKEN?: string;
+  EXPO_ACCESS_TOKEN?: string;
   UPLOAD_STORAGE_TYPE: "local" | "r2";
   R2_ACCOUNT_ID?: string;
   R2_BUCKET_NAME?: string;
@@ -126,6 +137,26 @@ interface ReadinessEnv {
   AI_LOCAL_TOKEN?: string;
   HEALTHCHECK_PING_URL?: string;
   HEALTHCHECK_FAIL_URL?: string;
+  REVERSE_GEOCODER_URL?: string;
+  REVERSE_GEOCODER_KEY?: string;
+  DELIVERY_GEOCODING_DAILY_BUDGET: number;
+  ADDRESS_SEARCH_URL?: string;
+  ADDRESS_SEARCH_KEY?: string;
+  ADDRESS_SEARCH_PROTOCOL: "locationiq-autocomplete" | "nominatim-search";
+  ADDRESS_SEARCH_DAILY_BUDGET: number;
+  ADDRESS_SEARCH_BUSINESS_DAILY_LIMIT: number;
+}
+
+/**
+ * The geocoder's state in Redis (geocoding-keys.ts), as read: the
+ * account's pause and the search's own (raw values, "REFUSED <deadline>
+ * 403"), and today's lookups and searches.
+ */
+interface GeocodingStateLike {
+  pause: string | null;
+  searchPause: string | null;
+  lookupsToday: number;
+  searchesToday: number;
 }
 
 interface ProofHealthLike {
@@ -149,6 +180,12 @@ interface ReadinessDeps {
   headBucket: (signal: AbortSignal) => Promise<void>;
   proofHealth: () => ProofHealthLike;
   heartbeat: () => HeartbeatOutcome | null;
+
+  /**
+   * The geocoder's pauses and today's counts, in one MGET; null when Redis
+   * does not answer — the state is then "not read", never an error.
+   */
+  geocodingState: (now: Date) => Promise<GeocodingStateLike | null>;
   now?: () => Date;
 
   /** Deadline of each attempt (PROBE_ATTEMPT_TIMEOUT_MS). */
@@ -846,9 +883,208 @@ interface MetaError {
   error?: { code?: number; message?: string };
 }
 
+/**
+ * Every template the code sends (plan of 02/11/2026, B7): the 17 internal
+ * notices and the customer's four. Read from the registries, so a template
+ * added to the code is checked here the same day.
+ */
+const WHATSAPP_TEMPLATE_REGISTRY: readonly WhatsAppTemplateDefinition[] = [
+  ...Object.values(INTERNAL_WHATSAPP_TEMPLATES),
+  ...Object.values(CUSTOMER_WHATSAPP_TEMPLATES),
+];
+
+/** Meta's list is paged; four pages of 250 cover any WABA we could have. */
+const TEMPLATE_LIST_PAGE_SIZE = 250;
+const TEMPLATE_LIST_MAX_PAGES = 4;
+
+interface MetaTemplateEntry {
+  name?: string;
+  status?: string;
+  language?: string;
+  category?: string;
+  components?: Array<{
+    type?: string;
+    text?: string;
+    buttons?: Array<{ type?: string; url?: string }>;
+  }>;
+}
+
+/**
+ * The account's templates, in ONE listing (following Meta's pages) instead
+ * of a GET per template: 21 GETs side by side would cost the page as much as
+ * the slowest of them, and every one counts against the token's rate limit.
+ * Null when the list could not be read whole — never "it does not exist".
+ */
+async function listMetaTemplates(
+  deps: ReadinessDeps,
+): Promise<
+  { ok: true; entries: MetaTemplateEntry[] } | { ok: false; warning: string }
+> {
+  const { env } = deps;
+
+  let url: string | null =
+    `https://graph.facebook.com/${env.META_WHATSAPP_API_VERSION}/` +
+    `${env.META_WHATSAPP_BUSINESS_ACCOUNT_ID}/message_templates` +
+    `?fields=name,status,language,category,components&limit=${TEMPLATE_LIST_PAGE_SIZE}`;
+
+  const entries: MetaTemplateEntry[] = [];
+
+  try {
+    for (let page = 0; url && page < TEMPLATE_LIST_MAX_PAGES; page += 1) {
+      const response = await deps.fetch(url, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${env.META_WHATSAPP_ACCESS_TOKEN}`,
+        },
+        signal: AbortSignal.timeout(probePolicy(deps).attemptTimeoutMs),
+      });
+
+      const body = (await readJson(response)) as
+        | ({
+            data?: MetaTemplateEntry[];
+            paging?: { next?: string };
+          } & MetaError)
+        | null;
+
+      if (!response.ok) {
+        return {
+          ok: false,
+          warning: `A lista de templates não pôde ser lida (HTTP ${response.status}${
+            body?.error?.code ? `, código ${body.error.code}` : ""
+          }): confira META_WHATSAPP_BUSINESS_ACCOUNT_ID e a permissão whatsapp_business_management do token.`,
+        };
+      }
+
+      // A list that stalled, arrived cut or came without `data` says
+      // nothing about any template: never "does not exist" (an error).
+      if (!Array.isArray(body?.data)) {
+        return {
+          ok: false,
+          warning:
+            "A lista de templates veio incompleta e os templates não puderam ser conferidos agora.",
+        };
+      }
+
+      entries.push(...body.data);
+
+      // Only Meta's own host is followed: the next page's URL comes from
+      // the answer, and the token rides along with it.
+      const next: string | undefined = body.paging?.next;
+      url =
+        typeof next === "string" &&
+        next.startsWith("https://graph.facebook.com/")
+          ? next
+          : null;
+    }
+
+    return { ok: true, entries };
+  } catch (error) {
+    return {
+      ok: false,
+      warning:
+        failureKind(error) === "timeout"
+          ? "A Meta não respondeu à lista de templates."
+          : "Sem rota até a Meta ao ler a lista de templates.",
+    };
+  }
+}
+
+/**
+ * One template's verdict against the registry: present in pt_BR, APPROVED,
+ * UTILITY (MARKETING is a problem — the reason these templates exist), the
+ * body taking as many variables as the code sends, and, for the customer's,
+ * one URL button ending in a variable per button the code fills.
+ */
+function judgeTemplate(
+  definition: WhatsAppTemplateDefinition,
+  entries: MetaTemplateEntry[],
+): { state: string; problems: string[]; warnings: string[] } {
+  const { name } = definition;
+  const matches = entries.filter((entry) => entry.name === name);
+  const entry =
+    matches.find((item) => item.language === TEMPLATE_LANGUAGE) ?? matches[0];
+
+  if (!entry) {
+    return {
+      state: "MISSING",
+      problems: [
+        `O template ${name} não existe na conta: os envios dele falham até ser criado.`,
+      ],
+      warnings: [],
+    };
+  }
+
+  const state = entry.status ?? "UNKNOWN";
+  const problems: string[] = [];
+  const warnings: string[] = [];
+
+  if (entry.language && entry.language !== TEMPLATE_LANGUAGE) {
+    problems.push(
+      `O template ${name} existe em ${entry.language}, mas os envios pedem ${TEMPLATE_LANGUAGE}.`,
+    );
+  }
+
+  if (state !== "APPROVED") {
+    problems.push(
+      `O template ${name} está ${state}, não APPROVED: os envios com ele falham.`,
+    );
+  }
+
+  if (entry.category && entry.category.toUpperCase() !== "UTILITY") {
+    problems.push(
+      `O template ${name} está na categoria ${entry.category.toUpperCase()}, não UTILITY: a Meta o recategorizou${
+        entry.category.toUpperCase() === "MARKETING"
+          ? " como MARKETING, que é cobrado como marketing e sujeito a bloqueio por opt-out"
+          : ""
+      }. Revise o texto na Meta.`,
+    );
+  }
+
+  const components = entry.components ?? [];
+  const bodyText = components.find(
+    (component) => component.type?.toUpperCase() === "BODY",
+  )?.text;
+
+  if (typeof bodyText === "string") {
+    const count = bodyVariableCount(bodyText);
+
+    if (count !== definition.variables.length) {
+      problems.push(
+        `O template ${name} tem ${count} variáveis na Meta, mas o código envia ${definition.variables.length}: os envios falham com o erro 132000.`,
+      );
+    }
+  } else if (components.length === 0) {
+    warnings.push(
+      `A Meta não devolveu o corpo do template ${name}; as variáveis não foram conferidas.`,
+    );
+  }
+
+  const wanted = definition.buttons?.length ?? 0;
+
+  if (wanted > 0) {
+    const urlButtons = components
+      .filter((component) => component.type?.toUpperCase() === "BUTTONS")
+      .flatMap((component) => component.buttons ?? [])
+      .filter(
+        (button) =>
+          button.type?.toUpperCase() === "URL" &&
+          typeof button.url === "string" &&
+          /\{\{1\}\}$/.test(button.url),
+      );
+
+    if (urlButtons.length < wanted) {
+      problems.push(
+        `O template ${name} precisa de ${wanted} botões de URL terminados em {{1}} (acompanhar e parar de receber); a Meta tem ${urlButtons.length}.`,
+      );
+    }
+  }
+
+  return { state, problems, warnings };
+}
+
 async function checkTemplates(
   deps: ReadinessDeps,
-  names: string[],
+  registry: readonly WhatsAppTemplateDefinition[],
 ): Promise<{
   details: Record<string, DetailValue>;
   problems: string[];
@@ -857,137 +1093,37 @@ async function checkTemplates(
   const { env } = deps;
   const details: Record<string, DetailValue> = {};
 
-  if (!env.META_WHATSAPP_BUSINESS_ACCOUNT_ID) {
-    for (const name of names) details[`template:${name}`] = "UNKNOWN";
+  const unknownAll = (warning: string) => {
+    for (const definition of registry) {
+      details[`template:${definition.name}`] = "UNKNOWN";
+    }
 
-    return {
-      details,
-      problems: [],
-      warnings: [
-        "Defina META_WHATSAPP_BUSINESS_ACCOUNT_ID para conferir se os templates estão aprovados.",
-      ],
-    };
+    return { details, problems: [], warnings: [warning] };
+  };
+
+  if (!env.META_WHATSAPP_BUSINESS_ACCOUNT_ID) {
+    return unknownAll(
+      "Defina META_WHATSAPP_BUSINESS_ACCOUNT_ID para conferir se os templates estão aprovados.",
+    );
   }
+
+  const listed = await listMetaTemplates(deps);
+
+  if (!listed.ok) return unknownAll(listed.warning);
 
   const problems: string[] = [];
   const warnings: string[] = [];
 
-  /**
-   * One probe per template, side by side: each is a GET of its own, and in a
-   * loop the page waited for the sum of their timeouts. The verdicts are
-   * collected in the templates' order, so the messages read the same.
-   */
-  const verdicts = await Promise.all(
-    names.map((name) => checkTemplate(deps, name)),
-  );
+  // In the registry's order, so the messages read the same every time.
+  for (const definition of registry) {
+    const verdict = judgeTemplate(definition, listed.entries);
 
-  for (const verdict of verdicts) {
-    Object.assign(details, verdict.details);
+    details[`template:${definition.name}`] = verdict.state;
     problems.push(...verdict.problems);
     warnings.push(...verdict.warnings);
   }
 
   return { details, problems, warnings };
-}
-
-/** One template's approval, as one GET of the account's template list. */
-async function checkTemplate(
-  deps: ReadinessDeps,
-  name: string,
-): Promise<{
-  details: Record<string, DetailValue>;
-  problems: string[];
-  warnings: string[];
-}> {
-  const { env } = deps;
-  const key = `template:${name}`;
-
-  try {
-    const url =
-      `https://graph.facebook.com/${env.META_WHATSAPP_API_VERSION}/` +
-      `${env.META_WHATSAPP_BUSINESS_ACCOUNT_ID}/message_templates` +
-      `?name=${encodeURIComponent(name)}&fields=name,status,language&limit=100`;
-
-    const response = await deps.fetch(url, {
-      method: "GET",
-      headers: { Authorization: `Bearer ${env.META_WHATSAPP_ACCESS_TOKEN}` },
-      signal: AbortSignal.timeout(probePolicy(deps).attemptTimeoutMs),
-    });
-    const body = (await readJson(response)) as
-      | ({
-          data?: Array<{ name?: string; status?: string; language?: string }>;
-        } & MetaError)
-      | null;
-
-    if (!response.ok) {
-      return {
-        details: { [key]: "UNKNOWN" },
-        problems: [],
-        warnings: [
-          `A lista de templates não pôde ser lida (HTTP ${response.status}${
-            body?.error?.code ? `, código ${body.error.code}` : ""
-          }): confira META_WHATSAPP_BUSINESS_ACCOUNT_ID e a permissão whatsapp_business_management do token.`,
-        ],
-      };
-    }
-
-    // A list that stalled, arrived cut or came without `data` says nothing
-    // about the template: never "does not exist" (an error) from it.
-    if (!Array.isArray(body?.data)) {
-      return {
-        details: { [key]: "UNKNOWN" },
-        problems: [],
-        warnings: [
-          `A lista de templates veio incompleta e o template ${name} não pôde ser conferido agora.`,
-        ],
-      };
-    }
-
-    const matches = body.data.filter((item) => item.name === name);
-    const entry =
-      matches.find((item) => item.language === TEMPLATE_LANGUAGE) ?? matches[0];
-
-    if (!entry) {
-      return {
-        details: { [key]: "MISSING" },
-        problems: [`O template ${name} não existe na conta.`],
-        warnings: [],
-      };
-    }
-
-    const status = entry.status ?? "UNKNOWN";
-
-    if (status !== "APPROVED") {
-      return {
-        details: { [key]: status },
-        problems: [
-          `O template ${name} está ${status}, não APPROVED: os envios com ele falham.`,
-        ],
-        warnings: [],
-      };
-    }
-
-    return {
-      details: { [key]: status },
-      problems: [],
-      warnings:
-        entry.language && entry.language !== TEMPLATE_LANGUAGE
-          ? [
-              `O template ${name} está aprovado em ${entry.language}, mas os envios pedem ${TEMPLATE_LANGUAGE}.`,
-            ]
-          : [],
-    };
-  } catch (error) {
-    return {
-      details: { [key]: "UNKNOWN" },
-      problems: [],
-      warnings: [
-        failureKind(error) === "timeout"
-          ? `A Meta não respondeu sobre o template ${name}.`
-          : `Sem rota até a Meta ao conferir o template ${name}.`,
-      ],
-    };
-  }
 }
 
 async function checkWhatsApp(deps: ReadinessDeps): Promise<ProviderReadiness> {
@@ -1015,19 +1151,10 @@ async function checkWhatsApp(deps: ReadinessDeps): Promise<ProviderReadiness> {
     });
   }
 
-  const templates = [
-    ...new Set(
-      [
-        env.META_WHATSAPP_TEMPLATE_NAME,
-        env.META_WHATSAPP_CUSTOMER_TEMPLATE_NAME,
-      ].filter((name): name is string => Boolean(name)),
-    ),
-  ];
-
   // The templates are read side by side with the number, not after it: the
-  // page waited for the number's probe plus each template's. Their verdict
-  // is only used when the number answered; checkTemplates never throws.
-  const templatesCheck = checkTemplates(deps, templates);
+  // page waited for the number's probe plus the list's. Their verdict is only
+  // used when the number answered; checkTemplates never throws.
+  const templatesCheck = checkTemplates(deps, WHATSAPP_TEMPLATE_REGISTRY);
 
   const outcome = await probeAttempts(
     "whatsapp",
@@ -1124,6 +1251,18 @@ async function checkWhatsApp(deps: ReadinessDeps): Promise<ProviderReadiness> {
 
 async function checkPush(deps: ReadinessDeps): Promise<ProviderReadiness> {
   const label = "Push (Expo → FCM)";
+  const { env } = deps;
+
+  // Plan of 02/11/2026 (A8): the project's access token is optional until
+  // somebody turns on Expo's "enhanced push security" — from then on every
+  // call without it is refused with 401. Said ahead, so the setting is never
+  // turned on before the variable exists (decision D43).
+  const tokenWarnings = env.EXPO_ACCESS_TOKEN
+    ? []
+    : [
+        "EXPO_ACCESS_TOKEN ausente: se a segurança reforçada de push for ligada no projeto da Expo, todos os pushes passam a falhar com 401. Defina a variável nos dois ambientes antes de ligar.",
+      ];
+  const tokenDetail = { expo_access_token: Boolean(env.EXPO_ACCESS_TOKEN) };
 
   // The FCM service account lives in the EAS project, not here: the API
   // only reaches Expo. A receipts query for an id that does not exist proves
@@ -1139,6 +1278,9 @@ async function checkPush(deps: ReadinessDeps): Promise<ProviderReadiness> {
           headers: {
             "Content-Type": "application/json",
             Accept: "application/json",
+            ...(env.EXPO_ACCESS_TOKEN
+              ? { Authorization: `Bearer ${env.EXPO_ACCESS_TOKEN}` }
+              : {}),
           },
           body: JSON.stringify({
             ids: ["00000000-0000-0000-0000-000000000000"],
@@ -1157,11 +1299,19 @@ async function checkPush(deps: ReadinessDeps): Promise<ProviderReadiness> {
 
   if (!outcome.answer) {
     return unanswered("push", label, "a Expo", outcome, deps, {
-      details: { fcm_credentials: "eas" },
+      warnings: tokenWarnings,
+      details: { fcm_credentials: "eas", ...tokenDetail },
     });
   }
 
   const { ok, status } = outcome.answer.value;
+
+  const refusedMessage =
+    status === 401 || status === 403
+      ? env.EXPO_ACCESS_TOKEN
+        ? `A Expo recusou EXPO_ACCESS_TOKEN (HTTP ${status}): gere um novo token de acesso no projeto e troque a variável.`
+        : `A Expo exige um token de acesso (HTTP ${status}): a segurança reforçada de push está ligada no projeto. Defina EXPO_ACCESS_TOKEN.`
+      : `A Expo respondeu HTTP ${status}.`;
 
   return answeredProbe(
     base("push", label, {
@@ -1169,8 +1319,9 @@ async function checkPush(deps: ReadinessDeps): Promise<ProviderReadiness> {
       reachable: true,
       message: ok
         ? "Serviço de push da Expo acessível. A credencial do FCM fica no projeto EAS: um erro nela aparece nos recibos (InvalidCredentials)."
-        : `A Expo respondeu HTTP ${status}.`,
-      details: { fcm_credentials: "eas" },
+        : refusedMessage,
+      warnings: tokenWarnings,
+      details: { fcm_credentials: "eas", ...tokenDetail },
     }),
     outcome,
     deps,
@@ -1505,6 +1656,325 @@ async function checkAiOcr(deps: ReadinessDeps): Promise<ProviderReadiness> {
 }
 
 // ---------------------------------------------------------------------------
+// Geocoding: the deliveries' points and the "Fixar no mapa" search
+// ---------------------------------------------------------------------------
+
+/*
+ * Not probed: every call to the provider spends a credit of the day, and a
+ * refusal already pauses every replica with its HTTP status in Redis
+ * (geocoding-gate.ts) — the pause is the probe. These two entries read the
+ * variables and that state (owner's report of 14/11/2026: the search was
+ * off and the deliveries had no point, and nothing on the Sistema screen
+ * said why). No balance probe (decision D-28).
+ */
+
+/** "15:15" today, "21:00 de 15/11" another day: Brasília's wall clock. */
+function brasiliaTime(until: Date, now: Date): string {
+  const at = wallClock(until, DEFAULT_BUSINESS_TIMEZONE);
+  const today = wallClock(now, DEFAULT_BUSINESS_TIMEZONE);
+  const pad = (value: number) => String(value).padStart(2, "0");
+  const time = `${pad(at.hour)}:${pad(at.minute)}`;
+
+  return at.day === today.day && at.month === today.month
+    ? time
+    : `${time} de ${pad(at.day)}/${pad(at.month)}`;
+}
+
+/** The host of a URL; null for one that does not parse. */
+function hostOf(url: string | undefined): string | null {
+  try {
+    return url ? new URL(url).hostname : null;
+  } catch {
+    return null;
+  }
+}
+
+function isLocationIq(url: string | undefined): boolean {
+  return /(^|\.)locationiq\.com$/i.test(hostOf(url) ?? "");
+}
+
+interface PauseRead {
+  reason: GeocodingPauseReason;
+  until: Date | null;
+  status: number | null;
+}
+
+/** A pause key, read; null for none. */
+function pauseOf(value: string | null): PauseRead | null {
+  const reason = pauseReasonOf(value);
+
+  return reason
+    ? {
+        reason,
+        until: pauseDeadlineOf(value),
+        status: pauseStatusOf(value),
+      }
+    : null;
+}
+
+function pauseDetails(pause: PauseRead | null): Record<string, DetailValue> {
+  return {
+    paused_reason: pause?.reason ?? null,
+    paused_until: pause?.until?.toISOString() ?? null,
+    refused_status: pause?.reason === "REFUSED" ? pause.status : null,
+  };
+}
+
+/** Until when, in words: "até 15:15 (horário de Brasília)". */
+function untilText(pause: PauseRead, now: Date): string {
+  return pause.until
+    ? `até ${brasiliaTime(pause.until, now)} (horário de Brasília)`
+    : "por alguns minutos";
+}
+
+/** What a refusal of the deliveries' lookups means, by its status. */
+function lookupRefusal(status: number | null): string {
+  switch (status) {
+    case 401:
+      return "O LocationIQ recusou a chave (HTTP 401): confira REVERSE_GEOCODER_KEY.";
+    case 403:
+      return "O LocationIQ recusou o acesso (HTTP 403): o token não tem o Search liberado ou tem restrição de Referrer ou de IP.";
+    case 404:
+      return "O provedor respondeu 404: REVERSE_GEOCODER_URL deve ser a raiz da API (a /v1, sem /search).";
+    default:
+      return `O provedor recusou as consultas${status ? ` (HTTP ${status})` : ""}: confira REVERSE_GEOCODER_URL e REVERSE_GEOCODER_KEY.`;
+  }
+}
+
+/** What a refusal of the search means, by its status. */
+function searchRefusal(status: number | null): string {
+  switch (status) {
+    case 401:
+      return "O LocationIQ recusou a chave da busca (HTTP 401): confira ADDRESS_SEARCH_KEY (vazia, vale a REVERSE_GEOCODER_KEY).";
+    case 403:
+      return "O LocationIQ recusou a busca (HTTP 403): o token não tem o Autocomplete liberado ou tem restrição de Referrer ou de IP.";
+    case 404:
+    case 200:
+      return `A busca não achou a API do provedor (HTTP ${status}): ADDRESS_SEARCH_URL deve ser a raiz da API (https://api.locationiq.com/v1) e ADDRESS_SEARCH_PROTOCOL, locationiq-autocomplete.`;
+    default:
+      return `O provedor recusou a busca${status ? ` (HTTP ${status})` : ""}: confira ADDRESS_SEARCH_URL, ADDRESS_SEARCH_PROTOCOL e a chave.`;
+  }
+}
+
+/**
+ * When something comes back, in words: "às 21:00 (horário de Brasília)".
+ * A return is a moment, not a span: "volta até 21:00" reads wrong in pt-BR.
+ * Null without a deadline.
+ */
+function backAtText(pause: PauseRead, now: Date): string | null {
+  return pause.until
+    ? `às ${brasiliaTime(pause.until, now)} (horário de Brasília)`
+    : null;
+}
+
+/** The provider's quota of the day: back at midnight UTC. */
+function quotaText(pause: PauseRead, now: Date): string {
+  const backAt = backAtText(pause, now);
+
+  return `A cota do dia do LocationIQ acabou: volta ${backAt ? `${backAt}, ` : ""}à meia-noite UTC.`;
+}
+
+const STATE_UNREAD =
+  "Configurado. Estado do dia não lido: o Redis não respondeu.";
+
+async function checkGeocoding(deps: ReadinessDeps): Promise<ProviderReadiness> {
+  const { env } = deps;
+  const label = "Localização das entregas (LocationIQ)";
+  const budget = env.DELIVERY_GEOCODING_DAILY_BUDGET;
+
+  if (!env.REVERSE_GEOCODER_URL) {
+    return base("geocoding", label, {
+      status: "not_configured",
+      configured: false,
+      missing_env: ["REVERSE_GEOCODER_URL"],
+      message:
+        "Sem REVERSE_GEOCODER_URL as entregas não são localizadas: só têm o ponto informado na criação ou fixado no mapa.",
+    });
+  }
+
+  if (isLocationIq(env.REVERSE_GEOCODER_URL) && !env.REVERSE_GEOCODER_KEY) {
+    return base("geocoding", label, {
+      status: "not_configured",
+      configured: false,
+      missing_env: ["REVERSE_GEOCODER_KEY"],
+      message:
+        "O LocationIQ exige a chave: sem REVERSE_GEOCODER_KEY toda consulta é recusada (HTTP 401).",
+    });
+  }
+
+  const keyed = {
+    key_source: env.REVERSE_GEOCODER_KEY ? "REVERSE_GEOCODER_KEY" : null,
+    daily_budget: budget,
+  };
+
+  if (budget <= 0) {
+    return base("geocoding", label, {
+      status: "disabled",
+      message:
+        "DELIVERY_GEOCODING_DAILY_BUDGET=0: a localização automática das entregas está desligada.",
+      details: keyed,
+    });
+  }
+
+  const now = (deps.now ?? (() => new Date()))();
+  const state = await deps.geocodingState(now);
+
+  if (!state) {
+    return base("geocoding", label, {
+      message: STATE_UNREAD,
+      transient: true,
+      details: { ...keyed, today_used: null, ...pauseDetails(null) },
+    });
+  }
+
+  const pause = pauseOf(state.pause);
+  const details = {
+    ...keyed,
+    today_used: state.lookupsToday,
+    ...pauseDetails(pause),
+  };
+
+  if (pause?.reason === "REFUSED") {
+    return base("geocoding", label, {
+      status: "error",
+      message: `${lookupRefusal(pause.status)} As consultas estão pausadas ${untilText(pause, now)}; se a recusa continuar, a pausa se renova.`,
+      details,
+    });
+  }
+
+  const warnings: string[] = [];
+
+  if (pause?.reason === "QUOTA") warnings.push(quotaText(pause, now));
+
+  if (state.lookupsToday >= budget) {
+    warnings.push(
+      `O orçamento do dia acabou (${state.lookupsToday} de ${budget} consultas, DELIVERY_GEOCODING_DAILY_BUDGET): as consultas voltam à meia-noite UTC.`,
+    );
+  }
+
+  return settle(
+    base("geocoding", label, {
+      message: `Hoje: ${state.lookupsToday} de ${budget} consultas.`,
+      warnings,
+      details,
+    }),
+  );
+}
+
+async function checkAddressSearch(
+  deps: ReadinessDeps,
+): Promise<ProviderReadiness> {
+  const { env } = deps;
+  const label = 'Busca do "Fixar no mapa"';
+  const budget = env.ADDRESS_SEARCH_DAILY_BUDGET;
+  const protocol = env.ADDRESS_SEARCH_PROTOCOL;
+
+  if (!env.ADDRESS_SEARCH_URL) {
+    return base("address_search", label, {
+      status: "not_configured",
+      configured: false,
+      missing_env: ["ADDRESS_SEARCH_URL"],
+      message:
+        "Sem ADDRESS_SEARCH_URL a busca de endereço fica desligada e a tela da rota pede o clique no mapa. No LocationIQ: ADDRESS_SEARCH_URL=https://api.locationiq.com/v1 e ADDRESS_SEARCH_PROTOCOL=locationiq-autocomplete.",
+      details: { protocol },
+    });
+  }
+
+  const keySource = env.ADDRESS_SEARCH_KEY
+    ? "ADDRESS_SEARCH_KEY"
+    : env.REVERSE_GEOCODER_KEY
+      ? "REVERSE_GEOCODER_KEY"
+      : null;
+  const locationIq = isLocationIq(env.ADDRESS_SEARCH_URL);
+
+  if (!keySource && (locationIq || protocol === "locationiq-autocomplete")) {
+    return base("address_search", label, {
+      status: "not_configured",
+      configured: false,
+      missing_env: ["ADDRESS_SEARCH_KEY"],
+      message:
+        "Sem chave a busca é recusada (HTTP 401): defina ADDRESS_SEARCH_KEY ou a REVERSE_GEOCODER_KEY, que ela usa quando vazia.",
+      details: { protocol, key_source: null },
+    });
+  }
+
+  const keyed = {
+    protocol,
+    key_source: keySource,
+    daily_budget: budget,
+    business_daily_limit: env.ADDRESS_SEARCH_BUSINESS_DAILY_LIMIT,
+  };
+
+  if (budget <= 0) {
+    return base("address_search", label, {
+      status: "disabled",
+      message:
+        "ADDRESS_SEARCH_DAILY_BUDGET=0: a busca de endereço está desligada e a tela da rota pede o clique no mapa.",
+      details: keyed,
+    });
+  }
+
+  // The likeliest slip: the URL set and the protocol left at its default,
+  // which asks LocationIQ's /search instead of its /autocomplete.
+  const warnings: string[] =
+    locationIq && protocol === "nominatim-search"
+      ? [
+          "ADDRESS_SEARCH_PROTOCOL está em nominatim-search com o LocationIQ: defina locationiq-autocomplete, ou a busca chama o /search em vez do /autocomplete.",
+        ]
+      : [];
+
+  const now = (deps.now ?? (() => new Date()))();
+  const state = await deps.geocodingState(now);
+
+  if (!state) {
+    return settle(
+      base("address_search", label, {
+        message: STATE_UNREAD,
+        warnings,
+        transient: true,
+        details: { ...keyed, today_used: null, ...pauseDetails(null) },
+      }),
+    );
+  }
+
+  // The search's own pause first: a refusal of its endpoint is its alone;
+  // the account's quota holds it too.
+  const own = pauseOf(state.searchPause);
+  const shared = pauseOf(state.pause);
+  const quota = [own, shared].find((pause) => pause?.reason === "QUOTA");
+  const details = {
+    ...keyed,
+    today_used: state.searchesToday,
+    ...pauseDetails(own ?? quota ?? null),
+  };
+
+  if (own?.reason === "REFUSED") {
+    return base("address_search", label, {
+      status: "error",
+      message: `${searchRefusal(own.status)} A busca está pausada ${untilText(own, now)}; a localização das entregas continua.`,
+      warnings,
+      details,
+    });
+  }
+
+  if (quota) warnings.push(quotaText(quota, now));
+
+  if (state.searchesToday >= budget) {
+    warnings.push(
+      `As buscas do dia acabaram (${state.searchesToday} de ${budget}, ADDRESS_SEARCH_DAILY_BUDGET): voltam à meia-noite UTC.`,
+    );
+  }
+
+  return settle(
+    base("address_search", label, {
+      message: `Hoje: ${state.searchesToday} de ${budget} buscas (até ${env.ADDRESS_SEARCH_BUSINESS_DAILY_LIMIT} por empresa).`,
+      warnings,
+      details,
+    }),
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Proof certificate (ICP-Brasil A1)
 // ---------------------------------------------------------------------------
 
@@ -1638,6 +2108,8 @@ async function checkProviders(
     checkPush(deps),
     checkStorage(deps),
     checkAiOcr(deps),
+    checkGeocoding(deps),
+    checkAddressSearch(deps),
     Promise.resolve(checkProofCertificate(deps)),
     Promise.resolve(checkHeartbeat(deps)),
   ]);
@@ -1677,7 +2149,62 @@ function productionDeps(): ReadinessDeps {
     proofHealth: () =>
       container.resolve<ProofSigningService>("ProofSigningService").health(),
     heartbeat: lastHeartbeatOutcome,
+    geocodingState: readGeocodingState,
   };
+}
+
+/** The Redis read of the two geocoding entries never holds the screen. */
+const GEOCODING_STATE_DEADLINE_MS = 1_000;
+
+/**
+ * One MGET of the production keys on the cache connection, fail-open:
+ * slower than GEOCODING_STATE_DEADLINE_MS or failing, null ("not read").
+ */
+async function readGeocodingState(
+  now: Date,
+): Promise<GeocodingStateLike | null> {
+  let timer: NodeJS.Timeout | undefined;
+
+  const count = (value: string | null | undefined) => {
+    const used = Number(value ?? 0);
+
+    return Number.isFinite(used) ? used : 0;
+  };
+
+  try {
+    const [pause, searchPause, lookups, searches] = await Promise.race([
+      RedisConnection.getInstance()
+        .getClient()
+        .then((redis) =>
+          redis.mget(
+            GEOCODING_KEYS.pause,
+            GEOCODING_KEYS.searchPause,
+            GEOCODING_KEYS.budget(now),
+            GEOCODING_KEYS.searchDay(now),
+          ),
+        ),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("geocoding state timed out")),
+          GEOCODING_STATE_DEADLINE_MS,
+        );
+        timer.unref?.();
+      }),
+    ]);
+
+    return {
+      pause: pause ?? null,
+      searchPause: searchPause ?? null,
+      lookupsToday: count(lookups),
+      searchesToday: count(searches),
+    };
+  } catch (err) {
+    log.info({ err }, "geocoding state unreadable for the readiness report");
+
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
@@ -1756,8 +2283,10 @@ export {
   READINESS_TRANSIENT_CACHE_MS,
   readinessCache,
   readinessTtl,
+  checkAddressSearch,
   checkAiOcr,
   checkEmail,
+  checkGeocoding,
   checkHeartbeat,
   checkProofCertificate,
   checkProviders,
@@ -1768,6 +2297,7 @@ export {
   resetProviderReadinessCache,
 };
 export type {
+  GeocodingStateLike,
   ProbeFailureKind,
   ProbeLog,
   ProviderKey,

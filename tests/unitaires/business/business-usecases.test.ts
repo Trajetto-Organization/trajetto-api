@@ -14,6 +14,9 @@ const entitlements = vi.hoisted(() => ({
   getModuleImpact: vi.fn(),
   setModuleEnabled: vi.fn(),
 }));
+const webhooks = vi.hoisted(() => ({
+  releaseHeldWebhookDeliveriesOfBusiness: vi.fn(async () => 0),
+}));
 
 vi.mock("@/websocket", () => ({
   sendCatalogChangedEvent,
@@ -27,6 +30,9 @@ vi.mock("@/shared/services/transactional-mail-service", () => ({
 // the entitlement E2E cover them); here only how the use case composes them.
 vi.mock("@/shared/ai/ai-quota-service", () => quota);
 vi.mock("@/shared/entitlements/entitlement-service", () => entitlements);
+// The release itself is SQL (tests/E2E/deliveries-module-off-in-flight);
+// here only when the switch asks for it.
+vi.mock("@/shared/integration/webhook-dispatch-service", () => webhooks);
 // The twins have no database to open a transaction on; the row lock taken
 // inside it is SQL, proven against Postgres by the E2E suites.
 vi.mock("@/../infra/database", () => ({
@@ -46,6 +52,7 @@ import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in
 import { InMemoryBusinessRepository } from "@/modules/business/repositories/in-memory/in-memory-business-repository";
 import { InMemoryBranchRepository } from "@/modules/branch/repositories/in-memory/in-memory-branch-repository";
 import { InMemoryPendingDeletionProvider } from "@/shared/providers/pending-deletion-provider/in-memory/in-memory-pending-deletion-provider";
+import { InMemoryBackgroundJobRepository } from "@/shared/jobs/in-memory/in-memory-background-job-repository";
 import { hashSecret } from "@/shared/security/bcrypt-gate";
 
 import { CreateBusinessUseCase } from "@/modules/business/usecases/create-business/create-business-usecase";
@@ -78,6 +85,7 @@ let users: InMemoryUserRepository;
 let businesses: InMemoryBusinessRepository;
 let branches: InMemoryBranchRepository;
 let pending: InMemoryPendingDeletionProvider;
+let jobs: InMemoryBackgroundJobRepository;
 const notifications = { createActivityIfEnabled: vi.fn(async () => undefined) };
 const outbox = { publish: vi.fn(async () => undefined) };
 
@@ -107,6 +115,7 @@ beforeEach(() => {
   businesses = new InMemoryBusinessRepository();
   branches = new InMemoryBranchRepository();
   pending = new InMemoryPendingDeletionProvider();
+  jobs = new InMemoryBackgroundJobRepository();
   vi.clearAllMocks();
 
   users.user.push(
@@ -555,6 +564,7 @@ describe("deleting a company with a code by e-mail", () => {
       businesses,
       pending,
       notifications as never,
+      jobs,
     );
 
   async function emptyCompany(): Promise<string> {
@@ -624,14 +634,33 @@ describe("deleting a company with a code by e-mail", () => {
     expect(sendTransactionalMail).not.toHaveBeenCalled();
   });
 
-  it("deletes with the right code, records it and tells the other masters", async () => {
+  // Since F3-26a the request no longer runs the cascade: the company is
+  // blocked and SCHEDULED for now, and the purge job (with `removeRow`)
+  // deletes its rows in short batches and then the company itself.
+  it("hands the deletion to the purge job with the right code, records it and tells the other masters", async () => {
     const id = await emptyCompany();
     await arm(id, "123456");
 
     const deleted = await remove().execute(id, MASTER, "123456");
 
     expect(deleted.id).toBe(id);
-    expect(businesses.business).toHaveLength(0);
+    expect(businesses.business[0]).toMatchObject({
+      id,
+      is_active: false,
+      purge_state: "SCHEDULED",
+    });
+    expect(
+      (businesses.business[0].purge_after as Date).getTime(),
+    ).toBeLessThanOrEqual(Date.now());
+    expect(jobs.jobs).toEqual([
+      expect.objectContaining({
+        kind: "TENANT_OFFBOARD",
+        businessId: id,
+        subjectId: id,
+        status: "PENDING",
+        payload: { businessId: id, scheduledById: MASTER, removeRow: true },
+      }),
+    ]);
     expect(pending.pendingDeletions).toHaveLength(0);
     expect(notifications.createActivityIfEnabled).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -647,6 +676,19 @@ describe("deleting a company with a code by e-mail", () => {
         expect.objectContaining({ email: "outro@trajetto.com.br" }),
       ),
     );
+  });
+
+  it("refuses a company whose purge is already scheduled (409) and starts no second job", async () => {
+    const id = await emptyCompany();
+    await arm(id, "123456");
+    await businesses.schedulePurge(id, new Date(Date.now() + 86_400_000));
+
+    await expect(remove().execute(id, MASTER, "123456")).rejects.toMatchObject({
+      statusCode: 409,
+      code: "BUSINESS_PURGE_ALREADY_SCHEDULED",
+    });
+    expect(jobs.jobs).toHaveLength(0);
+    expect(pending.pendingDeletions).toHaveLength(1);
   });
 
   it("refuses a wrong code (400) and keeps the company and the pending request", async () => {
@@ -1077,6 +1119,62 @@ describe("the company's plan (modules)", () => {
       enabled: false,
     });
   });
+
+  // Plan M3 (D51): the company's webhooks were held while Entregas was off.
+  it("sends the held webhooks when Entregas is switched back on, and on a second save", async () => {
+    const switchOn = () =>
+      new UpdateBusinessEntitlementUseCase(
+        users,
+        businesses,
+        outbox as never,
+      ).execute({
+        userId: MASTER,
+        businessId: alfaId,
+        module: "DELIVERIES",
+        enabled: true,
+      });
+
+    await switchOn();
+
+    expect(
+      webhooks.releaseHeldWebhookDeliveriesOfBusiness,
+    ).toHaveBeenCalledWith(alfaId);
+
+    // Already on: no write and no notice, but the release runs again — the
+    // retry of one that failed after the switch had committed.
+    entitlements.getBusinessEntitlements.mockResolvedValue([
+      { module: "DELIVERIES", enabled: true },
+    ]);
+    webhooks.releaseHeldWebhookDeliveriesOfBusiness.mockClear();
+    outbox.publish.mockClear();
+
+    await switchOn();
+
+    expect(outbox.publish).not.toHaveBeenCalled();
+    expect(
+      webhooks.releaseHeldWebhookDeliveriesOfBusiness,
+    ).toHaveBeenCalledWith(alfaId);
+  });
+
+  it("releases nothing when a module is switched off, or when Frota is switched on", async () => {
+    const execute = (module: "FLEET" | "DELIVERIES", enabled: boolean) =>
+      new UpdateBusinessEntitlementUseCase(
+        users,
+        businesses,
+        outbox as never,
+      ).execute({ userId: MASTER, businessId: alfaId, module, enabled });
+
+    entitlements.getBusinessEntitlements.mockResolvedValue([
+      { module: "DELIVERIES", enabled: true },
+    ]);
+
+    await execute("DELIVERIES", false);
+    await execute("FLEET", true);
+
+    expect(
+      webhooks.releaseHeldWebhookDeliveriesOfBusiness,
+    ).not.toHaveBeenCalled();
+  });
 });
 
 describe("the company writes are MASTER-only inside the use case too", () => {
@@ -1135,6 +1233,7 @@ describe("the company writes are MASTER-only inside the use case too", () => {
         businesses,
         pending,
         notifications as never,
+        jobs,
       ).execute(alfaId, ADMIN_A, "123456"),
     ).rejects.toMatchObject(FORBIDDEN);
 

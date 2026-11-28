@@ -27,6 +27,7 @@ import { IRouteRepository } from "@/modules/route/repositories/IRoute-repository
 import { VehicleHasAssociatedOperationError } from "../errors/vehicle-has-associated-operation-error";
 
 import { AppError } from "@/shared/errors/AppError";
+import { conflictFromPrisma } from "@/shared/errors/prisma-conflict";
 import { Vehicle } from "../../dtos/vehicle-dto";
 import { sendCatalogChangedEvent } from "@/websocket";
 
@@ -78,58 +79,26 @@ class DeleteVehicleUseCase {
       throw new VehicleNotBelongBusinessError();
     }
 
-    // Counted in one statement (FLEET-VEH-10): the guards used to load
-    // every fine, fuelling, order and checklist of the truck to read
-    // `.length` — thousands of rows to answer "is there any".
-    const usage = await this.vehicle.countVehicleUsage(vehicleId);
+    const refusal = await this.usageRefusal(vehicleId);
 
-    if (usage.fines > 0) {
-      throw new VehicleHasAssociatedFinesError(usage.fines);
-    }
-
-    if (usage.serviceOrders > 0) {
-      throw new VehicleHasAssociatedServiceOrdersError(usage.serviceOrders);
-    }
-
-    if (usage.fuels > 0) {
-      throw new VehicleHasAssociatedFuelError(usage.fuels);
-    }
-
-    if (usage.checklists > 0) {
-      throw new VehicleHasAssociatedChecklistsError(usage.checklists);
-    }
-
-    if (usage.accountsPayable > 0) {
-      throw new VehicleHasAssociatedPayablesError(usage.accountsPayable);
-    }
-
-    /**
-     * The operation history, which the guards above never covered.
-     *
-     * Both relations are optional, so this delete would SUCCEED and silently
-     * erase whose work it was — see tests/E2E/delete-cascade-integrity for
-     * what the database actually does without this.
-     */
-    const [associatedDeliveries, associatedRoutes] = await Promise.all([
-      this.delivery.countDeliveriesReferencing({ vehicleId: vehicleId }),
-      this.route.countRoutesReferencing({ vehicleId: vehicleId }),
-    ]);
-
-    if (associatedDeliveries > 0 || associatedRoutes > 0) {
-      throw new VehicleHasAssociatedOperationError(
-        associatedDeliveries,
-        associatedRoutes,
-      );
-    }
+    if (refusal) throw refusal;
 
     let deletedVehicle: Vehicle;
 
     try {
       deletedVehicle = await this.vehicle.deleteVehicle(vehicleId);
     } catch (error) {
-      throw new AppError(
-        "Houve um erro ao tentar excluir o veículo! Por favor, tente novamente.",
-        500,
+      // A fine, fueling, order or checklist written between the count and
+      // the delete met its RESTRICT key: counted again, the same 409 as the
+      // count, never a 500.
+      throw (
+        (await conflictFromPrisma(error, {
+          inUse: () => this.usageRefusal(vehicleId),
+        })) ??
+        new AppError(
+          "Houve um erro ao tentar excluir o veículo! Por favor, tente novamente.",
+          500,
+        )
       );
     }
 
@@ -146,6 +115,55 @@ class DeleteVehicleUseCase {
     });
 
     return deletedVehicle;
+  }
+
+  /** What keeps the vehicle from being deleted, the first reason found, or null. */
+  private async usageRefusal(vehicleId: string): Promise<Error | null> {
+    // Counted in one statement (FLEET-VEH-10): the guards used to load
+    // every fine, fuelling, order and checklist of the truck to read
+    // `.length` — thousands of rows to answer "is there any".
+    const usage = await this.vehicle.countVehicleUsage(vehicleId);
+
+    if (usage.fines > 0) {
+      return new VehicleHasAssociatedFinesError(usage.fines);
+    }
+
+    if (usage.serviceOrders > 0) {
+      return new VehicleHasAssociatedServiceOrdersError(usage.serviceOrders);
+    }
+
+    if (usage.fuels > 0) {
+      return new VehicleHasAssociatedFuelError(usage.fuels);
+    }
+
+    if (usage.checklists > 0) {
+      return new VehicleHasAssociatedChecklistsError(usage.checklists);
+    }
+
+    if (usage.accountsPayable > 0) {
+      return new VehicleHasAssociatedPayablesError(usage.accountsPayable);
+    }
+
+    /**
+     * The operation history, which the guards above never covered.
+     *
+     * Both relations are optional, so this delete would SUCCEED and silently
+     * erase whose work it was — see tests/E2E/delete-cascade-integrity for
+     * what the database actually does without this.
+     */
+    const [associatedDeliveries, associatedRoutes] = await Promise.all([
+      this.delivery.countDeliveriesReferencing({ vehicleId: vehicleId }),
+      this.route.countRoutesReferencing({ vehicleId: vehicleId }),
+    ]);
+
+    if (associatedDeliveries > 0 || associatedRoutes > 0) {
+      return new VehicleHasAssociatedOperationError(
+        associatedDeliveries,
+        associatedRoutes,
+      );
+    }
+
+    return null;
   }
 }
 

@@ -67,6 +67,8 @@ interface Call {
   method: string;
   path: string;
   key: string | undefined;
+  /** When the fake received it (Date.now()). */
+  at: number;
 }
 
 let server: Server | undefined;
@@ -93,12 +95,33 @@ async function fakeDokploy(options: {
   deployStatus?: number;
   /** The first N reads of the tasks after the deploy answer 503. */
   taskFailures?: number;
+  /**
+   * The other environment's release Application (U-11): its id, appName
+   * and the walk of its tasks, one read at a time (the last one repeats),
+   * and of its Dokploy deployments (none when absent).
+   */
+  other?: {
+    id: string;
+    appName: string;
+    tasks: Task[][];
+    deployments?: Array<
+      Array<{ deploymentId: string; status: string; createdAt?: string }>
+    >;
+    /**
+     * In place of the walk of its tasks: `Starting` for this long from the
+     * first read of them, `Running` after.
+     */
+    busyForMs?: number;
+  };
 }) {
   const calls: Call[] = [];
   let deployed = false;
   let reads = 0;
   let readsBefore = 0;
   let taskFailures = options.taskFailures ?? 0;
+  let otherReads = 0;
+  let otherDeploymentReads = 0;
+  let otherFirstRead: number | undefined;
 
   server = createServer((request: IncomingMessage, response) => {
     request.resume();
@@ -109,12 +132,66 @@ async function fakeDokploy(options: {
         method: request.method ?? "",
         path,
         key: request.headers["x-api-key"] as string | undefined,
+        at: Date.now(),
       });
       response.setHeader("content-type", "application/json");
 
       if (request.headers["x-api-key"] !== KEY) {
         response.statusCode = 401;
         response.end(JSON.stringify({ message: "Unauthorized" }));
+        return;
+      }
+
+      const other = options.other;
+
+      if (other && path === `/api/application.one?applicationId=${other.id}`) {
+        response.end(
+          JSON.stringify({
+            ...APPLICATION,
+            applicationId: other.id,
+            appName: other.appName,
+          }),
+        );
+        return;
+      }
+
+      if (other && path === `/api/deployment.all?applicationId=${other.id}`) {
+        const walk = other.deployments ?? [[]];
+
+        response.end(
+          JSON.stringify(
+            walk[Math.min(otherDeploymentReads++, walk.length - 1)] ?? [],
+          ),
+        );
+        return;
+      }
+
+      if (
+        other &&
+        path ===
+          `/api/docker.getServiceContainersByAppName?appName=${other.appName}`
+      ) {
+        const walk = other.tasks;
+        let tasks = walk[Math.min(otherReads++, walk.length - 1)] ?? [];
+
+        if (other.busyForMs !== undefined) {
+          otherFirstRead ??= Date.now();
+          tasks = [
+            {
+              containerId: "p1",
+              currentState:
+                Date.now() - otherFirstRead < other.busyForMs
+                  ? "Starting 1 second ago"
+                  : "Running 1 second ago",
+            },
+          ];
+        }
+
+        response.end(
+          JSON.stringify(
+            tasks.map((task) => ({ ...row(task), name: `${other.appName}.1` })),
+          ),
+        );
         return;
       }
 
@@ -483,10 +560,307 @@ describe("the release step on Dokploy", { timeout: 30_000 }, () => {
     });
 
     expect(result.status).toBe(1);
-    expect(result.output).toContain("não terminou em 0.2s");
+    expect(result.output).toContain("não terminou no prazo");
+    expect(result.output).toContain("0.2s no total");
     expect(result.output).toContain(
       "uma migration nunca é interrompida no meio",
     );
+  });
+
+  /**
+   * The deploy job has 120 min, and after this step it still deploys the
+   * AI and the API and checks the rollout: a longer wait let GitHub kill
+   * the job halfway through them.
+   */
+  it("caps the environment's timeout at 3600 s, with a warning", async () => {
+    const fake = await fakeDokploy({
+      before: [OLD_IDLE],
+      after: [[{ containerId: "new", currentState: "Running 1 second ago" }]],
+    });
+
+    const result = await release({
+      ...valid(fake),
+      RELEASE_TIMEOUT_SECONDS: "7200",
+    });
+
+    expect(result.status, result.output).toBe(0);
+    expect(result.output).toContain(
+      '::warning::RELEASE_TIMEOUT_SECONDS="7200" passa do teto de 3600 s',
+    );
+  });
+
+  it("keeps the default patience, with a warning, when the environment's timeout is not a number", async () => {
+    const fake = await fakeDokploy({
+      before: [OLD_IDLE],
+      after: [[{ containerId: "new", currentState: "Running 1 second ago" }]],
+    });
+
+    const result = await release({
+      ...valid(fake),
+      RELEASE_TIMEOUT_SECONDS: "30min",
+    });
+
+    expect(result.status, result.output).toBe(0);
+    expect(result.output).toContain(
+      '::warning::RELEASE_TIMEOUT_SECONDS="30min" não é um número positivo de segundos; vale o padrão, 1800.',
+    );
+  });
+
+  /**
+   * One release step at a time on the single VPS (U-11): staging's waits
+   * while production's is migrating (task `Starting`), and the other way
+   * round, by RELEASE_SERIALIZE_WITH_APPLICATION_ID.
+   */
+  describe("with the other environment's release Application", () => {
+    const OTHER = "mig_prod";
+    const OTHER_NAME = "trajetto-api-migrate-production";
+    const DONE_NEW: Task[][] = [
+      [{ containerId: "new", currentState: "Running 1 second ago" }],
+    ];
+
+    it("waits while the other one migrates, then runs its own", async () => {
+      const fake = await fakeDokploy({
+        before: [OLD_IDLE],
+        after: DONE_NEW,
+        other: {
+          id: OTHER,
+          appName: OTHER_NAME,
+          tasks: [
+            [{ containerId: "p1", currentState: "Starting 3 seconds ago" }],
+            [{ containerId: "p1", currentState: "Starting 4 seconds ago" }],
+            [{ containerId: "p1", currentState: "Running 1 second ago" }],
+          ],
+        },
+      });
+
+      const result = await release({
+        ...valid(fake),
+        RELEASE_SERIALIZE_WITH_APPLICATION_ID: OTHER,
+      });
+
+      expect(result.status, result.output).toBe(0);
+      expect(result.output).toContain(
+        `A etapa de release do outro ambiente (${OTHER_NAME}) está rodando`,
+      );
+
+      const paths = fake.calls.map((call) => call.path);
+      const lastWait = paths.lastIndexOf(
+        `/api/docker.getServiceContainersByAppName?appName=${OTHER_NAME}`,
+      );
+
+      // Three reads of the other one, all before its own deploy.
+      expect(paths.filter((path) => path.includes(OTHER_NAME))).toHaveLength(3);
+      expect(lastWait).toBeLessThan(
+        paths.findIndex((path) => path.startsWith("/api/application.deploy")),
+      );
+    });
+
+    /**
+     * The other one's release before its migration: Dokploy pulls the
+     * image (its deployment `running`, the tasks still the old ones), then
+     * Swarm prepares the new task. Watching `Starting` alone let both
+     * windows through, and the two releases then migrated at once.
+     */
+    it("waits while the other one's new task is still pulling its image", async () => {
+      const fake = await fakeDokploy({
+        before: [OLD_IDLE],
+        after: DONE_NEW,
+        other: {
+          id: OTHER,
+          appName: OTHER_NAME,
+          tasks: [
+            [{ containerId: "p1", currentState: "Preparing 2 seconds ago" }],
+            [{ containerId: "p1", currentState: "Starting 1 second ago" }],
+            [{ containerId: "p1", currentState: "Running 1 second ago" }],
+          ],
+        },
+      });
+
+      const result = await release({
+        ...valid(fake),
+        RELEASE_SERIALIZE_WITH_APPLICATION_ID: OTHER,
+      });
+      const paths = fake.calls.map((call) => call.path);
+
+      expect(result.status, result.output).toBe(0);
+      expect(result.output).toContain("tarefa Preparing");
+      expect(paths.filter((path) => path.includes(OTHER_NAME))).toHaveLength(3);
+      expect(
+        paths.lastIndexOf(
+          `/api/docker.getServiceContainersByAppName?appName=${OTHER_NAME}`,
+        ),
+      ).toBeLessThan(
+        paths.findIndex((path) => path.startsWith("/api/application.deploy")),
+      );
+    });
+
+    it("waits while Dokploy still deploys the other one, before any new task", async () => {
+      const now = new Date().toISOString();
+      const fake = await fakeDokploy({
+        before: [OLD_IDLE],
+        after: DONE_NEW,
+        other: {
+          id: OTHER,
+          appName: OTHER_NAME,
+          tasks: [[{ containerId: "p0", currentState: "Running 2 hours ago" }]],
+          deployments: [
+            [{ deploymentId: "p-dep-2", status: "running", createdAt: now }],
+            [{ deploymentId: "p-dep-2", status: "running", createdAt: now }],
+            [{ deploymentId: "p-dep-2", status: "done", createdAt: now }],
+          ],
+        },
+      });
+
+      const result = await release({
+        ...valid(fake),
+        RELEASE_SERIALIZE_WITH_APPLICATION_ID: OTHER,
+      });
+      const paths = fake.calls.map((call) => call.path);
+      const otherHistory = `/api/deployment.all?applicationId=${OTHER}`;
+
+      expect(result.status, result.output).toBe(0);
+      expect(result.output).toContain("deploy em andamento no Dokploy");
+      expect(paths.filter((path) => path === otherHistory)).toHaveLength(3);
+      expect(paths.lastIndexOf(otherHistory)).toBeLessThan(
+        paths.findIndex((path) => path.startsWith("/api/application.deploy")),
+      );
+    });
+
+    it("takes a deployment 'running' for over 15 min as stuck, and goes ahead with a warning", async () => {
+      const fake = await fakeDokploy({
+        before: [OLD_IDLE],
+        after: DONE_NEW,
+        other: {
+          id: OTHER,
+          appName: OTHER_NAME,
+          tasks: [[{ containerId: "p0", currentState: "Running 2 hours ago" }]],
+          deployments: [
+            [
+              {
+                deploymentId: "p-dep-1",
+                status: "running",
+                createdAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+              },
+            ],
+          ],
+        },
+      });
+
+      const result = await release({
+        ...valid(fake),
+        RELEASE_SERIALIZE_WITH_APPLICATION_ID: OTHER,
+      });
+
+      expect(result.status, result.output).toBe(0);
+      expect(result.output).not.toContain("está rodando");
+      expect(result.output).toContain("tomado como travado");
+    });
+
+    /**
+     * RELEASE_TIMEOUT_SECONDS is ONE budget: the time spent waiting for
+     * the other environment comes off the wait for this one's outcome,
+     * instead of each getting the whole of it (twice the job's share).
+     */
+    it("spends one budget on the other environment's release and on its own", async () => {
+      const fake = await fakeDokploy({
+        before: [OLD_IDLE],
+        // This one's release never ends: the run stops at the budget.
+        after: [
+          [
+            { containerId: "new", currentState: "Starting 1 second ago" },
+            OLD_IDLE,
+          ],
+        ],
+        other: { id: OTHER, appName: OTHER_NAME, tasks: [], busyForMs: 2_000 },
+      });
+
+      const result = await release({
+        ...valid(fake),
+        RELEASE_SERIALIZE_WITH_APPLICATION_ID: OTHER,
+        RELEASE_TIMEOUT_SECONDS: "5",
+      });
+
+      const deploy = fake.calls.find((call) =>
+        call.path.startsWith("/api/application.deploy"),
+      );
+      const last = fake.calls[fake.calls.length - 1];
+
+      expect(result.status).toBe(1);
+      expect(result.output).toContain("não terminou no prazo");
+      expect(deploy).toBeDefined();
+      // About 5 - 2 = 3 s of its own; the whole budget again would be 5.
+      expect(last.at - deploy!.at).toBeGreaterThan(2_000);
+      expect(last.at - deploy!.at).toBeLessThan(4_500);
+    });
+
+    it("does not wait when the other one is idle", async () => {
+      const fake = await fakeDokploy({
+        before: [OLD_IDLE],
+        after: DONE_NEW,
+        other: {
+          id: OTHER,
+          appName: OTHER_NAME,
+          tasks: [[{ containerId: "p0", currentState: "Running 2 hours ago" }]],
+        },
+      });
+
+      const result = await release({
+        ...valid(fake),
+        RELEASE_SERIALIZE_WITH_APPLICATION_ID: OTHER,
+      });
+
+      expect(result.status, result.output).toBe(0);
+      expect(result.output).not.toContain("está rodando");
+    });
+
+    it("fails before touching anything when the other one is still migrating at the timeout", async () => {
+      const fake = await fakeDokploy({
+        before: [OLD_IDLE],
+        after: DONE_NEW,
+        other: {
+          id: OTHER,
+          appName: OTHER_NAME,
+          tasks: [
+            [{ containerId: "p1", currentState: "Starting 9 minutes ago" }],
+          ],
+        },
+      });
+
+      const result = await release({
+        ...valid(fake),
+        RELEASE_SERIALIZE_WITH_APPLICATION_ID: OTHER,
+        RELEASE_TIMEOUT_SECONDS: "0.2",
+      });
+
+      expect(result.status).toBe(1);
+      expect(result.output).toContain(`(${OTHER_NAME}) segue rodando`);
+      expect(routes(fake.calls)).not.toContain("/api/application.deploy");
+    });
+
+    it("goes ahead with a warning when the other one cannot be read, or is this one", async () => {
+      const fake = await fakeDokploy({ before: [OLD_IDLE], after: DONE_NEW });
+
+      // The fake answers any unknown application with this one: point the
+      // variable at this very Application to hit the self-check.
+      const self = await release({
+        ...valid(fake),
+        RELEASE_SERIALIZE_WITH_APPLICATION_ID: "mig_123",
+      });
+
+      expect(self.status, self.output).toBe(0);
+      expect(self.output).toContain("aponta para a própria");
+
+      // A fresh Dokploy: the one above has deployed already.
+      await new Promise<void>((done) => server!.close(() => done()));
+      const second = await fakeDokploy({ before: [OLD_IDLE], after: DONE_NEW });
+      const malformed = await release({
+        ...valid(second),
+        RELEASE_SERIALIZE_WITH_APPLICATION_ID: "not an id!",
+      });
+
+      expect(malformed.status, malformed.output).toBe(0);
+      expect(malformed.output).toContain("formato inesperado");
+    });
   });
 
   it("fails at the timeout when no new task ever shows up", async () => {

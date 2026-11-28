@@ -99,7 +99,12 @@ beforeEach(() => {
     notifications,
     new InMemoryWebhookFanOutService().asService(),
   );
-  update = new UpdateDeliveryUseCase(users, shippers, deliveries);
+  update = new UpdateDeliveryUseCase(
+    users,
+    shippers,
+    deliveries,
+    new InMemoryRouteRepository(),
+  );
   importSpreadsheet = new ImportDeliverySpreadsheetUseCase(
     users,
     businesses,
@@ -191,6 +196,8 @@ describe("the public API's create", () => {
   it("answers the type in the public shape", () => {
     const row = {
       id: "d-1",
+      // Read with the row: it signs proof_url (plan of 02/11/2026, L7).
+      businessId: "b-1",
       code: null,
       invoice_key: null,
       invoice_number: null,

@@ -52,6 +52,13 @@ interface Business {
   timezone?: string;
   ai_analysis_limit?: number;
   vehicle_limit?: number;
+  /**
+   * The scheduled purge (plano-escala F3-25): null until a MASTER schedules
+   * it; then SCHEDULED, PURGING and PURGED. Reactivating only in SCHEDULED.
+   */
+  purge_state?: "SCHEDULED" | "PURGING" | "PURGED" | null;
+  deactivated_at?: Date | string | null;
+  purge_after?: Date | string | null;
   // Registered fleet size — only populated by listBusiness (relation count).
   vehicle_count?: number;
   created_at?: Date | string;

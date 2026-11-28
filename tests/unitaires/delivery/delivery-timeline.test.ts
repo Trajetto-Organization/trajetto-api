@@ -157,6 +157,78 @@ describe("a status moved by hand", () => {
   });
 });
 
+/**
+ * The status lines a delivery gets by itself (plano-escala F2-06): its
+ * creation, and the departure of the route it left on. Said as what
+ * happened — "Status alterado de — para Pendente" told support nothing.
+ */
+describe("the lines a delivery gets by itself", () => {
+  const line = (
+    overrides: Partial<NonNullable<TimelineSources["events"]>[number]>,
+  ) =>
+    buildDeliveryTimeline(
+      sources({
+        events: [
+          {
+            id: "e1",
+            type: "STATUS_CHANGE",
+            created_at: AT("2026-11-17T10:00:00Z"),
+            ...overrides,
+          },
+        ],
+      }),
+    )[0];
+
+  it("says the delivery was created, by whoever created it", () => {
+    const entry = line({
+      actor: "INTEGRATION",
+      status_from: null,
+      status_to: "PENDING",
+      apiKey: { name: "ERP Protheus" },
+    });
+
+    expect(entry.title).toBe("Entrega criada");
+    expect(entry.statusFrom).toBeNull();
+    expect(entry.statusTo).toBe("PENDING");
+    expect(entry.author).toEqual({
+      kind: "INTEGRATION",
+      name: "ERP Protheus",
+      device: null,
+    });
+  });
+
+  it("says it left for delivery on route N", () => {
+    expect(
+      line({
+        actor: "SYSTEM",
+        status_from: "PENDING",
+        status_to: "IN_TRANSIT",
+        route: { code: 12 },
+      }).title,
+    ).toBe("Saiu para entrega (Rota 12)");
+
+    // The app's old batch departure has no route.
+    expect(
+      line({
+        actor: "SYSTEM",
+        status_from: "PENDING",
+        status_to: "IN_TRANSIT",
+      }).title,
+    ).toBe("Saiu para entrega");
+  });
+
+  it("keeps a person's move to Em rota as the move it was", () => {
+    expect(
+      line({
+        actor: "USER",
+        status_from: "PENDING",
+        status_to: "IN_TRANSIT",
+        route: { code: 12 },
+      }).title,
+    ).toBe("Status alterado de Pendente para Em rota");
+  });
+});
+
 describe("what the driver did", () => {
   it("names the phone on an app event, because support is asked which one", () => {
     const [entry] = buildDeliveryTimeline(
@@ -249,6 +321,38 @@ describe("what the driver did", () => {
     expect(entry.author).toEqual({
       kind: "INTEGRATION",
       name: null,
+      device: null,
+    });
+  });
+
+  it("names the API key that cancelled it, with its words as the detail (L9)", () => {
+    // The public cancel has no catalogue reason: the title says the move
+    // alone, the integrator's text is the detail, and the key is the author.
+    const [entry] = buildDeliveryTimeline(
+      sources({
+        events: [
+          {
+            id: "e1",
+            type: "STATUS_CHANGE",
+            created_at: AT("2026-09-15T10:00:00Z"),
+            actor: "INTEGRATION",
+            status_from: "PENDING",
+            status_to: "CANCELLED",
+            reason: null,
+            reportedBy: null,
+            apiKey: { name: "ERP Protheus" },
+            note: "Pedido cancelado pelo cliente no ERP.",
+          },
+        ],
+      }),
+    );
+
+    expect(entry.title).toBe("Status alterado de Pendente para Cancelada");
+    expect(entry.detail).toBe("Pedido cancelado pelo cliente no ERP.");
+    expect(entry.reason).toBeNull();
+    expect(entry.author).toEqual({
+      kind: "INTEGRATION",
+      name: "ERP Protheus",
       device: null,
     });
   });

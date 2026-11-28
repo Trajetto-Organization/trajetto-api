@@ -11,6 +11,7 @@ import {
 import { randomUUID } from "node:crypto";
 
 import { container } from "tsyringe";
+import { env } from "@/env";
 import { createPrismaClient } from "@/shared/database/database-client";
 
 /**
@@ -24,6 +25,10 @@ import { createPrismaClient } from "@/shared/database/database-client";
  *
  * The budget is shrunk to one second here so the case runs in real time. The
  * provider takes 2.5s — past the budget, well inside the 180s lease.
+ *
+ * Under a provider's global cap (F3-15a), the call left on the wire keeps
+ * its place in the cap until the provider answers: the slot the pipeline
+ * freed used to start another call while the first was still open.
  */
 vi.mock("@/shared/notifications/pipeline-rules", async (importOriginal) => ({
   ...(await importOriginal<
@@ -44,6 +49,10 @@ const RECIPIENT = "018fc000-0000-7000-8000-0000000006c1";
 const mail = {
   sent: [] as Array<{ referenceId?: string }>,
   outcome: "accept" as "accept" | "refuse",
+
+  /** Requests open at the provider now, and at most. */
+  open: 0,
+  peak: 0,
 };
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -57,7 +66,9 @@ async function emailRow(): Promise<string> {
       aggregateType: "account-payable",
       aggregateId: randomUUID(),
       businessId: BUSINESS,
-      actorId: RECIPIENT,
+      // Nobody's action: the bill's responsible is told of a bill
+      // somebody else registered (actor-notice.test.ts).
+      actorId: null,
       payload: {
         accountPayableId: randomUUID(),
         businessId: BUSINESS,
@@ -119,8 +130,12 @@ beforeAll(async () => {
       // The request is on the wire from the first instant: counted now, the
       // way the recipient would count it.
       mail.sent.push(message);
+      mail.open += 1;
+      mail.peak = Math.max(mail.peak, mail.open);
 
       await sleep(PROVIDER_DELAY_MS);
+
+      mail.open -= 1;
 
       if (mail.outcome === "refuse") {
         throw new Error("SMTP 451: tente novamente mais tarde");
@@ -130,9 +145,8 @@ beforeAll(async () => {
     },
   });
 
-  const pipelineModule = await import(
-    "@/shared/notifications/notification-pipeline-service"
-  );
+  const pipelineModule =
+    await import("@/shared/notifications/notification-pipeline-service");
 
   pipeline = pipelineModule.NotificationPipelineService.getInstance();
 }, 120_000);
@@ -140,6 +154,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   mail.sent = [];
   mail.outcome = "accept";
+  mail.peak = mail.open;
 
   await prisma.notificationDelivery.deleteMany({});
   await prisma.domainOutboxEvent.deleteMany({});
@@ -218,6 +233,59 @@ describe("a send that outlives the pipeline's patience", () => {
       expect(row.attempts).toBe(1);
       expect(row.availableAt.getTime()).toBeGreaterThan(Date.now() + 10_000);
       expect(mail.sent).toHaveLength(1);
+    },
+  );
+});
+
+describe("a send left on the wire under the provider's global cap (F3-15a)", () => {
+  it(
+    "keeps its place in the cap until the provider answers",
+    { timeout: 30_000 },
+    async () => {
+      const saved = env.EMAIL_GLOBAL_CONCURRENCY;
+
+      // One process with a part of 1: one e-mail open at Resend at most.
+      env.EMAIL_GLOBAL_CONCURRENCY = 1;
+
+      try {
+        const { NotificationPipelineService } =
+          await import("@/shared/notifications/notification-pipeline-service");
+
+        // Built after the env, so its external lane is under the cap.
+        const capped = new (
+          NotificationPipelineService as unknown as new () => {
+            runDeliveryCycle: (lane: "external") => Promise<void>;
+          }
+        )();
+
+        const first = await emailRow();
+        const second = await emailRow();
+
+        // The first send overruns the 1 s budget and stays open for 2.5 s:
+        // the slot it frees must not start the second one meanwhile.
+        await capped.runDeliveryCycle("external");
+
+        expect(mail.sent).toHaveLength(1);
+
+        // Once the provider answered, the second goes out.
+        await sleep(PROVIDER_DELAY_MS);
+        await capped.runDeliveryCycle("external");
+        await sleep(PROVIDER_DELAY_MS + 500);
+
+        expect(mail.peak, "duas chamadas abertas com teto 1").toBe(1);
+        expect(mail.sent).toHaveLength(2);
+
+        const rows = await prisma.notificationDelivery.findMany({
+          where: { id: { in: [first, second] } },
+        });
+
+        expect(rows.map((row) => row.status)).toEqual([
+          "DELIVERED",
+          "DELIVERED",
+        ]);
+      } finally {
+        env.EMAIL_GLOBAL_CONCURRENCY = saved;
+      }
     },
   );
 });

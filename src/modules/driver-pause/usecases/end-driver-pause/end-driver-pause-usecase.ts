@@ -80,9 +80,15 @@ interface EndDriverPauseResult {
  * refused with PAUSE_TOO_OLD; closing one that exists never is.
  *
  * Decision 14.4: closing a pause that exists is never refused for want of a
- * route (an open pause must be able to close). An end that CREATES the pause
- * is a start too: outside a journey at the start's tap it is refused with
- * PAUSE_REQUIRES_ROUTE, nothing written.
+ * route (an open pause must be able to close), whatever route it was opened
+ * on — one only released, under the rule before this revision, included. An
+ * end that CREATES the pause is a start too: with no route started at the
+ * start's tap it is refused with PAUSE_REQUIRES_ROUTE, nothing written.
+ *
+ * Owner, 09/11/2026: an end never asks for the generic pause's reason
+ * (PAUSE_NOTE_REQUIRED is the start's, at the tap), not even one that
+ * creates the pause closed from `start`: that start was tapped earlier,
+ * and the driver can no longer be asked.
  */
 @injectable()
 class EndDriverPauseUseCase {

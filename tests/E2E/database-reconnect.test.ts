@@ -82,6 +82,14 @@ beforeAll(async () => {
   ({ app } = await import("@/http"));
   await app.ready();
 
+  // The app's pool opens on first use, and the first query pays for it:
+  // inside the first /health probe, on its 500 ms clock, that can read as a
+  // 503 on a loaded 2-vCPU machine (health-under-failure.test.ts). What this
+  // file kills is a warm pool, so it is opened here before the first call.
+  const { default: database } = await import("@/../infra/database");
+
+  await database.$queryRaw`SELECT 1`;
+
   // The killer's own backend has to exist before it can exclude itself.
   await killer.$queryRaw`SELECT 1`;
 }, 90_000);

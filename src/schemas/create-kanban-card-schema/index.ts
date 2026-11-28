@@ -6,6 +6,7 @@ import {
   isValidDateString,
   stringToBoolean,
 } from "@/shared/utils/zod-schema-helpers";
+import { fieldError } from "@/shared/validation/field-error";
 
 const createKanbanCardSchema = z.object({
   title: z
@@ -57,9 +58,7 @@ const createKanbanCardSchema = z.object({
       }
     }),
   priority: z.enum(["low", "medium", "high", "urgent"], {
-    errorMap: () => ({
-      message: "Prioridade inválida. Use: baixa, média, alta ou urgente.",
-    }),
+    error: "Prioridade inválida. Use: baixa, média, alta ou urgente.",
   }),
   dueDate: z
     .string()
@@ -75,7 +74,7 @@ const createKanbanCardSchema = z.object({
       }
     }),
   columnId: z
-    .string({ required_error: "ID da coluna é obrigatório!" })
+    .string(fieldError({ required: "ID da coluna é obrigatório!" }))
     .uuid("ID da coluna é inválido."),
   assignedUserId: z.preprocess(
     emptyStringToNull,

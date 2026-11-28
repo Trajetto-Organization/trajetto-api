@@ -17,6 +17,8 @@ import {
   ListVehicleByBusinessIdProps,
   UpdateVehicle,
   GetVehicleByIdAndBusinessProps,
+  VehicleDetail,
+  VehicleRelationNames,
   SearchVehicleWithCursorProps,
   CursorPaginatedVehicle,
   VehicleChoice,
@@ -26,6 +28,7 @@ import {
 
 import {
   canDriverOperateVehicle,
+  canDriverReadVehicle,
   type VehicleAssignment,
 } from "@/shared/vehicle/driver-vehicle-access";
 import type { OpenRouteCounts } from "@/shared/vehicle/vehicle-status-change";
@@ -89,9 +92,13 @@ class InMemoryVehicleRepository implements IVehicleRepository {
    */
   public driverNames: Record<string, string> = {};
   public branchNames: Record<string, string> = {};
+  /** user.name by id, for the vehicle's responsible user (F1). */
+  public userNames: Record<string, string> = {};
   public vehicleTypeNames: Record<string, string> = {};
   /** The licence each seeded type requires (decision 8.5); absent = none. */
   public vehicleTypeCnh: Record<string, string> = {};
+  /** fuel_type.description by id, for the picker's full rows. */
+  public fuelTypeNames: Record<string, string> = {};
 
   /**
    * The routes table, for the driver's vehicle access and the status rule.
@@ -129,6 +136,7 @@ class InMemoryVehicleRepository implements IVehicleRepository {
       vehicleTypeId: vehicleData.vehicleTypeId ?? null,
       driverId: vehicleData.driverId ?? null,
       branchId: vehicleData.branchId ?? null,
+      responsibleUserId: vehicleData.responsibleUserId ?? null,
       manufacturing_year: new Date(vehicleData.manufacturing_year),
       model_year: new Date(vehicleData.model_year),
       created_at: new Date(),
@@ -167,6 +175,7 @@ class InMemoryVehicleRepository implements IVehicleRepository {
       vehicleData,
       vehicleId,
       businessId,
+      statusFromRunningRoute,
     }: UpdateVehicle & { businessId: string },
     limit: { max: number },
   ): Promise<{ vehicle: Vehicle | null; activeCount: number }> {
@@ -177,14 +186,41 @@ class InMemoryVehicleRepository implements IVehicleRepository {
         vehicle.id !== vehicleId,
     ).length;
 
-    if (limit.max > 0 && activeCount >= limit.max) {
+    // Same as Postgres: whether the vehicle already holds a slot is read
+    // from the row as it is now, not from the caller's older read (M8).
+    const current = this.vehicles.find(
+      (vehicle) =>
+        vehicle.id === vehicleId && vehicle.businessId === businessId,
+    );
+    const holdsSlot = current !== undefined && current.status !== "INACTIVE";
+
+    if (!holdsSlot && limit.max > 0 && activeCount >= limit.max) {
       return { vehicle: null, activeCount };
     }
 
     return {
-      vehicle: await this.updateVehicle({ vehicleData, vehicleId }),
+      vehicle: await this.updateVehicle({
+        vehicleData,
+        vehicleId,
+        statusFromRunningRoute,
+      }),
       activeCount,
     };
+  }
+
+  /** routeDerivedStatus, over the route twin: nothing to lock in memory. */
+  private routeDerivedStatus(
+    vehicleId: string,
+    businessId: string,
+  ): "IN_ROUTE" | "ACTIVE" {
+    const running = this.routeSource().some(
+      (route) =>
+        route.vehicleId === vehicleId &&
+        route.businessId === businessId &&
+        route.status === "IN_PROGRESS",
+    );
+
+    return running ? "IN_ROUTE" : "ACTIVE";
   }
 
   /** The same conditions as vehicleListWhere, over the array. */
@@ -318,7 +354,9 @@ class InMemoryVehicleRepository implements IVehicleRepository {
       }));
 
     return {
-      data: rows.slice(skip, skip + pageSize),
+      data: rows
+        .slice(skip, skip + pageSize)
+        .map((vehicle) => ({ ...vehicle, ...this.relationNames(vehicle) })),
       statusCounts,
       branchCounts,
     };
@@ -327,6 +365,7 @@ class InMemoryVehicleRepository implements IVehicleRepository {
   async updateVehicle({
     vehicleData,
     vehicleId,
+    statusFromRunningRoute,
   }: UpdateVehicle): Promise<Vehicle> {
     const index = this.vehicles.findIndex(
       (vehicle) => vehicle.id === vehicleId,
@@ -336,8 +375,19 @@ class InMemoryVehicleRepository implements IVehicleRepository {
       throw recordNotFound("update");
     }
 
+    // The status is the route's, read with the write (see the real one).
+    const data = statusFromRunningRoute
+      ? {
+          ...vehicleData,
+          status: this.routeDerivedStatus(
+            vehicleId,
+            statusFromRunningRoute.businessId,
+          ),
+        }
+      : vehicleData;
+
     const filteredData = Object.fromEntries(
-      Object.entries(vehicleData).filter(([, value]) => value !== undefined),
+      Object.entries(data).filter(([, value]) => value !== undefined),
     );
 
     // Handle date conversions if needed
@@ -443,13 +493,35 @@ class InMemoryVehicleRepository implements IVehicleRepository {
   async getVehicleByIdAndBusiness({
     businessId,
     vehicleId,
-  }: GetVehicleByIdAndBusinessProps): Promise<Vehicle | null> {
+  }: GetVehicleByIdAndBusinessProps): Promise<VehicleDetail | null> {
     const found = this.vehicles.find(
       (vehicle) =>
         vehicle.id === vehicleId && vehicle.businessId === businessId,
     );
 
-    return found || null;
+    return found ? { ...found, ...this.relationNames(found) } : null;
+  }
+
+  /**
+   * The responsible user's and the branch's names, as the real include
+   * joins them: null without the id or without a seeded row (a LEFT JOIN's
+   * NULL); the branch's `name` is its corporate reason.
+   */
+  private relationNames(vehicle: Vehicle): VehicleRelationNames {
+    const responsible = vehicle.responsibleUserId
+      ? this.userNames[vehicle.responsibleUserId]
+      : undefined;
+    const branch = vehicle.branchId
+      ? this.branchNames[vehicle.branchId]
+      : undefined;
+
+    return {
+      responsibleUser: responsible === undefined ? null : { name: responsible },
+      branch:
+        branch === undefined
+          ? null
+          : { corporate_reason: branch, name: branch },
+    };
   }
 
   async findVehiclesByFuelTypeId(fuelTypeId: string): Promise<Vehicle[]> {
@@ -575,25 +647,26 @@ class InMemoryVehicleRepository implements IVehicleRepository {
 
     const data =
       fields === "choice"
-        ? page.map(
-            (vehicle): VehicleChoice => ({
-              id: vehicle.id,
-              description: vehicle.description,
-              license_plate: vehicle.license_plate,
-              brand: vehicle.brand,
-              model: vehicle.model,
-              status: vehicle.status,
-              businessId: vehicle.businessId,
-              driverId: vehicle.driverId ?? null,
-              vehicleTypeId: vehicle.vehicleTypeId ?? null,
-              driver: driverOf(vehicle),
-              vehicleType: typeOf(vehicle),
-            }),
-          )
+        ? page.map((vehicle): VehicleChoice => ({
+            id: vehicle.id,
+            description: vehicle.description,
+            license_plate: vehicle.license_plate,
+            brand: vehicle.brand,
+            model: vehicle.model,
+            status: vehicle.status,
+            businessId: vehicle.businessId,
+            driverId: vehicle.driverId ?? null,
+            vehicleTypeId: vehicle.vehicleTypeId ?? null,
+            driver: driverOf(vehicle),
+            vehicleType: typeOf(vehicle),
+          }))
         : page.map((vehicle) => ({
             ...vehicle,
             driver: driverOf(vehicle),
             vehicleType: typeOf(vehicle),
+            fuelType: this.fuelTypeNames[vehicle.fuelTypeId]
+              ? { description: this.fuelTypeNames[vehicle.fuelTypeId] }
+              : null,
           }));
 
     return { data, nextCursor, hasMore };
@@ -613,6 +686,49 @@ class InMemoryVehicleRepository implements IVehicleRepository {
     );
 
     return vehicle ? this.operableBy(vehicle, driverId) : false;
+  }
+
+  async findDriverOperableVehicleIds({
+    driverId,
+    businessId,
+  }: {
+    driverId: string;
+    businessId: string;
+  }): Promise<string[]> {
+    return this.vehicles
+      .filter(
+        (vehicle) =>
+          vehicle.businessId === businessId &&
+          this.operableBy(vehicle, driverId),
+      )
+      .map((vehicle) => vehicle.id);
+  }
+
+  async canDriverReadVehicle({
+    vehicleId,
+    driverId,
+    businessId,
+    now,
+  }: {
+    vehicleId: string;
+    driverId: string;
+    businessId: string;
+    now: Date;
+  }): Promise<boolean> {
+    const vehicle = this.vehicles.find(
+      (entry) => entry.id === vehicleId && entry.businessId === businessId,
+    );
+
+    return vehicle
+      ? canDriverReadVehicle(
+          vehicle,
+          driverId,
+          this.routeSource().filter(
+            (route) => route.businessId === vehicle.businessId,
+          ),
+          now,
+        )
+      : false;
   }
 
   async countOpenRoutesForVehicle(

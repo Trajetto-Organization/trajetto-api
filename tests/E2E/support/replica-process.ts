@@ -16,7 +16,10 @@ interface ReplicaCommand {
     | "routeEvent"
     | "driverPosition"
     | "securityToBusiness"
-    | "securityToUser";
+    | "securityToUser"
+    | "wake"
+    | "lane"
+    | "refreshRooms";
   businessId: string;
   payload: Record<string, unknown>;
 }
@@ -30,6 +33,15 @@ interface Replica {
 
   /** The ids of THIS replica's sockets in a room, from its own room index. */
   members: (room: string) => Promise<string[]>;
+
+  /** Which of these users the CLUSTER has connected (the presence beats). */
+  online: (userIds: string[]) => Promise<string[]>;
+
+  /**
+   * How this replica's adapter was built (plano-escala F4-51), and whether
+   * it emits through the Redis emitter instead (no sockets, U-07).
+   */
+  adapter: () => Promise<{ requestsTimeout: number | null; emitter: boolean }>;
 
   /**
    * Until a socket connected to this replica is in (or out of) a room. What
@@ -122,16 +134,20 @@ async function startReplica(env: Record<string, string>): Promise<Replica> {
 
   let question = 0;
 
-  const members = async (room: string): Promise<string[]> => {
+  /** One question, one answer line: `<KIND> <id> <json>`. */
+  const ask = async <T>(
+    kind: string,
+    payload: Record<string, unknown>,
+  ): Promise<T> => {
     question += 1;
 
-    const prefix = `MEMBERS ${question} `;
-    let answer = "[]";
+    const prefix = `${kind.toUpperCase()} ${question} `;
+    let answer = "null";
 
     const command = {
-      kind: "members",
+      kind,
       businessId: "",
-      payload: { id: question, room },
+      payload: { id: question, ...payload },
     };
 
     child.stdin.write(`${JSON.stringify(command)}\n`);
@@ -144,12 +160,17 @@ async function startReplica(env: Record<string, string>): Promise<Replica> {
       return true;
     }, 15_000);
 
-    return JSON.parse(answer) as string[];
+    return JSON.parse(answer) as T;
   };
+
+  const members = (room: string) => ask<string[]>("members", { room });
 
   return {
     process: child,
     port,
+    online: (userIds) => ask<string[]>("online", { userIds }),
+    adapter: () =>
+      ask<{ requestsTimeout: number | null; emitter: boolean }>("adapter", {}),
     run: async (command) => {
       child.stdin.write(`${JSON.stringify(command)}\n`);
 

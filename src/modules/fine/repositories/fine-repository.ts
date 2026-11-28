@@ -1,4 +1,4 @@
-import database from "@/../infra/database";
+import database, { readDatabase, readDatabaseWalk } from "@/../infra/database";
 import { Prisma } from "@prisma/client";
 import { Decimal } from "@prisma/client/runtime/client";
 
@@ -48,6 +48,33 @@ const EXPORT_BATCH_SIZE = 1000;
 
 class FineRepository implements IFineRepository {
   constructor(private prisma = database) {}
+
+  /**
+   * The heavy reads' bulkhead (plano-escala F3-17), for the export: a pool of
+   * its own, 3 connections and 10 s a statement, so a burst of them waits
+   * among itself instead of taking the connections every other request needs.
+   * A repository built on another client (a test's) reads on that client. A
+   * getter, so a module that mocks infra/database without it only needs it
+   * when one of these reads runs.
+   * With DATABASE_REPLICA_URL, readDatabase() sends them to the standby
+   * while the replica guard vouches for it: lists only (plano-escala F4-42,
+   * tests/unitaires/database/read-routing-guard.test.ts).
+   */
+  private get read(): typeof this.prisma {
+    return this.prisma === database ? readDatabase() : this.prisma;
+  }
+
+  /**
+   * The export's batches on the same bulkhead (or standby), one walk per
+   * export (plano-escala F4-42): they page with Prisma's cursor, the last
+   * row of the batch before, and a standby that has not replayed a row
+   * read on the primary would answer an empty batch and end the export
+   * early. So the walk never goes from the primary back to the standby
+   * (readDatabaseWalk).
+   */
+  private readWalk(): () => typeof this.prisma {
+    return this.prisma === database ? readDatabaseWalk() : () => this.prisma;
+  }
 
   // `tx` lets the use case create the fine and its outbox event atomically.
   async createFine(
@@ -210,7 +237,7 @@ class FineRepository implements IFineRepository {
     order: _order,
     ...filters
   }: FineListQuery): Promise<number> {
-    return this.prisma.fine.count({
+    return this.read.fine.count({
       where: fineListWhere(filters, { withFacets: true, todayStart }),
     });
   }
@@ -229,12 +256,13 @@ class FineRepository implements IFineRepository {
   }: FineListQuery): AsyncGenerator<FineExportRow> {
     const where = fineListWhere(filters, { withFacets: true, todayStart });
 
+    const read = this.readWalk();
     let cursor: string | undefined = undefined;
 
     while (true) {
       const fines: Array<
         Prisma.FineGetPayload<{ include: typeof FINE_INCLUDE }>
-      > = await this.prisma.fine.findMany({
+      > = await read().fine.findMany({
         where,
         include: FINE_INCLUDE,
         orderBy: [{ created_at: "desc" }, { id: "desc" }],

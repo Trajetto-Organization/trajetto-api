@@ -3,8 +3,14 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
-import { publishedPurgeBatchSql } from "@/jobs/cron/cleanup-notification-pipeline-job";
+import {
+  failedPurgeBatchSql,
+  publishedPurgeBatchSql,
+} from "@/jobs/cron/cleanup-notification-pipeline-job";
 import { createPrismaClient } from "@/shared/database/database-client";
+import { v7 as uuidV7 } from "uuid";
+import { withParentNames } from "./support/partition-plan";
+import { unpartitionQueues } from "./support/queue-partitions";
 
 /**
  * What one night of the notification purge costs at the target scale
@@ -40,6 +46,19 @@ function flatten(node: PlanNode): PlanNode[] {
   return [node, ...(node.Plans ?? []).flatMap(flatten)];
 }
 
+/**
+ * The nodes that READ a table: not the ModifyTable node of a DELETE, which
+ * names the table it deletes from and has no condition of its own (the
+ * deliveries and their receipts are deleted in the batch's statement since
+ * plano-escala F5-05).
+ */
+function readsOf(nodes: PlanNode[], table: string): PlanNode[] {
+  return nodes.filter(
+    (node) =>
+      node["Relation Name"] === table && node["Node Type"] !== "ModifyTable",
+  );
+}
+
 function literal(value: unknown): string {
   if (value instanceof Date) return `'${value.toISOString()}'`;
   if (typeof value === "number") return String(value);
@@ -67,7 +86,12 @@ async function genericPlan(query: Prisma.Sql): Promise<PlanNode> {
 
     await tx.$executeRawUnsafe(`DEALLOCATE ${name}`);
 
-    return (row["QUERY PLAN"] as Array<{ Plan: PlanNode }>)[0].Plan;
+    // The queues are partitioned since F5-09: each partition read as its
+    // parent, each partition index as the parent's.
+    return withParentNames(
+      tx,
+      (row["QUERY PLAN"] as Array<{ Plan: PlanNode }>)[0].Plan,
+    );
   });
 }
 
@@ -82,6 +106,10 @@ const RETAINED_EVENTS = 4_000;
 const DUE_EVENTS = 200;
 
 beforeAll(async () => {
+  // The batch purge of the plain queues: where the swap of F5-09 still
+  // waits, or is left for a window of its own (more than 2 M rows).
+  await unpartitionQueues();
+
   const user = await prisma.user.create({
     data: {
       name: "Destinatária do Expurgo",
@@ -92,7 +120,7 @@ beforeAll(async () => {
   });
 
   const event = (processedDaysAgo: number) => ({
-    id: randomUUID(),
+    id: uuidV7(),
     eventKey: `purge-${randomUUID()}`,
     topic: "delivery.dispatched",
     aggregateType: "delivery",
@@ -126,8 +154,24 @@ beforeAll(async () => {
     ]),
   });
 
+  // Expo tickets under every delivery: the receipts the batch takes with
+  // its deliveries (plano-escala F5-05) must be found by deliveryId.
+  const deliveries = await prisma.notificationDelivery.findMany({
+    select: { id: true },
+  });
+
+  await prisma.notificationProviderReceipt.createMany({
+    data: deliveries.map((delivery) => ({
+      deliveryId: delivery.id,
+      provider: "expo",
+      providerMessageId: randomUUID(),
+      status: "ticket",
+      occurredAt: new Date(),
+    })),
+  });
+
   await prisma.$executeRawUnsafe(
-    `ANALYZE "domain_outbox_event", "notification_delivery"`,
+    `ANALYZE "domain_outbox_event", "notification_delivery", "notification_provider_receipt"`,
   );
 }, 120_000);
 
@@ -159,8 +203,9 @@ describe("one batch of the nightly purge", () => {
   });
 
   it("reads the failed deliveries of THOSE events, not every retained failure", async () => {
-    const deliveryReads = flatten(await genericPlan(statement())).filter(
-      (node) => node["Relation Name"] === "notification_delivery",
+    const deliveryReads = readsOf(
+      flatten(await genericPlan(statement())),
+      "notification_delivery",
     );
 
     expect(deliveryReads.length).toBeGreaterThan(0);
@@ -171,6 +216,60 @@ describe("one batch of the nightly purge", () => {
     for (const node of deliveryReads) {
       expect(node["Node Type"]).not.toBe("Seq Scan");
       expect(node["Index Name"]).not.toBe("notification_delivery_failed_idx");
+      expect(node["Index Cond"] ?? node["Recheck Cond"] ?? "").toContain(
+        "outboxEventId",
+      );
+    }
+  });
+
+  it("deletes the receipts of THOSE deliveries through deliveryId, never a scan", async () => {
+    // The deliveries and their receipts leave in the batch's statement now,
+    // not by cascade (plano-escala F5-05): the receipts are many, and a
+    // scan of them per batch would cost every night what the ledger keeps.
+    for (const purge of [
+      statement(),
+      failedPurgeBatchSql(
+        new Date(Date.now() - 90 * DAY_MS),
+        new Date(Date.now() - 90 * DAY_MS),
+        5_000,
+      ),
+    ]) {
+      const receiptReads = readsOf(
+        flatten(await genericPlan(purge)),
+        "notification_provider_receipt",
+      );
+
+      expect(receiptReads.length).toBeGreaterThan(0);
+
+      for (const node of receiptReads) {
+        expect(node["Node Type"]).not.toBe("Seq Scan");
+        expect(node["Index Cond"] ?? node["Recheck Cond"] ?? "").toContain(
+          "deliveryId",
+        );
+      }
+    }
+  });
+
+  it("reads the FAILED purge's deliveries by event, never a scan", async () => {
+    const nodes = flatten(
+      await genericPlan(
+        failedPurgeBatchSql(
+          new Date(Date.now() - 90 * DAY_MS),
+          new Date(Date.now() - 90 * DAY_MS),
+          5_000,
+        ),
+      ),
+    );
+
+    expect(nodes.filter((node) => node["Node Type"] === "Seq Scan")).toEqual(
+      [],
+    );
+
+    const deliveryReads = readsOf(nodes, "notification_delivery");
+
+    expect(deliveryReads.length).toBeGreaterThan(0);
+
+    for (const node of deliveryReads) {
       expect(node["Index Cond"] ?? node["Recheck Cond"] ?? "").toContain(
         "outboxEventId",
       );

@@ -821,9 +821,8 @@ describe("the key", () => {
   });
 
   it("is counted on the usage monitor under the route pattern", async () => {
-    const { apiUsageRecorder } = await import(
-      "@/shared/integration/api-usage-recorder"
-    );
+    const { apiUsageRecorder } =
+      await import("@/shared/integration/api-usage-recorder");
 
     await post(writeKey, document());
     await apiUsageRecorder.flush();

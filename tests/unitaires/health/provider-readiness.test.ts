@@ -6,8 +6,10 @@ import {
   PROBE_RETRY_DELAY_MS,
   READINESS_CACHE_MS,
   READINESS_TRANSIENT_CACHE_MS,
+  checkAddressSearch,
   checkAiOcr,
   checkEmail,
+  checkGeocoding,
   checkHeartbeat,
   checkProofCertificate,
   checkProviders,
@@ -16,10 +18,17 @@ import {
   checkWhatsApp,
   readinessCache,
   readinessTtl,
+  type GeocodingStateLike,
   type ProviderReadinessReport,
   type ReadinessDeps,
   type ReadinessEnv,
 } from "@/shared/health/provider-readiness";
+import { pauseValue } from "@/shared/delivery/geocoding/geocoding-gate";
+import { CUSTOMER_WHATSAPP_TEMPLATES } from "@/shared/delivery/customer-whatsapp-templates";
+import {
+  INTERNAL_WHATSAPP_TEMPLATES,
+  type WhatsAppTemplateDefinition,
+} from "@/shared/notifications/whatsapp-templates";
 
 /**
  * Provider readiness (contract §32/§33): "just set the env vars" has to be
@@ -37,6 +46,9 @@ const SECRETS = {
   R2_ACCESS_KEY_ID: "SECRET_r2_id",
   AI_LOCAL_TOKEN: "SECRET_ai_token_0123456789abcdef0123",
   HEALTHCHECK_PING_URL: "https://hc-ping.com/SECRET-uuid",
+  EXPO_ACCESS_TOKEN: "SECRET_expo_access_token",
+  REVERSE_GEOCODER_KEY: "pk.SECRET_locationiq_reverse",
+  ADDRESS_SEARCH_KEY: "pk.SECRET_locationiq_search",
 };
 
 function fullEnv(overrides: Partial<ReadinessEnv> = {}): ReadinessEnv {
@@ -46,7 +58,6 @@ function fullEnv(overrides: Partial<ReadinessEnv> = {}): ReadinessEnv {
     RESEND_WEBHOOK_SECRET: "whsec_SECRET",
     META_WHATSAPP_PHONE_NUMBER_ID: "1234567890",
     META_WHATSAPP_TEMPLATE_NAME: "trajetto_notification",
-    META_WHATSAPP_CUSTOMER_TEMPLATE_NAME: "trajetto_cliente",
     META_WHATSAPP_API_VERSION: "v23.0",
     META_WHATSAPP_BUSINESS_ACCOUNT_ID: "998877665544",
     UPLOAD_STORAGE_TYPE: "r2",
@@ -54,12 +65,83 @@ function fullEnv(overrides: Partial<ReadinessEnv> = {}): ReadinessEnv {
     R2_BUCKET_NAME: "trajetto-uploads",
     AI_PROVIDER: "local",
     AI_LOCAL_URL: "http://trajetto-ai:8080",
+    REVERSE_GEOCODER_URL: "https://us1.locationiq.com/v1",
+    DELIVERY_GEOCODING_DAILY_BUDGET: 2_000,
+    ADDRESS_SEARCH_URL: "https://api.locationiq.com/v1",
+    ADDRESS_SEARCH_PROTOCOL: "locationiq-autocomplete",
+    ADDRESS_SEARCH_DAILY_BUDGET: 1_000,
+    ADDRESS_SEARCH_BUSINESS_DAILY_LIMIT: 150,
     ...SECRETS,
     ...overrides,
   };
 }
 
+/** The geocoder's Redis on a quiet day: nothing paused, a little used. */
+const QUIET_DAY: GeocodingStateLike = {
+  pause: null,
+  searchPause: null,
+  lookupsToday: 12,
+  searchesToday: 3,
+};
+
 type Route = (url: string, init?: RequestInit) => Response | Promise<Response>;
+
+/**
+ * The 21 templates of the registry (plan of 02/11/2026, B7), as Meta's list
+ * returns them when everything is right: approved, pt_BR, UTILITY, the same
+ * body and, for the customer's four, the two URL buttons.
+ */
+const REGISTRY: WhatsAppTemplateDefinition[] = [
+  ...Object.values(INTERNAL_WHATSAPP_TEMPLATES),
+  ...Object.values(CUSTOMER_WHATSAPP_TEMPLATES),
+];
+
+function metaTemplate(
+  definition: WhatsAppTemplateDefinition,
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    name: definition.name,
+    status: "APPROVED",
+    language: "pt_BR",
+    category: "UTILITY",
+    components: [
+      { type: "BODY", text: definition.body },
+      ...(definition.buttons
+        ? [
+            {
+              type: "BUTTONS",
+              buttons: definition.buttons.map((button) => ({
+                type: "URL",
+                text: button.text,
+                url: `https://www.intrajetto.com/${button.path}`,
+              })),
+            },
+          ]
+        : []),
+    ],
+    ...overrides,
+  };
+}
+
+const TEMPLATE_LIST =
+  "https://graph.facebook.com/v23.0/998877665544/message_templates?fields=";
+
+/** Meta's template list with one template changed (or removed: null). */
+function templateList(
+  changes: Record<string, Record<string, unknown> | null> = {},
+): Route {
+  return () =>
+    json(200, {
+      data: REGISTRY.flatMap((definition) => {
+        if (!(definition.name in changes)) return [metaTemplate(definition)];
+
+        const change = changes[definition.name];
+
+        return change ? [metaTemplate(definition, change)] : [];
+      }),
+    });
+}
 
 function json(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -97,6 +179,7 @@ function deps(
       days_left: 237,
     }),
     heartbeat: () => null,
+    geocodingState: async () => QUIET_DAY,
     now: () => new Date("2026-10-07T12:00:00.000Z"),
     timeoutMs: 200,
     retryDelayMs: 5,
@@ -114,24 +197,7 @@ const HEALTHY: Record<string, Route> = {
       verified_name: "Trajetto",
       quality_rating: "GREEN",
     }),
-  "https://graph.facebook.com/v23.0/998877665544/message_templates?name=trajetto_notification":
-    () =>
-      json(200, {
-        data: [
-          {
-            name: "trajetto_notification",
-            status: "APPROVED",
-            language: "pt_BR",
-          },
-        ],
-      }),
-  "https://graph.facebook.com/v23.0/998877665544/message_templates?name=trajetto_cliente":
-    () =>
-      json(200, {
-        data: [
-          { name: "trajetto_cliente", status: "APPROVED", language: "pt_BR" },
-        ],
-      }),
+  [TEMPLATE_LIST]: templateList(),
   "https://exp.host/--/api/v2/push/getReceipts": () => json(200, { data: {} }),
   "http://trajetto-ai:8080/health": () =>
     json(200, { ok: true, engine: "rapidocr", engineVersion: "3.9.2" }),
@@ -158,6 +224,8 @@ describe("a fully configured production", () => {
       ["push", "ok"],
       ["storage", "ok"],
       ["ai_ocr", "ok"],
+      ["geocoding", "ok"],
+      ["address_search", "ok"],
       ["proof_certificate", "ok"],
       ["heartbeat", "ok"],
     ]);
@@ -168,6 +236,315 @@ describe("a fully configured production", () => {
       expect(body).not.toContain(secret);
     expect(body).not.toContain("hc-ping.com");
     expect(body).not.toContain("trajetto-ai:8080");
+    expect(body).not.toContain("locationiq.com");
+  });
+});
+
+describe("the deliveries' lookups and the address search (LocationIQ)", () => {
+  // Owner's report of 14/11/2026: the search answered "indisponível" and a
+  // delivery had no point, and the Sistema screen said nothing about
+  // either. Not probed — a call spends a credit, and a refusal already
+  // pauses every replica with its status — so the entries read the
+  // variables and that state.
+  const NOW = new Date("2026-10-07T12:00:00.000Z");
+  const IN_15_MIN = new Date(NOW.getTime() + 15 * 60_000);
+  const MIDNIGHT = new Date("2026-10-08T00:00:00.000Z");
+
+  const withState = (
+    state: Partial<GeocodingStateLike> | null,
+    env: Partial<ReadinessEnv> = {},
+  ) =>
+    deps(
+      {},
+      {
+        env: fullEnv(env),
+        geocodingState: async () => (state ? { ...QUIET_DAY, ...state } : null),
+      },
+    );
+
+  describe("the deliveries' lookups", () => {
+    it("says how many lookups today when nothing holds them", async () => {
+      const result = await checkGeocoding(withState({}));
+
+      expect(result).toMatchObject({
+        key: "geocoding",
+        label: "Localização das entregas (LocationIQ)",
+        status: "ok",
+        message: "Hoje: 12 de 2000 consultas.",
+        details: {
+          key_source: "REVERSE_GEOCODER_KEY",
+          today_used: 12,
+          daily_budget: 2_000,
+          paused_reason: null,
+          paused_until: null,
+          refused_status: null,
+        },
+      });
+    });
+
+    it("names what is missing: the URL, or LocationIQ's key", async () => {
+      expect(
+        await checkGeocoding(
+          withState({}, { REVERSE_GEOCODER_URL: undefined }),
+        ),
+      ).toMatchObject({
+        status: "not_configured",
+        configured: false,
+        missing_env: ["REVERSE_GEOCODER_URL"],
+      });
+      expect(
+        await checkGeocoding(
+          withState({}, { REVERSE_GEOCODER_KEY: undefined }),
+        ),
+      ).toMatchObject({
+        status: "not_configured",
+        missing_env: ["REVERSE_GEOCODER_KEY"],
+      });
+
+      // A Nominatim of our own needs no key.
+      expect(
+        await checkGeocoding(
+          withState(
+            {},
+            {
+              REVERSE_GEOCODER_URL: "http://nominatim.internal:8080",
+              REVERSE_GEOCODER_KEY: undefined,
+            },
+          ),
+        ),
+      ).toMatchObject({ status: "ok", details: { key_source: null } });
+    });
+
+    it("is disabled with a budget of 0", async () => {
+      expect(
+        await checkGeocoding(
+          withState({}, { DELIVERY_GEOCODING_DAILY_BUDGET: 0 }),
+        ),
+      ).toMatchObject({ status: "disabled", configured: true });
+    });
+
+    it("is an error while the provider's refusal holds the lookups, saying what the status means and until when", async () => {
+      const expected: Record<number, RegExp> = {
+        401: /recusou a chave \(HTTP 401\): confira REVERSE_GEOCODER_KEY/,
+        403: /HTTP 403\): o token não tem o Search liberado/,
+        404: /REVERSE_GEOCODER_URL deve ser a raiz da API/,
+      };
+
+      for (const [status, message] of Object.entries(expected)) {
+        const result = await checkGeocoding(
+          withState({
+            pause: pauseValue("REFUSED", IN_15_MIN, Number(status)),
+          }),
+        );
+
+        expect(result.status).toBe("error");
+        expect(result.message).toMatch(message);
+        expect(result.message).toContain("até 09:15 (horário de Brasília)");
+        expect(result.details).toMatchObject({
+          paused_reason: "REFUSED",
+          paused_until: IN_15_MIN.toISOString(),
+          refused_status: Number(status),
+        });
+      }
+
+      // A value an older replica wrote: no status, still an error.
+      const old = await checkGeocoding(
+        withState({ pause: `REFUSED ${IN_15_MIN.toISOString()}` }),
+      );
+
+      expect(old).toMatchObject({
+        status: "error",
+        details: { refused_status: null },
+      });
+    });
+
+    it("warns for the provider's quota of the day and for today's budget spent", async () => {
+      const quota = await checkGeocoding(
+        withState({ pause: pauseValue("QUOTA", MIDNIGHT, 429) }),
+      );
+
+      expect(quota.status).toBe("warning");
+      // A return is a moment: "volta às 21:00", never "volta até 21:00".
+      expect(quota.warnings).toEqual([
+        "A cota do dia do LocationIQ acabou: volta às 21:00 (horário de Brasília), à meia-noite UTC.",
+      ]);
+      expect(quota.details).toMatchObject({
+        paused_reason: "QUOTA",
+        refused_status: null,
+      });
+
+      // A value without a deadline still says when.
+      const undated = await checkGeocoding(withState({ pause: "QUOTA" }));
+
+      expect(undated.warnings).toEqual([
+        "A cota do dia do LocationIQ acabou: volta à meia-noite UTC.",
+      ]);
+
+      const spent = await checkGeocoding(withState({ lookupsToday: 2_000 }));
+
+      expect(spent.status).toBe("warning");
+      expect(spent.warnings[0]).toMatch(
+        /orçamento do dia acabou \(2000 de 2000 consultas/,
+      );
+    });
+
+    it("is not held by a burst's minute", async () => {
+      expect(
+        await checkGeocoding(
+          withState({
+            pause: pauseValue("BURST", new Date(NOW.getTime() + 60_000), 429),
+          }),
+        ),
+      ).toMatchObject({ status: "ok", details: { paused_reason: "BURST" } });
+    });
+
+    it("says the state was not read when Redis does not answer, never an error", async () => {
+      expect(await checkGeocoding(withState(null))).toMatchObject({
+        status: "ok",
+        transient: true,
+        message: "Configurado. Estado do dia não lido: o Redis não respondeu.",
+        details: { today_used: null },
+      });
+    });
+  });
+
+  describe("the address search", () => {
+    it("says how many searches today when nothing holds it", async () => {
+      expect(await checkAddressSearch(withState({}))).toMatchObject({
+        key: "address_search",
+        label: 'Busca do "Fixar no mapa"',
+        status: "ok",
+        message: "Hoje: 3 de 1000 buscas (até 150 por empresa).",
+        details: {
+          protocol: "locationiq-autocomplete",
+          key_source: "ADDRESS_SEARCH_KEY",
+          today_used: 3,
+          daily_budget: 1_000,
+          business_daily_limit: 150,
+        },
+      });
+    });
+
+    it("names what is missing: the URL, or any key", async () => {
+      expect(
+        await checkAddressSearch(
+          withState({}, { ADDRESS_SEARCH_URL: undefined }),
+        ),
+      ).toMatchObject({
+        status: "not_configured",
+        missing_env: ["ADDRESS_SEARCH_URL"],
+      });
+      expect(
+        await checkAddressSearch(
+          withState(
+            {},
+            { ADDRESS_SEARCH_KEY: undefined, REVERSE_GEOCODER_KEY: undefined },
+          ),
+        ),
+      ).toMatchObject({
+        status: "not_configured",
+        missing_env: ["ADDRESS_SEARCH_KEY"],
+      });
+
+      // Without a key of its own, the deliveries' one (decision D-27).
+      expect(
+        await checkAddressSearch(
+          withState({}, { ADDRESS_SEARCH_KEY: undefined }),
+        ),
+      ).toMatchObject({
+        status: "ok",
+        details: { key_source: "REVERSE_GEOCODER_KEY" },
+      });
+    });
+
+    it("is disabled with a budget of 0", async () => {
+      expect(
+        await checkAddressSearch(
+          withState({}, { ADDRESS_SEARCH_DAILY_BUDGET: 0 }),
+        ),
+      ).toMatchObject({ status: "disabled" });
+    });
+
+    it("warns when LocationIQ is asked with the nominatim-search protocol", async () => {
+      const result = await checkAddressSearch(
+        withState({}, { ADDRESS_SEARCH_PROTOCOL: "nominatim-search" }),
+      );
+
+      expect(result.status).toBe("warning");
+      expect(result.warnings).toEqual([
+        "ADDRESS_SEARCH_PROTOCOL está em nominatim-search com o LocationIQ: defina locationiq-autocomplete, ou a busca chama o /search em vez do /autocomplete.",
+      ]);
+    });
+
+    it("is an error while its own refusal holds it (403: a token without the Autocomplete)", async () => {
+      const result = await checkAddressSearch(
+        withState({
+          searchPause: pauseValue("REFUSED", IN_15_MIN, 403),
+        }),
+      );
+
+      expect(result.status).toBe("error");
+      expect(result.message).toMatch(/não tem o Autocomplete liberado/);
+      expect(result.message).toContain("a localização das entregas continua");
+      expect(result.details).toMatchObject({
+        paused_reason: "REFUSED",
+        refused_status: 403,
+      });
+    });
+
+    it("searches on while a refusal holds only the deliveries' lookups", async () => {
+      expect(
+        await checkAddressSearch(
+          withState({ pause: pauseValue("REFUSED", IN_15_MIN, 401) }),
+        ),
+      ).toMatchObject({ status: "ok", details: { paused_reason: null } });
+    });
+
+    it("warns for the account's quota and for the day's searches spent", async () => {
+      const quota = await checkAddressSearch(
+        withState({ pause: pauseValue("QUOTA", MIDNIGHT, 429) }),
+      );
+
+      expect(quota.status).toBe("warning");
+      expect(quota.details).toMatchObject({ paused_reason: "QUOTA" });
+
+      const spent = await checkAddressSearch(
+        withState({ searchesToday: 1_000 }),
+      );
+
+      expect(spent.status).toBe("warning");
+      expect(spent.warnings[0]).toMatch(/As buscas do dia acabaram/);
+    });
+
+    it("says the state was not read when Redis does not answer", async () => {
+      expect(await checkAddressSearch(withState(null))).toMatchObject({
+        status: "ok",
+        transient: true,
+      });
+    });
+  });
+
+  it("never carries a key nor a configured URL, in any state", async () => {
+    const states: Array<Partial<GeocodingStateLike> | null> = [
+      {},
+      null,
+      { pause: pauseValue("REFUSED", IN_15_MIN, 401) },
+      { searchPause: pauseValue("REFUSED", IN_15_MIN, 403) },
+      { pause: pauseValue("QUOTA", MIDNIGHT, 429) },
+      { lookupsToday: 5_000, searchesToday: 5_000 },
+    ];
+
+    for (const state of states) {
+      const body = JSON.stringify([
+        await checkGeocoding(withState(state)),
+        await checkAddressSearch(withState(state)),
+      ]);
+
+      for (const secret of Object.values(SECRETS)) {
+        expect(body).not.toContain(secret);
+      }
+      expect(body).not.toContain("us1.locationiq.com");
+    }
   });
 });
 
@@ -265,36 +642,133 @@ describe("WhatsApp (Meta)", () => {
     const result = await checkWhatsApp(
       deps({
         ...HEALTHY,
-        "https://graph.facebook.com/v23.0/998877665544/message_templates?name=trajetto_cliente":
-          () =>
-            json(200, {
-              data: [
-                {
-                  name: "trajetto_cliente",
-                  status: "PAUSED",
-                  language: "pt_BR",
-                },
-              ],
-            }),
+        [TEMPLATE_LIST]: templateList({
+          trajetto_cliente_entregue: { status: "PAUSED" },
+        }),
       }),
     );
 
     expect(result.status).toBe("error");
-    expect(result.details["template:trajetto_cliente"]).toBe("PAUSED");
-    expect(result.details["template:trajetto_notification"]).toBe("APPROVED");
+    expect(result.details["template:trajetto_cliente_entregue"]).toBe("PAUSED");
+    expect(result.details["template:trajetto_multa_registrada"]).toBe(
+      "APPROVED",
+    );
   });
 
   it("is an error when a template does not exist", async () => {
     const result = await checkWhatsApp(
       deps({
         ...HEALTHY,
-        "https://graph.facebook.com/v23.0/998877665544/message_templates?name=trajetto_cliente":
-          () => json(200, { data: [] }),
+        [TEMPLATE_LIST]: templateList({ trajetto_entrega_insucesso: null }),
       }),
     );
 
-    expect(result.details["template:trajetto_cliente"]).toBe("MISSING");
+    expect(result.details["template:trajetto_entrega_insucesso"]).toBe(
+      "MISSING",
+    );
     expect(result.status).toBe("error");
+    expect(result.message).toContain("trajetto_entrega_insucesso");
+  });
+
+  // Plan of 02/11/2026, B7: the whole point of the 21 templates is that none
+  // is Marketing. A recategorization is a problem, not a warning.
+  it("is an error when Meta filed a template as MARKETING", async () => {
+    const result = await checkWhatsApp(
+      deps({
+        ...HEALTHY,
+        [TEMPLATE_LIST]: templateList({
+          trajetto_ordem_servico: { category: "MARKETING" },
+        }),
+      }),
+    );
+
+    expect(result.status).toBe("error");
+    expect(result.message).toContain("trajetto_ordem_servico");
+    expect(result.message).toContain("MARKETING");
+  });
+
+  it("is an error when a template takes another number of variables than the code sends", async () => {
+    const result = await checkWhatsApp(
+      deps({
+        ...HEALTHY,
+        [TEMPLATE_LIST]: templateList({
+          trajetto_multa_registrada: {
+            components: [
+              {
+                type: "BODY",
+                text: "Multa {{1}} no veículo {{2}}, registrada no Trajetto.",
+              },
+            ],
+          },
+        }),
+      }),
+    );
+
+    expect(result.status).toBe("error");
+    expect(result.message).toContain("trajetto_multa_registrada");
+    expect(result.message).toContain("11");
+  });
+
+  it("is an error when a customer template lacks its two URL buttons", async () => {
+    const definition = CUSTOMER_WHATSAPP_TEMPLATES.ON_THE_WAY;
+
+    const result = await checkWhatsApp(
+      deps({
+        ...HEALTHY,
+        [TEMPLATE_LIST]: templateList({
+          [definition.name]: {
+            components: [{ type: "BODY", text: definition.body }],
+          },
+        }),
+      }),
+    );
+
+    expect(result.status).toBe("error");
+    expect(result.message).toContain(definition.name);
+  });
+
+  it("reads every template from one list, following Meta's pages", async () => {
+    const calls: string[] = [];
+    const half = Math.ceil(REGISTRY.length / 2);
+
+    const result = await checkWhatsApp(
+      deps({
+        ...HEALTHY,
+        [TEMPLATE_LIST]: (url) => {
+          calls.push(url);
+
+          return json(200, {
+            data: REGISTRY.slice(0, half).map((definition) =>
+              metaTemplate(definition),
+            ),
+            paging: {
+              next: "https://graph.facebook.com/v23.0/998877665544/message_templates/page2",
+            },
+          });
+        },
+        "https://graph.facebook.com/v23.0/998877665544/message_templates/page2":
+          (url) => {
+            calls.push(url);
+
+            return json(200, {
+              data: REGISTRY.slice(half).map((definition) =>
+                metaTemplate(definition),
+              ),
+            });
+          },
+      }),
+    );
+
+    expect(calls).toHaveLength(2);
+    expect(result.status).toBe("ok");
+
+    // The 21, each with its state.
+    const states = Object.entries(result.details).filter(([key]) =>
+      key.startsWith("template:"),
+    );
+
+    expect(states).toHaveLength(21);
+    expect(states.every(([, state]) => state === "APPROVED")).toBe(true);
   });
 
   it("never reads a template list that arrived cut or malformed as 'does not exist'", async () => {
@@ -310,15 +784,15 @@ describe("WhatsApp (Meta)", () => {
       const result = await checkWhatsApp(
         deps({
           ...HEALTHY,
-          "https://graph.facebook.com/v23.0/998877665544/message_templates?name=trajetto_cliente":
-            answer,
+          [TEMPLATE_LIST]: answer,
         }),
       );
 
-      expect(result.details["template:trajetto_cliente"]).toBe("UNKNOWN");
+      expect(result.details["template:trajetto_cliente_entregue"]).toBe(
+        "UNKNOWN",
+      );
       expect(result.status).toBe("warning");
       expect(result.message).not.toContain("não existe");
-      expect(result.warnings.join(" ")).toContain("trajetto_cliente");
     }
   });
 
@@ -330,7 +804,9 @@ describe("WhatsApp (Meta)", () => {
     );
 
     expect(result.status).toBe("warning");
-    expect(result.details["template:trajetto_notification"]).toBe("UNKNOWN");
+    expect(result.details["template:trajetto_entrega_insucesso"]).toBe(
+      "UNKNOWN",
+    );
     expect(result.warnings.join(" ")).toContain(
       "META_WHATSAPP_BUSINESS_ACCOUNT_ID",
     );
@@ -351,6 +827,46 @@ describe("push, storage, OCR, certificate and heartbeat", () => {
     );
 
     expect(result.status).toBe("error");
+  });
+
+  // Plan of 02/11/2026 (A8): with Expo's "enhanced push security" on, every
+  // call without the project's access token is refused with 401.
+  it("push probes with the Expo access token, and warns while it is missing", async () => {
+    let authorization: string | null = null;
+
+    const withToken = await checkPush(
+      deps({
+        "https://exp.host": (_url, init) => {
+          authorization = new Headers(init?.headers).get("authorization");
+          return json(200, { data: {} });
+        },
+      }),
+    );
+
+    expect(authorization).toBe(`Bearer ${SECRETS.EXPO_ACCESS_TOKEN}`);
+    expect(withToken.status).toBe("ok");
+    expect(withToken.warnings).toEqual([]);
+    expect(JSON.stringify(withToken)).not.toContain(SECRETS.EXPO_ACCESS_TOKEN);
+
+    const without = await checkPush(
+      deps(HEALTHY, { env: fullEnv({ EXPO_ACCESS_TOKEN: undefined }) }),
+    );
+
+    // A warning, the house's way of saying "set it before it bites".
+    expect(without.status).toBe("warning");
+    expect(without.warnings.join(" ")).toContain("EXPO_ACCESS_TOKEN");
+  });
+
+  it("push says the enhanced security needs EXPO_ACCESS_TOKEN when Expo answers 401", async () => {
+    const result = await checkPush(
+      deps(
+        { "https://exp.host": () => json(401, {}) },
+        { env: fullEnv({ EXPO_ACCESS_TOKEN: undefined }) },
+      ),
+    );
+
+    expect(result.status).toBe("error");
+    expect(result.message).toContain("EXPO_ACCESS_TOKEN");
   });
 
   it("storage says the credential was refused on a 403", async () => {
@@ -592,15 +1108,16 @@ describe("independent probes of one provider", () => {
     return { routes, started, peak: () => peak };
   }
 
-  it("asks Meta for the number and every template at the same time", async () => {
-    const { routes, started, peak } = gated(3);
+  // Plan of 02/11/2026 (B7): the 21 templates come in ONE listing.
+  it("asks Meta for the number and the template list at the same time", async () => {
+    const { routes, started, peak } = gated(2);
 
     const whatsapp = await checkWhatsApp(deps(routes, { timeoutMs: 2_000 }));
 
     expect(whatsapp.status).toBe("ok");
-    expect(started.filter((url) => url.includes("graph"))).toHaveLength(3);
-    // One round trip, not three: all three were out at once.
-    expect(peak()).toBe(3);
+    expect(started.filter((url) => url.includes("graph"))).toHaveLength(2);
+    // One round trip, not two: both were out at once.
+    expect(peak()).toBe(2);
   });
 
   it("checks the OCR token while /health is still answering", async () => {

@@ -151,9 +151,8 @@ afterAll(async () => {
 });
 
 async function run(mode: "off" | "dry-run" | "delete") {
-  const { runOrphanUploadGc } = await import(
-    "@/shared/services/orphan-uploads"
-  );
+  const { runOrphanUploadGc } =
+    await import("@/shared/services/orphan-uploads");
 
   return runOrphanUploadGc({ mode, now: NOW });
 }
@@ -200,9 +199,8 @@ describe("the orphan collector", () => {
 
 describe("the reference queries", () => {
   it("run for every namespace against the real schema", async () => {
-    const { ORPHAN_GC_NAMESPACES, orphanWindow, keyRange } = await import(
-      "@/shared/services/orphan-uploads"
-    );
+    const { ORPHAN_GC_NAMESPACES, orphanWindow, keyRange } =
+      await import("@/shared/services/orphan-uploads");
 
     const window = orphanWindow(NOW);
 

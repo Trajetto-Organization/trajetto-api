@@ -71,7 +71,13 @@ interface IWebhookEndpointRepository {
   find: (
     id: string,
     businessId: string,
-  ) => Promise<{ id: string; name: string; is_active: boolean } | null>;
+  ) => Promise<{
+    id: string;
+    name: string;
+    is_active: boolean;
+    /** Our breaker: set when we switched it off after failures. */
+    disabled_at: Date | null;
+  } | null>;
 
   /** Clears the breaker of a switched-off endpoint; false when it was not off. */
   resetBreaker: (id: string, businessId: string) => Promise<boolean>;

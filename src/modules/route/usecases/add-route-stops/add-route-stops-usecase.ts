@@ -17,10 +17,21 @@ import { deliveryAssignedPayload } from "@/shared/integration/announce";
 
 import { assertDeliveriesRoutable } from "../shared/routable-deliveries";
 import {
+  geocodeSoon,
+  unlocatedDeliveryIds,
+} from "@/shared/delivery/geocoding/geocode-soon";
+import {
   alreadyOnRouteMessage,
   announcePlanChange,
   planWriteFailure,
 } from "../shared/route-plan-change";
+import {
+  alreadyOnRouteAfterRace,
+  deliveryLabelOf,
+  routeConflictAfterLock,
+  routeNotAppendable,
+} from "../shared/route-plan-rules";
+import { announceDepartedStops } from "../shared/departing-stops";
 
 import {
   DeliveryAlreadyOnRouteError,
@@ -28,6 +39,11 @@ import {
   RouteNotFoundError,
   RouteStatusConflictError,
 } from "../errors/route-errors";
+import { DeliveryStatusConflictError } from "@/modules/delivery/usecases/errors/delivery-errors";
+
+import type { Prisma } from "@prisma/client";
+import type { IStatusChangeReasonRepository } from "@/modules/status-change-reason/repositories/IStatus-change-reason-repository";
+import type { OutboxService } from "@/shared/notifications/outbox-service";
 
 import type { RouteStop } from "../../dtos/route-dto";
 
@@ -39,6 +55,14 @@ interface AddRouteStopsRequest {
 
   /** The plan the dispatcher is looking at (decision 14.7, D5). */
   expectedPlanVersion?: number;
+
+  /**
+   * "Reentregar" (K12, decision D30): the failed deliveries of the list go
+   * back to PENDING with this reason — the one a status change by hand
+   * always asks for — and onto the route, in the same transaction. Without
+   * it a failed delivery is refused, as before.
+   */
+  redelivery?: { reasonId: string; note?: string | null };
 }
 
 interface AddRouteStopsResult {
@@ -54,15 +78,17 @@ interface AddRouteStopsResult {
 }
 
 /**
- * Adds deliveries to a route that has not left yet, at the end of the order.
+ * Adds deliveries to a route that has not ended, at the end of the order.
  *
  * At the end and not in the middle: where a stop goes is the dispatcher's
  * decision, made by dragging, and guessing an insertion point would be a
  * different guess from the one they are about to make anyway.
  *
- * Only a route still in planning accepts new work. Once it has departed, the
- * route is a record of what the driver is doing — adding to it would change a
- * plan the person on the road has already been given, without telling them.
+ * A running route takes new work too (K12, decision D30): the load goes on
+ * the street in the same commit (IN_TRANSIT, as at the departure), the
+ * person waiting is told it left, and the driver is told the plan changed —
+ * which is what used to make adding to it unsafe. A route that ended
+ * (completed or cancelled) refuses.
  */
 @injectable()
 class AddRouteStopsUseCase {
@@ -77,6 +103,12 @@ class AddRouteStopsUseCase {
     private notificationService: NotificationService,
     @inject("WebhookFanOutService")
     private webhooks: WebhookFanOutService,
+    // K12. Optional so callers built before "Reentregar" and the running
+    // route keep working; the container always provides both.
+    @inject("StatusChangeReasonRepository")
+    private reasons?: IStatusChangeReasonRepository,
+    @inject("OutboxService")
+    private outbox?: OutboxService,
   ) {}
 
   async execute({
@@ -85,6 +117,7 @@ class AddRouteStopsUseCase {
     routeId,
     deliveryIds,
     expectedPlanVersion,
+    redelivery,
   }: AddRouteStopsRequest): Promise<AddRouteStopsResult> {
     // Planning is the dispatcher's job, and `delivery_manage` is open to
     // drivers so the app's own surface works — so the permission says yes
@@ -95,6 +128,12 @@ class AddRouteStopsUseCase {
 
     // Scoped read: another company's route reads as absent.
     if (!findRoute) throw new RouteNotFoundError();
+
+    // An ended route answers as one, naming it, before anything else —
+    // never as "already on this route" (owner's report of 25/11/2026).
+    const ended = routeNotAppendable(findRoute);
+
+    if (ended) throw ended;
 
     // Duplicates in a selection are harmless; collapsing them keeps the count
     // checks below honest.
@@ -130,7 +169,25 @@ class AddRouteStopsUseCase {
 
     const deliveries = await this.delivery.findDeliveriesByIds(toAdd);
 
-    assertDeliveriesRoutable(deliveries, toAdd, businessId);
+    // "Reentregar": the failed ones go back to PENDING first, in the
+    // transaction below, so they are judged as the pending deliveries they
+    // will be. The reason is checked like a status change by hand checks it.
+    const redelivered = redelivery
+      ? deliveries.filter(
+          (entry) =>
+            entry.businessId === businessId && entry.status === "FAILED",
+        )
+      : [];
+
+    if (redelivery) await this.assertReason(redelivery.reasonId, businessId);
+
+    assertDeliveriesRoutable(
+      deliveries.map((entry) =>
+        redelivered.includes(entry) ? { ...entry, status: "PENDING" } : entry,
+      ),
+      toAdd,
+      businessId,
+    );
 
     // Named before the write, rather than learned from the unique index
     // after it: the 409 says which delivery is on which route.
@@ -162,6 +219,16 @@ class AddRouteStopsUseCase {
        * were given, and the one the ERP must hear about.
        */
       const added = await database.$transaction(async (tx) => {
+        if (redelivered.length > 0) {
+          // The route row before the deliveries', the order every writer
+          // takes them in (a cancellation: route → stops → deliveries).
+          await this.route.lockRoutes([routeId], businessId, tx);
+
+          for (const entry of redelivered) {
+            await this.redeliver(entry.id!, userId, redelivery!, tx);
+          }
+        }
+
         const result = await this.route.addStops(
           routeId,
           businessId,
@@ -183,6 +250,17 @@ class AddRouteStopsUseCase {
           );
         }
 
+        // On a running route these left now: "saiu para entrega" and
+        // `delivery.in_transit`, in this commit, as the departure tells its
+        // own load (K12).
+        if (result.status === "IN_PROGRESS") {
+          await announceDepartedStops(
+            tx,
+            { webhooks: this.webhooks, outbox: this.outbox },
+            { businessId, actorId: userId, deliveries },
+          );
+        }
+
         return result;
       });
 
@@ -193,7 +271,13 @@ class AddRouteStopsUseCase {
         planVersion: added.planVersion,
         status: added.status,
         driverId: added.driverId,
+        actorId: userId,
       });
+
+      // The new stops' address points now rather than at the next minute's
+      // job (E1), which still takes the open stops first when this one
+      // could not ask. Never awaited.
+      geocodeSoon(businessId, unlocatedDeliveryIds(deliveries));
 
       this.notificationService.createActivityIfEnabled({
         type: "Rota",
@@ -221,9 +305,14 @@ class AddRouteStopsUseCase {
 
       // 409 and not 400: the request was well formed and the caller was
       // allowed to make it — somebody else put one of these deliveries on a
-      // route first. The screen has to say "refresh", not "you did it wrong".
+      // route first. The screen has to say "refresh", not "you did it wrong"
+      // — and which delivery, on which route, as the check above does.
       if (error instanceof DeliveryAlreadyOnRouteError) {
-        throw new AppError(error.message, 409, "DELIVERY_ALREADY_ON_ROUTE");
+        throw await alreadyOnRouteAfterRace(error, {
+          reread: (ids) => this.route.findOpenStopRoutes(ids, businessId),
+          labelOf: deliveryLabelOf(deliveries),
+          expected: (now) => now.routeId === routeId,
+        });
       }
 
       // A delivery cancelled (or sent out by hand) after the check above:
@@ -232,14 +321,20 @@ class AddRouteStopsUseCase {
         throw new AppError(error.message, 409, "DELIVERY_NOT_ROUTABLE");
       }
 
-      // Raised when the route left, or was cancelled, between the read above
-      // and the write — the same empty result set the tenant produces.
+      // Raised when the route ended (completed or cancelled) between the
+      // check above and the lock — the same empty result set the tenant
+      // produces. Read again to say which state it is in now.
       if (error instanceof RouteStatusConflictError) {
-        throw new AppError(
-          "Esta rota já saiu e não aceita novas paradas. Atualize a tela.",
-          409,
-          "ROUTE_STATUS_CONFLICT",
+        throw await routeConflictAfterLock(
+          () => this.route.findRouteById(routeId, businessId),
+          `O status da Rota ${findRoute.code} mudou enquanto você trabalhava nela e nada foi gravado. Atualize a tela e tente novamente.`,
         );
+      }
+
+      // A failed delivery that moved (another screen) between the read and
+      // the redelivery: nothing was written.
+      if (error instanceof DeliveryStatusConflictError) {
+        throw new AppError(error.message, 409, "DELIVERY_STATUS_CONFLICT");
       }
 
       if (error instanceof AppError) throw error;
@@ -249,6 +344,71 @@ class AddRouteStopsUseCase {
         500,
       );
     }
+  }
+
+  /**
+   * The reason of a "Reentregar", checked like a status change by hand
+   * checks it: of this company (another one's reads as missing) and active.
+   */
+  private async assertReason(
+    reasonId: string,
+    businessId: string,
+  ): Promise<void> {
+    const found = await this.reasons?.findStatusChangeReasonById(reasonId);
+
+    if (!found || found.businessId !== businessId) {
+      throw new AppError(
+        "Motivo não encontrado.",
+        404,
+        "STATUS_CHANGE_REASON_NOT_FOUND",
+      );
+    }
+
+    if (found.is_active === false) {
+      throw new AppError(
+        "Este motivo está desativado e não pode ser usado em novas mudanças de status.",
+        400,
+        "STATUS_CHANGE_REASON_INACTIVE",
+      );
+    }
+  }
+
+  /**
+   * FAILED → PENDING, the redelivery decision (delivery-rules), with the
+   * trail's STATUS_CHANGE line citing the reason — the same two writes a
+   * status change by hand makes, inside the caller's transaction. Only from
+   * FAILED: a delivery that moved since answers DELIVERY_STATUS_CONFLICT.
+   */
+  private async redeliver(
+    deliveryId: string,
+    userId: string,
+    redelivery: { reasonId: string; note?: string | null },
+    tx: Prisma.TransactionClient,
+  ): Promise<void> {
+    await this.delivery.updateDeliveryStatus(
+      deliveryId,
+      {
+        status: "PENDING",
+        expectedStatus: "FAILED",
+        delivered_at: null,
+        received_by: null,
+      },
+      tx,
+    );
+
+    await this.delivery.createDeliveryEvent(
+      {
+        type: "STATUS_CHANGE",
+        deliveryId,
+        reportedById: userId,
+        actor: "USER",
+        status_from: "FAILED",
+        status_to: "PENDING",
+        reasonId: redelivery.reasonId,
+        note: redelivery.note?.trim() || null,
+      },
+      tx,
+    );
   }
 }
 

@@ -35,6 +35,7 @@ interface IStatusChangeReasonRepository {
     reasonId: string,
   ) => Promise<StatusChangeReason | null>;
 
+  /** The company's reason with this name, whatever its case. */
   findStatusChangeReasonByName: (
     businessId: string,
     name: string,

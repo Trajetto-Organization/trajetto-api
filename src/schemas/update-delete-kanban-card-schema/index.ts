@@ -1,8 +1,9 @@
 import { z } from "zod";
+import { fieldError } from "@/shared/validation/field-error";
 
 const updateDeleteKanbanCardSchema = z.object({
   cardId: z
-    .string({ required_error: "ID do card é obrigatório!" })
+    .string(fieldError({ required: "ID do card é obrigatório!" }))
     .uuid("ID do card é inválido."),
 });
 

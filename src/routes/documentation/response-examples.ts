@@ -1,5 +1,6 @@
 import type {
   PublicDelivery,
+  PublicDeliveryCancellation,
   PublicEvent,
   PublicRoute,
 } from "@/shared/integration/public-shapes";
@@ -7,6 +8,7 @@ import {
   TOPIC_FAMILY,
   WEBHOOK_API_VERSION,
 } from "@/shared/integration/webhook-catalogue";
+import { DEFAULT_BUSINESS_TIMEZONE } from "@/shared/time/business-day";
 
 import { buildCatalogue } from "./integration-documentation";
 
@@ -73,6 +75,9 @@ const publicDelivery: PublicDelivery = {
   delivered_at: null,
   received_by: null,
 
+  // Plan of 02/11/2026 (L7): the receipt's link, once the delivery ended.
+  proof_url: null,
+
   route: { id: ROUTE_ID, code: 318 },
 
   created_at: "2026-09-23T18:42:10.000Z",
@@ -90,6 +95,18 @@ const createdPublicDelivery: PublicDelivery = {
 
   created_at: "2026-09-23T18:42:10.000Z",
   updated_at: "2026-09-23T18:42:10.000Z",
+};
+
+/** What POST /integration/v1/deliveries/:id/cancel answers (L9). */
+const cancelledPublicDelivery: PublicDeliveryCancellation = {
+  id: DELIVERY_ID,
+  code: "PED-10452",
+  invoice_key: INVOICE_KEY,
+
+  status: "CANCELLED",
+  status_label: "Cancelada",
+
+  updated_at: "2026-09-23T19:05:41.000Z",
 };
 
 const publicRoute: PublicRoute = {
@@ -148,6 +165,7 @@ const publicEvents: PublicEvent[] = [
       status_to: "DELIVERED",
       received_by: "Maria Souza",
       note: null,
+      occurrence_code: null,
     },
   },
   {
@@ -164,6 +182,25 @@ const publicEvents: PublicEvent[] = [
       status_to: null,
       received_by: "Maria Souza",
       note: null,
+      occurrence_code: null,
+    },
+  },
+  {
+    id: "0192f7f2-9c0d-7e1f-8a2b-3c4d5e6f7a8b",
+    topic: "occurrence.reported",
+    occurred_at: "2026-09-24T10:12:44.000Z",
+    delivery: {
+      id: DELIVERY_ID,
+      code: "PED-10452",
+      invoice_key: INVOICE_KEY,
+    },
+    // Plan of 02/11/2026 (L8): the type's ERP code.
+    data: {
+      status_from: null,
+      status_to: null,
+      received_by: null,
+      note: null,
+      occurrence_code: "AUS-01",
     },
   },
 ];
@@ -323,10 +360,17 @@ const deliveryDetail = {
       routeId: ROUTE_ID,
       occurrenceId: null,
       reportedById: DRIVER_USER_ID,
+      // L9: the API key behind an INTEGRATION event; null for the driver.
+      apiKeyId: null,
       occurred_at: "2026-09-24T08:15:02.000Z",
       created_at: "2026-09-24T08:15:32.000Z",
       reportedBy: driverPerson,
       reason: null,
+      apiKey: null,
+      // Plan of 02/11/2026 (E4): where the arrival was, against the radius.
+      distance_m: 38.4,
+      accuracy_m: 12,
+      geofence_outcome: "INSIDE",
     },
   ],
   occurrences: [],
@@ -373,33 +417,102 @@ const deliveryDetail = {
       blocking: false,
     },
   ],
+  // Contract C2: the recipient asked to stop WhatsApp; e-mail still goes.
+  messageOptOut: { whatsapp: "2026-09-24T09:02:11.000Z", email: null },
 };
+
+/**
+ * The sync_watermark of /deliveries and /routes (plano-escala F2-05): the
+ * instant of the read, 08:20 here, minus the 2-minute margin.
+ */
+const SYNC_WATERMARK = "2026-09-24T08:18:00.000Z";
 
 const RESPONSE_EXAMPLES: ResponseExamples = {
   "GET /integration/v1/catalogue": {
     200: buildCatalogue(WEBHOOK_API_VERSION, TOPIC_FAMILY),
   },
   "GET /integration/v1/deliveries": {
-    200: { data: [publicDelivery], next_cursor: DELIVERY_ID },
+    200: {
+      data: [publicDelivery],
+      next_cursor: DELIVERY_ID,
+      sync_watermark: SYNC_WATERMARK,
+    },
   },
   "GET /integration/v1/deliveries/:id": { 200: publicDelivery },
   "POST /integration/v1/deliveries": {
     201: createdPublicDelivery,
     200: createdPublicDelivery,
   },
+  "POST /integration/v1/deliveries/:id/cancel": {
+    200: cancelledPublicDelivery,
+  },
+  // The batch (plano-escala U-04): one created now, one refused with the
+  // single create's code and sentence, at their positions.
+  "POST /integration/v1/deliveries/batch": {
+    200: {
+      results: [
+        {
+          index: 0,
+          idempotency_key: "pedido-10452",
+          status: 201,
+          delivery_id: DELIVERY_ID,
+        },
+        {
+          index: 1,
+          idempotency_key: "pedido-10453",
+          status: 409,
+          delivery_id: NEXT_DELIVERY_ID,
+          code: "DELIVERY_INVOICE_KEY_EXISTS",
+          message:
+            "Já existe uma entrega com esta chave de NF-e nesta empresa.",
+        },
+      ],
+      created: 1,
+      replayed: 0,
+      refused: 1,
+    },
+  },
   "GET /integration/v1/routes": {
-    200: { data: [publicRoute], next_cursor: null },
+    200: {
+      data: [publicRoute],
+      next_cursor: null,
+      sync_watermark: SYNC_WATERMARK,
+    },
   },
   "GET /integration/v1/routes/:id": { 200: publicRoute },
   "GET /integration/v1/events": {
-    200: { data: publicEvents, next_cursor: publicEvents[1].id },
+    // A page with a next one: resume_cursor is that same cursor.
+    200: {
+      data: publicEvents,
+      next_cursor: publicEvents[2].id,
+      resume_cursor: publicEvents[2].id,
+    },
   },
 
   "GET /delivery/my-deliveries/:businessId": {
     200: {
       data: [myDelivery],
       // Decision 14.7: the plan the app caches, to notice a change offline.
-      routes: [{ id: ROUTE_ID, code: 318, plan_version: 4 }],
+      // Plan of 02/11/2026 (C2, C4): the route's plate and its checklists.
+      routes: [
+        {
+          id: ROUTE_ID,
+          code: 318,
+          plan_version: 4,
+          vehicle: {
+            id: "0192f7a0-1e2f-7a3b-8c4d-5e6f7a8b9c21",
+            license_plate: "ABC1D23",
+          },
+          checklists: {
+            route_start: {
+              id: "0192f7a0-1e2f-7a3b-8c4d-5e6f7a8b9c22",
+              checklist_date: "2026-10-05T10:42:00.000Z",
+              overall_condition: "approved",
+            },
+            route_end: null,
+          },
+        },
+      ],
       occurrence_types: [occurrenceType],
       // Decision 14.3: proving a delivery is reporting one of these.
       delivered_types: [
@@ -419,13 +532,22 @@ const RESPONSE_EXAMPLES: ResponseExamples = {
           is_default: true,
         },
       ],
-      // Decision 14.4: the pause picker and whether it may open now.
+      // Decision 14.4: the pause picker and whether it may open now; the
+      // generic "Outra pausa" asks for its reason (owner, 09/11/2026).
       pause_types: [
         {
           id: "0192f7a0-1e2f-7a3b-8c4d-5e6f7a8b9c10",
           name: "Refeição",
           pause_kind: "MEAL",
           is_default: true,
+          requires_note: false,
+        },
+        {
+          id: "0192f7a0-1e2f-7a3b-8c4d-5e6f7a8b9c11",
+          name: "Outra pausa",
+          pause_kind: "OTHER",
+          is_default: true,
+          requires_note: true,
         },
       ],
       journey: {
@@ -434,10 +556,20 @@ const RESPONSE_EXAMPLES: ResponseExamples = {
         day: "2026-10-05",
         time_zone: "America/Sao_Paulo",
       },
+      // Plan of 02/11/2026 (M1, M6): what the company decided.
+      settings: {
+        checklist_requirement: "ROUTE_START",
+        arrival_geofence_mode: "ALERT",
+        arrival_geofence_radius_m: 500,
+      },
     },
   },
   "GET /delivery/get-delivery/:deliveryId/business/:businessId": {
-    200: { data: deliveryDetail },
+    // The company's zone; a company that never set one answers the default.
+    200: {
+      data: deliveryDetail,
+      meta: { timeZone: DEFAULT_BUSINESS_TIMEZONE },
+    },
   },
   "POST /delivery/start-route/:businessId": {
     200: { message: "Rota iniciada com sucesso!", data: { started: 12 } },

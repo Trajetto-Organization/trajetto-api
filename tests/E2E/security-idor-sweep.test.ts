@@ -12,6 +12,7 @@ import {
   type CarrierIds,
 } from "./support/idor-sweep-seed";
 import { createPrismaClient } from "@/shared/database/database-client";
+import { deliveryAddressKey } from "@/shared/delivery/address-key";
 
 /**
  * The IDOR sweep, built from the OpenAPI document instead of by hand.
@@ -153,6 +154,20 @@ const DRIVER_OWN: Record<string, string> = {
   stopId: "journeyStopId",
 };
 
+/**
+ * `entityId` names a different kind of row on each notice type, so it is
+ * mapped per route instead of in ENTITY_BY_NAME: a new route with an
+ * `entityId` slot stays unknown until somebody says what it points at.
+ *
+ * POST /notification/read-by-entity only matches it against the caller's own
+ * notification rows and never looks the item up; probed with a service order
+ * (the notice type its variant sends), another company's order and an id
+ * that exists nowhere must both answer 200 `count: 0` with the same body.
+ */
+const ENTITY_ID_BY_ROUTE: Record<string, string> = {
+  "/notification/read-by-entity": "serviceOrderId",
+};
+
 /** `{id}` and `[].id` mean a different row on each route family. */
 function entityForGenericId(
   path: string,
@@ -166,6 +181,9 @@ function entityForGenericId(
   if (path.startsWith("/integrations/webhook-endpoint")) return "endpointId";
   if (path.startsWith("/integrations/webhook-delivery"))
     return "webhookDeliveryId";
+  // A session's family id: another company's must end nothing and answer
+  // the same 204 as one that never existed.
+  if (path.startsWith("/user/me/sessions")) return "sessionId";
   return undefined;
 }
 
@@ -179,6 +197,9 @@ const NOT_A_REFERENCE = new Set([
   "clientSubmissionId",
   "end_submission_id",
   "device_id",
+  // The phone a driver's session is bound to (plan of 02/11/2026, D4/D7):
+  // the same fingerprint as `device_id`, never a row of any company.
+  "deviceId",
   "fleet_id",
   "trafficViolationCodeId",
   "quoteId",
@@ -292,6 +313,8 @@ const VARIANTS: Record<string, Variant[]> = {
   "PUT /integrations/webhook-endpoint/{id}/business/{businessId}": [
     { set: { topics: ["delivery.created"] } },
   ],
+  // A real notice type, so the probed item is read as what it is.
+  "POST /notification/read-by-entity": [{ set: { type: "service-order" } }],
 };
 
 /** Path parameters that are not ids at all. */
@@ -300,6 +323,9 @@ const FIXED_PATH_VALUES: Record<string, string> = {
   recordType: "fuel",
   // Quotes are the platform's own leads, not a tenant's rows.
   quoteId: randomUUID(),
+  // A phone (D7), not a row: the driver's login in the same path is the
+  // slot that names the tenant.
+  deviceId: "5ee0e0c0ffee0001",
 };
 
 /** Not session-authenticated, or tokenised by a link — out of this sweep. */
@@ -357,7 +383,9 @@ function build(
           : name === "start_submission_id" &&
               op.path.startsWith("/driver-pause/start")
             ? undefined
-            : ENTITY_BY_NAME[name];
+            : name === "entityId"
+              ? ENTITY_ID_BY_ROUTE[op.path]
+              : ENTITY_BY_NAME[name];
 
     if (!entity) {
       unknownSlots.push(`${location}`);
@@ -634,7 +662,9 @@ async function victimSnapshot(): Promise<Record<string, string>> {
   const tables = await prisma.$queryRaw<Array<{ table_name: string }>>`
     SELECT table_name FROM information_schema.columns
     WHERE table_schema = 'public' AND column_name = 'businessId'
-      AND table_name NOT LIKE 'driver_position_%'
+      -- The trails' daily partitions; each parent covers its own
+      -- (driver_position, and driver_position_v2 since plano-escala F2-10).
+      AND table_name !~ '^driver_position(_v2)?_[0-9]{8}$'
     ORDER BY table_name
   `;
 
@@ -669,7 +699,75 @@ async function victimSnapshot(): Promise<Record<string, string>> {
   `;
   out.user = user?.digest ?? "";
 
+  // Sessions carry no businessId: ending another company's would go unseen.
+  const [sessions] = await prisma.$queryRaw<Array<{ digest: string | null }>>`
+    SELECT md5(string_agg(t::text, '|' ORDER BY t::text)) AS digest
+    FROM "refresh_token" t JOIN "user" u ON u.id = t."userId"
+    WHERE u."businessId" = ${B.businessId}
+  `;
+  out.refresh_token = sessions?.digest ?? "";
+
   return out;
+}
+
+/**
+ * One door shared by both companies (the same street, number, district,
+ * city and UF: the same address key), for the writes a pin makes on rows
+ * other than the one in its path: the propagation to the deliveries
+ * without a point and the follow-up of the copies (pre-push review of the
+ * batch of 14/11/2026). The other company's rows there include a copy that
+ * names this company's source — a link no write makes, the worst case a
+ * missing `businessId` would reach. Seeded before the snapshot.
+ */
+const SHARED_DOOR = {
+  street: "Rua da Varredura",
+  address_number: "77",
+  neighborhood: "Centro",
+  city: "São Paulo",
+  uf: "SP",
+};
+const FIRST_PIN = { latitude: -23.5401, longitude: -46.6301 };
+const door: Record<string, string> = {};
+
+async function seedSharedDoor(): Promise<void> {
+  const key = deliveryAddressKey(SHARED_DOOR);
+  const row = async (
+    name: string,
+    carrier: CarrierIds,
+    extra: Record<string, unknown> = {},
+  ) => {
+    const created = await prisma.delivery.create({
+      data: {
+        ...SHARED_DOOR,
+        recipient_name: `porta ${name}`,
+        businessId: carrier.businessId,
+        shipperId: carrier.shipperId,
+        status: "PENDING",
+        address_key: key,
+        ...extra,
+      },
+    });
+
+    door[name] = created.id;
+  };
+  const copyOf = (source: string) => ({
+    ...FIRST_PIN,
+    geo_source: "GEOCODER",
+    geo_precision: "ADDRESS",
+    geocode_status: "RESOLVED",
+    geo_updated_at: new Date(),
+    geo_copied_from: source,
+  });
+
+  await row("source", A, {
+    ...FIRST_PIN,
+    geo_source: "MANUAL",
+    geo_updated_at: new Date(),
+  });
+  await row("copy", A, copyOf(door.source));
+  await row("bare", A);
+  await row("theirsBare", B);
+  await row("theirsCopy", B, copyOf(door.source));
 }
 
 const findings: string[] = [];
@@ -731,6 +829,8 @@ beforeAll(async () => {
     (left, right) =>
       Number(left.method === "DELETE") - Number(right.method === "DELETE"),
   );
+
+  await seedSharedDoor();
 
   before = await victimSnapshot();
 }, APP_BOOT_TIMEOUT_MS);
@@ -843,6 +943,59 @@ describe("IDOR sweep over the whole OpenAPI document", () => {
   it("knows every id slot the document declares", () => {
     // A slot name nobody mapped is a route this sweep silently skips.
     expect([...unknown].sort()).toEqual([]);
+  });
+
+  it("pins a door of its own company without reaching the other company's deliveries at the same address", async () => {
+    const pin = async (body: Record<string, unknown>) => {
+      await resetLimiter();
+
+      return app.inject({
+        method: "PATCH",
+        url: `/route/set-delivery-location/${door.source}/business/${A.businessId}`,
+        headers: {
+          authorization: `Bearer ${tokens.admin}`,
+          "content-type": "application/json",
+        },
+        payload: JSON.stringify(body),
+      });
+    };
+    const point = async (id: string) =>
+      prisma.delivery.findUniqueOrThrow({
+        where: { id },
+        select: { latitude: true, geo_source: true, geo_copied_from: true },
+      });
+    const theirs = async () => [
+      await point(door.theirsBare),
+      await point(door.theirsCopy),
+    ];
+    const theirsBefore = await theirs();
+
+    // A corrected pin: this company's copy moves and its delivery without a
+    // point takes it; the other company's two rows never hear of it.
+    const corrected = await pin({ latitude: -23.5412, longitude: -46.6288 });
+
+    expect(corrected.statusCode, corrected.body).toBe(200);
+    expect(corrected.json().data).toMatchObject({ propagated: 2 });
+    expect(await point(door.copy)).toMatchObject({
+      latitude: -23.5412,
+      geo_copied_from: door.source,
+    });
+    expect(await point(door.bare)).toMatchObject({
+      latitude: -23.5412,
+      geo_copied_from: door.source,
+    });
+    expect(await theirs()).toEqual(theirsBefore);
+
+    // A cleared pin clears this company's copies, and only those.
+    const cleared = await pin({ clear: true });
+
+    expect(cleared.statusCode, cleared.body).toBe(200);
+    expect(cleared.json().data).toMatchObject({ propagated: 2 });
+    expect(await point(door.copy)).toMatchObject({
+      latitude: null,
+      geo_copied_from: null,
+    });
+    expect(await theirs()).toEqual(theirsBefore);
   });
 
   it("did not change a single row of the other company", async () => {

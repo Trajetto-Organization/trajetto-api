@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { emptyStringToNull } from "@/shared/utils/zod-schema-helpers";
+import { fieldError } from "@/shared/validation/field-error";
 
 const createServiceOrderPartSchema = z.object({
   unit_price: z
@@ -21,7 +22,7 @@ const createServiceOrderPartSchema = z.object({
       .nullable(),
   ),
   partId: z
-    .string({ required_error: "ID da peça é obrigatório!" })
+    .string(fieldError({ required: "ID da peça é obrigatório!" }))
     .uuid("ID da peça é inválido."),
 });
 

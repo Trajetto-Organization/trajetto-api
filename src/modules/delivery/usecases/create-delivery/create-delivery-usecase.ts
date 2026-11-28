@@ -23,6 +23,7 @@ import { WebhookFanOutService } from "@/shared/integration/webhook-fan-out-servi
 import { deliveryEventPayload } from "@/shared/integration/announce";
 import { assertDispatcher } from "@/shared/delivery/dispatcher-guard";
 import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
+import { countDeliveriesCreated } from "@/shared/health/volume-gauge";
 
 import { Delivery, CreateDeliveryProps } from "../../dtos/delivery-dto";
 
@@ -32,6 +33,10 @@ import {
 } from "@/shared/delivery/caller-not-found";
 import { isUniqueViolation } from "@/shared/http/idempotency-key";
 import { violatesUniqueOn } from "@/shared/delivery/unique-violation";
+import {
+  geocodeSoon,
+  unlocatedDeliveryIds,
+} from "@/shared/delivery/geocoding/geocode-soon";
 
 @injectable()
 class CreateDeliveryUseCase {
@@ -135,6 +140,9 @@ class CreateDeliveryUseCase {
         return created;
       });
 
+      // After the commit: a create that rolled back is never counted.
+      countDeliveriesCreated();
+
       this.notificationService.createActivityIfEnabled({
         type: "Entrega",
         action: "create",
@@ -144,6 +152,14 @@ class CreateDeliveryUseCase {
         performedBy: userId,
         businessId: deliveryData.businessId,
       });
+
+      // The address point now rather than at the next minute's job, so a
+      // delivery routed right away has it on the route page (E1). After
+      // the commit, never awaited; a point given on the form needs none.
+      geocodeSoon(
+        deliveryData.businessId,
+        unlocatedDeliveryIds([deliveryCreated]),
+      );
 
       return deliveryCreated;
     } catch (error) {

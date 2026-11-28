@@ -7,7 +7,7 @@ import {
 import { env } from "@/env";
 import { RedisConnection } from "@/../infra/cache/redis-connection";
 import {
-  SnapshotCache,
+  type SnapshotCache,
   redisSnapshotStore,
 } from "@/shared/cache/snapshot-cache";
 
@@ -16,6 +16,8 @@ import { UserRepository } from "@/modules/user/repositories/user-repository";
 
 import { BusinessRepository } from "@/modules/business/repositories/business-repository";
 import { IBusinessRepository } from "@/modules/business/repositories/IBusiness-repository";
+import { BusinessSettingsRepository } from "@/modules/business/repositories/business-settings-repository";
+import type { IBusinessSettingsRepository } from "@/modules/business/repositories/IBusiness-settings-repository";
 
 import { BranchRepository } from "@/modules/branch/repositories/branch-repository";
 import { IBranchRepository } from "@/modules/branch/repositories/IBranch-repository";
@@ -28,6 +30,12 @@ import { IPermissionRepository } from "@/modules/permission/repositories/IPermis
 
 import { IUsersTokensRepository } from "@/modules/user/repositories/IUsers-tokens-repository";
 import { UserTokensRepository } from "@/modules/user/repositories/user-tokens-repository";
+import type { ISessionRepository } from "@/modules/user/repositories/ISession-repository";
+import { SessionRepository } from "@/modules/user/repositories/session-repository";
+import { DriverEnrollmentRepository } from "@/modules/user/repositories/driver-enrollment-repository";
+import type { IDriverEnrollmentRepository } from "@/modules/user/repositories/IDriver-enrollment-repository";
+import { DriverTrustedDeviceRepository } from "@/modules/user/repositories/driver-trusted-device-repository";
+import type { IDriverTrustedDeviceRepository } from "@/modules/user/repositories/IDriver-trusted-device-repository";
 
 import { SupplierRepository } from "@/modules/supplier/repositories/supplier-repository";
 import { ISupplierRepository } from "@/modules/supplier/repositories/ISupplier-repository";
@@ -77,6 +85,22 @@ import { DriverPositionRepository } from "@/modules/route/repositories/driver-po
 import { OperationDayRepository } from "@/modules/route/repositories/operation-day-repository";
 import type { IOperationDayRepository } from "@/modules/route/repositories/IOperation-day-repository";
 import { IDeliveryRepository } from "@/modules/delivery/repositories/IDelivery-repository";
+import {
+  DeliveryGeocodingRepository,
+  type IDeliveryGeocodingRepository,
+} from "@/shared/delivery/geocoding/geocoding-repository";
+import {
+  ProviderQuotaRepository,
+  type IProviderQuotaRepository,
+} from "@/shared/services/provider-quota/provider-quota-repository";
+import {
+  BackgroundJobRepository,
+  type IBackgroundJobRepository,
+} from "@/shared/jobs/background-job-repository";
+import {
+  TenantDayRollupRepository,
+  type ITenantDayRollupRepository,
+} from "@/shared/rollup/tenant-day-rollup-repository";
 
 import { ChatRepository } from "@/modules/chat/repositories/chat-repository";
 import { IChatRepository } from "@/modules/chat/repositories/IChat-repository";
@@ -116,6 +140,12 @@ import {
   MASTER_OVERVIEW_TTL_MS,
   type OverviewNumbers,
 } from "@/modules/dashboard/usecases/get-dashboard-overview/get-dashboard-overview-usecase";
+import type { DashboardTrendsResponse } from "@/modules/dashboard/usecases/get-dashboard-trends/get-dashboard-trends-usecase";
+import {
+  dashboardSnapshot,
+  masterOverviewSnapshot,
+} from "@/modules/dashboard/usecases/shared/dashboard-snapshot";
+import type { TenantSnapshot } from "@/shared/cache/tenant-snapshot";
 
 import { ActivityRepository } from "@/modules/activity/repositories/activity-repository";
 import { IActivityRepository } from "@/modules/activity/repositories/IActivity-repository";
@@ -150,6 +180,7 @@ import { KanbanService } from "./services/kanban-service";
 import { UploadService } from "./services/upload-service";
 import { OutboxService } from "./notifications/outbox-service";
 import { WebhookFanOutService } from "./integration/webhook-fan-out-service";
+import { GeofenceCheck } from "./delivery/geofence/geofence-check";
 
 container.registerSingleton<IWhatsAppProvider>(
   "WhatsAppProvider",
@@ -187,11 +218,35 @@ container.registerSingleton<IUsersTokensRepository>(
   "UsersTokensRepository",
   UserTokensRepository,
 );
+// The session in one statement (plano-escala F4-04): the user, its relations
+// and the refresh-token family, for the middleware and the handshake.
+container.registerSingleton<ISessionRepository>(
+  "SessionRepository",
+  SessionRepository,
+);
+// Plan of 02/11/2026 (D3): the driver's one-time access by QR code.
+container.registerSingleton<IDriverEnrollmentRepository>(
+  "DriverEnrollmentRepository",
+  DriverEnrollmentRepository,
+);
+// Wave 2 (06/11/2026): the phones where a driver may sign in by CPF.
+container.registerSingleton<IDriverTrustedDeviceRepository>(
+  "DriverTrustedDeviceRepository",
+  DriverTrustedDeviceRepository,
+);
 
 container.registerSingleton<IBusinessRepository>(
   "BusinessRepository",
   BusinessRepository,
 );
+// Plan of 02/11/2026 (M1): the company's own settings.
+container.registerSingleton<IBusinessSettingsRepository>(
+  "BusinessSettingsRepository",
+  BusinessSettingsRepository,
+);
+// Plan of 02/11/2026 (E4): the geofence of the actions at the customer's
+// address. Stateless (reads the settings on every call), so one is enough.
+container.registerSingleton<GeofenceCheck>("GeofenceCheck", GeofenceCheck);
 container.registerSingleton<IBranchRepository>(
   "BranchRepository",
   BranchRepository,
@@ -257,15 +312,30 @@ container.registerSingleton<IDashboardRepository>(
 
 // The MASTER's platform-wide dashboard numbers: one read a minute for the
 // whole deployment, shared by the replicas through Redis and computed again
-// when Redis is away (shared/cache/snapshot-cache.ts). One instance per
+// when Redis is away (shared/cache/snapshot-cache.ts), with the company
+// copy's 2 s floor on "Atualizar" (dashboard-snapshot.ts). One instance per
 // process: the single-flight and this replica's copy live in it.
 container.registerInstance<SnapshotCache<OverviewNumbers>>(
   "MasterOverviewSnapshots",
-  new SnapshotCache<OverviewNumbers>({
-    name: "dashboard-overview-master",
+  masterOverviewSnapshot<OverviewNumbers>({
     ttlMs: MASTER_OVERVIEW_TTL_MS,
     store: redisSnapshotStore(() => RedisConnection.getInstance().getClient()),
   }),
+);
+
+// A company's dashboard numbers, a minute per company and per what the
+// viewer may see, in this process's memory only (plano-escala F4-23,
+// DASHBOARD_SNAPSHOT_TTL_MS; modules/dashboard/usecases/shared/
+// dashboard-snapshot.ts). One instance each per process: the copies and
+// the single-flight live in them, and a second one with the same name
+// throws.
+container.registerInstance<TenantSnapshot<OverviewNumbers>>(
+  "DashboardOverviewSnapshots",
+  dashboardSnapshot<OverviewNumbers>("dashboard-overview"),
+);
+container.registerInstance<TenantSnapshot<DashboardTrendsResponse>>(
+  "DashboardTrendsSnapshots",
+  dashboardSnapshot<DashboardTrendsResponse>("dashboard-trends"),
 );
 
 container.registerSingleton<IActivityRepository>(
@@ -319,6 +389,35 @@ container.registerSingleton<IDeliveryRepository>(
 container.registerSingleton<IRouteRepository>(
   "RouteRepository",
   RouteRepository,
+);
+
+// The geocoder's queue: the pin's propagation reads its open stops to tell
+// the route pages and the drivers (14/11/2026).
+container.registerSingleton<IDeliveryGeocodingRepository>(
+  "DeliveryGeocodingRepository",
+  DeliveryGeocodingRepository,
+);
+
+// A provider's day per scope in Postgres (plano-escala F2-32): the
+// geocoder's budgets today, WhatsApp's per company in wave 13.
+container.registerSingleton<IProviderQuotaRepository>(
+  "ProviderQuotaRepository",
+  ProviderQuotaRepository,
+);
+
+// The durable jobs' table (plano-escala F3-22): the use cases that enqueue
+// a long job (an upload, a large undo, a company's purge) take it here.
+container.registerSingleton<IBackgroundJobRepository>(
+  "BackgroundJobRepository",
+  BackgroundJobRepository,
+);
+
+// The dashboard's closed days (plano-escala F4-21). The cron builds its own
+// on databaseBatch (tenant-day-rollup-job.ts); this one, on the primary,
+// is for a reader that injects it.
+container.registerSingleton<ITenantDayRollupRepository>(
+  "TenantDayRollupRepository",
+  TenantDayRollupRepository,
 );
 
 // Separate from the route repository on purpose: a write-heavy stream

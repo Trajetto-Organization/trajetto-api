@@ -6,6 +6,7 @@ import { assertDispatcher } from "@/shared/delivery/dispatcher-guard";
 import {
   categoryValidationError,
   OccurrenceTypeCategoryLockedError,
+  OccurrenceTypeCodeTakenError,
   OccurrenceTypeNotFoundError,
   OccurrenceTypeNameAlreadyExistsError,
   OccurrenceTypeSystemError,
@@ -147,6 +148,27 @@ class UpdateOccurrenceTypeUseCase {
       otherChanges.deactivated_at = willBeActive ? null : new Date();
     }
 
+    // Same idea for the attachments a driver's report must carry (K2,
+    // decision D29): a report tapped offline before this instant keeps the
+    // rules it was made under. Only a real change counts — the form resends
+    // every flag. The tower's authorization is not an attachment: it changes
+    // what a report does, never whether it is refused.
+    const attachmentFlagChanged = (
+      [
+        "requires_photo",
+        "requires_receipt_photo",
+        "requires_signature",
+      ] as const
+    ).some(
+      (flag) =>
+        otherChanges[flag] !== undefined &&
+        Boolean(otherChanges[flag]) !== (findOccurrenceType[flag] === true),
+    );
+
+    if (attachmentFlagChanged) {
+      otherChanges.requirements_changed_at = new Date();
+    }
+
     // The company keeps one active delivery type and one active pause type:
     // without them the driver cannot prove or pause at all.
     const leavesCategory =
@@ -177,6 +199,11 @@ class UpdateOccurrenceTypeUseCase {
       // index decided, and the answer is the check's.
       if (violatesUniqueOn(error, "name")) {
         throw new OccurrenceTypeNameAlreadyExistsError();
+      }
+
+      // Another type of the company already holds this ERP code (L8).
+      if (violatesUniqueOn(error, "code")) {
+        throw new OccurrenceTypeCodeTakenError();
       }
 
       throw new AppError(

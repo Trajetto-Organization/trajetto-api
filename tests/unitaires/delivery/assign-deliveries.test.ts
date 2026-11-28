@@ -125,6 +125,7 @@ function makeContext() {
     routeRepository,
     userRepository,
     driverRepository,
+    vehicleRepository,
     notificationService,
     outboxStub,
     webhookStub.asService(),

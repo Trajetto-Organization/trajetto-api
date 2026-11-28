@@ -46,6 +46,29 @@ describe("pool configuration", () => {
     expect(poolFor("tests/E2E/user-update-sessions.test.ts")).toBe("forks");
   });
 
+  // Vitest's default is CPUs − 1: one process on the 2-vCPU runner, the
+  // suite in a queue. Never fewer than two (vite.config.mts, FORKS).
+  it("runs at least two files at once, whatever the CPUs", () => {
+    const forks = config.test?.poolOptions?.forks ?? {};
+
+    expect(forks.maxForks).toBeGreaterThanOrEqual(2);
+  });
+
+  // VITEST_MAX_FORKS overrides only the ceiling (Vitest's resolveConfig);
+  // the floor stays the config's, and Tinypool refuses to start with a
+  // floor above the ceiling ("options.minThreads and options.maxThreads
+  // must not conflict"). With a floor of FORKS, VITEST_MAX_FORKS=1 alone
+  // crashed the run on the 2-vCPU runner.
+  it("lets VITEST_MAX_FORKS=1 alone run one file at a time", () => {
+    const forks = config.test?.poolOptions?.forks ?? {};
+    const ceiling = 1;
+    const floor = forks.minForks;
+
+    expect(floor).toBeDefined();
+    expect(floor!).toBeLessThanOrEqual(ceiling);
+    expect(floor!).toBeGreaterThanOrEqual(1);
+  });
+
   it("runs every unit file in its own forked process too", () => {
     expect(poolFor("tests/unitaires/quality/e2e-pool-config.test.ts")).toBe(
       "forks",

@@ -69,8 +69,8 @@ function canSubscribeToChatBusiness(
 
   return Boolean(
     subscriber.isChatStaff &&
-      subscriber.businessId &&
-      subscriber.businessId === businessId,
+    subscriber.businessId &&
+    subscriber.businessId === businessId,
   );
 }
 

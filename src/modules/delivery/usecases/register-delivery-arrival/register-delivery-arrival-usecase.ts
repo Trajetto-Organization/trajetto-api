@@ -18,7 +18,12 @@ import { WebhookFanOutService } from "@/shared/integration/webhook-fan-out-servi
 import { announceRouteClosed } from "@/shared/integration/announce";
 
 import { AppError } from "@/shared/errors/AppError";
-import { isUniqueViolation } from "@/shared/http/idempotency-key";
+import { violatesUniqueOn } from "@/shared/delivery/unique-violation";
+import { submissionReused } from "@/shared/delivery/submission-reused";
+
+import type { DeliveryEventRecord } from "../../dtos/delivery-dto";
+import type { GeofenceCheck } from "@/shared/delivery/geofence/geofence-check";
+import { resolveEnabledModules } from "@/modules/user/usecases/get-user/get-user-usecase";
 
 interface RegisterDeliveryArrivalRequest {
   userId: string;
@@ -33,6 +38,18 @@ interface RegisterDeliveryArrivalRequest {
    * (resolveOccurredAt). Absent means now.
    */
   occurredAt?: Date | null;
+
+  /** E4: the fix's accuracy (metres) and age at the tap, for the geofence. */
+  accuracy?: number | null;
+  positionAgeMs?: number | null;
+}
+
+/** Whether a recorded event is this very arrival, sent again. */
+function isThisArrival(
+  recorded: DeliveryEventRecord,
+  deliveryId: string,
+): boolean {
+  return recorded.type === "ARRIVAL" && recorded.deliveryId === deliveryId;
 }
 
 /**
@@ -54,6 +71,10 @@ class RegisterDeliveryArrivalUseCase {
     private notificationService: NotificationService,
     @inject("WebhookFanOutService")
     private webhooks: WebhookFanOutService,
+    // Plan of 02/11/2026 (E4). Optional so callers built before the geofence
+    // keep working; the container always provides it.
+    @inject("GeofenceCheck")
+    private geofence?: GeofenceCheck,
   ) {}
 
   async execute({
@@ -64,6 +85,8 @@ class RegisterDeliveryArrivalUseCase {
     latitude,
     longitude,
     occurredAt,
+    accuracy,
+    positionAgeMs,
   }: RegisterDeliveryArrivalRequest): Promise<void> {
     const findUser = await this.user.findUserById(userId);
 
@@ -79,13 +102,19 @@ class RegisterDeliveryArrivalUseCase {
       );
     }
 
-    // Outbox resend: the same submission never becomes a second event.
+    // Outbox resend: the same submission never becomes a second event. The
+    // same key on another delivery or another kind of event is not a resend
+    // of this arrival, and answering it as one hid a fact never recorded.
     const alreadyRecorded = await this.delivery.findEventBySubmissionId(
       client_submission_id,
       businessId,
     );
 
     if (alreadyRecorded) {
+      if (!isThisArrival(alreadyRecorded, deliveryId)) {
+        throw submissionReused();
+      }
+
       return;
     }
 
@@ -110,6 +139,21 @@ class RegisterDeliveryArrivalUseCase {
         "DELIVERY_NOT_IN_TRANSIT",
       );
     }
+
+    // E4: where the driver was against the company's radius, recorded with
+    // the event. Under BLOCK a fresh arrival outside it stops here (422
+    // ARRIVAL_OUTSIDE_GEOFENCE); a queued one is only flagged. After the
+    // replay check, so a resend never meets a radius changed since.
+    const geofence = await this.geofence?.evaluate({
+      businessId,
+      enabledModules: resolveEnabledModules(findUser),
+      action: "ARRIVAL",
+      address: findDelivery,
+      position: { latitude, longitude },
+      accuracy: accuracy ?? null,
+      positionAgeMs: positionAgeMs ?? null,
+      occurredAt: occurredAt ?? null,
+    });
 
     try {
       // Captured to be announced AFTER the commit: a socket event about a
@@ -136,6 +180,7 @@ class RegisterDeliveryArrivalUseCase {
             longitude,
             client_submission_id,
             occurred_at: occurredAt ?? null,
+            ...geofence,
           },
           tx,
         );
@@ -179,14 +224,19 @@ class RegisterDeliveryArrivalUseCase {
       // network): the unique client_submission_id refused this one, and the
       // twin IS the answer. It used to surface as a 500, which told the
       // driver an arrival that worked had failed.
-      if (
-        isUniqueViolation(error) &&
-        (await this.delivery.findEventBySubmissionId(
+      //
+      // A key the index refused with no twin of this arrival behind it is
+      // taken by something else — another company's event, invisible here
+      // (K13): a 409 the app files for review, never a 500 it retries.
+      if (violatesUniqueOn(error, "client_submission_id")) {
+        const twin = await this.delivery.findEventBySubmissionId(
           client_submission_id,
           businessId,
-        ))
-      ) {
-        return;
+        );
+
+        if (twin && isThisArrival(twin, deliveryId)) return;
+
+        throw submissionReused();
       }
 
       throw new AppError(

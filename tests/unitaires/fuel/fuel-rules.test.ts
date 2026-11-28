@@ -3,13 +3,18 @@ import "reflect-metadata";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  RECENT_REFUEL_WINDOW_MINUTES,
+  SAME_READING_WINDOW_MINUTES,
   businessTimeZone,
   changedLinks,
   endOfBusinessDay,
   isRefuelingInTheFuture,
   placeReading,
   releasedOdometer,
+  standsStillWith,
+  type ReadingOnTimeline,
 } from "@/modules/fuel/usecases/fuel-rules";
+import type { TimelineReading } from "@/shared/vehicle/odometer-timeline";
 import { CreateFuelUseCase } from "@/modules/fuel/usecases/create-fuel/create-fuel-usecase";
 import { createFuelSchema } from "@/schemas/create-fuel-schema";
 
@@ -231,6 +236,8 @@ describe("CreateFuelUseCase refuses a fueling dated after the company's today", 
         {
           ...(fueling(new Date().toISOString()) as object),
           created_from: "MOBILE_APP",
+          // An app refuelling carries its key (appSubmissionKeyRefusal).
+          client_submission_id: "018fe600-0000-7000-8000-0000000000f1",
           location_source: "GPS_MANUAL",
           // About 1.1 km apart: one hundredth of a degree of latitude.
           latitude_original: -23.55,
@@ -298,11 +305,14 @@ describe("placeReading", () => {
   const middle = { before: 40_000, after: 48_000 };
   const newest = { before: 45_500, after: null };
 
-  // Nothing after it on its own day, it set nothing, no maintenance.
+  // Nothing after it on its own day, it set nothing, no maintenance. A
+  // moment, but neighbours without their records: the strict rule.
   const plain = {
     laterDay: null as number | null,
     highest: 48_000 as number | null,
     maintenanceFloor: null as number | null,
+    at: new Date("2026-09-28T14:10:00.000Z"),
+    timeZone: "America/Sao_Paulo",
   };
 
   it("keeps a past refueling between its neighbours and leaves the vehicle", () => {
@@ -616,9 +626,508 @@ describe("placeReading", () => {
                 laterDay: after,
                 highest: 20_000,
                 maintenanceFloor: null,
+                at: plain.at,
+                timeZone: plain.timeZone,
               }),
               JSON.stringify(reading),
             ).toEqual(lastRound(reading));
+          }
+        }
+      }
+    }
+  });
+});
+
+/**
+ * The odometer never goes backwards, but it may stand still for a short
+ * while (owner, 05/11/2026). The question "Já tem um abastecimento recente"
+ * offers "Completar o tanque", "Segundo tanque", "A bomba parou antes": all
+ * at the same stop, so the second refuelling reads the km of the first, and
+ * the strict rule made the driver type 1 km more. The same for the depot
+ * refuelling right after the departure checklist, the arrival checklist
+ * right after a refuelling, and a record the offline queue delivers after a
+ * record of the same km sent first.
+ */
+const SAO_PAULO = "America/Sao_Paulo";
+
+// 11:00 in São Paulo: the first record at the stop.
+const STOP = new Date("2026-11-05T14:00:00.000Z");
+
+const minutesFrom = (at: Date, delta: number) =>
+  new Date(at.getTime() + delta * 60_000);
+
+const reading = (
+  kind: TimelineReading["kind"],
+  mileage: number,
+  at: Date,
+): TimelineReading => ({
+  kind,
+  id: `${kind}-${mileage}-${at.toISOString()}`,
+  mileage,
+  at,
+});
+
+describe("standsStillWith", () => {
+  const record = (at: Date) => ({ at, timeZone: SAO_PAULO });
+
+  it("is less than 30 minutes apart, either side", () => {
+    const stop = { at: STOP };
+
+    expect(standsStillWith(record(minutesFrom(STOP, 29)), stop)).toBe(true);
+    expect(
+      standsStillWith(record(new Date(STOP.getTime() + 30 * 60_000 - 1)), stop),
+    ).toBe(true);
+    // The record the offline queue delivers late sits BEFORE its neighbour.
+    expect(standsStillWith(record(minutesFrom(STOP, -29)), stop)).toBe(true);
+
+    expect(standsStillWith(record(minutesFrom(STOP, 30)), stop)).toBe(false);
+    expect(standsStillWith(record(minutesFrom(STOP, -30)), stop)).toBe(false);
+    expect(standsStillWith(record(minutesFrom(STOP, 31)), stop)).toBe(false);
+  });
+
+  it("never for a date that is only a day, on either side", () => {
+    // The web's date picker sends the start of the day in the company's
+    // zone; an API client's bare day is 00:00 UTC.
+    const localMidnight = new Date("2026-11-05T03:00:00.000Z");
+    const utcMidnight = new Date("2026-11-05T00:00:00.000Z");
+
+    expect(
+      standsStillWith(record(minutesFrom(localMidnight, 10)), {
+        at: localMidnight,
+      }),
+    ).toBe(false);
+    expect(
+      standsStillWith(record(localMidnight), {
+        at: minutesFrom(localMidnight, -10),
+      }),
+    ).toBe(false);
+    expect(standsStillWith(record(localMidnight), { at: localMidnight })).toBe(
+      false,
+    );
+    expect(
+      standsStillWith(record(utcMidnight), {
+        at: minutesFrom(utcMidnight, -5),
+      }),
+    ).toBe(false);
+  });
+
+  it("never without the neighbour's record, nor with a date that is not one", () => {
+    expect(standsStillWith(record(STOP), null)).toBe(false);
+    expect(standsStillWith(record(STOP), undefined)).toBe(false);
+    expect(standsStillWith(record(new Date(Number.NaN)), { at: STOP })).toBe(
+      false,
+    );
+  });
+
+  it("is 30 minutes, never longer than the recent-refuel window", () => {
+    // A refuelling accepted at another's km is then always asked about and
+    // flagged (RECENT_REFUEL). The app reads the same number.
+    expect(SAME_READING_WINDOW_MINUTES).toBe(30);
+    expect(SAME_READING_WINDOW_MINUTES).toBeLessThanOrEqual(
+      RECENT_REFUEL_WINDOW_MINUTES,
+    );
+  });
+});
+
+describe("placeReading: the odometer standing still", () => {
+  // The vehicle's newest record: a refuelling at 11:00 with 50.000 km, which
+  // set the odometer. A new record 10 minutes later at the same km.
+  const still = (overrides: Partial<ReadingOnTimeline> = {}) =>
+    placeReading({
+      mileage: 50_000,
+      neighbours: {
+        before: 50_000,
+        after: null,
+        beforeReading: reading("fuel", 50_000, STOP),
+        afterReading: null,
+      },
+      laterDay: null,
+      highest: 50_000,
+      odometer: 50_000,
+      maintenanceFloor: null,
+      previousMileage: null,
+      at: minutesFrom(STOP, 10),
+      timeZone: SAO_PAULO,
+      ...overrides,
+    });
+
+  it("accepts a second tank at the stop, up to 29 minutes after, and leaves the odometer", () => {
+    expect(still()).toEqual({ fits: true, odometer: null });
+    expect(still({ at: minutesFrom(STOP, 29) })).toEqual({
+      fits: true,
+      odometer: null,
+    });
+  });
+
+  it("accepts the depot refuelling 5 minutes after the departure checklist", () => {
+    expect(
+      still({
+        neighbours: {
+          before: 50_000,
+          after: null,
+          beforeReading: reading("checklist", 50_000, STOP),
+          afterReading: null,
+        },
+        at: minutesFrom(STOP, 5),
+      }),
+    ).toEqual({ fits: true, odometer: null });
+  });
+
+  it("refuses it 30 minutes or more after, and without the record's date: the strict rule", () => {
+    expect(still({ at: minutesFrom(STOP, 30) })).toEqual({ fits: false });
+    expect(still({ at: minutesFrom(STOP, 31) })).toEqual({ fits: false });
+    expect(still({ neighbours: { before: 50_000, after: null } })).toEqual({
+      fits: false,
+    });
+  });
+
+  it("never moves the odometer, forward or back", () => {
+    // An odometer below the readings (a MASTER's correction): an equal
+    // reading is not ahead of anything, so it stays.
+    expect(still({ odometer: 49_000 })).toEqual({ fits: true, odometer: null });
+    // The edited record "set" an odometer a MASTER lowered to its km, below
+    // the 50.000 before it: releasing it would take the odometer up, and an
+    // equal reading is not what may do that.
+    expect(still({ previousMileage: 49_000, odometer: 49_000 })).toEqual({
+      fits: true,
+      odometer: null,
+    });
+  });
+
+  it("refuses a new newest record below an odometer raised since the reading before: the strict rule", () => {
+    // A service order at 11:05 took the odometer to 50.012 (and the last
+    // maintenance with it); a new 50.000 at 11:10 would show it going back.
+    const serviced = { odometer: 50_012, maintenanceFloor: 50_012 };
+
+    expect(still(serviced)).toEqual({ fits: false });
+    // A MASTER who raised it by hand, with no maintenance. (A record an edit
+    // moves here is new here too: previousMileage null, the same answer.)
+    expect(still({ odometer: 50_300 })).toEqual({ fits: false });
+
+    // A correction of a record already on this vehicle may sit below the
+    // odometer, as any correction; the odometer it did not set stays.
+    expect(still({ ...serviced, previousMileage: 50_005 })).toEqual({
+      fits: true,
+      odometer: null,
+    });
+
+    // The strict rule itself still takes a km above the raised odometer.
+    expect(still({ ...serviced, mileage: 50_013 })).toEqual({
+      fits: true,
+      odometer: 50_013,
+    });
+  });
+
+  it("accepts a record the offline queue delivers late, at the km of the one after it", () => {
+    // Tapped at 10:50 without signal; the 11:00 checklist of 50.000 was
+    // sent first. Yesterday's refuelling of 49.800 is before both.
+    const late = {
+      at: minutesFrom(STOP, -10),
+      neighbours: {
+        before: 49_800,
+        after: 50_000,
+        beforeReading: reading("fuel", 49_800, minutesFrom(STOP, -24 * 60)),
+        afterReading: reading("checklist", 50_000, STOP),
+      },
+    };
+
+    expect(still(late)).toEqual({ fits: true, odometer: null });
+
+    // An hour before it, the odometer did not stand still that long.
+    expect(still({ ...late, at: minutesFrom(STOP, -60) })).toEqual({
+      fits: false,
+    });
+
+    // Across midnight: 23:50 against a reading at 00:10 of the next day,
+    // which is a later civil day and still bounds it, at its own km.
+    const night = new Date("2026-11-06T02:50:00.000Z");
+
+    expect(
+      still({
+        at: night,
+        laterDay: 50_000,
+        neighbours: {
+          ...late.neighbours,
+          afterReading: reading("checklist", 50_000, minutesFrom(night, 20)),
+        },
+      }),
+    ).toEqual({ fits: true, odometer: null });
+  });
+
+  it("accepts the same km on both sides, never with one of them far", () => {
+    const around = (beforeAt: number, afterAt: number) =>
+      still({
+        at: STOP,
+        neighbours: {
+          before: 50_000,
+          after: 50_000,
+          beforeReading: reading("fuel", 50_000, minutesFrom(STOP, beforeAt)),
+          afterReading: reading(
+            "checklist",
+            50_000,
+            minutesFrom(STOP, afterAt),
+          ),
+        },
+      });
+
+    expect(around(-10, 10)).toEqual({ fits: true, odometer: null });
+    expect(around(-40, 10)).toEqual({ fits: false });
+    expect(around(-10, 40)).toEqual({ fits: false });
+  });
+
+  it("keeps the strict rule for a date that is only a day, on either side", () => {
+    const localMidnight = new Date("2026-11-05T03:00:00.000Z");
+    const utcMidnight = new Date("2026-11-05T00:00:00.000Z");
+    const before = (at: Date) => ({
+      before: 50_000,
+      after: null,
+      beforeReading: reading("fuel", 50_000, at),
+      afterReading: null,
+    });
+
+    // The web's refuelling typed for today, then the app's at 00:10.
+    expect(
+      still({
+        at: minutesFrom(localMidnight, 10),
+        neighbours: before(localMidnight),
+      }),
+    ).toEqual({ fits: false });
+    // The web's, typed for today, after the app's of 23:50.
+    expect(
+      still({
+        at: localMidnight,
+        neighbours: before(minutesFrom(localMidnight, -10)),
+      }),
+    ).toEqual({ fits: false });
+    // Two the office typed for the same day.
+    expect(
+      still({ at: localMidnight, neighbours: before(localMidnight) }),
+    ).toEqual({ fits: false });
+    // An API client's bare day.
+    expect(
+      still({
+        at: utcMidnight,
+        neighbours: before(minutesFrom(utcMidnight, -5)),
+      }),
+    ).toEqual({ fits: false });
+  });
+
+  it("still refuses a new record with nothing before it, even at the km of one minutes after", () => {
+    // Across midnight, so the reading after it is on a later day and binds.
+    const night = new Date("2026-11-06T02:55:00.000Z");
+    const first = {
+      at: night,
+      laterDay: 50_000,
+      neighbours: {
+        before: null,
+        after: 50_000,
+        beforeReading: null,
+        afterReading: reading("checklist", 50_000, minutesFrom(night, 10)),
+      },
+    };
+
+    expect(still(first)).toEqual({ fits: false });
+
+    // The vehicle's oldest record, corrected by the office: accepted once.
+    expect(still({ ...first, previousMileage: 49_990 })).toEqual({
+      fits: true,
+      odometer: null,
+    });
+  });
+
+  it("lets an edit that set nothing take the km of the record minutes before it, the odometer left", () => {
+    // 11:10, typed 50.060; a later reading of 50.400 at 14:00 set the
+    // odometer.
+    expect(
+      still({
+        previousMileage: 50_060,
+        odometer: 50_400,
+        highest: 50_400,
+        neighbours: {
+          before: 50_000,
+          after: 50_400,
+          beforeReading: reading("fuel", 50_000, STOP),
+          afterReading: reading("checklist", 50_400, minutesFrom(STOP, 180)),
+        },
+      }),
+    ).toEqual({ fits: true, odometer: null });
+  });
+
+  it("brings the odometer the corrected record set down to the equal reading, never below the last maintenance", () => {
+    // The second tank typed 50.100 for 50.000: it set the odometer, and the
+    // office corrects it to the first tank's km.
+    const typo = { previousMileage: 50_100, odometer: 50_100 };
+
+    expect(still(typo)).toEqual({ fits: true, odometer: 50_000 });
+    expect(still({ ...typo, maintenanceFloor: 50_050 })).toEqual({
+      fits: true,
+      odometer: 50_050,
+    });
+
+    // 31 minutes after the first tank: the strict rule, as before.
+    expect(still({ ...typo, at: minutesFrom(STOP, 31) })).toEqual({
+      fits: false,
+    });
+  });
+
+  it("places a record moved to another vehicle like a new one there", () => {
+    const there = {
+      mileage: 120_000,
+      odometer: 120_000,
+      highest: 120_000,
+      neighbours: {
+        before: 120_000,
+        after: null,
+        beforeReading: reading("checklist", 120_000, STOP),
+        afterReading: null,
+      },
+    };
+
+    expect(still(there)).toEqual({ fits: true, odometer: null });
+    expect(still({ ...there, at: minutesFrom(STOP, 45) })).toEqual({
+      fits: false,
+    });
+  });
+
+  it("keeps a later civil day bounding a back-dated record, the 510.000 typo included", () => {
+    // Its km is the later day's reading, days away: not standing still.
+    expect(
+      still({
+        mileage: 48_000,
+        at: minutesFrom(STOP, -4 * 24 * 60),
+        odometer: 50_000,
+        highest: 48_000,
+        laterDay: 48_000,
+        neighbours: {
+          before: 45_500,
+          after: 48_000,
+          beforeReading: reading(
+            "fuel",
+            45_500,
+            minutesFrom(STOP, -5 * 24 * 60),
+          ),
+          afterReading: reading(
+            "fuel",
+            48_000,
+            minutesFrom(STOP, -2 * 24 * 60),
+          ),
+        },
+      }),
+    ).toEqual({ fits: false });
+
+    // 510.000 typed for 51.000, between two readings minutes away.
+    expect(
+      still({
+        mileage: 510_000,
+        at: STOP,
+        odometer: 50_000,
+        highest: 48_000,
+        laterDay: 48_000,
+        neighbours: {
+          before: 45_500,
+          after: 48_000,
+          beforeReading: reading("fuel", 45_500, minutesFrom(STOP, -10)),
+          afterReading: reading("fuel", 48_000, minutesFrom(STOP, 10)),
+        },
+      }),
+    ).toEqual({ fits: false });
+  });
+
+  it("changes nothing the strict rule accepts, and accepts more only at a neighbour's km", () => {
+    const readings = [null, 15_000, 17_000, 17_900, 18_200, 20_000, 25_000];
+    const localMidnight = new Date("2026-11-05T03:00:00.000Z");
+
+    // Where the record is, and how far its neighbours' records are.
+    const placements = [
+      { name: "near", at: STOP, beforeAt: -10, afterAt: 10, still: true },
+      { name: "far", at: STOP, beforeAt: -40, afterAt: 40, still: false },
+      {
+        name: "a day",
+        at: localMidnight,
+        beforeAt: -10,
+        afterAt: 10,
+        still: false,
+      },
+    ];
+
+    for (const placement of placements) {
+      for (const before of readings) {
+        for (const after of readings) {
+          for (const mileage of [
+            16_000, 17_000, 17_900, 18_200, 19_000, 20_000, 26_000,
+          ]) {
+            for (const previousMileage of [null, 17_900, 20_000]) {
+              for (const laterDay of [null, after]) {
+                const base = {
+                  mileage,
+                  laterDay,
+                  highest: 20_000,
+                  odometer: 20_000,
+                  maintenanceFloor: null,
+                  previousMileage,
+                  at: placement.at,
+                  timeZone: SAO_PAULO,
+                };
+                const strict = placeReading({
+                  ...base,
+                  neighbours: { before, after },
+                });
+                const withRecords = placeReading({
+                  ...base,
+                  neighbours: {
+                    before,
+                    after,
+                    beforeReading:
+                      before === null
+                        ? null
+                        : reading(
+                            "fuel",
+                            before,
+                            minutesFrom(placement.at, placement.beforeAt),
+                          ),
+                    afterReading:
+                      after === null
+                        ? null
+                        : reading(
+                            "checklist",
+                            after,
+                            minutesFrom(placement.at, placement.afterAt),
+                          ),
+                  },
+                });
+                const label = JSON.stringify({
+                  placement: placement.name,
+                  before,
+                  after,
+                  mileage,
+                  previousMileage,
+                  laterDay,
+                });
+
+                if (strict.fits || !placement.still) {
+                  expect(withRecords, label).toEqual(strict);
+                } else if (mileage !== before && mileage !== after) {
+                  expect(withRecords, label).toEqual({ fits: false });
+                }
+
+                // Never ahead of the odometer because of an equal reading.
+                if (withRecords.fits && !strict.fits) {
+                  expect(
+                    withRecords.odometer === null ||
+                      withRecords.odometer <= base.odometer,
+                    label,
+                  ).toBe(true);
+
+                  // And a new newest record never below it: standing still,
+                  // not going back.
+                  if (previousMileage === null && after === null) {
+                    expect(mileage, label).toBeGreaterThanOrEqual(
+                      base.odometer,
+                    );
+                  }
+                }
+              }
+            }
           }
         }
       }

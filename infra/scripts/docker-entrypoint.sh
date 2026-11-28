@@ -74,7 +74,27 @@ if [ "$MODE" = "migrate" ] || [ "$MODE" = "release" ]; then
   # on migrate's advisory lock. Only the server keeps the timed connection.
   SCHEMA_URL="${MIGRATION_DATABASE_URL:-$DATABASE_URL}"
 
+  # prisma/concurrent BEFORE the migrations (plano-escala F2-01, D20): the
+  # indexes of hot tables built with CREATE INDEX CONCURRENTLY, so the
+  # migration's own `CREATE INDEX IF NOT EXISTS` finds them and does
+  # nothing instead of holding the writes for the whole build. It also
+  # refuses a URL through PgBouncer (exit 64), before anything runs.
+  DATABASE_URL="$SCHEMA_URL" node build/prebuild-online-ddl.js "$CLI_DIR/prisma/concurrent"
+
   (cd "$CLI_DIR" && DATABASE_URL="$SCHEMA_URL" ./node_modules/.bin/prisma migrate deploy)
+
+  # prisma/concurrent once more, for the files the first pass skipped: a
+  # column and its index ship in the same release, so the column only
+  # exists now. Its migration built the index only on an empty table; with
+  # rows, it is built here, concurrently, before the new API deploys.
+  DATABASE_URL="$SCHEMA_URL" node build/prebuild-online-ddl.js "$CLI_DIR/prisma/concurrent" --after-migrate
+
+  # infra/sql (roles, owners, grants: reapplied every release) and
+  # prisma/post-deploy (DDL that waits for a precondition), AFTER the
+  # migrations and before the seeds (plano-escala F5-08, D17). Each file's
+  # outcome lands in release_step_state; a 'pending' one makes the next
+  # deploy run this step again. A failed one stops here.
+  DATABASE_URL="$SCHEMA_URL" node build/release-steps.js "$CLI_DIR"
 
   # Strict: `set -e` turns a seed failure into a failed release step, which
   # is the point — the step is watched, a replica's boot log is not. Both

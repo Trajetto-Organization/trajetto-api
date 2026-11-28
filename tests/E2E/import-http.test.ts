@@ -10,6 +10,10 @@ import { readSpreadsheet } from "@/shared/delivery/spreadsheet-reader";
 import { importQueue } from "@/modules/import/services/import-queue";
 import { parseDeliverySpreadsheet } from "@/shared/delivery/spreadsheet-parser";
 import { createPrismaClient } from "@/shared/database/database-client";
+import { env } from "@/env";
+import { JobRunner } from "@/shared/jobs/job-runner";
+import { BackgroundJobRepository } from "@/shared/jobs/background-job-repository";
+import { registerJobHandlers } from "@/shared/jobs/job-handlers";
 
 /**
  * The whole loop, over real HTTP: download the model, fill it in, upload it,
@@ -24,6 +28,11 @@ import { createPrismaClient } from "@/shared/database/database-client";
  * It also proves the listing is a stream. Nothing in a typecheck says so, and
  * a client that calls response.json() on it gets a parse error that reads like
  * a server fault.
+ *
+ * The upload cases run in both modes (plano-escala F3-23a): processed in the
+ * memory of the replica that answered, and, with IMPORT_DURABLE_JOBS, as a
+ * job of the `jobs` queue that a runner of this process drains — the same
+ * answers either way.
  */
 const prisma = createPrismaClient();
 
@@ -177,11 +186,15 @@ function row(recipient: string, code: string, route?: string) {
   ];
 }
 
+/** The durable mode's runner: what a worker of the `jobs` queue does. */
+let jobRunner: JobRunner | null = null;
+
 /**
  * The upload, as the operator lives it: 202 with the open record, then the
- * record once the background processing closed it (import-queue.ts). The
- * rows are processed after the answer, so the report is read where the web
- * reads it — GET /import/get-import. A refusal comes back as it was sent.
+ * record once the background processing closed it (import-queue.ts, or the
+ * job, F3-23a). The rows are processed after the answer, so the report is
+ * read where the web reads it — GET /import/get-import. A refusal comes back
+ * as it was sent.
  */
 async function upload(rows: string[][], as = token) {
   const response = await app.inject({
@@ -201,7 +214,11 @@ async function upload(rows: string[][], as = token) {
 
   expect(accepted.data.status).toBe("IN_PROGRESS");
 
-  await importQueue.idle();
+  if (jobRunner) {
+    await jobRunner.processBatch();
+  } else {
+    await importQueue.idle();
+  }
 
   const detail = await app.inject({
     method: "GET",
@@ -263,90 +280,136 @@ describe("the model the endpoint serves", () => {
   });
 });
 
-describe("uploading a day's work", () => {
-  it("creates the deliveries and closes the record with the per-row report", async () => {
-    const response = await upload([
-      row("Padaria Central", "PED-001"),
-      row("Mercado Novo", "PED-002"),
-    ]);
+describe.each(["in memory", "as a durable job"] as const)(
+  "uploading a day's work (%s)",
+  (mode) => {
+    let adminToken: string;
 
-    expect(response.statusCode).toBe(202);
+    // The same orders in both modes would be duplicates the second time.
+    const code = (value: string) =>
+      mode === "in memory" ? value : `${value}-JOB`;
 
-    const body = response.json();
+    beforeAll(async () => {
+      // Its own admin per mode: the route allows 6 uploads a minute per user.
+      adminToken = token;
 
-    expect(body.data.imported).toBe(2);
-    expect(
-      body.data.report.rows.map((entry: { line: number }) => entry.line),
-    ).toEqual([2, 3]);
-
-    const created = await prisma.delivery.findMany({
-      where: { importId: body.data.id },
+      if (mode === "as a durable job") {
+        token = await seedUser(CARRIER, "BUSINESS_ADMIN");
+        env.IMPORT_DURABLE_JOBS = true;
+        jobRunner = new JobRunner({
+          store: new BackgroundJobRepository(),
+          sweepIntervalMs: 60_000,
+          owner: () => "import-http",
+        });
+        registerJobHandlers(jobRunner);
+      }
     });
 
-    expect(created).toHaveLength(2);
-  });
-
-  it("stamps the route it created, so the undo can find it", async () => {
-    const response = await upload([
-      row("Primeira", "PED-010", "Zona Sul"),
-      row("Segunda", "PED-011", "Zona Sul"),
-    ]);
-
-    const body = response.json();
-
-    expect(body.data.report.routes).toHaveLength(1);
-
-    const routes = await prisma.route.findMany({
-      where: { importId: body.data.id },
+    afterAll(() => {
+      env.IMPORT_DURABLE_JOBS = false;
+      jobRunner = null;
+      token = adminToken;
     });
 
-    expect(routes).toHaveLength(1);
-    expect(routes[0].name).toBe("Zona Sul");
-  });
+    it("creates the deliveries and closes the record with the per-row report", async () => {
+      const response = await upload([
+        row("Padaria Central", code("PED-001")),
+        row("Mercado Novo", code("PED-002")),
+      ]);
 
-  it("closes the record, rather than leaving it open forever", async () => {
-    const response = await upload([row("Padaria Central", "PED-020")]);
+      expect(response.statusCode).toBe(202);
 
-    const stored = await prisma.import.findUniqueOrThrow({
-      where: { id: response.json().data.id },
+      const body = response.json();
+
+      expect(body.data.imported).toBe(2);
+      expect(
+        body.data.report.rows.map((entry: { line: number }) => entry.line),
+      ).toEqual([2, 3]);
+
+      const created = await prisma.delivery.findMany({
+        where: { importId: body.data.id },
+      });
+
+      expect(created).toHaveLength(2);
     });
 
-    expect(stored.status).toBe("COMPLETED");
-    expect(stored.imported).toBe(1);
-  });
+    it("stamps the route it created, so the undo can find it", async () => {
+      const response = await upload([
+        row("Primeira", code("PED-010"), "Zona Sul"),
+        row("Segunda", code("PED-011"), "Zona Sul"),
+      ]);
 
-  it("refuses a driver's token", async () => {
-    const response = await upload(
-      [row("Padaria Central", "PED-030")],
-      driverToken,
-    );
+      const body = response.json();
 
-    expect(response.statusCode).toBe(403);
-  });
+      expect(body.data.report.routes).toHaveLength(1);
 
-  it("refuses another carrier's token on this company's URL", async () => {
-    const response = await upload(
-      [row("Padaria Central", "PED-031")],
-      otherToken,
-    );
+      const routes = await prisma.route.findMany({
+        where: { importId: body.data.id },
+      });
 
-    expect(response.statusCode).toBe(403);
-  });
+      expect(routes).toHaveLength(1);
+      expect(routes[0].name).toBe("Zona Sul");
+    });
 
-  it("reports the second sending of the same file as duplicated", async () => {
-    // The operator who is not sure whether it went through clicks again.
-    await upload([row("Repetida", "PED-040")]);
+    it("closes the record, rather than leaving it open forever", async () => {
+      const response = await upload([row("Padaria Central", code("PED-020"))]);
 
-    const again = await upload([row("Repetida", "PED-040")]);
+      const stored = await prisma.import.findUniqueOrThrow({
+        where: { id: response.json().data.id },
+      });
 
-    expect(again.statusCode).toBe(202);
+      expect(stored.status).toBe("COMPLETED");
+      expect(stored.imported).toBe(1);
+    });
 
-    const body = again.json();
+    it("refuses a driver's token", async () => {
+      const response = await upload(
+        [row("Padaria Central", code("PED-030"))],
+        driverToken,
+      );
 
-    expect(body.data.imported).toBe(0);
-    expect(body.data.duplicated).toBe(1);
-  });
-});
+      expect(response.statusCode).toBe(403);
+    });
+
+    it("refuses another carrier's token on this company's URL", async () => {
+      const response = await upload(
+        [row("Padaria Central", code("PED-031"))],
+        otherToken,
+      );
+
+      expect(response.statusCode).toBe(403);
+    });
+
+    it("reports the second sending of the same file as duplicated", async () => {
+      // The operator who is not sure whether it went through clicks again.
+      await upload([row("Repetida", code("PED-040"))]);
+
+      const again = await upload([row("Repetida", code("PED-040"))]);
+
+      expect(again.statusCode).toBe(202);
+
+      const body = again.json();
+
+      expect(body.data.imported).toBe(0);
+      expect(body.data.duplicated).toBe(1);
+    });
+
+    it("leaves no job and no stored file behind once it is done", async () => {
+      const response = await upload([row("Arquivo guardado", code("PED-045"))]);
+      const id = response.json().data.id;
+
+      const jobs = await prisma.backgroundJob.findMany({
+        where: { subjectId: id },
+      });
+
+      if (mode === "in memory") {
+        expect(jobs).toEqual([]);
+      } else {
+        expect(jobs.map((job) => job.status)).toEqual(["SUCCEEDED"]);
+      }
+    });
+  },
+);
 
 /**
  * The upload route allows 6 imports per minute PER USER. The describe blocks
@@ -452,6 +515,57 @@ describe("taking an upload back", () => {
     expect(
       await prisma.delivery.findUnique({ where: { id: untouched.id } }),
     ).not.toBeNull();
+  });
+
+  it("takes back the route it built and its deliveries, though each got its Adicionada à Rota line", async () => {
+    // The upload writes a ROUTE_ADDED per stop. The undo counted every event
+    // as the driver's work, so an untouched upload with a route kept all of
+    // it: the route "tem paradas de entregas que não puderam ser removidas",
+    // each delivery "já tem registros do motorista".
+    const created = await uploaded([
+      row("Com rota 1", "PED-075", "Zona Norte"),
+      row("Com rota 2", "PED-076", "Zona Norte"),
+    ]);
+
+    const deliveryIds = (
+      await prisma.delivery.findMany({
+        where: { importId: created.data.id },
+        select: { id: true },
+      })
+    ).map((delivery) => delivery.id);
+
+    const routeIds = created.data.report.routes.map(
+      (route: { id: string }) => route.id,
+    );
+
+    expect(routeIds).toHaveLength(1);
+    expect(deliveryIds).toHaveLength(2);
+    expect(
+      await prisma.deliveryEvent.count({
+        where: { deliveryId: { in: deliveryIds }, type: "ROUTE_ADDED" },
+      }),
+    ).toBe(2);
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/import/reverse-import/${created.data.id}/business/${CARRIER}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data).toMatchObject({
+      removedRoutes: 1,
+      removedDeliveries: 2,
+      keptRoutes: [],
+      keptDeliveries: [],
+    });
+
+    expect(await prisma.route.count({ where: { id: { in: routeIds } } })).toBe(
+      0,
+    );
+    expect(
+      await prisma.delivery.count({ where: { id: { in: deliveryIds } } }),
+    ).toBe(0);
   });
 
   it("answers 409 on the second attempt instead of reporting zero", async () => {

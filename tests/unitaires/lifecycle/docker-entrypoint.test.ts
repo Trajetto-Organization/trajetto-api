@@ -63,6 +63,17 @@ beforeEach(() => {
     "build/wait-for-postgres.js",
     nodeStub("wait-for-postgres", "STUB_WAIT_EXIT"),
   );
+  // One stub, two passes: the one after the migrations exits with its own
+  // variable.
+  box.file(
+    "build/prebuild-online-ddl.js",
+    `if (process.argv.includes("--after-migrate")) process.env.STUB_PREBUILD_EXIT = process.env.STUB_POSTBUILD_EXIT ?? "0";
+${nodeStub("prebuild-online-ddl", "STUB_PREBUILD_EXIT")}`,
+  );
+  box.file(
+    "build/release-steps.js",
+    nodeStub("release-steps", "STUB_STEPS_EXIT"),
+  );
   box.file("build/seed.js", nodeStub("seed", "STUB_SEED_EXIT"));
   box.file(
     "build/import-violation-codes.js",
@@ -143,6 +154,93 @@ describe.skipIf(!sh)("the release step (`migrate` mode)", () => {
     expect(called("seed ")).toBe(false);
   });
 
+  // prisma/concurrent (plano-escala F2-01): the hot tables' indexes built
+  // concurrently BEFORE the migrations, whose own CREATE INDEX IF NOT
+  // EXISTS then finds them. Beside the migrations, on the schema URL.
+  it("builds the online indexes first, from beside the migrations, on the schema URL", () => {
+    const { status, calls } = entrypoint(["migrate"], {
+      MIGRATION_DATABASE_URL: "postgresql://migration",
+    });
+
+    expect(status, calls.join("\n")).toBe(0);
+    expect(calls.slice(0, 3)).toEqual([
+      expect.stringMatching(/^wait-for-postgres /),
+      "prebuild-online-ddl migrate/prisma/concurrent DATABASE_URL=postgresql://migration",
+      expect.stringMatching(/^prisma migrate deploy cwd=migrate /),
+    ]);
+  });
+
+  // Exit 1 (an index left invalid, a file outside the whitelist) or 64 (a
+  // URL through PgBouncer): nothing of the step runs after it.
+  it.each(["1", "64"])(
+    "stops before migrating when the online DDL exits %s",
+    (code) => {
+      const { status, called } = entrypoint(["migrate"], {
+        STUB_PREBUILD_EXIT: code,
+      });
+
+      expect(status).not.toBe(0);
+      expect(called("prisma ")).toBe(false);
+      expect(called("seed ")).toBe(false);
+    },
+  );
+
+  // A column and its index ship in the same release: the first pass skips
+  // the file (no column yet), the migration builds the index only on an
+  // empty table, and this second pass builds it concurrently on a live one,
+  // right after the migrations and before anything else.
+  it("runs the online DDL again right after the migrations, on the schema URL", () => {
+    const { status, calls } = entrypoint(["migrate"], {
+      MIGRATION_DATABASE_URL: "postgresql://migration",
+    });
+    const at = (prefix: string) =>
+      calls.findIndex((line) => line.startsWith(prefix));
+
+    expect(status, calls.join(" | ")).toBe(0);
+    expect(calls[at("prisma migrate deploy") + 1]).toBe(
+      "prebuild-online-ddl migrate/prisma/concurrent --after-migrate DATABASE_URL=postgresql://migration",
+    );
+    expect(at("release-steps ")).toBe(at("prisma migrate deploy") + 2);
+  });
+
+  it("stops before the steps and the seeds when the pass after the migrations fails", () => {
+    const { status, called } = entrypoint(["migrate"], {
+      STUB_POSTBUILD_EXIT: "1",
+    });
+
+    expect(status).not.toBe(0);
+    expect(called("prisma migrate deploy")).toBe(true);
+    expect(called("release-steps ")).toBe(false);
+    expect(called("seed ")).toBe(false);
+  });
+
+  // infra/sql and prisma/post-deploy (plano-escala F5-08): after the
+  // migrations, before the seeds, from the CLI's directory as their root.
+  it("runs the steps after the migrations and before the seeds", () => {
+    const { status, calls } = entrypoint(["migrate"], {
+      MIGRATION_DATABASE_URL: "postgresql://migration",
+    });
+    const at = (prefix: string) =>
+      calls.findIndex((line) => line.startsWith(prefix));
+
+    expect(status, calls.join(" | ")).toBe(0);
+    expect(calls[at("release-steps ")]).toBe(
+      "release-steps migrate DATABASE_URL=postgresql://migration",
+    );
+    expect(at("release-steps ")).toBeGreaterThan(at("prisma migrate deploy"));
+    expect(at("release-steps ")).toBeLessThan(at("seed "));
+  });
+
+  it("stops before the seeds when a step fails", () => {
+    const { status, called } = entrypoint(["migrate"], {
+      STUB_STEPS_EXIT: "1",
+    });
+
+    expect(status).not.toBe(0);
+    expect(called("prisma migrate deploy")).toBe(true);
+    expect(called("seed ")).toBe(false);
+  });
+
   it("does nothing at all when the database is refused", () => {
     const { status, calls } = entrypoint(["migrate"], { STUB_WAIT_EXIT: "1" });
 
@@ -198,7 +296,14 @@ describe.skipIf(!sh)(
       expect(calls).toEqual([
         `rm -f ${MARKER}`,
         expect.stringMatching(/^wait-for-postgres DATABASE_URL=/),
+        expect.stringMatching(
+          /^prebuild-online-ddl migrate\/prisma\/concurrent DATABASE_URL=/,
+        ),
         expect.stringMatching(/^prisma migrate deploy cwd=migrate /),
+        expect.stringMatching(
+          /^prebuild-online-ddl migrate\/prisma\/concurrent --after-migrate DATABASE_URL=/,
+        ),
+        expect.stringMatching(/^release-steps migrate DATABASE_URL=/),
         expect.stringMatching(/^seed DATABASE_URL=/),
         expect.stringMatching(/^import-violation-codes DATABASE_URL=/),
         `touch ${MARKER}`,
@@ -208,6 +313,12 @@ describe.skipIf(!sh)(
 
     it.each([
       ["the database is refused", { STUB_WAIT_EXIT: "1" }],
+      ["the online DDL fails", { STUB_PREBUILD_EXIT: "1" }],
+      [
+        "the online DDL after the migrations fails",
+        { STUB_POSTBUILD_EXIT: "1" },
+      ],
+      ["a step after the migrations fails", { STUB_STEPS_EXIT: "1" }],
       ["a migration fails", { STUB_PRISMA_EXIT: "1" }],
       ["a seed fails", { STUB_SEED_EXIT: "1" }],
       ["the violation-code import fails", { STUB_IMPORT_EXIT: "1" }],
@@ -250,6 +361,9 @@ describe.skipIf(!sh)("where `migrate` finds the Prisma CLI", () => {
     expect(
       calls.find((line) => line.startsWith("prisma migrate deploy")),
     ).toMatch(/cwd=trajetto-sh-/);
+    expect(calls).toContain(
+      "prebuild-online-ddl ./prisma/concurrent DATABASE_URL=postgresql://runtime",
+    );
   });
 
   it("in the API image, nowhere: it says which image migrates and touches nothing", () => {
@@ -330,10 +444,12 @@ describe.skipIf(!sh)("which connection each step uses", () => {
     const { calls } = entrypoint(["migrate"], env);
 
     const schemaSteps = calls.filter((line) =>
-      /^(prisma migrate deploy|seed |import-violation-codes )/.test(line),
+      /^(prebuild-online-ddl |prisma migrate deploy|release-steps |seed |import-violation-codes )/.test(
+        line,
+      ),
     );
 
-    expect(schemaSteps).toHaveLength(3);
+    expect(schemaSteps).toHaveLength(6);
     for (const line of schemaSteps) {
       expect(line).toContain("DATABASE_URL=postgresql://migration");
     }

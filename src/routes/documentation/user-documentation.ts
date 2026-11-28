@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { responseDateTime } from "./response-date";
 
 import { codedRefusal, errorResponse } from "./common-responses";
 
@@ -11,7 +12,14 @@ import {
   updateMasterUserParamsSchema,
 } from "@/schemas/update-master-user-schema";
 
-import { authenticateUserSchema } from "@/schemas/authenticate-user-schema";
+import { sessionLoginSchema } from "@/schemas/authenticate-user-schema";
+import {
+  driverDeviceParamsSchema,
+  driverLoginParamsSchema,
+  enrollSessionSchema,
+  revokeSessionSchema,
+} from "@/schemas/driver-access-schema";
+import { resetDriverPasswordSchema } from "@/schemas/reset-driver-password-schema";
 import { forgotPasswordVerificationSchema } from "@/schemas/forgot-password-verification-schema";
 
 import { forgotPasswordSchema } from "@/schemas/forgot-password-schema";
@@ -24,7 +32,12 @@ import { resendTwoFactorCodeSchema } from "@/schemas/resend-two-factor-code-sche
 import { updateDeleteUserSchema } from "@/schemas/update-delete-user-schema";
 
 import { updateUserSchema } from "@/schemas/update-user-schema";
-import { updateUserPasswordSchema } from "@/schemas/update-user-password-schema";
+import {
+  createOwnPasswordSchema,
+  updateUserPasswordSchema,
+} from "@/schemas/update-user-password-schema";
+import { updateTwoFactorSchema } from "@/schemas/update-two-factor-schema";
+import { ownSessionParamsSchema } from "@/schemas/own-session-schema";
 
 import { updateUserNameSchema } from "@/schemas/update-user-name-schema";
 
@@ -49,8 +62,6 @@ const codedError = z.object({ code: z.string().optional() });
 const refusal = (description: string) =>
   errorResponse.extend({ code: z.string() }).describe(description);
 
-const isoDateTime = z.union([z.string(), z.date()]);
-
 /**
  * A user as the listings stream it: the whole row except the password hash.
  *
@@ -63,8 +74,13 @@ const isoDateTime = z.union([z.string(), z.date()]);
 const userRow = z.object({
   id: z.string(),
   name: z.string(),
-  email: z.string(),
-  email_verified: isoDateTime
+  email: z
+    .string()
+    .nullable()
+    .describe(
+      "Nulo só no login de um motorista sem e-mail (entra por QR Code ou CPF e senha).",
+    ),
+  email_verified: responseDateTime()
     .nullable()
     .describe("Quando o e-mail foi confirmado."),
   avatar: z.string().nullable(),
@@ -85,11 +101,16 @@ const userRow = z.object({
     .number()
     .int()
     .describe("Senhas erradas na janela atual."),
-  failed_login_at: isoDateTime.nullable(),
-  login_locked_until: isoDateTime
+  failed_login_at: responseDateTime().nullable(),
+  login_locked_until: responseDateTime()
     .nullable()
     .describe(
       "Até quando o login está bloqueado por senhas erradas; null quando livre.",
+    ),
+  must_change_password: z
+    .boolean()
+    .describe(
+      "A senha foi definida pelo gestor: a pessoa cria a própria no próximo login.",
     ),
   whatsapp_notifications_enabled: z.boolean(),
   whatsapp_phone: z.string().nullable(),
@@ -98,9 +119,9 @@ const userRow = z.object({
   ops_alert_sound_enabled: z
     .boolean()
     .describe("Se o balão de alertas da operação toca som para este usuário."),
-  last_seen_at: isoDateTime.nullable(),
-  created_at: isoDateTime,
-  updated_at: isoDateTime,
+  last_seen_at: responseDateTime().nullable(),
+  created_at: responseDateTime(),
+  updated_at: responseDateTime(),
 });
 
 /** GET /user/list-user adds the names the table shows next to each user. */
@@ -119,7 +140,15 @@ const userSchemas = {
   createMasterUser: createMasterUserSchema,
   updateMasterUser: updateMasterUserSchema,
   updateMasterUserParams: updateMasterUserParamsSchema,
-  authenticateUser: authenticateUserSchema,
+  // E-mail and password, or the driver's CPF and password (D8).
+  authenticateUser: sessionLoginSchema,
+  // The driver's own ways in, and what a manager does with them (plan of
+  // 02/11/2026: A3, D2, D3, D7).
+  revokeSession: revokeSessionSchema,
+  enrollSession: enrollSessionSchema,
+  driverLoginParams: driverLoginParamsSchema,
+  driverDeviceParams: driverDeviceParamsSchema,
+  resetDriverPassword: resetDriverPasswordSchema,
   forgotPasswordVerification: forgotPasswordVerificationSchema,
   forgotPassword: forgotPasswordSchema,
   sendForgotPassword: sendForgotPasswordSchema,
@@ -129,6 +158,12 @@ const userSchemas = {
   updateDeleteUser: updateDeleteUserSchema,
   updateUser: updateUserSchema,
   updateUserPassword: updateUserPasswordSchema,
+  // Wave 2: the password created right after a QR code, the explicit
+  // two-factor switch (documentation only: parsed by hand) and the person's
+  // own sessions.
+  createOwnPassword: createOwnPasswordSchema,
+  updateTwoFactor: updateTwoFactorSchema,
+  ownSessionParams: ownSessionParamsSchema,
   updateUserName: updateUserNameSchema,
   listUsers: listUserSchema,
   listMasterUsers: listMasterUserSchema,
@@ -200,6 +235,61 @@ const userResponses = {
   ),
   passwordUpdated: z.object({
     message: z.string().default("Senha atualizada com sucesso"),
+    // Declared, or the response serializer strips them.
+    token: z
+      .string()
+      .optional()
+      .describe(
+        "O novo token de acesso desta sessão. Ausente só quando a sessão já tinha terminado: aí todas as sessões terminam, como antes.",
+      ),
+    refresh_token: z
+      .string()
+      .optional()
+      .describe(
+        "O novo refresh token desta sessão, na mesma família e com a mesma política (preso ao mesmo aparelho, quando era). Guarde-o no lugar do anterior: o anterior não renova mais.",
+      ),
+    mustChangePassword: z
+      .literal(false)
+      .describe("A senha agora é da própria pessoa."),
+  }),
+  ownPasswordCreated: z.object({
+    message: z.string().default("Senha criada com sucesso."),
+    token: z.string().describe("O novo token de acesso desta sessão."),
+    refresh_token: z
+      .string()
+      .describe(
+        "O novo refresh token desta sessão, preso ao mesmo aparelho. Guarde-o no lugar do anterior.",
+      ),
+    mustChangePassword: z.literal(false),
+  }),
+  ownSessions: z.object({
+    data: z.array(
+      z.object({
+        id: z
+          .string()
+          .describe(
+            "O id opaco da sessão: envie-o em DELETE /user/me/sessions/:id.",
+          ),
+        kind: z
+          .enum(["aparelho", "app", "navegador"])
+          .describe(
+            "aparelho: sessão presa a um celular (QR Code ou CPF e senha); app: o aplicativo aberto por e-mail; navegador: o painel web.",
+          ),
+        current: z.boolean().describe("A sessão desta requisição."),
+        created_at: z.string().describe("Quando a sessão começou (ISO 8601)."),
+        last_activity_at: z
+          .string()
+          .describe(
+            "A última renovação (ISO 8601): o app renova a cada 15 minutos enquanto está em uso.",
+          ),
+        device_label: z
+          .string()
+          .nullable()
+          .describe(
+            "Este aparelho, na sessão desta requisição; null nas outras. O identificador do aparelho nunca é devolvido.",
+          ),
+      }),
+    ),
   }),
   usernameUpdated: z.object({
     message: z.string().default("Nome de usuário atualizado com sucesso"),
@@ -208,6 +298,11 @@ const userResponses = {
     message: z
       .string()
       .default("Autenticação de dois fatores atualizada com sucesso!"),
+    twoFactorEnabled: z
+      .boolean()
+      .describe(
+        "O estado da conta depois do pedido (o mesmo de antes quando nada mudou).",
+      ),
   }),
   userAccessRevoked: z.object({
     message: z.string().default("Revogação de acesso atualizada com sucesso!"),
@@ -236,6 +331,11 @@ const userResponses = {
     token: z.string(),
     refresh_token: z.string(),
     role: z.nativeEnum(EnumUserRole),
+    mustChangePassword: z
+      .boolean()
+      .describe(
+        "A senha foi definida pelo gestor: peça a da própria pessoa antes de seguir.",
+      ),
   }),
   genericMessage: z.object({
     message: z.string(),
@@ -273,7 +373,7 @@ const userResponses = {
 
   // Grouped errors by route
   createUserErrors: refusal(
-    "VALIDATION_ERROR (corpo inválido), USER_PROFILE_AND_DRIVER (perfil e motorista ao mesmo tempo), PROFILE_ACCESS_NOT_FOUND ou DRIVER_NOT_FOUND (o perfil ou o motorista indicado no corpo não existe ou é de outra empresa — a mesma resposta) ou BUSINESS_NOT_FOUND (a empresa indicada no corpo não existe).",
+    "VALIDATION_ERROR (corpo inválido; `password` fora do login de um motorista, ou e-mail ausente fora dele, também), USER_PASSWORD_DRIVER_ONLY e USER_EMAIL_REQUIRED (as mesmas regras, fora do schema), USER_PROFILE_AND_DRIVER (perfil e motorista ao mesmo tempo), PROFILE_ACCESS_NOT_FOUND ou DRIVER_NOT_FOUND (o perfil ou o motorista indicado no corpo não existe ou é de outra empresa — a mesma resposta) ou BUSINESS_NOT_FOUND (a empresa indicada no corpo não existe).",
   ),
   createUserNotFoundErrors: refusal(
     "USER_NOT_FOUND (o usuário da sessão não existe mais).",
@@ -285,7 +385,6 @@ const userResponses = {
   createUserConflictErrors: refusal(
     "USER_ALREADY_EXISTS (e-mail em uso) ou DRIVER_ALREADY_LINKED (motorista já tem login).",
   ),
-
   authenticateUserSuccess: z.union([
     z.object({
       message: z
@@ -311,8 +410,143 @@ const userResponses = {
       token: z.string(),
       refresh_token: z.string(),
       role: z.nativeEnum(EnumUserRole),
+      mustChangePassword: z
+        .boolean()
+        .describe(
+          "A senha foi definida pelo gestor (senha inicial ou redefinição): peça a da própria pessoa antes de seguir. A API não recusa nada por isso.",
+        ),
     }),
+    // Declared, or the response serializer strips the list.
+    z
+      .object({
+        message: z.string().default("Escolha a empresa para entrar."),
+        businessSelection: z.literal(true),
+        businesses: z
+          .array(
+            z.object({
+              id: z.string().describe("Envie de volta em `businessId`."),
+              name: z
+                .string()
+                .describe(
+                  "O nome fantasia da empresa (ou a razão social, sem ele).",
+                ),
+            }),
+          )
+          .describe(
+            "Só as empresas em que o CPF e a senha conferiram, e onde o motorista pode entrar agora.",
+          ),
+      })
+      .describe(
+        "Login por CPF: o CPF e a senha valem em mais de uma empresa. Nenhuma sessão foi aberta; repita o mesmo corpo com `businessId`.",
+      ),
   ]),
+
+  // The driver's phone opening a session with the manager's QR code (D3).
+  enrollSessionSuccess: z.object({
+    message: z.string().default("Usuário autenticado com sucesso!"),
+    token: z.string(),
+    refresh_token: z
+      .string()
+      .describe(
+        "Preso ao aparelho: renove sempre com o mesmo `deviceId` em /user/refresh-token.",
+      ),
+    role: z.nativeEnum(EnumUserRole),
+    mustChangePassword: z
+      .boolean()
+      .describe(
+        "A senha foi definida pelo gestor: o app pede a senha do motorista antes de seguir.",
+      ),
+  }),
+  enrollSessionUnauthorized: codedRefusal(
+    "QR Code ou código desconhecido, vencido, já usado ou gasto por tentativas recusadas: a mesma resposta para todos. Peça um novo ao gestor.",
+    ["AUTH_ENROLLMENT_INVALID"],
+  ),
+  enrollSessionForbidden: codedRefusal(
+    "O código é válido, mas o motorista não pode entrar agora (a mesma conferência de todo login). Cada recusa conta contra o código, que se gasta depois de 5.",
+    [
+      "AUTH_DRIVER_INACTIVE",
+      "AUTH_ACCESS_REVOKED",
+      "AUTH_BUSINESS_INACTIVE",
+      "AUTH_BRANCH_INACTIVE",
+      "AUTH_DRIVER_TENANT_MISMATCH",
+    ],
+  ),
+
+  // The access QR code a manager issues for a driver's login (D3).
+  enrollmentIssued: z.object({
+    qrToken: z
+      .string()
+      .describe(
+        "O token opaco (256 bits). Mostrado uma vez: o servidor guarda só o hash.",
+      ),
+    qrContent: z
+      .string()
+      .describe(
+        "O texto do QR Code: `trajetto-enroll:1:<ambiente>:<qrToken>`. O app recusa o QR de outro ambiente.",
+      ),
+    accessCode: z
+      .string()
+      .describe(
+        "O código de 8 caracteres para digitar em vez de ler o QR, como mostrar (`ABCD-EFGH`).",
+      ),
+    expiresAt: z.string().describe("Quando deixa de valer (ISO 8601)."),
+    expiresIn: z
+      .number()
+      .int()
+      .describe("Segundos até vencer (600): a contagem regressiva da tela."),
+  }),
+  driverLoginErrors: refusal("VALIDATION_ERROR (id ou corpo inválido)."),
+  driverLoginNotFound: refusal(
+    "USER_NOT_FOUND: o usuário não existe ou é de outra empresa — a mesma resposta.",
+  ),
+  driverLoginConflict: codedRefusal(
+    "USER_NOT_DRIVER: não é o login de um motorista (usuários de escritório seguem com o link por e-mail).",
+    ["USER_NOT_DRIVER"],
+  ),
+  enrollmentConflict: codedRefusal(
+    "USER_NOT_DRIVER (não é o login de um motorista), DRIVER_INACTIVE (motorista inativo) ou USER_ACCESS_REVOKED (acesso revogado): o QR Code só sai para quem pode entrar agora.",
+    ["USER_NOT_DRIVER", "DRIVER_INACTIVE", "USER_ACCESS_REVOKED"],
+  ),
+  driverPasswordReset: z.object({
+    message: z.string().default("Senha do motorista redefinida com sucesso!"),
+  }),
+
+  // The phones a driver is signed in on (D7).
+  driverDevices: z.object({
+    data: z.array(
+      z.object({
+        deviceHash: z
+          .string()
+          .describe(
+            "O aparelho, opaco: SHA-256 (hexadecimal) do identificador, a chave de DELETE /user/:userId/devices/:deviceId. O Android ID nunca é devolvido: no login por CPF ele é o que confere o aparelho.",
+          ),
+        deviceId: z
+          .string()
+          .describe(
+            "O mesmo valor de `deviceHash`, com o nome anterior do campo. Não é mais o Android ID.",
+          ),
+        sessions: z
+          .number()
+          .int()
+          .describe("Sessões abertas nele (quase sempre 1)."),
+        lastActivityAt: z
+          .string()
+          .describe(
+            "A última renovação da sessão (ISO 8601): o app renova a cada 15 minutos enquanto está em uso.",
+          ),
+        expiresAt: z
+          .string()
+          .describe(
+            "Quando a sessão cai se o aparelho ficar sem uso (ISO 8601).",
+          ),
+      }),
+    ),
+  }),
+
+  revokeSessionUnauthorized: codedRefusal(
+    "O token não é um refresh token assinado por esta API.",
+    ["AUTH_REFRESH_INVALID"],
+  ),
 
   // A wrong e-mail or password is a 401, not a 400: the controller answers
   // AUTH_INVALID_CREDENTIALS. The only 400 here is a body that fails the
@@ -326,6 +560,8 @@ const userResponses = {
       "E-mail ou senha errados. Não é sessão expirada: não tente renovar o token.",
     ),
 
+  // AUTH_DEVICE_NOT_TRUSTED (wave 2) is one of these: the same object, with
+  // the sentence in `message`.
   authenticateUserForbiddenErrors: z
     .union([
       z.object({
@@ -366,7 +602,10 @@ const userResponses = {
     .object({
       message: z.string().default("Assinatura de token inválida!"),
     })
-    .and(codedError),
+    .and(codedError)
+    .describe(
+      "AUTH_REFRESH_INVALID, AUTH_SESSION_INVALIDATED, AUTH_REFRESH_REUSED ou AUTH_DEVICE_MISMATCH (sessão presa a um aparelho renovada sem o mesmo `deviceId`; nada é gasto e o aparelho certo continua renovando).",
+    ),
 
   refreshTokenForbiddenErrors: z
     .union([
@@ -418,7 +657,7 @@ const userResponses = {
   ),
 
   updateUserConflictErrors: refusal(
-    "USER_ALREADY_EXISTS (e-mail em uso) ou DRIVER_ALREADY_LINKED (motorista já tem login).",
+    "USER_ALREADY_EXISTS (e-mail em uso) ou DRIVER_ALREADY_LINKED (motorista já tem login). Ao tirar o login do motorista atual (para outro motorista ou para nenhum): DRIVER_HAS_OPEN_ROUTES, quando esse motorista tem rota planejada, liberada ou em andamento (a mensagem traz as contagens e o que fazer com cada rota). Ao passar o login para OUTRO motorista: USER_DRIVER_LOCKED, quando o login já tem registros na operação (eventos de entrega, ocorrências, mensagens…, com a contagem na mensagem) — crie outro login para o novo motorista. Nos dois casos nada é gravado: o QR Code e os aparelhos continuam como estavam.",
   ),
 
   updatePasswordErrors: refusal(
@@ -438,7 +677,24 @@ const userResponses = {
   ),
 
   deleteUserConflictErrors: refusal(
-    "O usuário ainda é responsável por ordens de serviço (USER_HAS_SERVICE_ORDERS) ou por contas a pagar (USER_HAS_ACCOUNT_PAYABLES), com a quantidade na mensagem, ou é autor de registros que a plataforma preserva, como eventos de entrega, decisões da torre, importações ou mensagens (USER_HAS_RECORDS). Revogue o acesso em vez de excluir.",
+    "Excluir é só para o login criado por engano; quem já trabalhou tem o acesso revogado. DRIVER_HAS_OPEN_ROUTES: o usuário é o login de um motorista com rota planejada, liberada ou em andamento (a mesma regra da revogação, com as contagens). USER_HAS_SERVICE_ORDERS ou USER_HAS_ACCOUNT_PAYABLES: o usuário ainda é responsável por ordens de serviço ou por contas a pagar, com a quantidade na mensagem (concluir a OS ou quitar a conta não muda isso: transfira a responsabilidade ou revogue o acesso). USER_HAS_RECORDS: o usuário é autor de registros que a plataforma preserva (eventos de entrega, decisões da torre, ocorrências, revisões de comprovante, mensagens do chat, importações), com a contagem de cada tipo na mensagem; revogue o acesso em vez de excluir.",
+  ),
+
+  userAnonymizeScheduled: z
+    .object({
+      message: z.string(),
+      jobId: z.string().describe("O job USER_ANONYMIZE que remove os dados."),
+    })
+    .describe(
+      "A remoção e a anonimização ficaram na fila: os dados pessoais saem em instantes.",
+    ),
+
+  anonymizeUserForbiddenErrors: refusal(
+    "PERMISSION_DENIED (um nível de acesso acima do seu ou um usuário Master) ou USER_CANNOT_BE_DELETED_BY_HIMSELF (a si mesmo).",
+  ),
+
+  anonymizeUserConflictErrors: refusal(
+    "USER_ALREADY_ANONYMIZED: o usuário já foi removido e anonimizado. USER_IS_DRIVER_LOGIN: é o login de um motorista; remova e anonimize o motorista, que leva o login junto.",
   ),
 
   listUsersErrors: z
@@ -464,14 +720,32 @@ const userResponses = {
   ),
 
   revokeUserAccessConflictErrors: refusal(
-    "O acesso mudou enquanto o pedido era decidido; nada foi gravado.",
+    "TOGGLE_CONFLICT: o acesso mudou enquanto o pedido era decidido; nada foi gravado. DRIVER_HAS_OPEN_ROUTES: o usuário é o login de um motorista com rota planejada, liberada ou em andamento — revogar o acesso deixaria a rota sem quem a execute; a mensagem traz as contagens e o que fazer com cada rota (a mesma regra da inativação do motorista). Restaurar o acesso nunca é recusado por isso.",
   ),
 
   revokeUserAccessForbiddenErrors: refusal(
     "PERMISSION_DENIED (revogar a si mesmo ou um nível de acesso acima do seu).",
   ),
 
-  twoFactorUpdateErrors: refusal("VALIDATION_ERROR: corpo inválido."),
+  twoFactorUpdateErrors: refusal(
+    "VALIDATION_ERROR (corpo inválido: `enabled` e `password` vão juntos) ou PASSWORD_CURRENT_INCORRECT (senha atual incorreta).",
+  ),
+  twoFactorUpdateConflict: codedRefusal(
+    "Ligar sem e-mail: o código vai por e-mail, então a conta sem e-mail não liga a verificação.",
+    ["TWO_FACTOR_REQUIRES_EMAIL"],
+  ),
+  createOwnPasswordErrors: refusal(
+    "VALIDATION_ERROR: senha fora da regra (7 a 100 caracteres, sem espaços) ou `businessId` no corpo.",
+  ),
+  createOwnPasswordForbidden: codedRefusal(
+    "Esta sessão não é a que o QR Code acabou de abrir neste aparelho (há até 15 minutos). Troque a senha com a senha atual (PATCH /user/password) ou peça um novo QR Code ao gestor.",
+    ["PASSWORD_CREATE_NOT_ALLOWED"],
+  ),
+  ownSessionErrors: refusal("VALIDATION_ERROR (id inválido)."),
+  ownSessionConflict: codedRefusal(
+    "A sessão desta requisição: para sair dela, use POST /user/logout.",
+    ["SESSION_IS_CURRENT"],
+  ),
   // Master user responses
   masterUserCreated: z.object({
     message: z.string().default("Usuário Master criado com sucesso!"),
@@ -510,7 +784,7 @@ const userResponses = {
     "PERMISSION_DENIED (excluir a si mesmo, ou quem pede não é MASTER).",
   ),
   deleteMasterUserConflictErrors: refusal(
-    "LAST_MASTER_USER (deve restar pelo menos um), USER_HAS_SERVICE_ORDERS ou USER_HAS_ACCOUNT_PAYABLES.",
+    "LAST_MASTER_USER (deve restar pelo menos um), USER_HAS_SERVICE_ORDERS, USER_HAS_ACCOUNT_PAYABLES ou USER_HAS_RECORDS (registros que a plataforma preserva, com a contagem na mensagem), como na exclusão de um usuário da empresa.",
   ),
   tokenUserNotFound: refusal(
     "USER_NOT_FOUND: o token é válido, mas a conta dele não existe mais.",

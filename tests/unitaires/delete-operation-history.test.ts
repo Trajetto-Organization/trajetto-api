@@ -72,6 +72,7 @@ function makeContext() {
   } as Driver);
 
   return {
+    userRepository,
     driverRepository,
     deliveryRepository,
     routeRepository,
@@ -220,5 +221,68 @@ describe("deleting a driver who never worked", () => {
     await expect(
       context.deleteDriver.execute(DRIVER, ADMIN, BUSINESS),
     ).resolves.toBeDefined();
+  });
+});
+
+describe("the order of the answers (batch of 14/11/2026)", () => {
+  it("tells a driver with a login and a route to deactivate, not to remove the login", async () => {
+    // The login first sent the operator to Usuários, where the login refused
+    // with "revoke"; only a third try said "deactivate", which locks the
+    // login out too.
+    context.userRepository.user.push({
+      id: "018f0000-0000-7000-8000-0000000000b1",
+      role: "BUSINESS_USER",
+      businessId: BUSINESS,
+      driverId: DRIVER,
+    } as User);
+
+    await context.routeRepository.createRoute({
+      businessId: BUSINESS,
+      driverId: DRIVER,
+      scheduled_date: new Date(),
+      deliveryIds: [],
+    });
+
+    await expect(
+      context.deleteDriver.execute(DRIVER, ADMIN, BUSINESS),
+    ).rejects.toMatchObject({
+      code: "DRIVER_HAS_OPERATION",
+      message: expect.stringContaining("o login dele deixa de entrar no app"),
+    });
+  });
+
+  it("refuses a driver who only talked in the chat, and the conversation stays", async () => {
+    // Decision D-39: the thread is CASCADE, so the delete erased it.
+    context.driverRepository.conversation.push(
+      { driverId: DRIVER, kind: "chatMessages" },
+      { driverId: DRIVER, kind: "supportTickets" },
+    );
+
+    await expect(
+      context.deleteDriver.execute(DRIVER, ADMIN, BUSINESS),
+    ).rejects.toMatchObject({
+      code: "DRIVER_HAS_OPERATION",
+      message: expect.stringContaining(
+        "1 mensagem(ns) no chat e 1 atendimento(s)",
+      ),
+    });
+
+    expect(context.driverRepository.drivers).toHaveLength(1);
+  });
+
+  it("sends a driver whose only tie is the login to the Usuários screen", async () => {
+    context.userRepository.user.push({
+      id: "018f0000-0000-7000-8000-0000000000b2",
+      role: "BUSINESS_USER",
+      businessId: BUSINESS,
+      driverId: DRIVER,
+    } as User);
+
+    await expect(
+      context.deleteDriver.execute(DRIVER, ADMIN, BUSINESS),
+    ).rejects.toMatchObject({
+      code: "DRIVER_HAS_USER",
+      message: expect.stringContaining("tela Usuários"),
+    });
   });
 });

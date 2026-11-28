@@ -36,6 +36,7 @@ import { ResetUserPasswordUseCase } from "@/modules/user/usecases/reset-user-pas
 
 import { AuthenticateUserUseCase } from "@/modules/user/usecases/authenticate-user/authenticate-user-usecase";
 import { EmailVerificationUseCase } from "@/modules/user/usecases/e-mail-verification/e-mail-verification-usecase";
+import { InMemoryDriverTrustedDeviceRepository } from "@/modules/user/repositories/in-memory/in-memory-driver-trusted-device-repository";
 
 /**
  * Reset and e-mail verification links, and what the database keeps of them
@@ -134,6 +135,44 @@ describe("a password reset link", () => {
 
     expect(await compare("a-nova-senha", user!.password)).toBe(true);
   });
+
+  // Plan of 02/11/2026, D1: the single-use link reached the mailbox, so
+  // spending it proves the address. Asking for a second e-mail (the
+  // verification) only made the invited person act twice before signing in.
+  it("confirms the e-mail it was sent to, so the next login needs no second e-mail", async () => {
+    const mailed = await requestReset();
+
+    expect((await users.findUserByEmail(email))!.email_verified).toBeNull();
+
+    const before = Date.now();
+
+    await new ResetUserPasswordUseCase(users, tokens).execute({
+      token: mailed,
+      password: "a-nova-senha",
+    });
+
+    const verified = (await users.findUserByEmail(email))!.email_verified;
+
+    expect(verified).toBeInstanceOf(Date);
+    expect(verified!.getTime()).toBeGreaterThanOrEqual(before);
+  });
+
+  it("keeps an e-mail confirmed earlier as it was", async () => {
+    const mailed = await requestReset();
+    const confirmedAt = new Date("2026-01-02T03:04:05.000Z");
+    const row = users.user.find((user) => user.email === email)!;
+
+    row.email_verified = confirmedAt;
+
+    await new ResetUserPasswordUseCase(users, tokens).execute({
+      token: mailed,
+      password: "a-nova-senha",
+    });
+
+    expect((await users.findUserByEmail(email))!.email_verified).toEqual(
+      confirmedAt,
+    );
+  });
 });
 
 describe("an e-mail verification link", () => {
@@ -155,6 +194,7 @@ describe("an e-mail verification link", () => {
       users,
       tokens,
       driverRepositoryStub as never,
+      new InMemoryDriverTrustedDeviceRepository(),
     ).execute({ email, password: "a-senha" });
 
     expect(mailedUrls).toHaveLength(1);

@@ -1,0 +1,178 @@
+{
+  "uid": "trajetto-alertas",
+  "title": "Trajetto · alertas",
+  "description": "Os motivos do heartbeat de operação (os códigos do alert-rules) e as regras do vmalert, com histórico. Gerado por `yarn monitoring:render` (infra/monitoring/monitoring-config.ts): mude pelo repositório, nunca pelo painel.",
+  "tags": ["trajetto"],
+  "timezone": "browser",
+  "editable": false,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "1m",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "env",
+        "label": "Ambiente",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "victoriametrics"
+        },
+        "definition": "label_values(trajetto_build_info, env)",
+        "query": {
+          "query": "label_values(trajetto_build_info, env)",
+          "refId": "env"
+        },
+        "refresh": 2,
+        "includeAll": false,
+        "multi": false,
+        "sort": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "table",
+      "title": "Motivos ativos agora",
+      "description": "O veredito mais novo do ambiente; cada código tem o runbook em docs/runbooks/<código>.md.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "max by (env, code) (\n  trajetto_alert_active{env=\"$env\"}\n  and on (env, job, instance) (\n    trajetto_alert_evaluated_timestamp_seconds\n    == on (env) group_left ()\n    max by (env) (trajetto_alert_evaluated_timestamp_seconds)\n  )\n  and on (env, job, instance) (\n    time() - trajetto_alert_evaluated_timestamp_seconds < 300\n  )\n) == 1",
+          "legendFormat": "{{code}}",
+          "format": "table",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Idade do último veredito",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "time() - max(trajetto_alert_evaluated_timestamp_seconds{env=\"$env\"})",
+          "legendFormat": "segundos"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Réplicas lidas",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (job) (up{env=\"$env\", job=~\"trajetto-.+\"})",
+          "legendFormat": "{{job}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Alertas do vmalert",
+      "description": "ALERTS, gravado pelo vmalert: um degrau por alerta enquanto ele está pendente ou disparado.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "victoriametrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["lastNotNull", "max"]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "victoriametrics"
+          },
+          "expr": "sum by (alertname, alertstate) (ALERTS{env=\"$env\"})",
+          "legendFormat": "{{alertname}} {{alertstate}}"
+        }
+      ]
+    }
+  ]
+}

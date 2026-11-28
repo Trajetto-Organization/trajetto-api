@@ -48,7 +48,10 @@ vi.mock("@/shared/socket/handshake-rate-limit", async (importOriginal) => {
 
   return {
     ...actual,
-    createHandshakeLimiter: () => ({ allow: limiter.allow }),
+    createHandshakeLimiter: () => ({
+      allow: limiter.allow,
+      refund: async () => undefined,
+    }),
   };
 });
 
@@ -146,5 +149,41 @@ describe("a websocket upgrade", () => {
     // engine.io answers every refused upgrade with 400; the body says why.
     expect(result).toMatchObject({ opened: false, status: 400 });
     expect(result.body).toContain("SOCKET_RATE_LIMITED");
+  });
+});
+
+/**
+ * A process whose role takes no sockets (SOCKETS_ENABLED=false,
+ * plano-escala F3-02): a worker, a scheduler, the api once the realtime
+ * role exists. Refused at the engine before anything else, and never
+ * charged to the address: a Domain that sent the drivers here by mistake
+ * must not lock their CGNAT address out of the process that does take
+ * sockets (U-01).
+ */
+describe("a process with SOCKETS_ENABLED=false", () => {
+  it("refuses every upgrade with SOCKET_UNAVAILABLE, charging no address", async () => {
+    const { env } = await import("@/env");
+    const mutableEnv = env as unknown as { SOCKETS_ENABLED: boolean };
+    const before = websocket.realtimeMetrics().handshakes.refused;
+
+    mutableEnv.SOCKETS_ENABLED = false;
+
+    try {
+      const result = await rawUpgrade();
+
+      expect(result).toMatchObject({ opened: false, status: 400 });
+      expect(result.body).toContain("SOCKET_UNAVAILABLE");
+      expect(limiter.state.keys).toEqual([]);
+
+      const after = websocket.realtimeMetrics().handshakes.refused;
+
+      expect(after.sockets_disabled - (before.sockets_disabled ?? 0)).toBe(1);
+      expect(after.address_budget).toBe(before.address_budget);
+    } finally {
+      mutableEnv.SOCKETS_ENABLED = true;
+    }
+
+    // The same process takes the next upgrade once the role says so.
+    expect((await rawUpgrade()).opened).toBe(true);
   });
 });

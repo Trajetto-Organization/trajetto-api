@@ -14,9 +14,9 @@ import { createPrismaClient } from "@/shared/database/database-client";
  * Somebody says yes at the end of a long day and message search goes back to a
  * sequential scan with nothing failing anywhere.
  *
- * What this protects, precisely: the test environment builds a fresh database
- * per file and runs `migrate deploy` into it, so what is asserted here is the
- * state the MIGRATION FILES produce. That is the right target — accepting the
+ * What this protects, precisely: the test environment gives each file a clone
+ * of a template that `migrate deploy` built from the tree (template.ts), so
+ * what is asserted here is the state the MIGRATION FILES produce. That is the right target — accepting the
  * `migrate dev` prompt rewrites a migration file, and this fails — but it says
  * nothing about a long-lived database that has drifted. Dropping the index by
  * hand in a running environment leaves these green.

@@ -5,15 +5,17 @@ import {
   observeProviderCall,
 } from "@/shared/health/provider-metrics";
 import { IWhatsAppProvider } from "../IWhatsApp-provider";
+import { normalizePhoneNumber } from "../phone-number";
 
 import { SendMessageProps, WhatsAppResponse } from "../dtos";
 
 const log = logger.child({ component: "whatsapp-provider" });
 
 /**
- * Longest text accepted as the template's body parameter. Meta caps the
- * rendered body at 1024 characters, and the approved template's fixed text
- * also counts toward that — so the variable part is capped below the limit.
+ * Longest text a single parameter may carry here, as a last guard. The
+ * registry (whatsapp-templates.ts) already fits each parameter to its own
+ * limit and the whole body under Meta's 1024; this only keeps a value that
+ * skipped it from being refused whole.
  */
 const MAX_TEMPLATE_PARAMETER_LENGTH = 900;
 
@@ -110,6 +112,20 @@ const TEMPLATE_LANGUAGE = "pt_BR";
 const LANE_STOPPING_META_ERROR_CODES = new Set<number>([
   131031, // Business account is locked or restricted
   132016, // Template is disabled
+]);
+
+/**
+ * Refusals that mean the TEMPLATE at Meta does not match the code: it was
+ * never created, not approved in pt_BR, or takes another number of
+ * variables (plan of 02/11/2026, B1/B2/B7). Permanent per delivery, like any
+ * 13200x, but logged as errors with the template's name: the same refusal
+ * repeats for every message of that event until the owner fixes it at Meta,
+ * and /health/providers shows which one.
+ */
+const TEMPLATE_MISMATCH_META_ERROR_CODES = new Set<number>([
+  132000, // Template parameter count mismatch
+  132001, // Template does not exist for this name/language
+  132012, // Template parameter format mismatch
 ]);
 
 /**
@@ -241,51 +257,59 @@ function parseRetryAfterSeconds(
 }
 
 /**
- * Brazilian E.164 normalization for the `to` field.
- *
- * The decision is made by LENGTH, never by a "55" prefix. Area code 55
- * (Santa Maria/RS) produces local numbers that already begin with "55", so a
- * prefix test reads them as already carrying the country code and ships a
- * truncated, wrong destination. Digit counts, in contrast, are unambiguous
- * inside Brazil:
- *
- *   10 digits — DDD + 8-digit landline        → prepend "55"
- *   11 digits — DDD + 9 + 8-digit mobile      → prepend "55"
- *   12 digits — 55 + DDD + 8-digit landline   → already complete
- *   13 digits — 55 + DDD + 9 + 8-digit mobile → already complete
- *
- * Any other length belongs to another country's numbering plan and is returned
- * exactly as typed — a country code is never invented for it. The known
- * limitation is that a foreign number that happens to be 10 or 11 digits long
- * is indistinguishable from a local Brazilian one; this product only sends to
- * Brazilian recipients, so length wins.
+ * The template's components as Graph takes them: the body's text parameters
+ * in order, then one `button`/`url` component per URL button, by index,
+ * carrying the suffix appended to the URL approved at Meta. A component
+ * without parameters is left out: Meta refuses an empty one.
  */
-function normalizePhoneNumber(phone: string): string {
-  const digits = phone.replace(/\D/g, "");
+function templateComponents(
+  template: SendMessageProps["template"],
+  sanitize: (value: string) => string = (value) => value,
+): Array<Record<string, unknown>> {
+  const components: Array<Record<string, unknown>> = [];
 
-  if (digits.length === 10 || digits.length === 11) {
-    return `55${digits}`;
+  if (template.parameters.length > 0) {
+    components.push({
+      type: "body",
+      parameters: template.parameters.map((text) => ({
+        type: "text",
+        text: sanitize(text),
+      })),
+    });
   }
 
-  return digits;
+  (template.urlButtonSuffixes ?? []).forEach((suffix, index) => {
+    components.push({
+      type: "button",
+      sub_type: "url",
+      index: String(index),
+      parameters: [{ type: "text", text: suffix }],
+    });
+  });
+
+  return components;
 }
+
+// normalizePhoneNumber (the `to` field) lives in ../phone-number, a module
+// with no environment, so the customer opt-out (D38) keeps a phone under the
+// very digits this sender writes to.
 
 /**
  * Official WhatsApp sender (Meta Cloud API / Graph).
  *
  * Business-initiated messages are only accepted as pre-approved templates —
  * free-form text works solely inside the 24h window after the user writes
- * first, which a notification can never rely on. So every send goes out as
- * the template named by `META_WHATSAPP_TEMPLATE_NAME`, with the notification
- * text as its single body parameter. The template itself is created and
- * approved in Meta Business Manager; see the README for its expected shape.
+ * first, which a notification can never rely on. Every send names its own
+ * template, one per event and audience, with its parameters and, for the
+ * customer's four, two URL buttons (plan of 02/11/2026, B1/B2; the registry
+ * is src/shared/notifications/whatsapp-templates.ts). The generic one-
+ * parameter template is gone: Meta filed it as Marketing.
  *
- * A carrier's message to its own customer goes out under a template of its
- * own (`META_WHATSAPP_CUSTOMER_TEMPLATE_NAME`) when one is configured: a
- * customer reporting one as spam then risks that template, not the one every
- * driver and dispatcher depends on. The NUMBER, its quality rating and its
- * daily tier are still shared by every tenant — isolating those needs a
- * number per tenant or group (Meta account decision, see OUTBOX-16).
+ * A pause is per template, so a customer's spam report risks that moment's
+ * template, not the ones every driver and dispatcher depends on. The NUMBER,
+ * its quality rating and its daily tier are still shared by every tenant —
+ * isolating those needs a number per tenant or group (Meta account
+ * decision, see OUTBOX-16).
  */
 class MetaCloudApiProvider implements IWhatsAppProvider {
   /**
@@ -306,9 +330,8 @@ class MetaCloudApiProvider implements IWhatsAppProvider {
 
   async sendMessage({
     phoneNumber,
-    message,
+    template,
     referenceId,
-    audience,
   }: SendMessageProps): Promise<WhatsAppResponse> {
     if (!this.isConfigured()) {
       // Missing credentials are a deployment problem, not a transient one:
@@ -321,11 +344,7 @@ class MetaCloudApiProvider implements IWhatsAppProvider {
       };
     }
 
-    const templateName =
-      audience === "customer"
-        ? (env.META_WHATSAPP_CUSTOMER_TEMPLATE_NAME ??
-          env.META_WHATSAPP_TEMPLATE_NAME)
-        : env.META_WHATSAPP_TEMPLATE_NAME;
+    const templateName = template.name;
 
     const pausedFor = this.pauseRemainingSeconds(templateName);
 
@@ -361,17 +380,9 @@ class MetaCloudApiProvider implements IWhatsAppProvider {
               template: {
                 name: templateName,
                 language: { code: TEMPLATE_LANGUAGE },
-                components: [
-                  {
-                    type: "body",
-                    parameters: [
-                      {
-                        type: "text",
-                        text: this.sanitizeTemplateParameter(message),
-                      },
-                    ],
-                  },
-                ],
+                components: templateComponents(template, (value) =>
+                  this.sanitizeTemplateParameter(value),
+                ),
               },
               // Echoed back on every status callback for this message (see
               // SendMessageProps.referenceId). Meta caps it at 512 characters; a
@@ -422,6 +433,14 @@ class MetaCloudApiProvider implements IWhatsAppProvider {
           log.error(
             { errorCode, template: templateName },
             "whatsapp lane stopped by Meta: every send fails until an operator acts",
+          );
+        } else if (
+          errorCode !== undefined &&
+          TEMPLATE_MISMATCH_META_ERROR_CODES.has(errorCode)
+        ) {
+          log.error(
+            { errorCode, template: templateName },
+            "whatsapp template missing, unapproved or mismatched at Meta: its sends fail until it is fixed (see /health/providers)",
           );
         }
 
@@ -545,6 +564,8 @@ export {
   parseRetryAfterSeconds,
   RETRYABLE_META_ERROR_CODES,
   REQUEST_TIMEOUT_MS,
+  TEMPLATE_MISMATCH_META_ERROR_CODES,
+  templateComponents,
 };
 
 export type { MetaErrorClassification, MetaErrorSignals };

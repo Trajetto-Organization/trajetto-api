@@ -9,6 +9,8 @@ import {
   PolicyDeps,
   RenderContext,
 } from "../notification-types";
+import type { RenderedWhatsApp } from "../whatsapp-templates";
+import { nameWithEmail } from "../whatsapp-parameters";
 
 /**
  * Notification policies for MASTER account management.
@@ -33,6 +35,10 @@ const masterUserCreatedPolicy: NotificationPolicyEntry<MasterUserCreatedPayload>
   {
     category: NotificationCategory.ACCOUNT,
 
+    // The record of a privileged account the reader opened: the one notice
+    // that is about what they just did on purpose (decision D-49).
+    notifiesActor: "security",
+
     async resolveRecipients(payload, deps) {
       return resolveSingleUser(payload.actorUserId, deps);
     },
@@ -47,14 +53,12 @@ const masterUserCreatedPolicy: NotificationPolicyEntry<MasterUserCreatedPayload>
       };
     },
 
-    renderWhatsApp(payload) {
-      return [
-        `👤 *Novo Usuário Master Criado!*`,
-        `Nome: *${payload.masterName}*`,
-        `E-mail: *${payload.masterEmail}*`,
-        `As credenciais foram enviadas por e-mail.`,
-        `Para mais detalhes, acesse o sistema.`,
-      ].join("\n");
+    // trajetto_master_criado (B1): the confirmation of what the reader did.
+    renderWhatsApp(payload): RenderedWhatsApp {
+      return {
+        template: "trajetto_master_criado",
+        parameters: [payload.masterName, payload.masterEmail],
+      };
     },
 
     renderActivity(payload) {
@@ -104,24 +108,39 @@ const masterUserWelcomedPolicy: NotificationPolicyEntry<MasterUserWelcomedPayloa
 // master-user.updated — for the performing MASTER
 // ============================================================================
 
-function renderMasterUserUpdatedWhatsApp(payload: {
-  masterName: string;
-  changesNotificationText: string;
-  performingUserName: string;
-  performingUserEmail: string;
-}): string {
-  return [
-    `✏️ *Usuário Master Atualizado!*`,
-    `Usuário: *${payload.masterName}*`,
-    `Campos alterados: *${payload.changesNotificationText}*`,
-    `Atualizado por: *${payload.performingUserName}* (${payload.performingUserEmail})`,
-    `Para mais detalhes, acesse o sistema.`,
-  ].join("\n");
+/**
+ * Two templates where one render used to serve both (B1): the master who
+ * made the change reads "você alterou", the master whose account changed
+ * reads the security notice with who did it.
+ */
+function renderMasterUserUpdatedWhatsApp(
+  payload: MasterUserUpdatedPayload,
+): RenderedWhatsApp {
+  return {
+    template: "trajetto_master_atualizado",
+    parameters: [payload.beforeName, payload.changesNotificationText],
+  };
+}
+
+function renderMasterAccountUpdatedWhatsApp(
+  payload: MasterUserAccountUpdatedPayload,
+): RenderedWhatsApp {
+  return {
+    template: "trajetto_conta_master_atualizada",
+    parameters: [
+      payload.changesNotificationText,
+      nameWithEmail(payload.performingUserName, payload.performingUserEmail),
+    ],
+  };
 }
 
 const masterUserUpdatedPolicy: NotificationPolicyEntry<MasterUserUpdatedPayload> =
   {
     category: NotificationCategory.ACCOUNT,
+
+    // Same as the creation's: the record of a privileged account the reader
+    // changed (D-49).
+    notifiesActor: "security",
 
     async resolveRecipients(payload, deps) {
       return resolveSingleUser(payload.actorUserId, deps);
@@ -162,6 +181,17 @@ const masterUserAccountUpdatedPolicy: NotificationPolicyEntry<MasterUserAccountU
     // "Someone changed your account" is a security notice, not noise.
     mandatory: true,
 
+    // About the reader's own account, so it would reach them even if they
+    // were the one who changed it (the use case refuses a self-update today).
+    notifiesActor: "security",
+
+    // The use case already mails this master directly, with the fuller
+    // template (old and new name or e-mail; update-master-user-usecase.ts),
+    // and a link-only change mails the link itself. This e-mail landed in
+    // the same inbox as a second copy of the event (14/11/2026, decision
+    // D-52). The bell, the phone and the WhatsApp stay.
+    suppressEmail: true,
+
     async resolveRecipients(payload, deps) {
       return resolveSingleUser(payload.masterUserId, deps);
     },
@@ -176,7 +206,7 @@ const masterUserAccountUpdatedPolicy: NotificationPolicyEntry<MasterUserAccountU
       };
     },
 
-    renderWhatsApp: renderMasterUserUpdatedWhatsApp,
+    renderWhatsApp: renderMasterAccountUpdatedWhatsApp,
   };
 
 export {
@@ -184,5 +214,6 @@ export {
   masterUserWelcomedPolicy,
   masterUserUpdatedPolicy,
   masterUserAccountUpdatedPolicy,
+  renderMasterAccountUpdatedWhatsApp,
   renderMasterUserUpdatedWhatsApp,
 };

@@ -9,6 +9,7 @@ import {
   E2E_PHASE_REPLICAS,
   E2E_PHASE_SHARED,
   REPLICA_E2E_FILES,
+  SERIAL_E2E_FILES,
   replicaFileGlobs,
 } from "../../E2E/support/replica-files";
 
@@ -94,6 +95,109 @@ describe("the list of E2E files that start replicas", () => {
     }
 
     expect(mm.isMatch("route-lifecycle.test.ts", replicaFileGlobs())).toBe(
+      false,
+    );
+  });
+});
+
+/**
+ * What makes a file wait on the cluster's xmin horizon. Before it settles a
+ * changed day, the dashboard's rollup (plano-escala F4-21) waits for every
+ * write transaction open ANYWHERE in the cluster when it started: in the
+ * parallel phase, a writer another file keeps open in its own database (a
+ * lock or 55P03 test, a bulk seed) holds the wait past the 5 s test timeout,
+ * a red that a run alone never shows. The job's entry point waits only when
+ * a mark is pending; a file that runs it before any delivery changes, as
+ * dashboard-rollup-equivalence does, never waits.
+ */
+const WAITS_ON_THE_HORIZON = [
+  /\brollUpTenantDays\(/,
+  /\.settledSince\(/,
+  /\bpg_current_snapshot\(/,
+  /\bpg_snapshot_xmin\(/,
+];
+
+/** The file and the shared suites it runs (../contract): their cases run in it. */
+function sourceWithSuites(name: string): string {
+  const source = readFileSync(join(E2E, name), "utf8");
+  const suites = [...source.matchAll(/from "(\.\.\/contract\/[^"]+)"/g)].map(
+    ([, path]) => readFileSync(`${resolve(E2E, path)}.ts`, "utf8"),
+  );
+
+  return [source, ...suites].join("\n");
+}
+
+function waitsOnTheHorizon(name: string): boolean {
+  const source = sourceWithSuites(name);
+
+  return WAITS_ON_THE_HORIZON.some((pattern) => pattern.test(source));
+}
+
+/**
+ * The files that measure what the whole cluster disturbs (the xmin horizon
+ * every database shares, plano-escala F2-13) run in the same
+ * one-file-at-a-time phase, without starting replicas.
+ */
+describe("the cluster-sensitive files", () => {
+  it("exist and run in the one-file-at-a-time phase", () => {
+    for (const name of SERIAL_E2E_FILES) {
+      expect(e2eFiles, name).toContain(name);
+      expect(mm.isMatch(`tests/E2E/${name}`, replicaFileGlobs()), name).toBe(
+        true,
+      );
+    }
+  });
+
+  it("has every file that waits on the cluster's xmin horizon", () => {
+    const missing = e2eFiles.filter(
+      (name) =>
+        waitsOnTheHorizon(name) &&
+        !(SERIAL_E2E_FILES as readonly string[]).includes(name),
+    );
+
+    expect(missing).toEqual([]);
+  });
+
+  /**
+   * A gate on the planner's own clock ("Planning Time" of an EXPLAIN) is
+   * wall-clock CPU: beside the parallel phase's other forks, on a runner
+   * of two to four cores, the same plan read 60 % slower than alone (the
+   * partitioned queues' webhook claim, 1.3 ms alone, 2.19 ms in E2E 1/3
+   * with its statement unchanged), over its 2 ms gate.
+   */
+  it("has every file that gates on the planner's clock", () => {
+    const missing = e2eFiles.filter(
+      (name) =>
+        /"Planning Time"/.test(sourceWithSuites(name)) &&
+        !(SERIAL_E2E_FILES as readonly string[]).includes(name),
+    );
+
+    expect(missing).toEqual([]);
+  });
+
+  /**
+   * So is a gate on the slowest of a series of timed statements (each
+   * sample pushed as Date.now() minus its start): the partition job's
+   * pings while its ATTACH waits took at most 9 ms alone and up to 146 ms
+   * in E2E 1/3, a gradual tail of CPU contention, not a lock wait, over
+   * its 100 ms gate.
+   */
+  it("has every file that gates on the slowest of its timed samples", () => {
+    const missing = e2eFiles.filter(
+      (name) =>
+        /\.push\(Date\.now\(\) - \w+\)/.test(sourceWithSuites(name)) &&
+        !(SERIAL_E2E_FILES as readonly string[]).includes(name),
+    );
+
+    expect(missing).toEqual([]);
+  });
+
+  it("tells a file that waits on the horizon from one that only runs the job", () => {
+    expect(waitsOnTheHorizon("tenant-day-rollup.test.ts")).toBe(true);
+    expect(
+      waitsOnTheHorizon("tenant-day-rollup-repository-contract.test.ts"),
+    ).toBe(true);
+    expect(waitsOnTheHorizon("dashboard-rollup-equivalence.test.ts")).toBe(
       false,
     );
   });

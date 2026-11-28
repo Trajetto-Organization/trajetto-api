@@ -2,7 +2,10 @@ import { v7 as uuidV7 } from "uuid";
 import { hashSingleUseToken } from "@/shared/security/single-use-token";
 import {
   IUsersTokensRepository,
+  MAX_EXPIRED_REFRESH_TOKENS_PER_RUN,
   REFRESH_GRACE_MAX_SIBLINGS,
+  type RefreshTokenPurgeLimits,
+  type RefreshTokenPurgeResult,
 } from "../IUsers-tokens-repository";
 
 import {
@@ -16,10 +19,29 @@ import {
   CreateTwoFactorToken,
   RotateUserRefreshTokenProps,
   RefreshRotation,
+  UserDeviceSession,
+  UserOwnSession,
+  UserSessionFamily,
 } from "../../dtos/user-tokens-dto";
+import { groupDeviceSessions } from "../../services/device-sessions";
+import { hashDeviceId } from "../../services/session-service";
+import { groupOwnSessions, sessionFamilyOf } from "../../services/own-sessions";
+
+/** A push device as the session tables see it (Prisma: PushDeviceToken). */
+interface PushDeviceRow {
+  userId: string;
+  session_family_id: string | null;
+}
 
 class InMemoryUserTokensRepository implements IUsersTokensRepository {
   public refreshTokenItems: UserRefreshTokenProps[] = [];
+
+  /**
+   * The push devices the sessions registered, for the session reads that
+   * look at them (the own sessions' "app" kind and their revocation). Empty
+   * unless a test seeds it.
+   */
+  public pushDeviceTokens: PushDeviceRow[] = [];
   public forgotPasswordVerificationTokens: VerificationToken[] = [];
 
   public emailVerificationTokens: VerificationToken[] = [];
@@ -33,6 +55,7 @@ class InMemoryUserTokensRepository implements IUsersTokensRepository {
     userId,
     jti,
     family_id,
+    device_id,
   }: CreateUserRefreshTokenProps): Promise<UserRefreshTokenProps> {
     const createRefreshToken: UserRefreshTokenProps = {
       id: uuidV7(),
@@ -44,6 +67,8 @@ class InMemoryUserTokensRepository implements IUsersTokensRepository {
       revoked_at: null,
       replaced_by_jti: null,
       grace_siblings: 0,
+      device_id: device_id ?? null,
+      created_at: new Date(),
     };
 
     this.refreshTokenItems.push(createRefreshToken);
@@ -158,13 +183,167 @@ class InMemoryUserTokensRepository implements IUsersTokensRepository {
     );
   }
 
-  async deleteExpiredUserRefreshTokens(now = new Date()): Promise<number> {
-    const previousCount = this.refreshTokenItems.length;
+  async listUserDeviceSessions(
+    userId: string,
+    now = new Date(),
+  ): Promise<UserDeviceSession[]> {
+    return groupDeviceSessions(
+      this.refreshTokenItems
+        .filter(
+          (item) =>
+            item.userId === userId &&
+            Boolean(item.device_id) &&
+            !item.revoked_at &&
+            item.expires_in > now,
+        )
+        .map((item) => ({
+          device_id: item.device_id ?? null,
+          family_id: item.family_id,
+          created_at: item.created_at ?? new Date(0),
+          expires_in: item.expires_in,
+        })),
+    );
+  }
+
+  async findLoginsSignedInOnDevice(
+    userIds: string[],
+    deviceId: string,
+    now = new Date(),
+  ): Promise<string[]> {
+    return [
+      ...new Set(
+        this.refreshTokenItems
+          .filter(
+            (item) =>
+              userIds.includes(item.userId) &&
+              item.device_id === deviceId &&
+              !item.revoked_at &&
+              item.expires_in > now,
+          )
+          .map((item) => item.userId),
+      ),
+    ];
+  }
+
+  /** No push devices in this fake: the real one is proven against Postgres. */
+  async revokeUserDeviceSessions(
+    userId: string,
+    deviceHash: string,
+  ): Promise<string[]> {
+    const families = [
+      ...new Set(
+        this.refreshTokenItems
+          .filter(
+            (item) =>
+              item.userId === userId &&
+              Boolean(item.device_id) &&
+              hashDeviceId(item.device_id!) === deviceHash,
+          )
+          .map((item) => item.family_id),
+      ),
+    ];
+
     this.refreshTokenItems = this.refreshTokenItems.filter(
-      (item) => item.expires_in >= now,
+      (item) => !(item.userId === userId && families.includes(item.family_id)),
     );
 
-    return previousCount - this.refreshTokenItems.length;
+    return families;
+  }
+
+  async listUserSessions(
+    userId: string,
+    now = new Date(),
+  ): Promise<UserOwnSession[]> {
+    return groupOwnSessions(
+      this.refreshTokenItems
+        .filter(
+          (item) =>
+            item.userId === userId && !item.revoked_at && item.expires_in > now,
+        )
+        .map((item) => ({
+          family_id: item.family_id,
+          device_id: item.device_id ?? null,
+          created_at: item.created_at ?? new Date(0),
+          expires_in: item.expires_in,
+        })),
+      new Set(
+        this.pushDeviceTokens
+          .filter((row) => row.userId === userId && row.session_family_id)
+          .map((row) => row.session_family_id as string),
+      ),
+    );
+  }
+
+  async findSessionFamily(
+    userId: string,
+    familyId: string,
+    now = new Date(),
+  ): Promise<UserSessionFamily | null> {
+    return sessionFamilyOf(
+      familyId,
+      this.refreshTokenItems
+        .filter((item) => item.userId === userId && item.family_id === familyId)
+        .map((item) => ({
+          device_id: item.device_id ?? null,
+          created_at: item.created_at ?? new Date(0),
+          revoked_at: item.revoked_at ?? null,
+          expires_in: item.expires_in,
+        })),
+      now,
+    );
+  }
+
+  async revokeUserSession(
+    userId: string,
+    familyId: string,
+  ): Promise<{ ended: boolean; deviceId: string | null }> {
+    const now = new Date();
+    const rows = this.refreshTokenItems.filter(
+      (item) => item.userId === userId && item.family_id === familyId,
+    );
+
+    // Only a live session ends (see the real repository).
+    if (!rows.some((item) => !item.revoked_at && item.expires_in > now)) {
+      return { ended: false, deviceId: null };
+    }
+
+    this.refreshTokenItems = this.refreshTokenItems.filter(
+      (item) => !(item.userId === userId && item.family_id === familyId),
+    );
+    this.pushDeviceTokens = this.pushDeviceTokens.filter(
+      (row) => !(row.userId === userId && row.session_family_id === familyId),
+    );
+
+    return {
+      ended: true,
+      deviceId: rows.find((item) => item.device_id)?.device_id ?? null,
+    };
+  }
+
+  /**
+   * The Prisma one's semantics without its batches: oldest expired first, at
+   * most `maxRows`, nothing once the deadline passed, and `stoppedEarly`
+   * whenever an expired row is left.
+   */
+  async deleteExpiredUserRefreshTokens(
+    now = new Date(),
+    {
+      maxRows = MAX_EXPIRED_REFRESH_TOKENS_PER_RUN,
+      deadline = Number.POSITIVE_INFINITY,
+    }: RefreshTokenPurgeLimits = {},
+  ): Promise<RefreshTokenPurgeResult> {
+    const expired = this.refreshTokenItems
+      .filter((item) => item.expires_in < now)
+      .sort((a, b) => a.expires_in.getTime() - b.expires_in.getTime());
+
+    const take = Date.now() >= deadline ? 0 : Math.min(maxRows, expired.length);
+    const gone = new Set(expired.slice(0, take));
+
+    this.refreshTokenItems = this.refreshTokenItems.filter(
+      (item) => !gone.has(item),
+    );
+
+    return { deleted: take, stoppedEarly: expired.length > take };
   }
 
   /** No push devices in this fake: the real one is proven against Postgres. */

@@ -87,6 +87,49 @@ describe("deleting from R2", () => {
     await expect(service.tryDeleteFile(KEY)).resolves.toBe(false);
   });
 
+  describe("for the orphan collector (plano-escala F1-23)", () => {
+    // A Bucket Lock refuses the delete of an object it holds; S3's Object
+    // Lock says ObjectLocked. The collector counts those apart, as
+    // skipped, and the night still succeeds.
+    it.each([
+      ["AccessDenied", { name: "AccessDenied" }],
+      ["ObjectLocked", { name: "ObjectLocked" }],
+      [
+        "a Code of ObjectLockedByBucketPolicy",
+        { Code: "ObjectLockedByBucketPolicy" },
+      ],
+    ])("reads %s as locked, and logs no failure", async (_label, fields) => {
+      send.mockRejectedValue(
+        Object.assign(new Error("object is locked"), fields),
+      );
+
+      await expect(service.deleteFileOutcome(KEY)).resolves.toBe("locked");
+      expect(loggedLines()).toEqual([]);
+    });
+
+    it("reads anything else as failed, with the key in the log", async () => {
+      send.mockRejectedValue(new Error("socket hang up"));
+
+      await expect(service.deleteFileOutcome(KEY)).resolves.toBe("failed");
+      expect(loggedLines().some((line) => line.includes(KEY))).toBe(true);
+    });
+
+    it("answers deleted when the object is gone", async () => {
+      send.mockResolvedValue({});
+
+      await expect(service.deleteFileOutcome(KEY)).resolves.toBe("deleted");
+    });
+
+    it("leaves tryDeleteFile as it was: a lock is a false with the key in the log", async () => {
+      send.mockRejectedValue(
+        Object.assign(new Error("object is locked"), { name: "ObjectLocked" }),
+      );
+
+      await expect(service.tryDeleteFile(KEY)).resolves.toBe(false);
+      expect(loggedLines().some((line) => line.includes(KEY))).toBe(true);
+    });
+  });
+
   it("names the key for the callers that only clean up, too", async () => {
     // deleteFile is what every use case calls; before, its log line said
     // "Erro ao deletar arquivo" and nothing about which one.

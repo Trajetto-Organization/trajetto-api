@@ -1,11 +1,15 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { randomUUID } from "node:crypto";
 
+import pg from "pg";
+
 import { sign } from "jsonwebtoken";
 import auth from "@/config/auth";
+import { resetIndexUsageCache } from "@/shared/health/database-metrics";
 import { resetOperationalMetricsCache } from "@/shared/health/operational-metrics";
 import { createPrismaClient } from "@/shared/database/database-client";
+import { v7 as uuidV7 } from "uuid";
 
 /**
  * The numbers a MASTER uses to decide when to add capacity.
@@ -84,7 +88,8 @@ const OLDEST_AGE_SECONDS = 600;
  */
 function probe(overrides: Record<string, unknown>) {
   return {
-    id: randomUUID(),
+    // A v7, as every queue id: the queues are partitioned by it (F5-09).
+    id: uuidV7(),
     eventKey: `metrics-probe-${randomUUID()}`,
     topic: "metrics.probe",
     aggregateType: "metrics",
@@ -409,6 +414,219 @@ describe("the queue tables", () => {
   });
 });
 
+/** A plain session on this file's database, apart from the API's pool. */
+async function secondConnection(): Promise<pg.Client> {
+  const url = new URL(process.env.DATABASE_URL as string);
+
+  url.searchParams.delete("schema");
+
+  const client = new pg.Client({
+    connectionString: url.toString(),
+    connectionTimeoutMillis: 10_000,
+  });
+
+  await client.connect();
+
+  return client;
+}
+
+/**
+ * The database's own numbers (plano-escala F1-06), from the real views.
+ *
+ * The plan's alerts read them: an archiver that stopped, an xid running out,
+ * a write left open that holds back vacuum everywhere, a pg_wal filling the
+ * disk. A field the serializer drops, or an age measured from the wrong
+ * column, is an alert that never fires. The test server is a superuser on a
+ * Postgres that preloads pg_stat_statements, as the CI's is.
+ */
+describe("the database's own numbers", () => {
+  it("come back from the real views", async () => {
+    const { database } = (await metrics(masterToken)).json();
+
+    expect(database.collection_errors).toEqual([]);
+    expect(database.xid_age_database).toBeGreaterThan(0);
+    // Wraparound is the cluster's: the oldest database counts.
+    expect(database.xid_age).toBeGreaterThanOrEqual(database.xid_age_database);
+    expect(database.cache_hit_ratio).toBeGreaterThan(0);
+    expect(database.cache_hit_ratio).toBeLessThanOrEqual(1);
+    expect(database.stats_cluster_wide).toBe(true);
+    expect(database.pg_stat_statements).toBe("ready");
+    expect(database.parameters.max_connections).toBe(
+      String(database.max_connections),
+    );
+    expect(database.parameters).not.toHaveProperty("archive_command");
+
+    // The test server does not archive: zero, never an error.
+    expect(database.parameters.archive_mode).toBe("off");
+    expect(database.archiver).toMatchObject({
+      failed_count: 0,
+      last_archived_at: null,
+    });
+
+    expect(database.pg_wal.readable).toBe(true);
+    expect(database.pg_wal.files).toBeGreaterThan(0);
+    expect(database.pg_wal.bytes).toBeGreaterThan(0);
+
+    expect(database.sizes.database_bytes).toBeGreaterThan(0);
+    expect(database.sizes.tables).toContainEqual({
+      table: "driver_position",
+      total_bytes: expect.any(Number),
+    });
+  });
+
+  /**
+   * The limits the ops heartbeat pages at, as this environment set them.
+   * Two are tuned by env (LONG_WRITE_XACT_ALERT_SECONDS drops to 60 in wave
+   * 14; PG_WAL_ALERT_GIB is 8 on the single VPS), and the web's Sistema
+   * tab had them hardcoded: a 90 s write paged while its card stayed green.
+   * The tab reads them from here, and needs them through the serializer.
+   */
+  it("send the limits the alert judges them by", async () => {
+    const { env } = await import("@/env");
+    const { database } = (await metrics(masterToken)).json();
+
+    expect(database.alert_limits).toEqual({
+      xid_age: 1_000_000_000,
+      archive_lag_seconds: 300,
+      long_write_xact_seconds: env.LONG_WRITE_XACT_ALERT_SECONDS,
+      pg_wal_bytes: env.PG_WAL_ALERT_GIB * 1024 ** 3,
+      pitr_expected: env.PITR_EXPECTED,
+    });
+  });
+
+  /**
+   * The index usage report (plano-escala F2-23), on the real catalog: each
+   * index of a hot table once, by the parent's name for a partitioned one,
+   * the primary keys marked so they are never candidates, and the last
+   * scan Postgres 16 keeps. A scan through an index moves its counter.
+   */
+  it("report each hot table's indexes once, with their scans and last scan", async () => {
+    resetOperationalMetricsCache();
+    resetIndexUsageCache();
+
+    // One read down the trail's primary key, so its counter moves: the
+    // planner kept off a sequential scan of the small partitions, and the
+    // backend's statistics flushed when the transaction ends.
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe("SET LOCAL enable_seqscan = off");
+      await tx.$queryRawUnsafe(
+        `SELECT 1 FROM "driver_position_v2" WHERE "driverId" = $1::uuid AND "recorded_at" > now() - interval '1 day'`,
+        randomUUID(),
+      );
+      await tx.$executeRawUnsafe("SELECT pg_stat_force_next_flush()");
+    });
+
+    const { database } = (await metrics(masterToken)).json();
+    const usage = database.index_usage;
+
+    expect(usage).not.toBeNull();
+    expect(database.collection_errors).toEqual([]);
+
+    const names = usage.indexes.map(
+      (entry: { table: string; index: string }) =>
+        `${entry.table}.${entry.index}`,
+    );
+
+    // Once each, and never a daily partition's own index.
+    expect(new Set(names).size).toBe(names.length);
+    expect(
+      usage.indexes.filter((entry: { index: string }) =>
+        /_\d{8}_/.test(entry.index),
+      ),
+    ).toEqual([]);
+
+    const trailKey = usage.indexes.find(
+      (entry: { index: string }) => entry.index === "driver_position_v2_pkey",
+    );
+
+    expect(trailKey).toMatchObject({
+      table: "driver_position_v2",
+      primary: true,
+      unique: true,
+      unused: false,
+    });
+    expect(trailKey.scans).toBeGreaterThanOrEqual(1);
+    expect(trailKey.last_scan_at).not.toBeNull();
+    expect(
+      usage.indexes.some((entry: { primary: boolean }) => !entry.primary),
+    ).toBe(true);
+    // A fresh database: the counters' window is unknown or short, so no
+    // index is a candidate yet.
+    expect(usage.unused).toEqual([]);
+
+    // The index of a foreign key, the one the parent's ON DELETE CASCADE
+    // walks, is marked so (also when the key's column leads a longer
+    // index), and never becomes a candidate.
+    const byName = (name: string) =>
+      usage.indexes.find((entry: { index: string }) => entry.index === name);
+
+    expect(byName("route_stop_deliveryId_idx")).toMatchObject({
+      table: "route_stop",
+      foreign_key: true,
+      unused: false,
+    });
+    expect(byName("route_stop_routeId_status_idx")).toMatchObject({
+      foreign_key: true,
+    });
+  });
+
+  it("report a partitioned table once, by its root", async () => {
+    const { database } = (await metrics(masterToken)).json();
+    const tables = database.hot_tables.map(
+      (entry: { table: string }) => entry.table,
+    );
+
+    const trail = database.hot_tables.find(
+      (entry: { table: string }) => entry.table === "driver_position",
+    );
+
+    const roots = tables.filter((name: string) =>
+      /^driver_position(_v2)?$/.test(name),
+    );
+    // A daily partition of either trail (the lean one since plano-escala
+    // F2-10) reported on its own.
+    const leaks = tables.filter((n: string) =>
+      /^driver_position(_v2)?_\d{8}$/.test(n),
+    );
+
+    // The migration creates several daily partitions ahead.
+    expect(trail.partitions).toBeGreaterThan(1);
+    expect(roots.sort()).toEqual(["driver_position", "driver_position_v2"]);
+    expect(leaks).toEqual([]);
+    expect(tables).toContain("notification_delivery");
+  });
+
+  it("see a write and a snapshot left open on other connections", async () => {
+    const writer = await secondConnection();
+    const reader = await secondConnection();
+
+    try {
+      // An xid assigned is a write as far as vacuum is concerned.
+      await writer.query("BEGIN");
+      await writer.query("SELECT pg_current_xact_id()");
+
+      // A repeatable-read snapshot held, writing nothing.
+      await reader.query("BEGIN ISOLATION LEVEL REPEATABLE READ");
+      await reader.query("SELECT 1");
+
+      await vi.waitFor(
+        async () => {
+          const { database } = (await metrics(masterToken)).json();
+
+          expect(database.oldest_write_xact_seconds).toBeGreaterThanOrEqual(3);
+          expect(database.oldest_snapshot_seconds).toBeGreaterThanOrEqual(3);
+        },
+        { timeout: 30_000, interval: 500 },
+      );
+    } finally {
+      await writer.query("ROLLBACK").catch(() => undefined);
+      await reader.query("ROLLBACK").catch(() => undefined);
+      await writer.end();
+      await reader.end();
+    }
+  }, 60_000);
+});
+
 /**
  * What the meeting-wave features left for operators to watch (decisions 14.2,
  * 14.3/14.4 and 14.8): the deprecated app contracts still in use (removed
@@ -417,9 +635,8 @@ describe("the queue tables", () => {
  */
 describe("the meeting-wave numbers", () => {
   it("count the legacy app contracts this replica served", async () => {
-    const { countLegacyContractUse } = await import(
-      "@/shared/http/legacy-contract-usage"
-    );
+    const { countLegacyContractUse } =
+      await import("@/shared/http/legacy-contract-usage");
     const before = (await metrics(masterToken)).json().legacy_contracts;
 
     countLegacyContractUse("legacy_proof_adapter");
@@ -437,9 +654,8 @@ describe("the meeting-wave numbers", () => {
   });
 
   it("count the device pre-check's agreement per kind and result", async () => {
-    const { countDeviceAgreement } = await import(
-      "@/shared/ai-precheck/device-agreement-metrics"
-    );
+    const { countDeviceAgreement } =
+      await import("@/shared/ai-precheck/device-agreement-metrics");
     const before = (await metrics(masterToken)).json()
       .ai_device_agreement_total;
 
@@ -457,6 +673,34 @@ describe("the meeting-wave numbers", () => {
     ]);
   });
 
+  it("count the dashboard rollup's shadow windows, the gate before it serves", async () => {
+    // Plano-escala F4-22: the owner switches DASHBOARD_ROLLUP_MODE=on after
+    // seven days with windows_diverged at 0. Per replica, since it started.
+    const { countRollupWindow } =
+      await import("@/shared/rollup/dashboard-rollup-metrics");
+    const before = (await metrics(masterToken)).json().dashboard_rollup;
+
+    countRollupWindow("diverged");
+
+    const after = (await metrics(masterToken)).json().dashboard_rollup;
+
+    expect(before.mode).toBe("shadow");
+    expect(after.windows_diverged).toBe(before.windows_diverged + 1);
+    expect(after.windows_compared).toBe(before.windows_compared + 1);
+    expect(after.last_divergence_at).toEqual(expect.any(String));
+    expect(Object.keys(after).sort()).toEqual([
+      "failures",
+      "last_divergence_at",
+      "mode",
+      "on_fallbacks",
+      "views_skipped",
+      "windows_agreed",
+      "windows_compared",
+      "windows_diverged",
+      "windows_raced",
+    ]);
+  });
+
   it("show the proof signing certificate's state without its serial or CNPJ", async () => {
     const body = (await metrics(masterToken)).json();
 
@@ -468,6 +712,97 @@ describe("the meeting-wave numbers", () => {
       signer_name: null,
       not_after: null,
       days_left: null,
+    });
+  });
+});
+
+describe("the ramp's gauge", () => {
+  /**
+   * The Sistema tab shows the ramp next to the alert (plano-escala F1-22):
+   * the newest quarter-hour sums of the cluster rows, as the heartbeat's
+   * alert reads them (up to 20 minutes old), against the approved gate.
+   * Without a recent sum the numbers are unknown, not zero.
+   */
+  it("says unknown, with the gate, before any quarter-hour sum", async () => {
+    const response = await metrics(masterToken);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().volume).toEqual({
+      approved_gate_monthly: 10_000,
+      gate_ratio: 0.7,
+      daily_soft_cap: null,
+      last_24h: null,
+      last_7d: null,
+      projected_monthly: null,
+      gate_percent: null,
+      since: null,
+      measured_at: null,
+    });
+  });
+
+  it("reads the newest quarter-hour sums of the cluster rows", async () => {
+    const now = Date.now();
+    const at = (minutesAgo: number) => new Date(now - minutesAgo * 60_000);
+
+    await prisma.opsSample.createMany({
+      data: [
+        // Older than 20 minutes: the alert would not judge it either.
+        {
+          ts: at(25),
+          role: "cluster",
+          replica: "seed",
+          metrics: {
+            v: 1,
+            deliveries: { created: 1, last_24h: 1, last_7d: 1, since: null },
+          },
+        },
+        {
+          ts: at(4),
+          role: "cluster",
+          replica: "seed",
+          metrics: {
+            v: 1,
+            deliveries: {
+              created: 3,
+              last_24h: 400,
+              last_7d: 1_400,
+              since: at(6 * 24 * 60).toISOString(),
+            },
+          },
+        },
+        // Newer, but a minute row without the sums: it carries no totals.
+        {
+          ts: at(2),
+          role: "cluster",
+          replica: "seed",
+          metrics: { v: 1, deliveries: { created: 2 } },
+        },
+        // A process row with numbers in the same keys never counts.
+        {
+          ts: at(1),
+          role: "all",
+          replica: "api-1",
+          metrics: {
+            v: 1,
+            deliveries: { created: 9, last_24h: 9, last_7d: 9 },
+          },
+        },
+      ],
+    });
+
+    const volume = (await metrics(masterToken)).json().volume;
+
+    // 1 400 a week is 6 000 a month: 60% of the 10 000 gate.
+    expect(volume).toEqual({
+      approved_gate_monthly: 10_000,
+      gate_ratio: 0.7,
+      daily_soft_cap: null,
+      last_24h: 400,
+      last_7d: 1_400,
+      projected_monthly: 6_000,
+      gate_percent: 60,
+      since: at(6 * 24 * 60).toISOString(),
+      measured_at: at(4).toISOString(),
     });
   });
 });

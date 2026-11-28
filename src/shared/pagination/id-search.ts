@@ -66,8 +66,7 @@ function idSearchOf(term: string): IdSearch | null {
 }
 
 type IdCondition =
-  | { id: string }
-  | { id: { endsWith: string; mode: "insensitive" } };
+  { id: string } | { id: { endsWith: string; mode: "insensitive" } };
 
 /** The Prisma conditions on `id` a search term names (none, or one). */
 function idSearchConditions(term: string): IdCondition[] {

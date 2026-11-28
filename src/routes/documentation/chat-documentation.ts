@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { responseDateTime } from "./response-date";
 
 import { listChatThreadsSchema } from "@/schemas/list-chat-threads-schema";
 import { listChatMessagesSchema } from "@/schemas/list-chat-messages-schema";
@@ -30,8 +31,6 @@ const chatSchemas = {
   listRecipients: listChatRecipientsSchema,
 };
 
-const isoDateTime = z.union([z.string(), z.date()]);
-
 /**
  * The chat's wire shapes, for the document.
  *
@@ -40,7 +39,9 @@ const isoDateTime = z.union([z.string(), z.date()]);
  * silently strip any field one of them reads and this file forgot. So the
  * typed shapes are attached with `documentedAs` — shown in /docs, never
  * applied — and tests/unitaires/contract/chat-documented-shapes holds them to
- * the DTOs the use cases return.
+ * the DTOs the use cases return. A pass-through field is `.optional()` too:
+ * zod 4 refuses an absent key under a bare `z.unknown()` (zod 3 let it
+ * through), and the serializer would answer 500.
  */
 const chatPerson = z.object({ id: z.string(), name: z.string() });
 
@@ -73,7 +74,7 @@ const chatMessageEntity = z.object({
       "O atendimento (ticket) da mensagem (decisão 14.5); null só em aviso em massa.",
     ),
   senderId: z.string(),
-  created_at: isoDateTime,
+  created_at: responseDateTime(),
   sender: chatPerson,
   delivery: z
     .object({ id: z.string(), recipient_name: z.string(), status: z.string() })
@@ -122,7 +123,7 @@ const chatDocumented = {
     driverUser: z
       .object({
         id: z.string(),
-        last_seen_at: isoDateTime.nullable(),
+        last_seen_at: responseDateTime().nullable(),
         online: z.boolean().describe("Conectado agora, em qualquer réplica."),
       })
       .nullable()
@@ -132,7 +133,7 @@ const chatDocumented = {
         kind: z.enum(["TEXT", "IMAGE", "AUDIO"]),
         body: z.string().nullable(),
         sender: chatPerson,
-        created_at: isoDateTime,
+        created_at: responseDateTime(),
       })
       .nullable(),
     unreadCount: z.number().int(),
@@ -168,16 +169,16 @@ const chatResponses = {
       previousCursor: chatCursorEntity,
       hasNewer: z.boolean(),
 
-      counterpartLastReadAt: z.unknown(),
-      counterpartDeliveredAt: z.unknown(),
+      counterpartLastReadAt: z.unknown().optional(),
+      counterpartDeliveredAt: z.unknown().optional(),
 
       // Null means the driver genuinely has no app account — the one fact the
       // panel used to guess from a thread list that may not have loaded him.
-      driverUser: z.unknown(),
+      driverUser: z.unknown().optional(),
 
       // Decision 14.5: the tickets cited on the page (subject separators).
       tickets: z.array(z.unknown()),
-      counterpartTicketReadAt: z.unknown(),
+      counterpartTicketReadAt: z.unknown().optional(),
     }),
     z.object({
       threadId: z
@@ -192,16 +193,16 @@ const chatResponses = {
         "Para mensagens mais novas; null no fim da conversa.",
       ),
       hasNewer: z.boolean(),
-      counterpartLastReadAt: isoDateTime
+      counterpartLastReadAt: responseDateTime()
         .nullable()
         .describe("Até onde o OUTRO lado leu: o duplo check azul."),
-      counterpartDeliveredAt: isoDateTime
+      counterpartDeliveredAt: responseDateTime()
         .nullable()
         .describe(
           "Até onde o aparelho do motorista recebeu (só para a base): o duplo check cinza.",
         ),
       driverUser: z
-        .object({ id: z.string(), last_seen_at: isoDateTime.nullable() })
+        .object({ id: z.string(), last_seen_at: responseDateTime().nullable() })
         .nullable(),
       tickets: z
         .array(z.union([ticketSummary, driverTicketViewShape]))
@@ -209,7 +210,7 @@ const chatResponses = {
           "Os atendimentos das mensagens desta página, para os separadores de assunto. O motorista recebe a visão reduzida (sem atendente).",
         ),
       counterpartTicketReadAt: z
-        .record(z.string(), isoDateTime)
+        .record(z.string(), responseDateTime())
         .describe(
           "Até onde o OUTRO lado leu cada atendimento citado na página (ler um atendimento move só o cursor dele). Uma mensagem está lida quando counterpartLastReadAt OU o cursor do atendimento dela a cobre. Atendimento que o outro lado nunca leu fica de fora.",
         ),
@@ -220,7 +221,7 @@ const chatResponses = {
       message: z.string().default("Mensagem enviada!"),
       data: z.array(z.unknown()),
       outcomes: z.array(z.unknown()),
-      summary: z.unknown(),
+      summary: z.unknown().optional(),
     }),
     z.object({
       message: z.string(),
@@ -263,7 +264,7 @@ const chatResponses = {
       data: z.array(z.unknown()),
       nextCursor: z.string().nullable(),
       hasMore: z.boolean(),
-      audience: z.unknown(),
+      audience: z.unknown().optional(),
     }),
     z.object({
       data: z
@@ -285,22 +286,25 @@ const chatResponses = {
   markRead: documentedAs(
     z.object({
       message: z.string().default("Conversa marcada como lida."),
-      data: z.object({ last_read_at: z.unknown() }),
+      data: z.object({ last_read_at: z.unknown().optional() }),
     }),
     z.object({
       message: z.string(),
-      data: z.object({ last_read_at: isoDateTime }),
+      data: z.object({ last_read_at: responseDateTime() }),
     }),
   ),
   markDelivered: documentedAs(
     z.object({
       message: z.string().default("Entrega confirmada."),
-      data: z.object({ delivered_at: z.unknown(), side: z.unknown() }),
+      data: z.object({
+        delivered_at: z.unknown().optional(),
+        side: z.unknown().optional(),
+      }),
     }),
     z.object({
       message: z.string(),
       data: z.object({
-        delivered_at: isoDateTime,
+        delivered_at: responseDateTime(),
         side: z.enum(["DRIVER", "STAFF"]),
       }),
     }),
@@ -312,7 +316,7 @@ const chatResponses = {
     z.object({ data: z.array(chatDocumented.searchHit) }),
   ),
   attachmentUrl: documentedAs(
-    z.object({ attachment_url: z.unknown() }),
+    z.object({ attachment_url: z.unknown().optional() }),
     z.object({
       attachment_url: z
         .string()

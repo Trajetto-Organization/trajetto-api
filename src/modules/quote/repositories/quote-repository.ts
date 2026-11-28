@@ -7,7 +7,7 @@ import {
   UpdateQuoteProps,
 } from "../dtos/quote-dto";
 
-import database from "@/../infra/database";
+import database, { readDatabase } from "@/../infra/database";
 
 import { QUOTE_SORT, quoteListWhere } from "../usecases/list-quotes/quote-list";
 
@@ -16,6 +16,21 @@ import { insensitiveEquals } from "@/shared/utils/like-pattern";
 
 class QuoteRepository implements IQuoteRepository {
   constructor(private prisma = database) {}
+
+  /**
+   * The heavy reads' bulkhead (plano-escala F3-17), for the MASTER's list of
+   * quotes: a pool of its own, 3 connections and 10 s a statement, so a burst
+   * of them waits among itself instead of taking the connections every other
+   * request needs. A repository built on another client (a test's) reads on
+   * that client. A getter, so a module that mocks infra/database without it
+   * only needs it when one of these reads runs.
+   * With DATABASE_REPLICA_URL, readDatabase() sends them to the standby
+   * while the replica guard vouches for it: lists only (plano-escala F4-42,
+   * tests/unitaires/database/read-routing-guard.test.ts).
+   */
+  private get read(): typeof this.prisma {
+    return this.prisma === database ? readDatabase() : this.prisma;
+  }
 
   async createQuote(quoteData: CreateQuoteProps): Promise<Quote> {
     const quote = await this.prisma.quote.create({
@@ -72,13 +87,13 @@ class QuoteRepository implements IQuoteRepository {
     const filters = { search, statuses, fleetSizes };
 
     const [data, grouped] = await Promise.all([
-      this.prisma.quote.findMany({
+      this.read.quote.findMany({
         skip: (page - 1) * pageSize,
         take: pageSize,
         where: quoteListWhere(filters),
         orderBy: resolveOrderBy(QUOTE_SORT, { sort, order }),
       }),
-      this.prisma.quote.groupBy({
+      this.read.quote.groupBy({
         by: ["status", "fleet_size"],
         where: quoteListWhere(filters, { except: "facets" }),
         _count: { _all: true },

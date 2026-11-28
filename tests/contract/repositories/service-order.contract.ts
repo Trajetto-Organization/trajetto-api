@@ -8,7 +8,8 @@ import { expectPrismaCode, fixedId, type Kind } from "../support";
 /**
  * The service order repository's contract (decision 13.2): what a create
  * stores (origin and original GPS), the submission key, the guarded delete's
- * tenant wall, and the list's order and search.
+ * tenant wall, the list's order and search, and the reads of wave 3 (the
+ * detail, "Minhas OS" and a vehicle's history).
  */
 
 const A = fixedId("05ea", 1);
@@ -157,6 +158,126 @@ function serviceOrderRepositoryContract(
       await h.repo.deleteServiceOrderGuarded(fixedId("05ee", 99), A),
     ).toEqual({ missing: true });
     expect(await h.repo.findServiceOrderById(h.id("b"))).not.toBeNull();
+  });
+
+  // Wave 3: the app's reads. The company is in the query, never compared
+  // after the read.
+  it("reads one order's detail inside its company only", async () => {
+    const h = harness();
+    const detail = await h.repo.findServiceOrderDetail(h.id("app"), A);
+
+    expect(detail).toMatchObject({
+      id: h.id("app"),
+      businessId: A,
+      vehicleId: F.vehicleA,
+      responsibleUserId: F.userA,
+      description: "Pneu furado na estrada",
+      completion_date: null,
+      created_from: "MOBILE_APP",
+      vehicle: {
+        id: F.vehicleA,
+        license_plate: F.plateA,
+        description: `Caminhão ${F.plateA}`,
+      },
+      responsibleUser: { id: F.userA },
+      parts: [],
+    });
+    expect(Number(detail?.total_amount)).toBe(150);
+
+    expect(await h.repo.findServiceOrderDetail(h.id("b"), A)).toBeNull();
+    expect(
+      await h.repo.findServiceOrderDetail(fixedId("05ee", 99), A),
+    ).toBeNull();
+  });
+
+  it("lists the caller's orders newest first and pages them by cursor", async () => {
+    const h = harness();
+    const assigned = (cursor?: string) =>
+      h.repo.searchServiceOrdersOfDriverWithCursor({
+        limit: 1,
+        cursor,
+        businessId: A,
+        userId: F.userA,
+        scope: "assigned",
+        vehicleIds: [],
+      });
+
+    const first = await assigned();
+
+    expect(first.data.map((row) => row.id)).toEqual([h.id("web")]);
+    expect(first.hasMore).toBe(true);
+
+    const second = await assigned(first.nextCursor ?? undefined);
+
+    expect(second.data.map((row) => row.id)).toEqual([h.id("app")]);
+    expect(second.hasMore).toBe(false);
+  });
+
+  it("lists the vehicles' orders without the caller's own, inside the company", async () => {
+    const h = harness();
+    const vehicle = (userId: string, vehicleIds: string[]) =>
+      h.repo.searchServiceOrdersOfDriverWithCursor({
+        limit: 10,
+        businessId: A,
+        userId,
+        scope: "vehicle",
+        vehicleIds,
+      });
+
+    // userA is the responsible of both: they belong to "assigned".
+    expect((await vehicle(F.userA, [F.vehicleA])).data).toEqual([]);
+    expect(
+      (await vehicle(F.userB, [F.vehicleA])).data.map((row) => row.id),
+    ).toEqual([h.id("web"), h.id("app")]);
+    // Another company's vehicle brings none of its orders into A.
+    expect((await vehicle(F.userA, [F.vehicleB])).data).toEqual([]);
+    expect((await vehicle(F.userB, [])).data).toEqual([]);
+  });
+
+  // The web's driver page: the detail's rows, which the use case cuts per
+  // reader. It read the whole row, the location audit and the submission
+  // key included.
+  it("lists a vehicle's orders as detail rows, newest first, inside its company", async () => {
+    const h = harness();
+    const history = (vehicleId: string, cursor?: string) =>
+      h.repo.searchServiceOrderByVehicleWithCursor({
+        limit: 1,
+        cursor,
+        vehicleId,
+        businessId: A,
+      });
+
+    const first = await history(F.vehicleA);
+
+    expect(first.data.map((row) => row.id)).toEqual([h.id("web")]);
+    expect(first.hasMore).toBe(true);
+    expect(first.data[0]).toMatchObject({
+      vehicle: {
+        id: F.vehicleA,
+        license_plate: F.plateA,
+        description: `Caminhão ${F.plateA}`,
+      },
+      responsibleUser: { id: F.userA },
+      parts: [],
+    });
+    expect(Number(first.data[0]?.total_amount)).toBe(150);
+
+    const second = await history(F.vehicleA, first.nextCursor ?? undefined);
+
+    expect(second.data.map((row) => row.id)).toEqual([h.id("app")]);
+    expect(second.hasMore).toBe(false);
+
+    for (const column of [
+      "client_submission_id",
+      "latitude_original",
+      "location_source",
+      "location_edited_by",
+    ]) {
+      expect(second.data[0], column).not.toHaveProperty(column);
+    }
+
+    // Another company's vehicle brings none of its orders into A.
+    expect((await history(F.vehicleB)).data).toEqual([]);
   });
 }
 

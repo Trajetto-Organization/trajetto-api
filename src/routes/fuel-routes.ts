@@ -4,6 +4,11 @@ import { container } from "tsyringe";
 import { CreateFuelController } from "@/modules/fuel/usecases/create-fuel/create-fuel-controller";
 import { CreateFuelUseCase } from "@/modules/fuel/usecases/create-fuel/create-fuel-usecase";
 import { acceptLegacyMultipart } from "@/shared/http/legacy-multipart";
+import { clientSentAtHeaders } from "@/shared/delivery/occurred-at";
+import {
+  clientQueuedAtHeaders,
+  clientVersionHeaders,
+} from "@/shared/http/client-version";
 import { ListFuelController } from "@/modules/fuel/usecases/list-fuel/list-fuel-controller";
 
 import { UpdateFuelController } from "@/modules/fuel/usecases/update-fuel/update-fuel-controller";
@@ -19,6 +24,7 @@ import { requireModuleForPlugin } from "@/modules/middlewares/verify-module-enab
 import { verifyPermission } from "@/modules/middlewares/verify-permission";
 
 import {
+  ignoreDriverBranchChoice,
   verifyBranchActive,
   verifyBusinessActive,
 } from "@/modules/middlewares/verify-tenant-active";
@@ -74,12 +80,20 @@ async function fuelRoutes(app: FastifyInstance) {
           // Parsed by hand in the controller; see idempotency-documentation.
           openapi: {
             body: fuelSchemas.createFuelBody,
-            headers: fuelSchemas.idempotencyHeaders,
+            // X-Client-Sent-At dates a refuelling queued offline (K6); the
+            // build's contract and X-Client-Queued-At decide whether a second
+            // refuelling within 30 minutes is refused or only flagged.
+            headers: fuelSchemas.idempotencyHeaders
+              .merge(clientSentAtHeaders)
+              .merge(clientVersionHeaders)
+              .merge(clientQueuedAtHeaders),
           },
         },
         onRequest: [ensureAuthenticated],
         preHandler: [
           verifyBusinessActive,
+          // A driver's branch is the server's to resolve (wave 3.7).
+          ignoreDriverBranchChoice,
           verifyBranchActive,
           verifyPermission("fuel_manage", "write"),
           materializeLegacyUploads,
@@ -89,7 +103,7 @@ async function fuelRoutes(app: FastifyInstance) {
           tags: ["fuel"],
           summary: "Registra um abastecimento",
           description:
-            "Registra um abastecimento de um veículo: filial, motorista, combustível, quilometragem, litros, preço por litro, data e localização. A foto do odômetro é obrigatória e vai em `photo`, a chave já enviada ao storage por POST /uploads/presign/:businessId. O valor total é calculado pelo servidor (litros × preço). A data não pode ser posterior ao dia de hoje no fuso da empresa. A quilometragem é posta na data do abastecimento antes de qualquer mudança no odômetro: havendo registro em dia posterior (abastecimento lançado com atraso, fila offline do app), ela fica entre a leitura anterior e a seguinte e o odômetro do veículo não muda; sendo o registro mais recente (registros do mesmo dia não contam, pois a data do web é o dia, não a hora), ela fica à frente do odômetro, que avança com ela; fora disso, 400 VEHICLE_MILEAGE_INVALID. O motorista abastece só o veículo em que é responsável ou o da sua rota liberada ou em andamento; a filial, o combustível e o motorista dele são preenchidos pelo servidor. Reenvio com a mesma chave de idempotência devolve o registro já criado. Vínculo de outra empresa responde como inexistente.",
+            "Registra um abastecimento de um veículo: filial, motorista, combustível, quilometragem, litros, preço por litro, data e localização. A foto do odômetro é obrigatória e vai em `photo`, a chave já enviada ao storage por POST /uploads/presign/:businessId. O valor total é calculado pelo servidor (litros × preço). A data não pode ser posterior ao dia de hoje no fuso da empresa. A quilometragem é posta na data do abastecimento antes de qualquer mudança no odômetro: havendo registro em dia posterior (abastecimento lançado com atraso, fila offline do app), ela fica entre a leitura anterior e a seguinte e o odômetro do veículo não muda; sendo o registro mais recente (registros do mesmo dia não contam, pois a data do web é o dia, não a hora), ela fica à frente do odômetro, que avança com ela. Também vale repetir a leitura do registro vizinho (o anterior ou o seguinte, abastecimento ou checklist) quando ele é de menos de 30 minutos antes ou depois deste, desde que nenhuma das duas datas seja só o dia: o segundo tanque no mesmo posto, o abastecimento logo depois do checklist de saída, o que a fila offline entrega depois de um registro da mesma quilometragem. Esse fica gravado e o odômetro não muda; como o registro mais recente, ele não pode ficar abaixo do odômetro (uma ordem de serviço ou um MASTER pode tê-lo subido depois do registro repetido). Fora disso, 400 VEHICLE_MILEAGE_INVALID. O motorista abastece só o veículo em que é responsável ou o da sua rota liberada ou em andamento; a filial, o combustível e o motorista dele são preenchidos pelo servidor. Reenvio com a mesma chave de idempotência devolve o registro já criado. Vínculo de outra empresa responde como inexistente. Abastecimento a partir da rota (plano de 02/11/2026, C5/F3): `routeId`; a rota tem de ser do motorista do abastecimento e ter o veículo dele (422 ROUTE_LINK_MISMATCH; rota inexistente ou de outra empresa, 404 DELIVERY_ROUTE_NOT_FOUND), em qualquer status. Para o motorista, a rota também prova que o veículo estava com ele, mas só num abastecimento datado do dia da liberação da rota até 24 h depois do fim dela (concluída ou cancelada); uma rota planejada, nunca liberada ou de outra época não prova nada, e vale a regra do veículo acima (403 VEHICLE_NOT_ASSIGNED_TO_DRIVER). A filial do motorista é sempre uma filial ATIVA (a enviada no corpo é ignorada): a do veículo, senão a dele, senão a única filial ativa da empresa, pulando as desativadas; sem nenhuma, 409 BRANCH_REQUIRED e, com `routeId`, quem opera as entregas é avisado uma vez por rota (`route.record_branch_missing`). Feito sem sinal (K6): `occurred_at` (o momento do abastecimento, pelo relógio do aparelho) com o header X-Client-Sent-At substitui `refueling_date`, corrigido pelo erro do relógio do aparelho. A origem (`created_from`) do abastecimento do motorista é sempre MOBILE_APP, decidida pelo servidor seja qual for o valor enviado, e com ela valem as regras do app: localização GPS (400 LOCATION_REQUIRED) e chave de idempotência, no corpo ou no header Idempotency-Key (400 VALIDATION_ERROR). Segundo abastecimento em menos de 30 minutos (05/11/2026): outro abastecimento do mesmo veículo a menos de 30 minutos da data deste, antes ou depois (a fila offline chega atrasada; vale a data do registro, nunca a hora em que chegou), não impede nada — todo abastecimento gravado nessa situação leva o alerta RECENT_REFUEL em `alerts`, com a data do outro em `recent_refuel_previous_at`, seja do motorista, do escritório, da fila offline ou de um app antigo. Uma data só com o dia (o formulário da web) não é um momento e não entra na conta. Para o motorista cujo app manda `contract` 5 ou maior em `x-trajetto-client-version`, num envio direto (sem X-Client-Queued-At), o segundo sem confirmação é recusado com 409 FUEL_RECENT_REFUEL e `previous_refuel`; o app pergunta e reenvia com `confirm_recent: true` e `recent_reason` (de 3 a 300 caracteres), que fica em `recent_refuel_reason`. O reenvio de um abastecimento já gravado é respondido com ele antes de tudo isso.",
           params: fuelSchemas.updateDeleteBusiness,
           consumes: ["application/json"],
           response: {
@@ -98,7 +112,7 @@ async function fuelRoutes(app: FastifyInstance) {
             403: fuelResponses.writeForbidden,
             404: fuelResponses.createNotFound,
             409: fuelResponses.writeConflict,
-            422: fuelResponses.driverInactive,
+            422: fuelResponses.createUnprocessable,
             500: fuelResponses.internalServerError,
           },
         },
@@ -117,7 +131,7 @@ async function fuelRoutes(app: FastifyInstance) {
         tags: ["fuel"],
         summary: "Lista os abastecimentos da empresa",
         description:
-          "Abastecimentos de uma empresa numa tabela paginada, com veículo, motorista, filial, combustível e a foto do odômetro em URL assinada. Ordena no servidor (`sort`/`order`) e filtra por filial, veículo e tipo de combustível (um ou mais IDs separados por vírgula), além da busca livre (ID, observações, placa, descrição/marca/modelo do veículo, motorista, CNH, combustível e filial). A primeira linha (`meta`) traz o total do filtro e, em `searchMeta`, os cartões (total, litros, valor e odômetros verificados) somados sobre todo o conjunto filtrado e as opções dos filtros com as contagens (até 100 por filtro, as de mais abastecimentos; as selecionadas sempre vêm — a busca alcança as demais). Ordenação padrão: mais novos primeiro, com desempate pelo ID. O MASTER informa `businessId`; os demais veem a própria empresa. O motorista vê só os próprios abastecimentos.",
+          "Abastecimentos de uma empresa numa tabela paginada, com veículo, motorista, filial, combustível e a foto do odômetro em URL assinada. Ordena no servidor (`sort`/`order`) e filtra por filial, veículo e tipo de combustível (um ou mais IDs separados por vírgula) e por alerta (`alerts`, um ou mais valores separados por vírgula: os abastecimentos com qualquer um deles; hoje só RECENT_REFUEL), além da busca livre (ID, observações, placa, descrição/marca/modelo do veículo, motorista, CNH, combustível e filial). A primeira linha (`meta`) traz o total do filtro e, em `searchMeta`, os cartões (total, litros, valor e odômetros verificados) somados sobre todo o conjunto filtrado e as opções dos filtros com as contagens (até 100 por filtro, as de mais abastecimentos; as selecionadas sempre vêm — a busca alcança as demais; em `alerts`, todos os valores, mesmo com 0, sem rótulo). Cada linha traz `alerts`, `recent_refuel_reason` e `recent_refuel_previous_at`. Ordenação padrão: mais novos primeiro, com desempate pelo ID. O MASTER informa `businessId`; os demais veem a própria empresa. O motorista vê só os próprios abastecimentos.",
         querystring: listFuelSchema,
         response: {
           200: ndjsonList(
@@ -155,7 +169,7 @@ async function fuelRoutes(app: FastifyInstance) {
         tags: ["fuel"],
         summary: "Atualiza um abastecimento",
         description:
-          "Atualiza um abastecimento: quilometragem, litros, preço, data, observações, localização e vínculos (filial, veículo, motorista, combustível). Envie só o que mudou. Um vínculo que não muda não é revalidado contra o estado atual: o abastecimento antigo de um veículo hoje inativo ou bloqueado, ou de um motorista inativo, pode ter o preço corrigido; mover o registro para um veículo que não está ativo/em rota, um motorista inativo ou uma filial inativa é recusado. A data não pode ser posterior ao dia de hoje no fuso da empresa. A quilometragem é posta na data do abastecimento (a nova, quando a data muda; mudar só a data também é conferido), com o próprio registro fora da conta: havendo registro em dia posterior, fica entre a leitura anterior e a seguinte e o odômetro do veículo não muda; sendo o abastecimento mais recente, fica acima da leitura anterior e o odômetro avança com ela. Se foi este abastecimento que definiu o odômetro, a correção o leva à maior leitura restante (esta incluída), nunca abaixo da última manutenção. Fora disso, 400 VEHICLE_MILEAGE_INVALID. Mover o registro para outro veículo segue lá a regra do cadastro, e o veículo que ele deixa volta à maior leitura restante se era este abastecimento que definia o odômetro dele. A nova foto do odômetro é opcional e vai em `photo`, a chave já enviada ao storage por POST /uploads/presign/:businessId.",
+          "Atualiza um abastecimento: quilometragem, litros, preço, data, observações, localização e vínculos (filial, veículo, motorista, combustível). Envie só o que mudou. Um vínculo que não muda não é revalidado contra o estado atual: o abastecimento antigo de um veículo hoje inativo ou bloqueado, ou de um motorista inativo, pode ter o preço corrigido; mover o registro para um veículo que não está ativo/em rota, um motorista inativo ou uma filial inativa é recusado. A data não pode ser posterior ao dia de hoje no fuso da empresa. A quilometragem é posta na data do abastecimento (a nova, quando a data muda; mudar só a data também é conferido), com o próprio registro fora da conta: havendo registro em dia posterior, fica entre a leitura anterior e a seguinte e o odômetro do veículo não muda; sendo o abastecimento mais recente, fica acima da leitura anterior e o odômetro avança com ela. Se foi este abastecimento que definiu o odômetro, a correção o leva à maior leitura restante (esta incluída), nunca abaixo da última manutenção. Igual à leitura vizinha (a anterior ou a seguinte) também vale quando o registro dela é de menos de 30 minutos antes ou depois e nenhuma das duas datas é só o dia; o odômetro não avança por isso. Fora disso, 400 VEHICLE_MILEAGE_INVALID. Mover o registro para outro veículo segue lá a regra do cadastro, e o veículo que ele deixa volta à maior leitura restante se era este abastecimento que definia o odômetro dele. A nova foto do odômetro é opcional e vai em `photo`, a chave já enviada ao storage por POST /uploads/presign/:businessId.",
         params: fuelSchemas.updateDeleteFuel,
         consumes: ["application/json"],
         response: {
@@ -219,7 +233,7 @@ async function fuelRoutes(app: FastifyInstance) {
         tags: ["fuel"],
         summary: "Exporta os abastecimentos (CSV ou Excel)",
         description:
-          "Exporta os abastecimentos em CSV ou Excel (`format=csv|excel`) com a mesma busca e os mesmos filtros da listagem (`search`, `branchId`, `vehicleId`, `fuelTypeId`): o arquivo traz o que a tela filtrou. O MASTER informa `businessId`. O nome do arquivo usa o dia de hoje no fuso da empresa. Motoristas não exportam.",
+          "Exporta os abastecimentos em CSV ou Excel (`format=csv|excel`) com a mesma busca e os mesmos filtros da listagem (`search`, `branchId`, `vehicleId`, `fuelTypeId`, `alerts`): o arquivo traz o que a tela filtrou, com as colunas Alertas, Abastecimento Anterior (alerta) e Motivo Informado. O MASTER informa `businessId`. O nome do arquivo usa o dia de hoje no fuso da empresa. Motoristas não exportam.",
         querystring: exportFuelQuerySchema,
         response: {
           200: exportFileResponse("relatorio-abastecimentos-<AAAA-MM-DD>"),
@@ -244,7 +258,7 @@ async function fuelRoutes(app: FastifyInstance) {
         tags: ["fuel"],
         summary: "Abastecimento anterior de um veículo",
         description:
-          "O último abastecimento do veículo antes da data informada, só com data, quilometragem e litros (a base do consumo no detalhe), ou `null` quando não há. `businessId` é a empresa do veículo; só o MASTER informa outra empresa que não a sua. Um veículo de outra empresa responde como inexistente (404 VEHICLE_NOT_FOUND). O motorista consulta só o veículo que pode operar: aquele em que é o responsável ou o da sua rota liberada ou em andamento; outro veículo da empresa recebe 403 VEHICLE_NOT_ASSIGNED_TO_DRIVER.",
+          "O último abastecimento do veículo antes da data informada, só com data, quilometragem e litros (a base do consumo no detalhe), ou `null` quando não há. `businessId` é a empresa do veículo; só o MASTER informa outra empresa que não a sua. Um veículo de outra empresa responde como inexistente (404 VEHICLE_NOT_FOUND). O motorista consulta só o veículo que pode operar: aquele em que é o responsável ou o da sua rota liberada ou em andamento; outro veículo da empresa recebe 403 VEHICLE_NOT_ASSIGNED_TO_DRIVER. É também o último abastecimento que o app mostra antes de registrar outro (com `date` = agora), de qualquer motorista do veículo.",
         params: fuelSchemas.getPreviousFuelParams,
         querystring: fuelSchemas.getPreviousFuelQuery,
         response: {

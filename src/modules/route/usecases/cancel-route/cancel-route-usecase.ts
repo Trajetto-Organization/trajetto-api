@@ -5,6 +5,7 @@ import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 
 import database from "@/../infra/database";
 import { sendRouteEventToBusiness, sendRouteEventToDriver } from "@/websocket";
+import { announceRouteVehicle } from "@/shared/vehicle/vehicle-realtime";
 import { OutboxService } from "@/shared/notifications/outbox-service";
 
 import { WebhookFanOutService } from "@/shared/integration/webhook-fan-out-service";
@@ -153,6 +154,7 @@ class CancelRouteUseCase {
         expectedStatus: route.status,
         status: "CANCELLED",
         cancellation_reason: reason,
+        actorId: userId,
       },
       tx,
     );
@@ -201,6 +203,9 @@ class CancelRouteUseCase {
         routeId,
         routeCode: route.code,
       });
+
+      // A route that had left gave its truck back.
+      announceRouteVehicle(businessId, cancelled);
 
       if (route.status !== "PLANNED") {
         const driverUser = await this.user.findUserByDriverId(route.driverId);

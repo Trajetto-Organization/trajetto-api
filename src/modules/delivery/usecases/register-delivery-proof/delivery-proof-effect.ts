@@ -7,6 +7,7 @@ import type { IBusinessRepository } from "@/modules/business/repositories/IBusin
 import type { Delivery } from "../../dtos/delivery-dto";
 import type { PlanBump } from "@/modules/route/dtos/route-dto";
 import type { ProofCapture } from "@/shared/delivery/proof-capture";
+import type { GeofenceRecord } from "@/shared/delivery/geofence/geofence-check";
 
 import type { OutboxService } from "@/shared/notifications/outbox-service";
 import type { WebhookFanOutService } from "@/shared/integration/webhook-fan-out-service";
@@ -125,6 +126,18 @@ interface ApplyDeliveryProofInput {
 
   /** The route of the delivery's open stop, when it is on one. */
   routeId?: string | null;
+
+  /**
+   * The geofence record of the report (plan of 02/11/2026, E4), stored on
+   * the PROOF event; absent when nothing weighed it (an approval).
+   */
+  geofence?: GeofenceRecord;
+
+  /**
+   * A late proof (K7, decision D27): the driver and vehicle of the route the
+   * delivery was taken from, back on the delivered row.
+   */
+  owner?: { driverId: string; vehicleId: string | null };
 }
 
 /**
@@ -174,9 +187,11 @@ async function applyDeliveryProof(
       device_id: input.capture?.deviceId ?? null,
       photo_taken_at: input.capture?.photoTakenAt ?? null,
       routeId: input.routeId ?? lockedRouteId,
+      ...input.geofence,
     },
     input.expectedStatus,
     tx,
+    input.owner,
   );
 
   // The ticket of each superseded request says so in its trail and stays

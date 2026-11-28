@@ -10,6 +10,7 @@ import {
   hasConsecutiveSpaces,
   hasSpaceAtEdges,
 } from "@/shared/utils/zod-schema-helpers";
+import { fieldError } from "@/shared/validation/field-error";
 
 const createServiceOrderSchema = z
   .object({
@@ -39,9 +40,7 @@ const createServiceOrderSchema = z
         ),
     ),
     maintenance_type: z.enum(["INTERNAL", "EXTERNAL"], {
-      errorMap: () => ({
-        message: "Tipo de manutenção inválido. Deve ser INTERNAL ou EXTERNAL",
-      }),
+      error: "Tipo de manutenção inválido. Deve ser INTERNAL ou EXTERNAL",
     }),
     description: z.preprocess(
       emptyStringToNull,
@@ -85,11 +84,12 @@ const createServiceOrderSchema = z
         return val;
       },
       z
-        .number({
-          required_error: "A quilometragem atual do veículo é obrigatória.",
-          invalid_type_error:
-            "A quilometragem atual deve ser um número válido.",
-        })
+        .number(
+          fieldError({
+            required: "A quilometragem atual do veículo é obrigatória.",
+            invalid: "A quilometragem atual deve ser um número válido.",
+          }),
+        )
         .nonnegative("A quilometragem atual deve ser um valor não negativo.")
         .min(0.1, "A quilometragem atual deve ser maior que zero.")
         .max(9999999, "A quilometragem atual não pode exceder 9.999.999 km."),
@@ -104,11 +104,12 @@ const createServiceOrderSchema = z
         return val;
       },
       z
-        .number({
-          required_error: "O intervalo de revisão em km é obrigatório.",
-          invalid_type_error:
-            "O intervalo de revisão em km deve ser um número válido.",
-        })
+        .number(
+          fieldError({
+            required: "O intervalo de revisão em km é obrigatório.",
+            invalid: "O intervalo de revisão em km deve ser um número válido.",
+          }),
+        )
         .min(0.1, "O intervalo de revisão em km deve ser maior que zero.")
         .positive("O intervalo de revisão em km deve ser um valor positivo.")
         .max(
@@ -126,10 +127,12 @@ const createServiceOrderSchema = z
         return val;
       },
       z
-        .number({
-          invalid_type_error:
-            "A quilometragem da última revisão deve ser um número válido.",
-        })
+        .number(
+          fieldError({
+            invalid:
+              "A quilometragem da última revisão deve ser um número válido.",
+          }),
+        )
         .nonnegative(
           "A quilometragem da última revisão deve ser um valor não negativo.",
         )
@@ -153,9 +156,11 @@ const createServiceOrderSchema = z
         return val;
       },
       z
-        .number({
-          invalid_type_error: "A nova quilometragem deve ser um número válido.",
-        })
+        .number(
+          fieldError({
+            invalid: "A nova quilometragem deve ser um número válido.",
+          }),
+        )
         .nonnegative("A nova quilometragem deve ser um valor não negativo.")
         .min(0.1, "A nova quilometragem deve ser maior que zero.")
         .max(9999999, "A nova quilometragem não pode exceder 9.999.999 km.")
@@ -163,13 +168,15 @@ const createServiceOrderSchema = z
         .nullable(),
     ),
     vehicleId: z
-      .string({ required_error: "ID do veículo é obrigatório!" })
+      .string(fieldError({ required: "ID do veículo é obrigatório!" }))
       .uuid("ID do veículo é inválido."),
     responsibleUserId: z
-      .string({ required_error: "ID do usuário responsável é obrigatório!" })
+      .string(
+        fieldError({ required: "ID do usuário responsável é obrigatório!" }),
+      )
       .uuid("ID do usuário responsável é inválido."),
     branchId: z
-      .string({ required_error: "ID da filial é obrigatório!" })
+      .string(fieldError({ required: "ID da filial é obrigatório!" }))
       .uuid("ID da filial é inválido."),
     supplierId: z.preprocess(
       emptyStringToNull,
@@ -189,9 +196,9 @@ const createServiceOrderSchema = z
         return val;
       },
       z
-        .number({
-          invalid_type_error: "A latitude deve ser um número válido.",
-        })
+        .number(
+          fieldError({ invalid: "A latitude deve ser um número válido." }),
+        )
         .min(-90, "A latitude deve estar entre -90 e 90.")
         .max(90, "A latitude deve estar entre -90 e 90.")
         .optional()
@@ -210,9 +217,9 @@ const createServiceOrderSchema = z
         return val;
       },
       z
-        .number({
-          invalid_type_error: "A longitude deve ser um número válido.",
-        })
+        .number(
+          fieldError({ invalid: "A longitude deve ser um número válido." }),
+        )
         .min(-180, "A longitude deve estar entre -180 e 180.")
         .max(180, "A longitude deve estar entre -180 e 180.")
         .optional()
@@ -247,9 +254,7 @@ const createServiceOrderSchema = z
 
     // 🆕 RECORD ORIGIN: Track where the record was created
     created_from: z.nativeEnum(RecordOrigin, {
-      errorMap: () => ({
-        message: "Origem inválida. Deve ser MOBILE_APP ou WEB_DASHBOARD.",
-      }),
+      error: "Origem inválida. Deve ser MOBILE_APP ou WEB_DASHBOARD.",
     }),
   })
   // 🆕 VALIDATION: Distance check for GPS_MANUAL (manual adjustment)

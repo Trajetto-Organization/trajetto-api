@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { deliveryIdFloor } from "@/shared/health/metrics-queries";
+import { deliveryIdFor } from "@/shared/notifications/delivery-id";
 
 /**
  * The 24 h window of /health/metrics is a range of notification_delivery's
@@ -12,6 +13,11 @@ import { deliveryIdFloor } from "@/shared/health/metrics-queries";
  * read through the pkey, which stays ordered however the heap is reused. The
  * BRIN it replaced widened with every row written into an old page and ended
  * up matching the whole table.
+ *
+ * Since plano-escala F5-03 the pipeline writes each delivery under an id
+ * decided by its event, recipient and channel, with the EVENT's
+ * millisecond in front: the window counts deliveries by when their event
+ * was published.
  */
 const mintedAt = (ms: number, tail = "7abc-8def-0123456789ab") => {
   const hex = ms.toString(16).padStart(12, "0");
@@ -38,6 +44,42 @@ describe("deliveryIdFloor", () => {
     expect(mintedAt(since.getTime() - 25 * 60 * 60 * 1000) >= floor).toBe(
       false,
     );
+  });
+
+  it("counts a delivery by the instant of its event", () => {
+    const user = { userId: "019a9000-0000-7000-8000-0000000000a1" };
+
+    const inside = deliveryIdFor(
+      { id: mintedAt(since.getTime()), created_at: new Date(0) },
+      user,
+      "IN_APP",
+    );
+
+    const before = deliveryIdFor(
+      { id: mintedAt(since.getTime() - 1), created_at: new Date(0) },
+      user,
+      "IN_APP",
+    );
+
+    expect(inside >= floor).toBe(true);
+    expect(before >= floor).toBe(false);
+  });
+
+  it("is what the pipeline writes every delivery under", () => {
+    // A delivery written under another id would fall in a window by
+    // chance, or in none.
+    const pipeline = readFileSync(
+      resolve(
+        process.cwd(),
+        "src/shared/notifications/notification-pipeline-service.ts",
+      ),
+      "utf8",
+    );
+
+    expect(pipeline).toMatch(/id: deliveryIdFor\(event, row, row\.channel\)/);
+    expect(pipeline.match(/notificationDelivery\.create(Many)?\(/g)).toEqual([
+      "notificationDelivery.createMany(",
+    ]);
   });
 
   it("is only as right as the delivery ids being uuid v7", () => {

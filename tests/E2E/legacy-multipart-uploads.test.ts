@@ -158,12 +158,17 @@ function legacyChecklist(
   ]);
 }
 
-function postMultipart(url: string, payload: Buffer, submissionId: string) {
+function postMultipart(
+  url: string,
+  payload: Buffer,
+  submissionId: string,
+  token: string = seed.driverToken,
+) {
   return app.inject({
     method: "POST",
     url,
     headers: {
-      authorization: `Bearer ${seed.driverToken}`,
+      authorization: `Bearer ${token}`,
       "content-type": `multipart/form-data; boundary=${BOUNDARY}`,
       "idempotency-key": submissionId,
       "user-agent": "okhttp/4.9.2",
@@ -275,6 +280,8 @@ describe("a fueling posted as multipart by the app build in drivers' hands", () 
     expect(await storedObjects("odometerPhotos")).toEqual(before);
   });
 
+  // The manager picks the branch, so theirs goes through the gate; a
+  // driver's is the server's to resolve (wave 3.7), below.
   it("goes through the branch guard, which reads the branch from the multipart fields", async () => {
     const inactive = await prisma.branch.create({
       data: {
@@ -303,6 +310,7 @@ describe("a fueling posted as multipart by the app build in drivers' hands", () 
         branchId: inactive.id,
       }),
       key,
+      seed.managerToken,
     );
 
     expect(response.statusCode, response.body).toBe(403);
@@ -310,6 +318,24 @@ describe("a fueling posted as multipart by the app build in drivers' hands", () 
 
     // Refused before a single byte reached storage.
     expect(await storedObjects("odometerPhotos")).toEqual(before);
+
+    // The driver's build sends the vehicle's branch as it last read it: a
+    // switched-off one is not theirs to pick, and the refuelling is filed
+    // under the active branch the server resolves (the vehicle's here).
+    const fromDriver = randomUUID();
+    const filed = await postMultipart(
+      fuelUrl(),
+      legacyFuel((await vehicleMileage()) + 100, fromDriver, {
+        branchId: inactive.id,
+      }),
+      fromDriver,
+    );
+
+    expect(filed.statusCode, filed.body).toBe(201);
+    expect(
+      (await prisma.fuel.findUniqueOrThrow({ where: { id: filed.json().id } }))
+        .branchId,
+    ).toBe(seed.branchId);
   });
 
   it("refuses a part that is not an image, and keeps nothing", async () => {
@@ -367,6 +393,9 @@ describe("a checklist posted as multipart by the app build in drivers' hands", (
 
     expect(checklist.current_mileage).toBe(mileage);
     expect(checklist.photos).toHaveLength(3);
+    // That build never sends `created_from`: a driver's checklist is the
+    // app's by the server's decision, so the panel badges it "App".
+    expect(checklist.created_from).toBe("MOBILE_APP");
 
     const byField = checklist.photos_by_field as Record<string, string[]>;
 
@@ -379,6 +408,30 @@ describe("a checklist posted as multipart by the app build in drivers' hands", (
     for (const keys of Object.values(byField)) {
       expect(keys[0]).toMatch(new RegExp(`^checklistPhotos/${BUSINESS}/`));
     }
+  });
+
+  it("is the app's when the office makes it there too: its key, no `created_from`", async () => {
+    // That build lets an admin pick the driver and the branch, and sends the
+    // same key and no origin; the backfill reads such a row as the app's.
+    const key = randomUUID();
+
+    const response = await postMultipart(
+      checklistUrl(),
+      legacyChecklist((await vehicleMileage()) + 100, key),
+      key,
+      seed.managerToken,
+    );
+
+    expect(response.statusCode, response.body).toBe(201);
+
+    const checklist = await prisma.vehicleChecklist.findUniqueOrThrow({
+      where: { id: response.json().id },
+    });
+
+    expect(checklist).toMatchObject({
+      created_from: "MOBILE_APP",
+      client_submission_id: key,
+    });
   });
 
   it("leaves no photo behind when the controller refuses it before the use case runs", async () => {

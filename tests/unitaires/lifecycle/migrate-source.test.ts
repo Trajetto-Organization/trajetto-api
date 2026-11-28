@@ -14,7 +14,7 @@ import {
 /**
  * The source key of the release image (.github/scripts/migrate-source.sh).
  *
- * build-and-push reuses the release image tagged `src-<key>` instead of
+ * the Build job reuses the release image tagged `src-<key>` instead of
  * building it again, and the deploys run the release step only when that
  * image is not the one their database applied. So the key must change
  * whenever anything the release step runs or reads changes — a migration,
@@ -91,6 +91,8 @@ describe("the release image's source key", () => {
   it("finds the release step's entry points where the entrypoint runs them", () => {
     expect(releaseEntryPoints().sort()).toEqual([
       "infra/scripts/import-violation-codes.ts",
+      "infra/scripts/prebuild-online-ddl.ts",
+      "infra/scripts/release-steps.ts",
       "infra/scripts/seed.ts",
       "infra/scripts/wait-for-postgres.ts",
     ]);
@@ -212,9 +214,17 @@ describe.skipIf(!bash)("the key, computed", () => {
 
     git("init", "-q");
 
+    // Directories hold a file; files are files.
+    const DIRECTORIES = new Set([
+      "prisma/migrations",
+      "prisma/concurrent",
+      "prisma/post-deploy",
+      "infra/sql",
+      "src/shared/database",
+    ]);
+
     for (const path of listed()) {
-      // Directories hold a file; files are files.
-      if (path === "prisma/migrations" || path === "src/shared/database") {
+      if (DIRECTORIES.has(path)) {
         box.file(`${path}/one`, path);
       } else {
         box.file(path, path);
@@ -262,6 +272,12 @@ describe.skipIf(!bash)("the key, computed", () => {
     ["the infraction table", "tabela-codigo-infracoes-renainf-xlsx.xlsx"],
     ["the dependencies", "yarn.lock"],
     ["the entrypoint", "infra/scripts/docker-entrypoint.sh"],
+    // F2-01: a push with only a new online index must rebuild the image
+    // and run the step, or the index never reaches the database.
+    ["a new online index", "prisma/concurrent/20261201000000_new.sql"],
+    // F5-08: the same for a step after the migrations.
+    ["a new step of infra/sql", "infra/sql/10-roles.sql"],
+    ["a new post-deploy step", "prisma/post-deploy/10-swap.sql"],
   ])("changes with %s", (_case, path) => {
     const before = key().stdout;
 

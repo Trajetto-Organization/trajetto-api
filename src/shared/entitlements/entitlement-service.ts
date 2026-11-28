@@ -1,7 +1,7 @@
 import database from "@/../infra/database";
 import { BusinessModule, Prisma } from "@prisma/client";
 
-import { isModuleEnabled } from "./entitlement-rules";
+import { isModuleEnabled, isModuleSwitchedOff } from "./entitlement-rules";
 
 /**
  * The one place that answers "what did this company hire?". Modules come
@@ -34,6 +34,25 @@ async function hasModule(
 ): Promise<boolean> {
   const rows = await getBusinessEntitlements(businessId);
   return isModuleEnabled(rows, module);
+}
+
+/**
+ * Whether the MASTER switched `module` off for the company (see
+ * isModuleSwitchedOff): what holds the company's webhooks while Entregas is
+ * off (plan M3). Read from the database on every call — never cached, so a
+ * switch is seen by every replica at its next send.
+ */
+async function hasModuleSwitchedOff(
+  businessId: string,
+  module: BusinessModule,
+  client: Prisma.TransactionClient = database,
+): Promise<boolean> {
+  const row = await client.businessEntitlement.findUnique({
+    where: { businessId_module: { businessId, module } },
+    select: { module: true, enabled: true },
+  });
+
+  return isModuleSwitchedOff(row ? [row] : [], module);
 }
 
 interface CompanyModuleState {
@@ -127,10 +146,8 @@ const MODULE_PERMISSION_KEYS: Record<BusinessModule, string[]> = {
   DELIVERIES: ["delivery_manage", "occurrence_manage"],
 };
 
-async function countAffectedUsers(
-  businessId: string,
-  module: BusinessModule,
-): Promise<number> {
+// Not async: the deliveries impact batches this query with its counts.
+function countAffectedUsers(businessId: string, module: BusinessModule) {
   return database.user.count({
     where: {
       businessId,
@@ -193,14 +210,19 @@ async function getFleetImpact(businessId: string): Promise<ModuleImpact> {
 async function getDeliveriesImpact(businessId: string): Promise<ModuleImpact> {
   const where = { businessId };
 
+  // One connection for all of them (a batch runs in order on one), not one
+  // connection per count: the dialog must not take the pool's share of a
+  // replica while it opens.
   const [
     deliveries,
     shippers,
     occurrenceTypes,
     pending,
     inTransit,
+    routesInProgress,
+    activeWebhooks,
     affectedUsers,
-  ] = await Promise.all([
+  ] = await database.$transaction([
     database.delivery.count({ where }),
     database.shipper.count({ where }),
     // The company's own types: the four defaults the platform seeds
@@ -208,6 +230,13 @@ async function getDeliveriesImpact(businessId: string): Promise<ModuleImpact> {
     database.occurrenceType.count({ where: { businessId, system_key: null } }),
     database.delivery.count({ where: { businessId, status: "PENDING" } }),
     database.delivery.count({ where: { businessId, status: "IN_TRANSIT" } }),
+    // Plan M3 (D51): a route on the street is not cancelled by the switch —
+    // it stays IN_PROGRESS, the app hides the day and keeps the proofs
+    // queued — so the master must see it before confirming.
+    database.route.count({ where: { businessId, status: "IN_PROGRESS" } }),
+    // The customer's ERP stops hearing: these endpoints' events are held
+    // until the module is back (webhook-dispatch-service, `deliver`).
+    database.webhookEndpoint.count({ where: { businessId, is_active: true } }),
     countAffectedUsers(businessId, "DELIVERIES"),
   ]);
 
@@ -220,8 +249,13 @@ async function getDeliveriesImpact(businessId: string): Promise<ModuleImpact> {
     ],
     affectedUsers,
     inFlight: [
+      { label: "Rotas em andamento", count: routesInProgress },
       { label: "Entregas pendentes", count: pending },
       { label: "Entregas em rota", count: inTransit },
+      {
+        label: "Webhooks ativos (pausados até religar)",
+        count: activeWebhooks,
+      },
     ],
   };
 }
@@ -239,6 +273,7 @@ export {
   getBusinessEntitlements,
   getCompaniesModuleState,
   hasModule,
+  hasModuleSwitchedOff,
   setModuleEnabled,
   getModuleImpact,
   MODULE_PERMISSION_KEYS,

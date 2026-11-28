@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { NotificationCategory } from "@prisma/client";
 
 import { notificationPolicies } from "@/shared/notifications/notification-policy";
 import { webhookEndpointDisabledPolicy } from "@/shared/notifications/policies/webhook-endpoint-policies";
@@ -41,6 +42,13 @@ describe("webhook-endpoint.disabled", () => {
       payload.businessId,
     );
     expect(webhookEndpointDisabledPolicy.mandatory).toBe(true);
+  });
+
+  it('puts its e-mail under the admin\'s "Conta" row, never SYSTEM', () => {
+    // SYSTEM is a row no role is shown: the e-mail had no switch at all.
+    expect(webhookEndpointDisabledPolicy.category).toBe(
+      NotificationCategory.ACCOUNT,
+    );
   });
 
   it("says which endpoint, why, and that the events are being kept", () => {

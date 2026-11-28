@@ -44,6 +44,7 @@ import { uploadConfig } from "@/config/upload";
 import { logger } from "@/shared/logging/logger";
 import { recordDate } from "@/shared/vehicle/odometer-timeline";
 import { pickedDateFromInput } from "@/shared/vehicle/record-dates";
+import { announceVehicleChanged } from "@/shared/vehicle/vehicle-realtime";
 
 import {
   assertChecklistNotInTheFuture,
@@ -388,6 +389,12 @@ class UpdateVehicleChecklistUseCase {
             : undefined,
         );
       databaseCommitted = true;
+
+      // Committed, and the reading was placed again: the odometer of one
+      // vehicle (or two, when the checklist changed truck) may have moved.
+      if (mileageChanged || vehicleChanged || dateChanged) {
+        announceVehicleChanged(businessId);
+      }
 
       // Remove superseded objects only after the transaction succeeds.
       await Promise.allSettled(

@@ -39,6 +39,11 @@ const ADAPTER_KEY = vi.hoisted(() => {
 
   process.env.SOCKET_ADAPTER_KEY = key;
 
+  // Offline at once, as before the wait of plano-escala U-05: these cases
+  // are about which replica holds the last socket, not about the wait
+  // (socket-presence-grace.test.ts has it).
+  process.env.PRESENCE_GRACE_MS = "0";
+
   return key;
 });
 
@@ -248,17 +253,20 @@ beforeAll(async () => {
     REDIS_URL: redis,
     SOCKET_ADAPTER_KEY: ADAPTER_KEY,
     SOCKET_REVALIDATE_MS: NEVER_MS,
+    PRESENCE_GRACE_MS: "0",
   });
   two = await startReplica({
     REDIS_URL: redis,
     SOCKET_ADAPTER_KEY: ADAPTER_KEY,
     SOCKET_REVALIDATE_MS: NEVER_MS,
+    PRESENCE_GRACE_MS: "0",
   });
 
   // Nothing listens on this port: Redis is down for this replica only.
   isolated = await startReplica({
     REDIS_URL: `redis://127.0.0.1:${await freePort()}`,
     SOCKET_REVALIDATE_MS: NEVER_MS,
+    PRESENCE_GRACE_MS: "0",
   });
 
   replicas.push(one, two, isolated);
@@ -327,8 +335,15 @@ describe("across replicas", () => {
     "is seen online by a third node, for the thread list's dot",
     { timeout: 30_000 },
     async () => {
-      expect(await thirdNode.getOnlineUserIds([DRIVER_USER, STAFF])).toEqual(
-        expect.arrayContaining([DRIVER_USER, STAFF]),
+      // From Postgres since U-05: the driver's beat was written before his
+      // online was announced; the staff's, by the other replica, may land
+      // a batch later.
+      await vi.waitFor(
+        async () =>
+          expect(
+            await thirdNode.getOnlineUserIds([DRIVER_USER, STAFF]),
+          ).toEqual(expect.arrayContaining([DRIVER_USER, STAFF])),
+        { timeout: 10_000, interval: 100 },
       );
       expect(await thirdNode.getOnlineUserIds([randomUUID()])).toEqual([]);
     },

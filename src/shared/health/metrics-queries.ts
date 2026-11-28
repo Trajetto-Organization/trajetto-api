@@ -42,10 +42,15 @@ function laneChannels(lane: DeliveryLane): Prisma.Sql {
   );
 }
 
-/** Tables the dead-tuple watch covers: written, claimed and updated per event. */
+/**
+ * Tables the dead-tuple watch covers: written, claimed and updated per
+ * event. The four queues of plano-escala F5-09 (the receipts joined them
+ * with F5-13) and the AI's.
+ */
 const QUEUE_TABLES = [
   "domain_outbox_event",
   "notification_delivery",
+  "notification_provider_receipt",
   "ai_analysis_request",
   "webhook_delivery",
 ] as const;
@@ -53,27 +58,43 @@ const QUEUE_TABLES = [
 /**
  * n_live_tup / n_dead_tup are the statistics collector's estimates, not a
  * count — cheap to read and precise enough for a threshold.
+ *
+ * Summed per parent (plano-escala F5-13): once a queue is partitioned by
+ * day (F5-09), its parent's own line in pg_stat_user_tables is always
+ * empty and the rows live in its partitions; read by name, the watch
+ * would report a clean table forever. `partitions` is how many physical
+ * tables the sum covers, 1 for a plain one; the folga of each queue's
+ * partitions is `partitions.<table>` on the same endpoint.
  */
 function queueTableStatsSql(): Prisma.Sql {
   return Prisma.sql`
     SELECT
-      relname::text AS table_name,
-      n_live_tup,
-      n_dead_tup,
-      last_autovacuum
-    FROM pg_stat_user_tables
-    WHERE relname = ANY(${[...QUEUE_TABLES]}::text[])
+      coalesce(root.relname, c.relname)::text AS table_name,
+      count(*)::int AS partitions,
+      coalesce(sum(s.n_live_tup), 0)::float8 AS n_live_tup,
+      coalesce(sum(s.n_dead_tup), 0)::float8 AS n_dead_tup,
+      max(s.last_autovacuum) AS last_autovacuum
+    FROM pg_stat_user_tables s
+    JOIN pg_class c ON c.oid = s.relid AND c.relkind = 'r'
+    LEFT JOIN pg_class root ON root.oid = pg_partition_root(c.oid)
+    WHERE s.schemaname = current_schema()
+      AND coalesce(root.relname, c.relname) = ANY(${[...QUEUE_TABLES]}::text[])
+    GROUP BY 1
   `;
 }
 
 /**
- * The smallest uuid v7 a delivery minted at or after `since` can carry.
+ * The smallest id a delivery of an event published at or after `since` can
+ * carry.
  *
  * A uuid v7 starts with its millisecond timestamp in hex, so its text sorts
- * in time order. Relies on NotificationDelivery.id being `@default(uuid(7))`,
- * minted by the client at insert — pinned by
- * tests/unitaires/health/delivery-id-floor.test.ts. Same technique as
- * eventIdFloor in integration-repository.ts.
+ * in time order. The pipeline writes every delivery under
+ * `deliveryIdFor` (notifications/delivery-id.ts, plano-escala F5-03): the
+ * uuid v7 layout with the EVENT's millisecond, not the expansion's. So the
+ * floor counts deliveries by the instant of their event; the column's
+ * `@default(uuid(7))` only serves rows written outside the pipeline. Both
+ * pinned by tests/unitaires/health/delivery-id-floor.test.ts. Same
+ * technique as eventIdFloor in integration-repository.ts.
  */
 function deliveryIdFloor(since: Date): string {
   const hex = Math.max(0, since.getTime()).toString(16).padStart(12, "0");
@@ -97,9 +118,11 @@ function deliveryIdFloor(since: Date): string {
  *
  * The pkey is a btree: a range of it touches the window's rows wherever they
  * sit. No created_at predicate on purpose — with one, the planner may still
- * pick the BRIN. The id's millisecond is the client's clock at insert, within
- * milliseconds of created_at; for a 24-hour counter that is the same window.
- * tests/E2E/health-metrics-window-scan.test.ts builds the churned table.
+ * pick the BRIN. The id's millisecond is the event's (deliveryIdFloor):
+ * within milliseconds of created_at when the event expands at once, and
+ * earlier by the queue's wait when it does not; for a 24-hour counter that
+ * is the same window. tests/E2E/health-metrics-window-scan.test.ts builds
+ * the churned table.
  */
 function deliveriesInWindowSql(since: Date): Prisma.Sql {
   return Prisma.sql`
@@ -305,12 +328,18 @@ function outboxPendingSql(): Prisma.Sql {
  * above: that one reads created_at from the heap, and a FILTER would drag
  * every FAILED row ever kept through the same heap read; alone, this is an
  * index-only count on (status, availableAt).
+ *
+ * Plus the copies in outbox_event_dead_letter not replayed yet: a FAILED
+ * event leaves the queue table at 30 days (plano-escala F5-10), and the
+ * count still says how many failures are kept, as it always did.
  */
 function outboxFailedSql(): Prisma.Sql {
   return Prisma.sql`
-    SELECT count(*)::int AS n
-    FROM "domain_outbox_event"
-    WHERE "status" = 'FAILED'
+    SELECT (
+      (SELECT count(*) FROM "domain_outbox_event" WHERE "status" = 'FAILED')
+      + (SELECT count(*) FROM "outbox_event_dead_letter"
+         WHERE "replayed_at" IS NULL)
+    )::int AS n
   `;
 }
 
@@ -377,10 +406,274 @@ function operationalSnapshotSql(since: Date): Prisma.Sql {
   `;
 }
 
+/**
+ * The tables whose growth and churn the scale plan watches (plano-escala,
+ * "Tabelas quentes por tempo" and the mutable state beside them): the GPS
+ * trail (both tables, F2-10) and the drivers' last position (rewritten on
+ * every flush, F2-13), the delivery history, the audit trail, the bell, the sessions, the
+ * queues, the deliveries themselves and the series. A partitioned one is
+ * reported once, by its root, with its partitions summed: the trail is ~90
+ * daily partitions, and a row per partition would bury the number.
+ *
+ * The chat's messages too (plano-escala U-08, decision D12): kept forever
+ * unless CHAT_MESSAGE_RETENTION_DAYS says otherwise, their rows and size are
+ * what that decision is taken on.
+ */
+const HOT_TABLES = [
+  "driver_position",
+  "driver_position_v2",
+  "driver_last_position",
+  "delivery_event",
+  "activity",
+  "notification",
+  "refresh_token",
+  "domain_outbox_event",
+  "notification_delivery",
+  "notification_provider_receipt",
+  "webhook_delivery",
+  "ai_analysis_request",
+  "delivery",
+  "route",
+  "route_stop",
+  "delivery_occurrence",
+  "chat_message",
+  "ops_sample",
+] as const;
+
+/**
+ * The parameters the capacity reading compares against (shared_buffers
+ * derived from the memory limit, the WAL ceiling, the archiver, the freeze
+ * age the xid alert is read against). Only settings that hold no secret:
+ * never archive_command or a connection string, which can carry one.
+ */
+const DATABASE_PARAMETERS = [
+  "server_version_num",
+  "max_connections",
+  "shared_buffers",
+  "effective_cache_size",
+  "work_mem",
+  "maintenance_work_mem",
+  "max_wal_size",
+  "wal_level",
+  "archive_mode",
+  "archive_timeout",
+  "autovacuum_freeze_max_age",
+  "statement_timeout",
+  "idle_in_transaction_session_timeout",
+  "shared_preload_libraries",
+  "compute_query_id",
+] as const;
+
+/**
+ * The first of the three database reads of /health/metrics (plano-escala
+ * F1-06): ONE statement, every part a subquery joined on `true`, so a view
+ * with no row (a stats reset, a database without its pg_stat_database row)
+ * leaves its columns null instead of emptying the answer.
+ *
+ *  - xid: the oldest unfrozen xid of the CLUSTER (wraparound is per cluster:
+ *    template0 and any other database count) and of this database;
+ *  - hit ratio: pg_stat_database since its last reset; the counters go out
+ *    too, so a series can take the difference between two minutes;
+ *  - the oldest WRITE transaction of the cluster (a backend that holds an
+ *    xid, so it has written or is about to) and the oldest snapshot (any
+ *    backend_xmin): both hold back vacuum, and the feed of the plan waits on
+ *    the second. This statement's own backend is left out. Without
+ *    superuser or pg_read_all_stats, other roles' sessions read null here;
+ *    `stats_cluster_wide` says which;
+ *  - pg_stat_archiver, readable by anyone;
+ *  - the hot tables by partition root, from the statistics collector's
+ *    estimates (pg_stat_user_tables), never a count;
+ *  - the safe parameters and what pg_stat_statements needs: whether the
+ *    extension exists and whether the library is preloaded. A preloaded
+ *    library is proof it loaded, because the server does not start when it
+ *    cannot; the view itself is not read here. The parameters come through
+ *    pg_settings, which lists only what this user may read: a
+ *    current_setting() of shared_preload_libraries without
+ *    pg_read_all_settings fails the WHOLE statement (42501), which is what
+ *    the runtime's own login would get after the cut of the database roles
+ *    (F3-18). An unreadable one is absent, read as null;
+ *  - whether this user may list pg_wal (the second read).
+ *
+ * clock_timestamp(), not now(): a transaction that began after this one did
+ * would otherwise read a negative age.
+ */
+function databaseCoreSql(): Prisma.Sql {
+  return Prisma.sql`
+    SELECT
+      (SELECT max(age(datfrozenxid)) FROM pg_database)::float8 AS xid_age,
+      (SELECT age(datfrozenxid) FROM pg_database
+        WHERE datname = current_database())::float8 AS xid_age_database,
+      (SELECT max(mxid_age(datminmxid)) FROM pg_database)::float8 AS mxid_age,
+      db.blks_hit::float8 AS blocks_hit,
+      db.blks_read::float8 AS blocks_read,
+      activity.oldest_write_xact_seconds,
+      activity.oldest_snapshot_seconds,
+      activity.oldest_snapshot_xmin_age,
+      archiver.archived_count::float8 AS archived_count,
+      archiver.failed_count::float8 AS archive_failed_count,
+      archiver.last_archived_time AS last_archived_at,
+      EXTRACT(EPOCH FROM (clock_timestamp() - archiver.last_archived_time))::float8
+        AS last_archived_age_seconds,
+      archiver.last_failed_time AS last_archive_failed_at,
+      (SELECT coalesce(json_agg(t ORDER BY t.table_name), '[]'::json) FROM (
+        SELECT
+          coalesce(root.relname, c.relname)::text AS table_name,
+          count(*)::int AS partitions,
+          coalesce(sum(s.n_live_tup), 0)::float8 AS n_live_tup,
+          coalesce(sum(s.n_dead_tup), 0)::float8 AS n_dead_tup,
+          max(s.last_autovacuum) AS last_autovacuum
+        FROM pg_stat_user_tables s
+        JOIN pg_class c ON c.oid = s.relid AND c.relkind = 'r'
+        LEFT JOIN pg_class root ON root.oid = pg_partition_root(c.oid)
+        WHERE s.schemaname = current_schema()
+          AND coalesce(root.relname, c.relname) = ANY(${[...HOT_TABLES]}::text[])
+        GROUP BY 1
+      ) t) AS hot_tables,
+      (SELECT json_object_agg(s.name, current_setting(s.name))
+         FROM pg_settings s
+        WHERE s.name = ANY(${[...DATABASE_PARAMETERS]}::text[])) AS parameters,
+      EXISTS (
+        SELECT 1 FROM pg_extension WHERE extname = 'pg_stat_statements'
+      ) AS pgss_installed,
+      (
+        coalesce((SELECT rolsuper FROM pg_roles WHERE rolname = current_user), false)
+        OR pg_has_role(current_user, 'pg_read_all_stats', 'USAGE')
+      ) AS stats_cluster_wide,
+      has_function_privilege('pg_ls_waldir()', 'EXECUTE') AS wal_readable
+    FROM (SELECT 1) one
+    LEFT JOIN (
+      SELECT blks_hit, blks_read FROM pg_stat_database
+      WHERE datname = current_database()
+    ) db ON true
+    LEFT JOIN (
+      SELECT
+        EXTRACT(EPOCH FROM max(clock_timestamp() - xact_start)
+          FILTER (WHERE backend_xid IS NOT NULL))::float8
+          AS oldest_write_xact_seconds,
+        EXTRACT(EPOCH FROM max(clock_timestamp() - xact_start)
+          FILTER (WHERE backend_xmin IS NOT NULL))::float8
+          AS oldest_snapshot_seconds,
+        max(age(backend_xmin))::float8 AS oldest_snapshot_xmin_age
+      FROM pg_stat_activity
+      WHERE pid <> pg_backend_pid()
+    ) activity ON true
+    LEFT JOIN pg_stat_archiver archiver ON true
+  `;
+}
+
+/**
+ * The second read: what pg_wal holds, files and bytes. Its own statement,
+ * run only when the first said this user may (superuser or pg_monitor):
+ * otherwise pg_ls_waldir() refuses, and a refusal would fail a statement
+ * that carries nothing else. A full pg_wal is how an archiver that stopped
+ * becomes a database that stops.
+ */
+function databaseWalSql(): Prisma.Sql {
+  return Prisma.sql`
+    SELECT count(*)::int AS files, coalesce(sum(size), 0)::float8 AS bytes
+    FROM pg_ls_waldir()
+  `;
+}
+
+/**
+ * The third read, cached for five minutes by its caller: the database's size
+ * and each hot table's (with its indexes and TOAST, partitions summed under
+ * the root). pg_database_size walks the data directory, so it is not read on
+ * every 10-second snapshot; sizes move by the day, not by the minute.
+ */
+function databaseSizesSql(): Prisma.Sql {
+  return Prisma.sql`
+    SELECT
+      pg_database_size(current_database())::float8 AS database_bytes,
+      (SELECT coalesce(json_agg(t ORDER BY t.table_name), '[]'::json) FROM (
+        SELECT
+          coalesce(root.relname, c.relname)::text AS table_name,
+          sum(pg_total_relation_size(c.oid))::float8 AS total_bytes
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        LEFT JOIN pg_class root ON root.oid = pg_partition_root(c.oid)
+        WHERE c.relkind = 'r'
+          AND n.nspname = current_schema()
+          AND coalesce(root.relname, c.relname) = ANY(${[...HOT_TABLES]}::text[])
+        GROUP BY 1
+      ) t) AS tables
+  `;
+}
+
+/**
+ * The index usage report (plano-escala F2-23), cached by its caller: each
+ * index of the hot tables, by partition root (a partition's index is a
+ * partition of the parent's, so pg_partition_root names the parent's), its
+ * scans and size summed over the partitions, whether it is a primary key
+ * or a unique, whether a foreign key of its table leads it (its columns,
+ * as a set, are the index's first ones: the index the parent's ON DELETE
+ * CASCADE and the check of a parent's removal walk), and its last scan.
+ * last_idx_scan only exists from Postgres
+ * 16, so it is read through the row as JSON: on an older server it is
+ * null instead of failing the read. With the reset of this database's
+ * statistics, which says how long the scans were counted. The statistics
+ * views and pg_relation_size need no privilege on the tables.
+ */
+function indexUsageSql(): Prisma.Sql {
+  return Prisma.sql`
+    SELECT
+      (SELECT stats_reset FROM pg_stat_database
+        WHERE datname = current_database()) AS stats_reset_at,
+      (SELECT coalesce(json_agg(t ORDER BY t.table_name, t.index_name), '[]'::json) FROM (
+        SELECT
+          coalesce(root_table.relname, s.relname)::text AS table_name,
+          coalesce(root_index.relname, s.indexrelname)::text AS index_name,
+          sum(s.idx_scan)::float8 AS scans,
+          max((to_jsonb(s) ->> 'last_idx_scan')::timestamptz) AS last_scan_at,
+          sum(pg_relation_size(s.indexrelid))::float8 AS bytes,
+          bool_or(i.indisprimary) AS is_primary,
+          bool_or(i.indisunique) AS is_unique,
+          bool_or(EXISTS (
+            SELECT 1 FROM pg_constraint fk
+            WHERE fk.contype = 'f'
+              AND fk.conrelid = i.indrelid
+              AND (string_to_array(i.indkey::text, ' ')::int2[])[1:cardinality(fk.conkey)] @> fk.conkey
+              AND (string_to_array(i.indkey::text, ' ')::int2[])[1:cardinality(fk.conkey)] <@ fk.conkey
+          )) AS serves_foreign_key
+        FROM pg_stat_user_indexes s
+        JOIN pg_index i ON i.indexrelid = s.indexrelid
+        LEFT JOIN pg_class root_table ON root_table.oid = pg_partition_root(s.relid)
+        LEFT JOIN pg_class root_index ON root_index.oid = pg_partition_root(s.indexrelid)
+        WHERE s.schemaname = current_schema()
+          AND coalesce(root_table.relname, s.relname) = ANY(${[...HOT_TABLES]}::text[])
+        GROUP BY 1, 2
+      ) t) AS indexes
+  `;
+}
+
+/**
+ * The database block of the newest cluster row (ops_sample, role
+ * 'cluster') written after `since` (plano-escala F3-18): what the cron
+ * process read on the maintenance pool, with pg_read_all_stats and
+ * pg_monitor, that the runtime's own login may not read after the cut of
+ * the database roles. A backward walk of the ts index, a few rows per
+ * minute.
+ */
+function latestClusterDatabaseSql(since: Date): Prisma.Sql {
+  return Prisma.sql`
+    SELECT ts, metrics->'database' AS database
+    FROM ops_sample
+    WHERE ts > ${since} AND role = 'cluster'
+    ORDER BY ts DESC
+    LIMIT 1
+  `;
+}
+
 export {
+  DATABASE_PARAMETERS,
+  HOT_TABLES,
   QUEUE_TABLES,
   aiFailedSinceSql,
   aiQueueSql,
+  databaseCoreSql,
+  databaseSizesSql,
+  databaseWalSql,
+  indexUsageSql,
   operationalSnapshotSql,
   outboxFailedSql,
   outboxPendingSql,
@@ -390,6 +683,7 @@ export {
   deliveryBacklogSql,
   deliveryIdFloor,
   failedByChannelSql,
+  latestClusterDatabaseSql,
   queueTableStatsSql,
   webhookFailedSinceSql,
   whatsappFailedSinceSql,

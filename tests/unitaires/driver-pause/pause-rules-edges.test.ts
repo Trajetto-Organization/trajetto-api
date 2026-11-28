@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  PAUSE_ROUTE_START_SLACK_MS,
   isJourneyRouteAt,
   journeyRouteAt,
-  releasedAtOf,
   type JourneyRoute,
 } from "@/modules/driver-pause/rules/pause-journey-rules";
 import {
@@ -15,23 +15,21 @@ import {
 
 /**
  * Edges of the pause rules left alive by the 06/10 mutation run: instants
- * equal to a boundary (start = end, released = tap, finished = tap), the
- * stand-ins for a route released before released_at existed, the order that
- * picks the journey's route, and the view of a pause with its type name.
+ * equal to a boundary (start = end, started = tap, finished = tap), the
+ * clock slack of the journey (12/11/2026), the order that picks the
+ * journey's route, and the view of a pause with its type name.
  */
 
 const T = new Date("2026-10-06T15:00:00.000Z");
 const min = (minutes: number) => new Date(T.getTime() + minutes * 60_000);
-const DAY = "2026-10-06";
+const ms = (offset: number) => new Date(T.getTime() + offset);
 
 const route = (over: Partial<JourneyRoute>): JourneyRoute => ({
   id: "r1",
-  status: "RELEASED",
-  released_at: min(-60),
-  started_at: null,
+  status: "IN_PROGRESS",
+  started_at: min(-60),
   completed_at: null,
   updated_at: min(-60),
-  scheduled_date: DAY,
   ...over,
 });
 
@@ -87,34 +85,50 @@ describe("toPauseView", () => {
   });
 });
 
-describe("releasedAtOf", () => {
-  it("uses updated_at as the stand-in only for a route still released or on the street", () => {
-    expect(
-      releasedAtOf(
-        route({
-          released_at: null,
-          status: "IN_PROGRESS",
-          updated_at: min(-5),
-        }),
-      ),
-    ).toEqual(min(-5));
-    expect(
-      releasedAtOf(route({ released_at: null, status: "COMPLETED" })),
-    ).toBeNull();
-    expect(
-      releasedAtOf(
-        route({ released_at: null, status: "PLANNED", started_at: min(-5) }),
-      ),
-    ).toBeNull();
-  });
-});
-
 describe("isJourneyRouteAt", () => {
-  it("counts a route released at the tap's instant", () => {
-    expect(isJourneyRouteAt(route({ released_at: T }), T, DAY)).toBe(true);
-    expect(isJourneyRouteAt(route({ released_at: min(1) }), T, DAY)).toBe(
-      false,
-    );
+  it("counts a route started at the tap's instant, and up to the slack after it", () => {
+    expect(isJourneyRouteAt(route({ started_at: T }), T)).toBe(true);
+    expect(isJourneyRouteAt(route({ started_at: min(1) }), T)).toBe(true);
+    expect(
+      isJourneyRouteAt(
+        route({ started_at: ms(PAUSE_ROUTE_START_SLACK_MS) }),
+        T,
+      ),
+    ).toBe(true);
+    expect(
+      isJourneyRouteAt(
+        route({ started_at: ms(PAUSE_ROUTE_START_SLACK_MS + 1) }),
+        T,
+      ),
+    ).toBe(false);
+  });
+
+  it("never counts a route without started_at, whatever its status", () => {
+    for (const status of [
+      "PLANNED",
+      "RELEASED",
+      "IN_PROGRESS",
+      "COMPLETED",
+      "CANCELLED",
+    ] as const) {
+      expect(
+        isJourneyRouteAt(
+          route({
+            status,
+            started_at: null,
+            completed_at: min(30),
+            updated_at: min(30),
+          }),
+          T,
+        ),
+        status,
+      ).toBe(false);
+    }
+  });
+
+  it("never counts a route still released or planned, even with started_at", () => {
+    expect(isJourneyRouteAt(route({ status: "RELEASED" }), T)).toBe(false);
+    expect(isJourneyRouteAt(route({ status: "PLANNED" }), T)).toBe(false);
   });
 
   it("counts a route completed or cancelled at the tap's instant, not before it", () => {
@@ -122,7 +136,6 @@ describe("isJourneyRouteAt", () => {
       isJourneyRouteAt(
         route({ status: "COMPLETED", completed_at: T, updated_at: min(10) }),
         T,
-        DAY,
       ),
     ).toBe(true);
     expect(
@@ -133,79 +146,69 @@ describe("isJourneyRouteAt", () => {
           updated_at: min(10),
         }),
         T,
-        DAY,
       ),
     ).toBe(false);
     expect(
       isJourneyRouteAt(
         route({ status: "COMPLETED", completed_at: null, updated_at: T }),
         T,
-        DAY,
       ),
-    ).toBe(true);
-    expect(
-      isJourneyRouteAt(route({ status: "CANCELLED", updated_at: T }), T, DAY),
     ).toBe(true);
     expect(
       isJourneyRouteAt(
-        route({ status: "CANCELLED", updated_at: min(-1) }),
+        route({ status: "COMPLETED", completed_at: null, updated_at: min(-1) }),
         T,
-        DAY,
       ),
+    ).toBe(false);
+    expect(
+      isJourneyRouteAt(route({ status: "CANCELLED", updated_at: T }), T),
+    ).toBe(true);
+    expect(
+      isJourneyRouteAt(route({ status: "CANCELLED", updated_at: min(-1) }), T),
     ).toBe(false);
   });
 
-  it("counts another day's route only once it started, at or before the tap", () => {
+  it("holds the slack to the start only: a route finished just before the tap stays out", () => {
     expect(
       isJourneyRouteAt(
-        route({ scheduled_date: "2026-10-05", started_at: T }),
+        route({
+          status: "COMPLETED",
+          started_at: min(-30),
+          completed_at: ms(-1),
+          updated_at: ms(-1),
+        }),
         T,
-        DAY,
-      ),
-    ).toBe(true);
-    expect(
-      isJourneyRouteAt(
-        route({ scheduled_date: "2026-10-05", started_at: min(1) }),
-        T,
-        DAY,
-      ),
-    ).toBe(false);
-    expect(
-      isJourneyRouteAt(
-        route({ scheduled_date: "2026-10-05", started_at: null }),
-        T,
-        DAY,
       ),
     ).toBe(false);
   });
 });
 
 describe("journeyRouteAt", () => {
-  it("prefers the latest start, then the latest release, then the greater id", () => {
-    const a = route({ id: "a", released_at: min(-50) });
-    const b = route({ id: "b", released_at: min(-10) });
+  it("prefers the latest start, then the greater id", () => {
+    const a = route({ id: "a", started_at: min(-50) });
+    const b = route({ id: "b", started_at: min(-10) });
     const c = route({
       id: "c",
-      released_at: min(-40),
-      started_at: min(-20),
-      status: "IN_PROGRESS",
+      status: "COMPLETED",
+      started_at: min(-5),
+      completed_at: min(20),
     });
 
-    expect(journeyRouteAt([a, b], T, DAY)?.id).toBe("b");
-    expect(journeyRouteAt([b, a], T, DAY)?.id).toBe("b");
-    expect(journeyRouteAt([a, b, c], T, DAY)?.id).toBe("c");
+    expect(journeyRouteAt([a, b], T)?.id).toBe("b");
+    expect(journeyRouteAt([b, a], T)?.id).toBe("b");
+    expect(journeyRouteAt([a, b, c], T)?.id).toBe("c");
 
-    const twinA = route({ id: "a", released_at: min(-10) });
-    expect(journeyRouteAt([b, twinA], T, DAY)?.id).toBe("b");
-    expect(journeyRouteAt([twinA, b], T, DAY)?.id).toBe("b");
+    const twinA = route({ id: "a", started_at: min(-10) });
+    expect(journeyRouteAt([b, twinA], T)?.id).toBe("b");
+    expect(journeyRouteAt([twinA, b], T)?.id).toBe("b");
   });
 
-  it("prefers the latest release over the greater id", () => {
-    const later = route({ id: "a", released_at: min(-10) });
-    const earlier = route({ id: "z", released_at: min(-50) });
+  it("prefers the latest start over the greater id", () => {
+    const later = route({ id: "a", started_at: min(-10) });
+    const earlier = route({ id: "z", started_at: min(-50) });
 
-    expect(journeyRouteAt([earlier, later], T, DAY)?.id).toBe("a");
-    expect(journeyRouteAt([later, earlier], T, DAY)?.id).toBe("a");
+    expect(journeyRouteAt([earlier, later], T)?.id).toBe("a");
+    expect(journeyRouteAt([later, earlier], T)?.id).toBe("a");
   });
 
   it("reads a cancelled route's end from updated_at, never from completed_at", () => {
@@ -215,18 +218,19 @@ describe("journeyRouteAt", () => {
       completed_at: min(30),
     });
 
-    expect(isJourneyRouteAt(cancelled, T, DAY)).toBe(false);
+    expect(isJourneyRouteAt(cancelled, T)).toBe(false);
   });
 
-  it("ranks a route with no release stand-in last", () => {
-    const legacy = route({
-      id: "a",
-      released_at: null,
+  it("skips a route only released, however recent, for the one that started", () => {
+    const released = route({
+      id: "z",
       status: "RELEASED",
-      updated_at: min(-90),
+      started_at: null,
+      updated_at: min(-1),
     });
-    const fresh = route({ id: "z", released_at: min(-10) });
+    const running = route({ id: "a", started_at: min(-90) });
 
-    expect(journeyRouteAt([legacy, fresh], T, DAY)?.id).toBe("z");
+    expect(journeyRouteAt([released, running], T)?.id).toBe("a");
+    expect(journeyRouteAt([released], T)).toBeNull();
   });
 });

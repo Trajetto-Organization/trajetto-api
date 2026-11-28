@@ -1,5 +1,7 @@
 import type { RouteStatus, RouteStopStatus } from "@/shared/route/route-rules";
 import type { SortOrder } from "@/shared/pagination/list-query";
+import type { GeofenceOutcome } from "@/shared/delivery/geofence/geofence-rules";
+import type { AddressLookupState } from "@/shared/delivery/geocoding/address-lookup-state";
 
 import type {
   RouteListFilters,
@@ -25,6 +27,15 @@ interface Route {
   started_at: Date | null;
   completed_at: Date | null;
   cancellation_reason: string | null;
+
+  /**
+   * Why a dispatcher closed the route with stops still open (plan of
+   * 02/11/2026, K11; decision D26). Null on a route that closed by itself.
+   */
+  closure_reason?: string | null;
+
+  /** When the admins were warned the route was left open (K11). */
+  left_open_alerted_at?: Date | null;
 
   businessId: string;
   driverId: string;
@@ -66,6 +77,13 @@ interface RouteStop {
 
   routeId: string;
   deliveryId: string;
+
+  /**
+   * Which stops of the route are the same visit (plan of 02/11/2026, B6):
+   * siblings share one customer message per moment. Null = a group of its
+   * own (every stop written before the key existed).
+   */
+  stop_group_key?: string | null;
 
   created_at: Date;
   updated_at: Date;
@@ -118,6 +136,9 @@ interface RouteTransition {
   started_at?: Date;
   completed_at?: Date;
   cancellation_reason?: string;
+
+  /** Who moved it: the author of the timeline lines a cancellation writes (K8). */
+  actorId?: string | null;
 }
 
 /** A route with everything a panel or the driver's app needs in one read. */
@@ -159,6 +180,25 @@ interface RouteStopWithDelivery extends RouteStop {
     latitude?: number | null;
     longitude?: number | null;
     geo_source?: "MANUAL" | "GEOCODER" | null;
+
+    /** How precisely the geocoder placed the address (E1); null otherwise. */
+    geo_precision?: "ADDRESS" | "STREET" | "NEIGHBORHOOD" | "CITY" | null;
+
+    /**
+     * The geocoder's bookkeeping (E1) and the row's last write, read for
+     * `address_lookup` and never answered: get-route drops all four.
+     */
+    geocode_status?: "RESOLVED" | "COARSE" | "NOT_FOUND" | "FAILED" | null;
+    geocode_attempts?: number;
+    geocode_attempted_at?: Date | null;
+    updated_at?: Date;
+
+    /**
+     * Whether the address of a stop without a point is still being looked
+     * up or was not found (owner's report of 09/11/2026), derived by
+     * get-route (shared/delivery/geocoding/address-lookup-state.ts).
+     */
+    address_lookup?: AddressLookupState | null;
   };
 }
 
@@ -171,12 +211,73 @@ interface ListRoutesProps extends RouteListFilters {
   order?: SortOrder;
 }
 
+/**
+ * "Encerrar com pendências" (K11): what the close writes, under the route's
+ * row lock, in the caller's transaction.
+ */
+interface CloseWithPendingProps {
+  reason: string;
+  actorId: string;
+  at: Date;
+}
+
+/** A running route the hourly sweep found and claimed to warn about (K11). */
+interface LeftOpenRoute {
+  id: string;
+  code: number;
+  name: string | null;
+  businessId: string;
+  driverId: string;
+  driverName: string | null;
+  started_at: Date;
+  timeZone: string;
+}
+
+/** A route's driver and execution window, for the trail (G9). */
+interface RouteWindow {
+  id: string;
+  driverId: string;
+  started_at: Date | null;
+  completed_at: Date | null;
+}
+
+/** How many stops of a route are in each status (K14). Every key, zeros too. */
+type RouteStopCounts = Record<RouteStopStatus, number>;
+
+/**
+ * A row of the routes board (plan of 02/11/2026, K14): the route, its driver
+ * and vehicle, and its stops COUNTED by status — progress and blockers read
+ * nothing else. The detail (findRouteById) keeps the stops and deliveries.
+ */
+interface RouteListRow extends Route {
+  driver: { id: string; name: string } | null;
+  vehicle: { id: string; license_plate: string } | null;
+  stopCounts: RouteStopCounts;
+
+  /**
+   * @deprecated One release only: the bare stops for the web still in the
+   * field, which counts them itself. Never a delivery. Dropped by the N+1
+   * patch (_n1/api-k14-route-list-without-stops.patch).
+   */
+  stops: Array<{ id: string; status: RouteStopStatus }>;
+}
+
 interface ListRoutesResult {
-  data: RouteWithStops[];
+  data: RouteListRow[];
   /** Rows of the search and EVERY facet: what the pager draws. */
   total: number;
   /** The cards and the filter options (disjunctive counts). */
   meta: RouteListSearchMeta;
+}
+
+/** The repository's answer: the result, and whether the period held. */
+interface ListRoutesPage extends ListRoutesResult {
+  /**
+   * False when the search named one route exactly (exactRouteSearch) and the
+   * period was dropped for it; true when a period shaped the page; false
+   * without one. The use case reports it as `meta.period.applied`.
+   */
+  periodApplied: boolean;
 }
 
 interface AssignmentPreviewProps {
@@ -361,8 +462,21 @@ interface PinnedLocation {
     geo_updated_at: Date | null;
   } | null;
 
-  /** The editable route holding it, when its plan moved a version. */
+  /** The planned or released route holding it, when its plan moved a version. */
   route: (PlanWriteResult & { routeId: string }) | null;
+
+  /**
+   * The running route holding it (D23): its plan keeps its version — a pin
+   * moves no stop — and its driver is told to read the day again.
+   */
+  runningRoute: { routeId: string; driverId: string } | null;
+
+  /**
+   * The company's open copies of this delivery's previous point that
+   * followed the pin in its commit (followSource): moved to the new point,
+   * or cleared with it. Empty when locked.
+   */
+  followed: string[];
 }
 
 /** The route a delivery's open stop is on. */
@@ -374,6 +488,20 @@ interface OpenStopRoute {
   routeStatus: RouteStatus;
 }
 
+/**
+ * The stop a cancellation or a status change took from a driver (K7,
+ * decision D27): findLostStop's answer, for a proof made offline before it.
+ */
+interface LostStop {
+  routeId: string;
+  routeCode: number;
+  routeStatus: RouteStatus;
+  vehicleId: string | null;
+  stopStatus: "CANCELLED" | "FAILED";
+  /** When the delivery left the driver: the stop's end. */
+  lostAt: Date;
+}
+
 /** GPS the app captured at a stop (arrival or proof), for the route map. */
 interface VisitedPoint {
   deliveryId: string;
@@ -381,11 +509,36 @@ interface VisitedPoint {
   latitude: number;
   longitude: number;
   recordedAt: Date;
+
+  /**
+   * The point's geofence record (plan of 02/11/2026, E5), named as in the
+   * delivery detail: OUTSIDE is the stop card's "Fora do raio" flag. Null
+   * on a point from before the geofence.
+   */
+  geofence_outcome: GeofenceOutcome | null;
+  distance_m: number | null;
+  accuracy_m: number | null;
+}
+
+/**
+ * A stop recorded outside the radius (plan of 02/11/2026, E5): the newest
+ * OUTSIDE record among the delivery's arrival, proof and occurrences on this
+ * route. The stop card's "Fora do raio" flag — an occurrence outside always
+ * passes, flagged, and is not a map point.
+ */
+interface StopGeofenceFlag {
+  deliveryId: string;
+  type: "ARRIVAL" | "PROOF" | "OCCURRENCE";
+  geofence_outcome: "OUTSIDE";
+  distance_m: number | null;
+  accuracy_m: number | null;
+  recordedAt: Date;
 }
 
 export type {
   DetachResult,
   LockedRoute,
+  LostStop,
   OpenStopRoute,
   PinnedLocation,
   PlanBump,
@@ -395,18 +548,25 @@ export type {
   PlanWriteOptions,
   PlanWriteResult,
   VisitedPoint,
+  StopGeofenceFlag,
   AssignmentContext,
   AssignmentPreview,
   AssignmentPreviewProps,
   AssignmentRouteRef,
   AssignmentVehicleRef,
+  CloseWithPendingProps,
   CreateRouteProps,
+  LeftOpenRoute,
+  ListRoutesPage,
   ListRoutesProps,
   ListRoutesResult,
   Route,
+  RouteListRow,
   RouteStop,
+  RouteStopCounts,
   RouteStopWithDelivery,
   RouteTransition,
+  RouteWindow,
   RouteWithStops,
   UpdateRouteProps,
 };

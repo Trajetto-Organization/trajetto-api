@@ -1,6 +1,6 @@
 import { NotificationCategory } from "@prisma/client";
 
-import { formatCurrency, formatDate } from "@/shared/utils/format-values";
+import { formatCurrency } from "@/shared/utils/format-values";
 
 import {
   FineCreatedPayload,
@@ -9,6 +9,8 @@ import {
   RenderedActivity,
   RenderedInApp,
 } from "../notification-types";
+import type { RenderedWhatsApp } from "../whatsapp-templates";
+import { actorLabel, dayLabel, oneLine } from "../whatsapp-parameters";
 
 /**
  * Notification policy for a newly registered fine.
@@ -31,30 +33,37 @@ function renderFineCreatedInApp(
   };
 }
 
-function renderFineCreatedWhatsApp(payload: FineCreatedPayload): string {
-  // A MASTER registering a fine for a client company is back office — their
-  // identity is noise to the admins reading the alert.
-  const isMasterActor = payload.actor.role === "MASTER";
-  const locationPart = payload.location ? `\nLocal: ${payload.location}` : "";
+/**
+ * trajetto_multa_registrada (B1). A MASTER registering a fine for a client
+ * company is back office: the admins read "Suporte Trajetto", never the
+ * master's name or e-mail.
+ */
+function renderFineCreatedWhatsApp(
+  payload: FineCreatedPayload,
+): RenderedWhatsApp {
+  const violation = oneLine(payload.violationDescription)
+    ? `${payload.violationCode} – ${oneLine(payload.violationDescription)}`
+    : payload.violationCode;
 
-  return [
-    `🚨 *Nova Multa Registrada!*`,
-    !isMasterActor && `Usuário: *${payload.actor.name}*`,
-    !isMasterActor && `E-mail: *${payload.actor.email}*`,
-    `Filial: *${payload.branchName}*`,
-    `Veículo: *${payload.vehiclePlate}*`,
-    `Valor: *${formatCurrency(payload.amount)}*`,
-    `Identificador da multa: *${payload.fineId}*`,
-    `Data da infração: *${formatDate(payload.violationDate, payload.timeZone)}*${locationPart}`,
-    // Bold is closed on every line: an open `*` bolds the rest of the
-    // message in WhatsApp. Zero points is still a value worth printing.
-    payload.points !== null &&
-      payload.points !== undefined &&
-      `Pontos na carteira: *${payload.points}*`,
-    payload.observation && `Observação: *${payload.observation}*`,
-  ]
-    .filter(Boolean)
-    .join("\n");
+  return {
+    template: "trajetto_multa_registrada",
+    parameters: [
+      payload.vehiclePlate,
+      payload.driverName,
+      payload.branchName,
+      violation,
+      dayLabel(payload.violationDate, payload.timeZone),
+      oneLine(payload.location),
+      // Zero points is a value worth printing; only absence is not.
+      payload.points === null || payload.points === undefined
+        ? null
+        : String(payload.points),
+      formatCurrency(Number(payload.amount) || 0),
+      dayLabel(payload.dueDate, payload.timeZone),
+      oneLine(payload.observation),
+      actorLabel(payload.actor, { maskMaster: true }),
+    ],
+  };
 }
 
 function renderFineCreatedActivity(

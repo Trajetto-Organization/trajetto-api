@@ -16,11 +16,7 @@ import type { ProviderFailureKind } from "../vision-provider";
  */
 
 type Failure =
-  | "busy"
-  | "retryable"
-  | "unauthorized"
-  | "permanent"
-  | "quota_exhausted";
+  "busy" | "retryable" | "unauthorized" | "permanent" | "quota_exhausted";
 
 class FakeReaderFailure extends Error {
   constructor(readonly kind: Failure) {
@@ -31,8 +27,7 @@ class FakeReaderFailure extends Error {
 
 type FakeAnswers = {
   [K in keyof AnswerByKind]?:
-    | Record<string, unknown>
-    | ((photoPath: string) => Record<string, unknown>);
+    Record<string, unknown> | ((photoPath: string) => Record<string, unknown>);
 };
 
 interface FakeImageReaderOptions {

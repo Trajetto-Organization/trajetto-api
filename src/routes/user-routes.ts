@@ -1,4 +1,5 @@
 import { FastifyInstance } from "fastify";
+import { z } from "zod";
 
 import { CreateUserController } from "@/modules/user/usecases/create-user/create-user-controller";
 import { AuthenticateUserController } from "@/modules/user/usecases/authenticate-user/authenticate-user-controller";
@@ -23,6 +24,7 @@ import { ListUsersController } from "@/modules/user/usecases/list-users/list-use
 
 import { UpdateUserController } from "@/modules/user/usecases/update-user/update-user-controller";
 import { DeleteUserController } from "@/modules/user/usecases/delete-user/delete-user-controller";
+import { AnonymizeUserController } from "@/modules/user/usecases/anonymize-user/anonymize-user-controller";
 
 import { EmailVerificationController } from "@/modules/user/usecases/e-mail-verification/e-mail-verification-controller";
 
@@ -45,6 +47,20 @@ import { UpdateMasterUserController } from "@/modules/user/usecases/update-maste
 import { DeleteMasterUserController } from "@/modules/user/usecases/delete-master-user/delete-master-user-controller";
 
 import { SearchUserCursorController } from "@/modules/user/usecases/search-user-cursor/search-user-cursor-controller";
+
+import { RevokeSessionController } from "@/modules/user/usecases/revoke-session/revoke-session-controller";
+import { EnrollDriverSessionController } from "@/modules/user/usecases/enroll-driver-session/enroll-driver-session-controller";
+import { IssueDriverEnrollmentController } from "@/modules/user/usecases/issue-driver-enrollment/issue-driver-enrollment-controller";
+import { ResetDriverPasswordController } from "@/modules/user/usecases/reset-driver-password/reset-driver-password-controller";
+import {
+  ListDriverDevicesController,
+  RevokeDriverDeviceController,
+} from "@/modules/user/usecases/driver-devices/driver-devices-controllers";
+import { CreateOwnPasswordController } from "@/modules/user/usecases/create-own-password/create-own-password-controller";
+import {
+  ListOwnSessionsController,
+  RevokeOwnSessionController,
+} from "@/modules/user/usecases/own-sessions/own-sessions-controllers";
 
 import { userResponses, userSchemas } from "./documentation/user-documentation";
 import {
@@ -79,6 +95,7 @@ const emailVerificationController = new EmailVerificationController();
 
 const getUserController = new GetUserController();
 const deleteUserController = new DeleteUserController();
+const anonymizeUserController = new AnonymizeUserController();
 
 const updateUserPasswordController = new UpdateUserPasswordController();
 const updateUserController = new UpdateUserController();
@@ -100,6 +117,16 @@ const deleteMasterUserController = new DeleteMasterUserController();
 
 const searchUserCursorController = new SearchUserCursorController();
 
+const revokeSessionController = new RevokeSessionController();
+const enrollDriverSessionController = new EnrollDriverSessionController();
+const issueDriverEnrollmentController = new IssueDriverEnrollmentController();
+const resetDriverPasswordController = new ResetDriverPasswordController();
+const listDriverDevicesController = new ListDriverDevicesController();
+const revokeDriverDeviceController = new RevokeDriverDeviceController();
+const createOwnPasswordController = new CreateOwnPasswordController();
+const listOwnSessionsController = new ListOwnSessionsController();
+const revokeOwnSessionController = new RevokeOwnSessionController();
+
 async function userRoutes(app: FastifyInstance) {
   app.post(
     "/create-user",
@@ -114,7 +141,7 @@ async function userRoutes(app: FastifyInstance) {
         tags: ["user"],
         summary: "Cria um usuário",
         description:
-          "Cadastra um usuário na empresa informada, com nível de acesso e perfil de acesso ou motorista vinculado. Nenhuma senha é definida aqui nem enviada por e-mail: o usuário recebe um link de uso único (72 h) para definir a própria senha.",
+          "Cadastra um usuário na empresa informada, com nível de acesso e perfil de acesso ou motorista vinculado. Nenhuma senha é enviada por e-mail: o usuário recebe um link de uso único (72 h) para definir a própria senha. Exceção, só no login de um motorista: o gestor pode definir a senha inicial em `password`; aí nenhum e-mail é enviado, o e-mail fica confirmado e o motorista entra na hora (com o CPF ou o e-mail e a senha, ou pelo QR Code) e cria a própria senha no primeiro login (`must_change_password`). O e-mail é opcional no login de um motorista (sem ele, o motorista entra com o CPF e a senha inicial, ou pelo QR Code) e obrigatório para todos os outros (400). A senha não vai para log nem para a atividade, que registra quem a definiu.",
         body: userSchemas.createUser,
         response: {
           201: userResponses.userCreated,
@@ -167,6 +194,7 @@ async function userRoutes(app: FastifyInstance) {
         summary: "Busca usuários da empresa (cursor)",
         description:
           "Usuários da empresa em NDJSON paginado por cursor, para os seletores. " +
+          "Só quem ainda entra no sistema: acesso revogado ou usuário removido (anonimizado) não aparece, porque todo seletor que usa esta busca escolhe um responsável. " +
           "O termo em `search` é comparado com nome e e-mail no servidor. " +
           "A primeira linha traz {meta: {total: 0, searchMeta: {nextCursor, hasMore}}}; " +
           "use nextCursor como `cursor` da próxima página.",
@@ -190,9 +218,10 @@ async function userRoutes(app: FastifyInstance) {
       },
       schema: {
         tags: ["user"],
-        summary: "Entra com e-mail e senha",
+        summary: "Entra com e-mail e senha, ou com CPF e senha (motorista)",
         description:
-          "Confere as credenciais e abre uma sessão com os tokens de acesso (ou pede o código de dois fatores). Credenciais erradas: 401 AUTH_INVALID_CREDENTIALS, a mesma frase para e-mail inexistente e senha errada. Conta sem perfil, revogada, motorista inativo ou empresa inativa: 403 com o `code` de cada caso.",
+          "Confere as credenciais e abre uma sessão com os tokens de acesso (ou pede o código de dois fatores). Credenciais erradas: 401 AUTH_INVALID_CREDENTIALS, a mesma frase para e-mail ou CPF inexistente e senha errada. Conta sem perfil, revogada, motorista inativo ou empresa inativa: 403 com o `code` de cada caso. " +
+          "Login do motorista por CPF (`{ cpf, password, deviceId }`, CPF com ou sem máscara; CPF com dígito verificador errado: 400): só vale num aparelho em que aquele login já entrou pelo QR Code de acesso (o aparelho deixa de valer depois de 210 dias sem login nele). Sem `deviceId`, com um CPF sem login ou num aparelho que nenhum login do CPF conhece: 403 AUTH_DEVICE_NOT_TRUSTED, a mesma resposta para os três, antes de qualquer conferência de senha e sem contar tentativa (o motorista lê um QR Code novo do gestor nesse aparelho). Nos logins que conhecem o aparelho, a senha é conferida em cada empresa. Se valer em uma só, a sessão abre; se valer em mais de uma, a resposta traz `businessSelection: true` e `businesses` (id e nome, só as empresas em que a senha conferiu) e o app repete o pedido com `businessId`. Uma senha errada conta contra esses logins do CPF (10 seguidas bloqueiam por 15 minutos, com a mesma resposta 401). A sessão fica presa ao aparelho: até 30 dias sem uso e 180 no total, renovada só com o mesmo `deviceId`. O login por CPF não pede confirmação de e-mail. Toda sessão aberta traz `mustChangePassword`: true quando a senha foi definida pelo gestor (o app e a web pedem a da própria pessoa; a API não recusa nada por isso).",
         body: userSchemas.authenticateUser,
         response: {
           200: userResponses.authenticateUserSuccess,
@@ -205,6 +234,61 @@ async function userRoutes(app: FastifyInstance) {
       },
     },
     authenticateUserController.handle,
+  );
+
+  app.post(
+    "/session/enroll",
+    {
+      // The same per-address limit as the password login: an anonymous route
+      // that opens sessions. Each code also counts its refused presentations.
+      config: {
+        rateLimit: getRateLimiterConfig({ max: 8 }),
+      },
+      schema: {
+        tags: ["user"],
+        summary: "Entra com o QR Code de acesso do motorista",
+        description:
+          'O aparelho do motorista abre a sessão com o QR Code que o gestor mostrou (`qrToken`, o token do conteúdo `trajetto-enroll:1:<ambiente>:<token>`) ou com o código de 8 caracteres (`accessCode`), e o seu `deviceId`. Vale uma vez, por 10 minutos: dois aparelhos lendo o mesmo QR, só um entra. A sessão fica presa ao aparelho (até 30 dias sem uso e 180 no total; renove com o mesmo `deviceId`). Desconhecido, vencido, já usado ou gasto: 401 AUTH_ENROLLMENT_INVALID, a mesma resposta. Motorista que não pode entrar agora: 403 com o `code` do motivo, e a recusa conta contra o código (5 gastam). Sem confirmação de e-mail nem segundo fator. O aparelho passa a valer para o login por CPF e senha daquele motorista; se for um aparelho novo para ele, os administradores da empresa (menos quem gerou o QR Code) recebem o aviso "Aparelho novo do motorista" e a atividade registra. A resposta traz `mustChangePassword` (a senha foi definida pelo gestor).',
+        body: userSchemas.enrollSession,
+        response: {
+          200: userResponses.enrollSessionSuccess,
+          400: errorResponse,
+          401: userResponses.enrollSessionUnauthorized,
+          403: userResponses.enrollSessionForbidden,
+          500: userResponses.internalServerError,
+        },
+      },
+    },
+    enrollDriverSessionController.handle,
+  );
+
+  app.post(
+    "/session/revoke",
+    {
+      // Anonymous, like the refresh, and counted the same way: per session
+      // when the token proves one, per address otherwise.
+      config: {
+        rateLimit: getRateLimiterConfig({
+          max: 10,
+          keyGenerator: refreshSessionRateLimitKey,
+          hook: "preHandler",
+        }),
+      },
+      schema: {
+        tags: ["user"],
+        summary: "Encerra uma sessão só com o refresh token",
+        description:
+          "Para o logout que não chegou ao servidor (aparelho sem rede, token de acesso vencido): o app guarda o refresh token e chama esta rota quando a rede volta, de qualquer tela. Encerra a sessão daquele token (todos os refresh tokens dela) e apaga os aparelhos de push que ela registrou. Aceita o token mesmo vencido, já trocado ou reutilizado, e responde 204 também quando a sessão já tinha terminado. Só um token que não foi assinado por esta API é recusado (401 AUTH_REFRESH_INVALID). As outras sessões do usuário continuam valendo.",
+        body: userSchemas.revokeSession,
+        response: {
+          204: z.null().describe("Sessão encerrada (ou já encerrada)."),
+          400: errorResponse,
+          401: userResponses.revokeSessionUnauthorized,
+          500: userResponses.internalServerError,
+        },
+      },
+    },
+    revokeSessionController.handle,
   );
 
   app.get(
@@ -237,7 +321,7 @@ async function userRoutes(app: FastifyInstance) {
         tags: ["user"],
         summary: "Define a nova senha pelo link",
         description:
-          "Grava a nova senha com o token do link de redefinição. Token inválido ou expirado: 400 AUTH_TOKEN_INVALID ou AUTH_TOKEN_EXPIRED.",
+          "Grava a nova senha com o token do link de redefinição. O link chegou à caixa de e-mail, então gastá-lo também confirma o e-mail, se ainda não estava confirmado: o próximo login não pede outro e-mail. Token inválido ou expirado: 400 AUTH_TOKEN_INVALID ou AUTH_TOKEN_EXPIRED.",
         querystring: userSchemas.forgotPasswordVerification,
         body: userSchemas.forgotPassword,
         response: {
@@ -303,7 +387,7 @@ async function userRoutes(app: FastifyInstance) {
         tags: ["user"],
         summary: "Renova os tokens da sessão",
         description:
-          "Troca um refresh token válido por um novo par de tokens. Refresh inválido, expirado ou já usado: 401 AUTH_REFRESH_INVALID. Sessão encerrada (logout, expiração): 401 AUTH_SESSION_INVALIDATED. Um token já trocado ainda vale UMA vez nos 60 s seguintes (duas abas renovando juntas, um app repetindo uma resposta perdida) e recebe outro par da mesma sessão; uma terceira apresentação, mesmo dentro desses 60 s, ou qualquer uma depois deles, é reuso: 401 AUTH_REFRESH_REUSED, todas as sessões da conta são encerradas e o usuário é avisado.",
+          "Troca um refresh token válido por um novo par de tokens. Refresh inválido, expirado ou já usado: 401 AUTH_REFRESH_INVALID. Sessão encerrada (logout, expiração): 401 AUTH_SESSION_INVALIDATED. Um token já trocado ainda vale UMA vez nos 60 s seguintes (duas abas renovando juntas, um app repetindo uma resposta perdida) e recebe outro par da mesma sessão; uma terceira apresentação, mesmo dentro desses 60 s, ou qualquer uma depois deles, é reuso: 401 AUTH_REFRESH_REUSED, todas as sessões da conta são encerradas e o usuário é avisado. Sessão presa a um aparelho (aberta pelo QR Code ou por CPF e senha com `deviceId`): renova só com o mesmo `deviceId` no corpo; outro aparelho, ou nenhum, recebe 401 AUTH_DEVICE_MISMATCH, sem gastar o token nem encerrar a sessão.",
         body: userSchemas.refreshToken,
         response: {
           200: userResponses.tokenRefreshed,
@@ -372,7 +456,7 @@ async function userRoutes(app: FastifyInstance) {
         tags: ["user"],
         summary: "Confere o código de dois fatores",
         description:
-          "Conclui o login com o código enviado por e-mail. Código errado: 400 AUTH_2FA_CODE_INVALID; expirado: 400 AUTH_2FA_CODE_EXPIRED; de outro usuário: 400 AUTH_2FA_USER_MISMATCH.",
+          "Conclui o login com o código enviado por e-mail. Código errado: 400 AUTH_2FA_CODE_INVALID; expirado: 400 AUTH_2FA_CODE_EXPIRED; de outro usuário: 400 AUTH_2FA_USER_MISMATCH. Desafio que veio de um login por CPF: só vale com o mesmo `deviceId` daquele login (outro ou nenhum: 400 AUTH_2FA_CODE_INVALID), e a sessão fica presa ao aparelho. A resposta traz `mustChangePassword`.",
         body: userSchemas.twoFactorUser,
         response: {
           200: userResponses.twoFactorSuccess,
@@ -447,6 +531,83 @@ async function userRoutes(app: FastifyInstance) {
     getUserController.handle,
   );
 
+  // The person's own account (wave 2, 06/11/2026): the password created
+  // right after a QR code, and the sessions ("Aparelhos conectados").
+  app.post(
+    "/me/password",
+    {
+      // Sets a password without the current one: held like the manager's
+      // reset of a driver's password.
+      config: {
+        rateLimit: getRateLimiterConfig({ max: 10 }),
+      },
+      onRequest: [ensureAuthenticated],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["user"],
+        summary: "Cria a própria senha logo depois de entrar pelo QR Code",
+        description:
+          'O motorista cria a senha sem a senha atual, na sessão que o QR Code de acesso acabou de abrir: o QR foi lido há até 15 minutos, neste aparelho, e esta sessão começou com ele. Fora disso: 403 PASSWORD_CREATE_NOT_ALLOWED (troque com a senha atual em PATCH /user/password, ou peça um novo QR Code). Mesma regra de senha da troca. Mantém esta sessão e encerra todas as outras (evento de segurança `password_changed` nelas); a resposta traz os tokens novos desta sessão, que o app guarda no lugar dos anteriores. Limpa o bloqueio por senhas erradas e o `must_change_password`. A atividade registra, e os administradores da empresa (menos quem gerou o QR Code) recebem o aviso "Senha criada pelo motorista".',
+        body: userSchemas.createOwnPassword,
+        response: {
+          200: userResponses.ownPasswordCreated,
+          400: userResponses.createOwnPasswordErrors,
+          403: userResponses.createOwnPasswordForbidden,
+          404: userResponses.resourceNotFound,
+          500: userResponses.internalServerError,
+          503: authBusyResponse,
+        },
+      },
+    },
+    createOwnPasswordController.handle,
+  );
+
+  app.get(
+    "/me/sessions",
+    {
+      onRequest: [ensureAuthenticated],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["user"],
+        summary: "Lista as próprias sessões (aparelhos conectados)",
+        description:
+          'Todas as sessões ainda válidas do usuário autenticado, da atividade mais recente para a mais antiga: `kind` diz se é um celular com sessão presa a ele (aparelho), o app aberto por e-mail (app) ou o painel web (navegador); `current` marca a desta requisição, com `device_label` "Este aparelho". O identificador do aparelho nunca é devolvido.',
+        response: {
+          200: userResponses.ownSessions,
+          404: userResponses.resourceNotFound,
+          500: userResponses.internalServerError,
+        },
+      },
+    },
+    listOwnSessionsController.handle,
+  );
+
+  app.delete(
+    "/me/sessions/:id",
+    {
+      config: {
+        rateLimit: getRateLimiterConfig({ max: 10 }),
+      },
+      onRequest: [ensureAuthenticated],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["user"],
+        summary: "Encerra uma das próprias sessões",
+        description:
+          "Encerra outra sessão do usuário autenticado (os refresh tokens dela e os aparelhos de push que ela registrou) e avisa o tempo real dela (evento de segurança `logout`). Sessão presa a um celular: quando nenhuma outra sessão do usuário continua naquele aparelho (a desta requisição incluída), ele deixa de valer para o login por CPF e senha (precisa de um novo QR Code); encerrar uma sessão antiga do próprio aparelho não tira o acesso dele. A sessão desta requisição é recusada: 409 SESSION_IS_CURRENT (use POST /user/logout). Responde 204 também quando a sessão já tinha terminado ou não é do usuário.",
+        params: userSchemas.ownSessionParams,
+        response: {
+          204: z.null().describe("Sessão encerrada (ou já encerrada)."),
+          400: userResponses.ownSessionErrors,
+          404: userResponses.resourceNotFound,
+          409: userResponses.ownSessionConflict,
+          500: userResponses.internalServerError,
+        },
+      },
+    },
+    revokeOwnSessionController.handle,
+  );
+
   app.delete(
     "/delete-user/:userId",
     {
@@ -457,7 +618,7 @@ async function userRoutes(app: FastifyInstance) {
         tags: ["user"],
         summary: "Exclui um usuário",
         description:
-          "Exclui a conta de um usuário da empresa. Recusa (409) quem é responsável por ordens de serviço ou contas a pagar, ou é autor de registros que a plataforma preserva (USER_HAS_RECORDS: eventos de entrega, decisões da torre, importações, mensagens), apontando para revogar o acesso; recusa (403 PERMISSION_DENIED) um nível de acesso acima do de quem pede e um usuário Master (que sai por /user/delete-master-user, a rota que garante que sempre reste um). Encerra as sessões e, se for o login de um motorista, avisa as abas abertas (catalogChanged driver).",
+          "Exclui a conta de um usuário da empresa. Excluir é só para o login criado por engano: recusa (409) o login de um motorista com rota planejada, liberada ou em andamento (DRIVER_HAS_OPEN_ROUTES, a regra da revogação), quem é responsável por ordens de serviço ou contas a pagar e quem é autor de registros que a plataforma preserva (USER_HAS_RECORDS: eventos de entrega, decisões da torre, ocorrências, revisões de comprovante, mensagens do chat, importações, com a contagem de cada um), apontando para revogar o acesso; abastecimentos, checklists, multas e rotas são do motorista e não seguram o login. Recusa (403 PERMISSION_DENIED) um nível de acesso acima do de quem pede e um usuário Master (que sai por /user/delete-master-user, a rota que garante que sempre reste um). Encerra as sessões e, se for o login de um motorista, avisa as abas abertas (catalogChanged driver).",
         params: userSchemas.updateDeleteUser,
         response: {
           200: userResponses.userDeleted,
@@ -472,6 +633,31 @@ async function userRoutes(app: FastifyInstance) {
     deleteUserController.handle,
   );
 
+  app.post(
+    "/anonymize-user/:userId",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [verifyPermission("user_registration_manage", "write")],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["user"],
+        summary: "Remove e anonimiza um usuário com registros",
+        description:
+          "Para o usuário do painel que a exclusão recusa por registros (USER_HAS_RECORDS) e que pediu para sair (plano de escala F3-27, LGPD). Responde 202 e põe na fila o job USER_ANONYMIZE, que apaga o nome (vira 'Usuário removido'), o e-mail, o telefone, a foto, as sessões e os aparelhos, revoga o acesso e mantém o que ele registrou, com o autor anônimo. As regras de quem pode remover quem são as da exclusão: nunca a si mesmo, um Master ou um nível acima do seu (403); usuário de outra empresa responde 404, como um inexistente. O login de um motorista sai com o motorista (409 USER_IS_DRIVER_LOGIN). Pedir de novo responde o mesmo job.",
+        params: userSchemas.updateDeleteUser,
+        response: {
+          202: userResponses.userAnonymizeScheduled,
+          400: userResponses.deleteUserErrors,
+          403: userResponses.anonymizeUserForbiddenErrors,
+          404: userResponses.deleteUserNotFoundErrors,
+          409: userResponses.anonymizeUserConflictErrors,
+          500: userResponses.internalServerError,
+        },
+      },
+    },
+    anonymizeUserController.handle,
+  );
+
   app.patch(
     "/update-user/:userId",
     {
@@ -482,7 +668,7 @@ async function userRoutes(app: FastifyInstance) {
         tags: ["user"],
         summary: "Atualiza um usuário",
         description:
-          "Compara os valores enviados com os atuais e grava só o que mudou. Mudar o nível de acesso ou o motorista vinculado encerra as sessões do usuário e apaga as notificações dele (as atividades ficam). A empresa não muda pela edição, nem pelo MASTER (decisão 16.100): um `businessId` no corpo responde 400 VALIDATION_ERROR. Mudar só o nome, o e-mail ou o perfil não desloga ninguém. O MASTER pode pedir `sendPasswordSetupLink`: o usuário recebe um link de uso único para definir uma nova senha; se o link não puder ser gerado, nada é alterado (503 PASSWORD_LINK_UNAVAILABLE). Usuários Master são alterados em /user/update-master-user.",
+          "Compara os valores enviados com os atuais e grava só o que mudou. Mudar o nível de acesso ou o motorista vinculado encerra as sessões do usuário e apaga as notificações dele (as atividades ficam). Mudar o motorista vinculado também anula o QR Code de acesso e os aparelhos em que o login entrava por CPF e senha: eram do motorista anterior, e o novo entra pelo QR Code dele. Tirar o login do motorista atual é recusado (409 DRIVER_HAS_OPEN_ROUTES) enquanto esse motorista tem rota planejada, liberada ou em andamento, e passar para outro motorista um login que já tem registros na operação é recusado (409 USER_DRIVER_LOCKED: crie outro login); nos dois casos nada muda. A empresa não muda pela edição, nem pelo MASTER (decisão 16.100): um `businessId` no corpo responde 400 VALIDATION_ERROR. Mudar só o nome, o e-mail ou o perfil não desloga ninguém. O MASTER pode pedir `sendPasswordSetupLink`: o usuário recebe um link de uso único para definir uma nova senha; se o link não puder ser gerado, nada é alterado (503 PASSWORD_LINK_UNAVAILABLE). Usuários Master são alterados em /user/update-master-user.",
         params: userSchemas.updateDeleteUser,
         body: userSchemas.updateUser,
         response: {
@@ -508,7 +694,7 @@ async function userRoutes(app: FastifyInstance) {
         tags: ["user"],
         summary: "Troca a própria senha",
         description:
-          "Troca a senha do usuário autenticado, com a senha atual. Senha atual errada: 400 PASSWORD_CURRENT_INCORRECT; nova igual à atual: 400 PASSWORD_SAME_AS_CURRENT.",
+          "Troca a senha do usuário autenticado, com a senha atual. Senha atual errada: 400 PASSWORD_CURRENT_INCORRECT; nova igual à atual: 400 PASSWORD_SAME_AS_CURRENT. Mantém a sessão desta requisição e encerra todas as outras (evento de segurança `password_changed` só nelas): a resposta traz `token` e `refresh_token` novos desta sessão, na mesma política (presa ao mesmo aparelho, quando era), que o cliente guarda no lugar dos anteriores. Um cliente que os ignora sai na próxima requisição, como antes. Limpa o bloqueio por senhas erradas e o `must_change_password`; com e-mail, avisa por e-mail.",
         body: userSchemas.updateUserPassword,
         response: {
           200: userResponses.passwordUpdated,
@@ -547,18 +733,28 @@ async function userRoutes(app: FastifyInstance) {
   app.patch(
     "/twofactor",
     {
+      // Parsed by hand in the controller: a request with no body is still the
+      // old toggle for one release. Documented through the transform. It now
+      // compares the password, so it is held like the other password routes.
+      config: {
+        openapi: { body: userSchemas.updateTwoFactor },
+        rateLimit: getRateLimiterConfig({ max: 10 }),
+      },
       onRequest: [ensureAuthenticated],
       schema: {
         security: [{ bearerAuth: [] }],
         tags: ["user"],
         summary: "Liga ou desliga a verificação em dois fatores",
+        consumes: ["application/json"],
         description:
-          "Liga ou desliga, na conta do usuário autenticado, o código enviado por e-mail a cada login.",
+          "Liga (`enabled: true`) ou desliga (`false`), na conta do usuário autenticado, o código enviado por e-mail a cada login, com a senha atual em `password`. Pedir o estado atual responde 200 sem mudar nada (`twoFactorEnabled` diz o estado). Senha errada: 400 PASSWORD_CURRENT_INCORRECT. Ligar numa conta sem e-mail: 409 TWO_FACTOR_REQUIRES_EMAIL. Descontinuado: sem corpo, inverte o estado como antes (sem senha), só durante esta release, para a web da release anterior; a mesma recusa sem e-mail vale.",
         response: {
           200: userResponses.twoFactorUpdated,
           400: userResponses.twoFactorUpdateErrors,
           404: userResponses.resourceNotFound,
+          409: userResponses.twoFactorUpdateConflict,
           500: userResponses.internalServerError,
+          503: authBusyResponse,
         },
       },
     },
@@ -575,7 +771,7 @@ async function userRoutes(app: FastifyInstance) {
         tags: ["user"],
         summary: "Revoga ou restaura o acesso de um usuário",
         description:
-          "Alterna o acesso da conta (revogado ↔ liberado). Só MASTER e administradores; um nível de acesso acima do de quem pede é recusado com 403 PERMISSION_DENIED. Se for o login de um motorista, avisa as abas abertas (catalogChanged driver).",
+          "Alterna o acesso da conta (revogado ↔ liberado). Só MASTER e administradores; um nível de acesso acima do de quem pede é recusado com 403 PERMISSION_DENIED. Revogar o login de um motorista com rota planejada, liberada ou em andamento é recusado com 409 DRIVER_HAS_OPEN_ROUTES (a mesma regra da inativação do motorista; restaurar nunca é recusado). Revogar o login de um motorista também anula o QR Code de acesso ainda não usado e os aparelhos em que ele entrava por CPF e senha (restaurar não traz nenhum dos dois de volta: gere outro QR Code). Se for o login de um motorista, avisa as abas abertas (catalogChanged driver).",
         params: userSchemas.revokeUserAccess,
         response: {
           200: userResponses.userAccessRevoked,
@@ -588,6 +784,112 @@ async function userRoutes(app: FastifyInstance) {
       },
     },
     userRevokeAccessController.handle,
+  );
+
+  // The driver's login, as the manager handles it (plan of 02/11/2026: the
+  // access QR code, D3; the password the manager sets, D2; the phones, D7).
+  app.post(
+    "/:userId/enrollment",
+    {
+      config: {
+        rateLimit: getRateLimiterConfig({ max: 10 }),
+      },
+      onRequest: [ensureAuthenticated],
+      preHandler: [verifyPermission("user_registration_manage", "write")],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["user"],
+        summary: "Gera o QR Code de acesso do motorista",
+        description:
+          "Gera o QR Code (e o código de 8 caracteres) com que o motorista entra no app sem e-mail nem senha. Vale uma vez, por 10 minutos; gerar outro anula o anterior. O conteúdo do QR é `qrContent` (marca o ambiente e leva só um token opaco, nunca a senha); o servidor guarda só o hash do token e do código, que aparecem uma única vez nesta resposta. Só para o login de um motorista ativo e com acesso liberado (409 com o `code` do motivo). Usuário de outra empresa: 404 USER_NOT_FOUND, como inexistente. A atividade registra quem gerou.",
+        params: userSchemas.driverLoginParams,
+        response: {
+          201: userResponses.enrollmentIssued,
+          400: userResponses.driverLoginErrors,
+          404: userResponses.driverLoginNotFound,
+          409: userResponses.enrollmentConflict,
+          500: userResponses.internalServerError,
+        },
+      },
+    },
+    issueDriverEnrollmentController.handle,
+  );
+
+  app.patch(
+    "/:userId/driver-password",
+    {
+      config: {
+        rateLimit: getRateLimiterConfig({ max: 10 }),
+      },
+      onRequest: [ensureAuthenticated],
+      preHandler: [verifyPermission("user_registration_manage", "write")],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["user"],
+        summary: "Define uma nova senha para o motorista",
+        description:
+          "O gestor define a senha do login de um motorista (o motorista que esqueceu a senha pode não ter e-mail). Nada é enviado por e-mail e a senha não vai para log nem para a atividade, que registra só quem a definiu. Encerra todas as sessões do motorista (e os aparelhos de push delas), confirma o e-mail cadastrado, se houver, e marca `must_change_password`: o motorista cria a própria senha no próximo login. Os aparelhos em que ele entra por CPF continuam valendo. Só para o login de um motorista (409 USER_NOT_DRIVER: o usuário de escritório segue com o link por e-mail). Usuário de outra empresa: 404 USER_NOT_FOUND.",
+        params: userSchemas.driverLoginParams,
+        body: userSchemas.resetDriverPassword,
+        response: {
+          200: userResponses.driverPasswordReset,
+          400: userResponses.driverLoginErrors,
+          404: userResponses.driverLoginNotFound,
+          409: userResponses.driverLoginConflict,
+          500: userResponses.internalServerError,
+          503: authBusyResponse,
+        },
+      },
+    },
+    resetDriverPasswordController.handle,
+  );
+
+  app.get(
+    "/:userId/devices",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [verifyPermission("user_registration_manage", "read")],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["user"],
+        summary: "Lista os aparelhos em que o motorista está conectado",
+        description:
+          "Os aparelhos com sessão aberta pelo QR Code ou por CPF e senha (sessões presas ao aparelho), do mais recente para o mais antigo, com a última atividade e quando a sessão cai sem uso. Cada aparelho vem pelo `deviceHash` (SHA-256 do identificador), nunca pelo Android ID, que no login por CPF é o que confere o aparelho; `deviceId` repete o mesmo valor. Sessões do painel web e do app abertas por e-mail não aparecem. Só para o login de um motorista (409 USER_NOT_DRIVER). Usuário de outra empresa: 404 USER_NOT_FOUND.",
+        params: userSchemas.driverLoginParams,
+        response: {
+          200: userResponses.driverDevices,
+          400: userResponses.driverLoginErrors,
+          404: userResponses.driverLoginNotFound,
+          409: userResponses.driverLoginConflict,
+          500: userResponses.internalServerError,
+        },
+      },
+    },
+    listDriverDevicesController.handle,
+  );
+
+  app.delete(
+    "/:userId/devices/:deviceId",
+    {
+      onRequest: [ensureAuthenticated],
+      preHandler: [verifyPermission("user_registration_manage", "write")],
+      schema: {
+        security: [{ bearerAuth: [] }],
+        tags: ["user"],
+        summary: "Desconecta um aparelho do motorista",
+        description:
+          "Encerra todas as sessões do motorista naquele aparelho e apaga os aparelhos de push delas: o app sai na próxima requisição (e na hora, se estiver conectado ao tempo real: evento de segurança `device_revoked`). Os outros aparelhos continuam. O aparelho deixa de valer para o login por CPF e senha: para entrar nele de novo, o motorista lê um novo QR Code. O aparelho vai no caminho pelo `deviceHash` da listagem (o Android ID ainda é aceito). Responde 204 também quando o aparelho já não tinha sessão. Só para o login de um motorista (409 USER_NOT_DRIVER). Usuário de outra empresa: 404 USER_NOT_FOUND.",
+        params: userSchemas.driverDeviceParams,
+        response: {
+          204: z.null().describe("Aparelho desconectado (ou já sem sessão)."),
+          400: userResponses.driverLoginErrors,
+          404: userResponses.driverLoginNotFound,
+          409: userResponses.driverLoginConflict,
+          500: userResponses.internalServerError,
+        },
+      },
+    },
+    revokeDriverDeviceController.handle,
   );
 
   app.patch(
@@ -727,7 +1029,7 @@ async function userRoutes(app: FastifyInstance) {
         tags: ["user"],
         summary: "Exclui um usuário master",
         description:
-          "Remove a conta de outro master. Ninguém exclui a si mesmo, e o último master nunca é removido (a contagem e a exclusão acontecem juntas, então dois pedidos simultâneos não zeram os masters). Recusa (409) quem ainda é responsável por ordens de serviço ou contas a pagar.",
+          "Remove a conta de outro master. Ninguém exclui a si mesmo, e o último master nunca é removido (a contagem e a exclusão acontecem juntas, então dois pedidos simultâneos não zeram os masters). Recusa (409) quem ainda é responsável por ordens de serviço ou contas a pagar, ou é autor de registros que a plataforma preserva (USER_HAS_RECORDS, com a contagem).",
         params: userSchemas.updateMasterUserParams,
         response: {
           200: userResponses.masterUserDeleted,

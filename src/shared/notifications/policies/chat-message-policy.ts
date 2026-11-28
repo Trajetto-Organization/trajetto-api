@@ -5,6 +5,7 @@ import {
   NotificationPolicyEntry,
   RenderedPush,
 } from "../notification-types";
+import { PUSH_TTL_SECONDS } from "../push-validity";
 
 /**
  * A SAC message headed for the driver. Push-only by design: the chat screen
@@ -53,6 +54,7 @@ const chatMessageSentPolicy: NotificationPolicyEntry<ChatMessageSentPayload> = {
   },
 
   renderPush: renderChatMessagePush,
+  pushTtlSeconds: PUSH_TTL_SECONDS.chat,
 };
 
 export { chatMessageSentPolicy, renderChatMessagePush };

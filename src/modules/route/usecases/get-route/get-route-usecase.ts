@@ -3,10 +3,27 @@ import { inject, injectable } from "tsyringe";
 import { IRouteRepository } from "../../repositories/IRoute-repository";
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { IDriverPositionRepository } from "../../repositories/IDriver-position-repository";
+import { IVehicleChecklistRepository } from "@/modules/vehicle-checklist/repositories/IVehicle-checklist-repository";
+import { IFuelRepository } from "@/modules/fuel/repositories/IFuel-repository";
 
 import { ResourceNotFoundError } from "@/modules/user/usecases/errors/resource-not-found-error";
+import {
+  decidePermission,
+  type PermissionPrincipal,
+} from "@/modules/middlewares/verify-permission";
+import {
+  checklistsByRoute,
+  type MyDeliveriesRoute,
+} from "@/modules/delivery/usecases/list-my-deliveries/list-my-deliveries-usecase";
 
 import { routeProgress } from "@/shared/route/route-rules";
+import { addressLookupState } from "@/shared/delivery/geocoding/address-lookup-state";
+import { deliveryGeocodingEnabled } from "@/shared/delivery/geocoding/geocoding-enabled";
+import { geocodingHeld } from "@/shared/delivery/geocoding/geocoding-hold";
+import {
+  loadBusinessTimeZone,
+  type BusinessLookup,
+} from "@/shared/time/business-time-zone";
 
 import { RouteNotFoundError } from "../errors/route-errors";
 
@@ -15,7 +32,12 @@ import {
   type RouteDriverPosition,
 } from "./route-driver-position";
 
-import type { RouteWithStops, VisitedPoint } from "../../dtos/route-dto";
+import type {
+  RouteWithStops,
+  StopGeofenceFlag,
+  VisitedPoint,
+} from "../../dtos/route-dto";
+import type { RouteFuelSummary } from "@/modules/fuel/dtos/fuel-dto";
 
 interface GetRouteRequest {
   userId: string;
@@ -36,6 +58,93 @@ interface GetRouteResult {
    */
   driverPosition: RouteDriverPosition | null;
   visitedPoints: VisitedPoint[];
+
+  /**
+   * The stops recorded outside the radius (E5): the newest OUTSIDE arrival,
+   * proof or occurrence of each. The occurrence is not a map point, so the
+   * stop card cannot read it from `visitedPoints`. Panel only.
+   */
+  stopGeofence: StopGeofenceFlag[];
+
+  /**
+   * The company's zone (plan of 02/11/2026, G8; decision D22): the panel
+   * prints every time of the route on the company's clock, with the note,
+   * as the tower does — not on the browser's.
+   */
+  timeZone: string;
+
+  /**
+   * What happened to the vehicle on the route (plan of 02/11/2026, F3): the
+   * newest departure and arrival checklists — the shape the driver's
+   * payload carries (C4) — and the refuellings made on it. Null when this
+   * reader may not see them: FLEET off, or a profile without the key of the
+   * screen that lists them (Checklists, Abastecimentos).
+   */
+  checklists: MyDeliveriesRoute["checklists"] | null;
+  fuels: RouteFuelSummary[] | null;
+}
+
+/**
+ * The stops with `address_lookup` in place of the geocoder's bookkeeping
+ * (owner's report of 09/11/2026): the page tells "Localizando endereço…"
+ * from "Endereço não localizado" for a stop without a point, and neither
+ * when the server looks nothing up. The status, the attempts, the claim's
+ * instant and the row's last write stay inside: they are the job's, not a
+ * contract.
+ *
+ * Whether the lookups are held (geocoding-hold.ts) is asked only when a
+ * stop would otherwise read SEARCHING — one Redis read, on few routes.
+ *
+ * `geo_precision` is the geocoder's level, so only where its answer still
+ * stands: on the point it found, as the geofence reads it
+ * (addressPrecisionOf), and on the district or city it only reached
+ * (COARSE, no point). "Fixar no mapa" over a found point keeps the column,
+ * and a MANUAL pin is exact; clearing a found point leaves it behind too.
+ */
+async function withAddressLookup(
+  route: RouteWithStops,
+  now: Date,
+): Promise<RouteWithStops> {
+  const enabled = deliveryGeocodingEnabled();
+
+  const lookupOf = (
+    delivery: RouteWithStops["stops"][number]["delivery"],
+    held: boolean,
+  ) => addressLookupState(delivery, { enabled, now, held });
+
+  const held =
+    enabled &&
+    route.stops.some((stop) => lookupOf(stop.delivery, false) === "SEARCHING")
+      ? await geocodingHeld(now)
+      : false;
+
+  return {
+    ...route,
+    stops: route.stops.map((stop) => {
+      const {
+        geocode_status,
+        geocode_attempts: _attempts,
+        geocode_attempted_at: _claimedAt,
+        updated_at: _written,
+        ...delivery
+      } = stop.delivery;
+
+      const geocoderLevel =
+        delivery.geo_source === "GEOCODER" ||
+        (delivery.geo_source == null && geocode_status === "COARSE");
+
+      return {
+        ...stop,
+        delivery: {
+          ...delivery,
+          geo_precision: geocoderLevel
+            ? (delivery.geo_precision ?? null)
+            : null,
+          address_lookup: lookupOf(stop.delivery, held),
+        },
+      };
+    }),
+  };
 }
 
 /**
@@ -56,7 +165,52 @@ class GetRouteUseCase {
     private user: IUserRepository,
     @inject("DriverPositionRepository")
     private positions: IDriverPositionRepository,
+    @inject("BusinessRepository")
+    private business: BusinessLookup,
+    @inject("VehicleChecklistRepository")
+    private checklists: IVehicleChecklistRepository,
+    @inject("FuelRepository")
+    private fuels: IFuelRepository,
   ) {}
+
+  /**
+   * The route's fleet records, for whoever may read them (F3). The module
+   * first — FLEET off hides every screen of it, and the route page must not
+   * reopen one — then each record behind the key of its own screen. A driver
+   * passes through the app's fixed table: these are their own records.
+   */
+  private async vehicleRecords(
+    user: PermissionPrincipal,
+    businessId: string,
+    routeId: string,
+  ): Promise<Pick<GetRouteResult, "checklists" | "fuels">> {
+    const readsChecklists = !decidePermission(
+      user,
+      "vehicle_checklist_manage",
+      "read",
+    );
+    const readsFuels = !decidePermission(user, "fuel_manage", "read");
+
+    if (!readsChecklists && !readsFuels) {
+      return { checklists: null, fuels: null };
+    }
+
+    if (!(await this.route.assignmentContext(businessId)).fleetEnabled) {
+      return { checklists: null, fuels: null };
+    }
+
+    const checklists = readsChecklists
+      ? (checklistsByRoute(
+          await this.checklists.listRouteChecklists(businessId, [routeId]),
+        ).get(routeId) ?? { route_start: null, route_end: null })
+      : null;
+
+    const fuels = readsFuels
+      ? await this.fuels.listRouteFuels(businessId, routeId)
+      : null;
+
+    return { checklists, fuels };
+  }
 
   async execute({
     userId,
@@ -69,17 +223,26 @@ class GetRouteUseCase {
 
     // The read is already scoped by company, so a route of another carrier
     // comes back null rather than coming back and being rejected.
-    const findRoute = await this.route.findRouteById(routeId, businessId);
+    const found = await this.route.findRouteById(routeId, businessId);
 
-    if (!findRoute) throw new RouteNotFoundError();
+    if (!found) throw new RouteNotFoundError();
 
     // A driver opens their own routes and nobody else's. Same 404: the driver
     // of the next truck must not be able to read today's plan by guessing.
-    if (findUser.driverId && findRoute.driverId !== findUser.driverId) {
+    if (findUser.driverId && found.driverId !== findUser.driverId) {
       throw new RouteNotFoundError();
     }
 
+    const findRoute = await withAddressLookup(found, new Date());
+
     const progress = routeProgress(findRoute.stops.map((stop) => stop.status));
+    const timeZone = await loadBusinessTimeZone(this.business, businessId);
+
+    const records = await this.vehicleRecords(
+      findUser as PermissionPrincipal,
+      businessId,
+      routeId,
+    );
 
     // The driver's app reads its own route; it has no map to feed.
     if (findUser.driverId) {
@@ -88,6 +251,9 @@ class GetRouteUseCase {
         progress,
         driverPosition: null,
         visitedPoints: [],
+        stopGeofence: [],
+        timeZone,
+        ...records,
       };
     }
 
@@ -98,11 +264,17 @@ class GetRouteUseCase {
       this.route.listVisitedPoints(routeId, businessId),
     ]);
 
+    // After the two above, never beside them: two connections at most.
+    const stopGeofence = await this.route.listStopGeofence(routeId, businessId);
+
     return {
       route: findRoute,
       progress,
       driverPosition: routeDriverPosition(findRoute, last),
       visitedPoints,
+      stopGeofence,
+      timeZone,
+      ...records,
     };
   }
 }

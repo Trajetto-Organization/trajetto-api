@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { sessionDeviceIdField } from "@/schemas/driver-access-schema";
+
 const twoFactorUserSchema = z.object({
   email: z
     .string()
@@ -16,6 +18,13 @@ const twoFactorUserSchema = z.object({
   // the use case; optional here so a missing one gets the same answer as a
   // wrong one instead of a validation error that tells them apart.
   challenge: z.string().min(1).max(2048).optional(),
+  // Wave 2: a challenge started by a CPF login names its phone; the code is
+  // then accepted only with that phone's id, and the session is bound to it.
+  deviceId: sessionDeviceIdField
+    .optional()
+    .describe(
+      "Só quando o desafio veio de um login por CPF: o mesmo `deviceId` daquele login. A sessão fica presa ao aparelho.",
+    ),
 });
 
 export { twoFactorUserSchema };

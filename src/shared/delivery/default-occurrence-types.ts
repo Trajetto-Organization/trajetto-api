@@ -62,6 +62,18 @@ const DEFAULT_PAUSE_TYPE_KEY: Record<DriverPauseKind, string> = {
   OTHER: "pause_other",
 };
 
+/**
+ * Whether a pause of this type must say why (owner, 09/11/2026): only the
+ * seeded generic "Outra pausa". Its category and nature are locked, so a
+ * rename keeps it generic; a company type ("Banheiro", nature OTHER)
+ * already names its reason. The legacy body (`kind: OTHER` alone) lands on
+ * this same type. The driver's day says it per type (`requires_note`), and
+ * the app reads it from there.
+ */
+function pauseTypeRequiresNote(type: { system_key: string | null }): boolean {
+  return type.system_key === DEFAULT_PAUSE_TYPE_KEY.OTHER;
+}
+
 const DELIVERED_DEFAULT_TYPE_KEY = "delivered_default";
 
 type RawClient = Pick<Prisma.TransactionClient, "$executeRaw" | "$queryRaw">;
@@ -176,5 +188,6 @@ export {
   DEFAULT_PAUSE_TYPE_KEY,
   DELIVERED_DEFAULT_TYPE_KEY,
   ensureDefaultOccurrenceTypes,
+  pauseTypeRequiresNote,
 };
 export type { DefaultOccurrenceType };

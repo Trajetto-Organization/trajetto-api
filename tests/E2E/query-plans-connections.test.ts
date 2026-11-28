@@ -22,9 +22,8 @@ import { createPrismaClient } from "@/shared/database/database-client";
 const pool = vi.hoisted(() => ({ inFlight: 0, peak: 0, operations: 0 }));
 
 vi.mock("@/../infra/database", async () => {
-  const { createPrismaClient } = await import(
-    "@/shared/database/database-client"
-  );
+  const { createPrismaClient } =
+    await import("@/shared/database/database-client");
 
   const counted = createPrismaClient().$extends({
     query: {
@@ -133,7 +132,8 @@ describe("reads that held more than two connections", () => {
     );
 
     expect(result.total).toBe(5);
-    expect(result.facets.city.map((facet) => facet.value).sort()).toEqual([
+    // A first page (no cursor) carries the facets (G9).
+    expect(result.facets!.city.map((facet) => facet.value).sort()).toEqual([
       "Campinas",
       "Santos",
     ]);

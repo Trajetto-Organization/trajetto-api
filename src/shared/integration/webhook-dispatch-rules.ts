@@ -43,7 +43,11 @@ const RESPONSE_READ_LIMIT_BYTES = 8 * 1024;
 /** How long a claimed row stays invisible to other replicas. */
 const WEBHOOK_LEASE_SECONDS = 120;
 
-/** How many of one batch are in flight at once. */
+/**
+ * How many of one batch are in flight at once: the default of the
+ * WEBHOOK_CONCURRENCY variable (plano-escala F3-05), which the dispatcher
+ * asserts against the lease when it loads.
+ */
 const WEBHOOK_CONCURRENCY = 5;
 
 /**
@@ -57,7 +61,10 @@ const WEBHOOK_CONCURRENCY = 5;
  *
  * Now one claim takes at most WEBHOOK_PER_ENDPOINT_BATCH rows of any single
  * endpoint, and at most WEBHOOK_PER_ENDPOINT_CONCURRENCY calls to one endpoint
- * are in flight at a time; the other slots keep moving.
+ * are in flight at a time in a process; the other slots keep moving. The
+ * second is the default of the variable of the same name (plano-escala
+ * F3-07), which the dispatcher reads; a process's cap, not the endpoint's:
+ * every process that claims the queue runs its own.
  */
 const WEBHOOK_PER_ENDPOINT_BATCH = 10;
 const WEBHOOK_PER_ENDPOINT_CONCURRENCY = 2;
@@ -68,6 +75,89 @@ const WEBHOOK_PER_ENDPOINT_CONCURRENCY = 2;
  * Bounded so the choice costs an index range, not the whole backlog.
  */
 const WEBHOOK_CLAIM_WINDOW = 500;
+
+/**
+ * The global cap per endpoint (plano-escala F3-13): calls in flight to one
+ * endpoint across every dispatcher, the default of
+ * WEBHOOK_ENDPOINT_GLOBAL_CONCURRENCY. Production's two api replicas at
+ * WEBHOOK_PER_ENDPOINT_CONCURRENCY (2) each already send this many, so the
+ * cap only bites once a dispatcher is added (decision D8: confirmed with
+ * the receiver's rate).
+ */
+const WEBHOOK_ENDPOINT_GLOBAL_CONCURRENCY = 4;
+
+/**
+ * The cap per destination host (plano-escala F3-14), the default of
+ * WEBHOOK_HOST_GLOBAL_CONCURRENCY: calls in flight to one host across
+ * every endpoint pointed at it and every dispatcher. An aggregator's ERP
+ * (Comprovei/Fusion) receives every tenant's endpoint at one host: four
+ * per endpoint times their tenants would be what it took at once.
+ */
+const WEBHOOK_HOST_GLOBAL_CONCURRENCY = 16;
+
+/**
+ * The host an endpoint's calls go to, as the host cap groups them: the
+ * URL's host name, lower case, without a trailing dot (`Api.Example.com.`
+ * and `api.example.com` are one server). Null for a URL that does not
+ * parse: no group, no host cap (the send itself refuses it).
+ */
+function destinationHostOf(url: string): string | null {
+  let host: string;
+
+  try {
+    host = new URL(url).hostname;
+  } catch {
+    return null;
+  }
+
+  const normalized = host.toLowerCase().replace(/\.+$/, "");
+
+  return normalized === "" ? null : normalized;
+}
+
+/**
+ * Endpoints one walk of a capped claim visits at most, from its rotating
+ * cursor: each costs two short index probes, and the walk stops as soon as
+ * it found the rows the free slots take.
+ */
+const WEBHOOK_CLAIM_MAX_ENDPOINTS = 64;
+
+/**
+ * Walks one capped claim makes at most (fair-claim.ts, walkFairLap): a
+ * walk that visited WEBHOOK_CLAIM_MAX_ENDPOINTS endpoints with nothing to
+ * take (rows parked for a paused or switched-off endpoint, rows in backoff
+ * or in flight, an endpoint or a host at its cap) goes on from where it
+ * stopped, each walk a short transaction of its own, until the lap closes.
+ * 64 walks reach 4,096 endpoints, more than the 3,600 tenants of the scale
+ * plan; past that, the next claim goes on from where this one stopped.
+ */
+const WEBHOOK_CLAIM_MAX_WALKS = 64;
+
+/**
+ * The advisory lock the capped claims take, one claim at a time across
+ * the processes, only for the claim's own transaction (never during a
+ * call): two dispatchers counting the same endpoint's rows in flight at
+ * once would each take what the cap leaves, and send twice as many.
+ */
+const WEBHOOK_CLAIM_LOCK = "webhook-delivery-claim";
+
+/**
+ * How many due rows of an endpoint one capped claim may take: what this
+ * process may send to it at once (its per-process cap, within the claim's
+ * share, WEBHOOK_PER_ENDPOINT_BATCH), never past what the global cap
+ * leaves after the endpoint's rows in flight in every process. A row
+ * claimed past the process's own cap would wait in its pool while holding
+ * a unit of the global cap the other dispatchers could be sending with.
+ * The claim computes the same in SQL; this is the rule, for the tests.
+ */
+function endpointShare(
+  inFlight: number,
+  cap: number,
+  perProcess: number,
+  batch: number = WEBHOOK_PER_ENDPOINT_BATCH,
+): number {
+  return Math.max(0, Math.min(batch, perProcess, cap - inFlight));
+}
 
 /**
  * How long one sweep keeps claiming while there is work.
@@ -147,9 +237,17 @@ function nextWebhookDelayMs(attempts: number): number | null {
 }
 
 /**
- * The same invariant the notification pipeline asserts: a batch has to finish
- * inside its lease, or a second replica reclaims rows the first is still
- * sending and the customer's system receives every event twice.
+ * The same invariant the notification pipeline asserts: a claim's rows have
+ * to finish inside its lease, or a second replica reclaims rows the first is
+ * still sending and the customer's system receives every event twice.
+ *
+ * The rounds of one claim through the slots, or of one endpoint's share
+ * through the calls it is allowed, plus one: the dispatcher is a continuous
+ * pool since F3-07 (shared/queue/continuous-pool.ts), so a claim goes out
+ * while the rows of the claims before it are still on the wire, and its own
+ * rows may first wait for those — one call each, at most: a claim goes out
+ * only when nothing taken before waits for a slot, and it leaves out the
+ * endpoints whose rows still wait for theirs.
  */
 function assertWebhookLeaseInvariant(
   batchSize: number,
@@ -161,10 +259,11 @@ function assertWebhookLeaseInvariant(
 ): void {
   // The slower of two bounds: the batch through all the slots, or one
   // endpoint's share through the slots it is allowed.
-  const rounds = Math.max(
-    Math.ceil(batchSize / concurrency),
-    Math.ceil(Math.min(perEndpointBatch, batchSize) / perEndpointConcurrency),
-  );
+  const rounds =
+    Math.max(
+      Math.ceil(batchSize / concurrency),
+      Math.ceil(Math.min(perEndpointBatch, batchSize) / perEndpointConcurrency),
+    ) + 1;
 
   const worstCaseMs = rounds * timeoutMs;
 
@@ -176,58 +275,6 @@ function assertWebhookLeaseInvariant(
         `the batch.`,
     );
   }
-}
-
-/**
- * Runs `work` over `items`, `concurrency` at a time and at most `perKey`
- * per key, taking the next item that may start as soon as a slot frees.
- *
- * Not waves: a wave lasts as long as its slowest member, so one slow call held
- * four free slots idle. `work` is expected to handle its own failures; one
- * that throws anyway does not stop the rest.
- */
-async function inFairPool<T>(
-  items: T[],
-  options: { concurrency: number; perKey: number; keyOf: (item: T) => string },
-  work: (item: T) => Promise<void>,
-): Promise<void> {
-  const waiting = [...items];
-  const inFlight = new Map<string, number>();
-
-  let running = 0;
-
-  await new Promise<void>((done) => {
-    const startWhatCan = () => {
-      if (waiting.length === 0 && running === 0) {
-        done();
-        return;
-      }
-
-      while (running < options.concurrency) {
-        const index = waiting.findIndex(
-          (item) => (inFlight.get(options.keyOf(item)) ?? 0) < options.perKey,
-        );
-
-        if (index < 0) break;
-
-        const [item] = waiting.splice(index, 1);
-        const key = options.keyOf(item);
-
-        inFlight.set(key, (inFlight.get(key) ?? 0) + 1);
-        running += 1;
-
-        work(item)
-          .catch(() => undefined)
-          .finally(() => {
-            inFlight.set(key, (inFlight.get(key) ?? 1) - 1);
-            running -= 1;
-            startWhatCan();
-          });
-      }
-    };
-
-    startWhatCan();
-  });
 }
 
 /**
@@ -285,8 +332,13 @@ export {
   WEBHOOK_MAX_ATTEMPTS,
   REPLAY_WINDOW_DAYS,
   RESPONSE_BODY_LIMIT,
+  WEBHOOK_CLAIM_LOCK,
+  WEBHOOK_CLAIM_MAX_ENDPOINTS,
+  WEBHOOK_CLAIM_MAX_WALKS,
   WEBHOOK_CLAIM_WINDOW,
   WEBHOOK_CONCURRENCY,
+  WEBHOOK_ENDPOINT_GLOBAL_CONCURRENCY,
+  WEBHOOK_HOST_GLOBAL_CONCURRENCY,
   WEBHOOK_DRAIN_BUDGET_MS,
   WEBHOOK_LEASE_SECONDS,
   WEBHOOK_PER_ENDPOINT_BATCH,
@@ -294,7 +346,8 @@ export {
   WEBHOOK_RETRY_DELAYS_MS,
   WEBHOOK_TIMEOUT_MS,
   assertWebhookLeaseInvariant,
-  inFairPool,
+  destinationHostOf,
+  endpointShare,
   isWebhookPermanent,
   isWebhookSuccess,
   nextWebhookDelayMs,

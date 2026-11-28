@@ -18,8 +18,15 @@ class ExportFuelController {
     const { id } = request.user;
 
     // Validated and transformed by the route (facets arrive as lists).
-    const { search, format, businessId, branchId, vehicleId, fuelTypeId } =
-      request.query as z.infer<typeof exportFuelQuerySchema>;
+    const {
+      search,
+      format,
+      businessId,
+      branchId,
+      vehicleId,
+      fuelTypeId,
+      alerts,
+    } = request.query as z.infer<typeof exportFuelQuerySchema>;
 
     const exportFuelUseCase = container.resolve(ExportFuelUseCase);
 
@@ -31,6 +38,7 @@ class ExportFuelController {
         branchIds: branchId,
         vehicleIds: vehicleId,
         fuelTypeIds: fuelTypeId,
+        alerts,
       });
 
       // Choose writer

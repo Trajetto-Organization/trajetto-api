@@ -201,8 +201,8 @@ describe("columns", () => {
     expect(board.columns[0].title).toBe("Renomeada");
   });
 
-  it("delete with their cards and close the gap in the positions", async () => {
-    const { createColumn, deleteColumn, createCard } = useCases();
+  it("delete an empty one and close the gap in the positions", async () => {
+    const { createColumn, deleteColumn } = useCases();
 
     const first = await createColumn.execute(
       { title: "1", color: "#000", businessId: A },
@@ -217,8 +217,6 @@ describe("columns", () => {
       "adminA",
     );
 
-    await createCard.execute(card(middle.id, "vai junto"), "adminA");
-
     await deleteColumn.execute(middle.id, A, "adminA");
 
     expect(board.columns.map((column) => [column.id, column.position])).toEqual(
@@ -227,7 +225,32 @@ describe("columns", () => {
         [last.id, 1],
       ],
     );
-    expect(board.cards).toHaveLength(0);
+  });
+
+  // Decision D-38 (14/11/2026): the cards went with the column (ON DELETE
+  // CASCADE) behind a dialog that only said it could not be undone.
+  it("refuse one that still has cards, saying how many, and keep it all", async () => {
+    const { createColumn, deleteColumn, createCard } = useCases();
+
+    const column = await createColumn.execute(
+      { title: "Cheia", color: "#000", businessId: A },
+      "adminA",
+    );
+
+    await createCard.execute(card(column.id, "fica 1"), "adminA");
+    await createCard.execute(card(column.id, "fica 2"), "adminA");
+
+    await expect(
+      deleteColumn.execute(column.id, A, "adminA"),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: "KANBAN_COLUMN_HAS_CARDS",
+      message:
+        "A coluna tem 2 cartão(ões). Mova ou exclua os cartões antes de excluir a coluna.",
+    });
+
+    expect(board.columns.map((item) => item.id)).toEqual([column.id]);
+    expect(board.cards).toHaveLength(2);
   });
 
   it("refuse deleting another company's column", async () => {
@@ -508,7 +531,7 @@ describe("cards", () => {
 });
 
 describe("InMemoryKanbanRepository answers like the repository", () => {
-  it("raises the not-found errors for a missing row and cascades a column's cards", async () => {
+  it("raises the not-found errors for a missing row and refuses a column with cards", async () => {
     await expect(
       board.deleteColumn("018fe900-0000-7000-8000-0000000000dd"),
     ).rejects.toBeInstanceOf(KanbanColumnNotFoundError);
@@ -518,11 +541,17 @@ describe("InMemoryKanbanRepository answers like the repository", () => {
       color: "#000",
       businessId: A,
     });
-    await board.createCard({ ...card(column.id, "x") });
+    const kept = await board.createCard({ ...card(column.id, "x") });
 
+    await expect(board.deleteColumn(column.id)).rejects.toMatchObject({
+      code: "KANBAN_COLUMN_HAS_CARDS",
+      cardsCount: 1,
+    });
+    expect(board.cards).toHaveLength(1);
+
+    await board.deleteCard(kept.id);
     await board.deleteColumn(column.id);
 
-    expect(board.cards).toHaveLength(0);
     await expect(
       board.createCard(card(column.id, "órfão")),
     ).rejects.toBeInstanceOf(KanbanColumnNotFoundError);

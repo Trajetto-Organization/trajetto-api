@@ -117,7 +117,10 @@ async function waitForAdapterRedis(
 /**
  * How long a cluster-wide question (`fetchSockets`, `serverSideEmit` with an
  * ack) waits for every replica. The library's 5 s held an HTTP request — the
- * chat thread list asks for presence — hostage to the slowest replica.
+ * chat thread list asked for presence until plano-escala U-05 moved it to
+ * Postgres — hostage to the slowest replica. SOCKET_ADAPTER_REQUESTS_TIMEOUT_MS
+ * overrides it (F4-51): with N replicas and no affinity, every such question
+ * (now the end of a presence wait) asks all of them.
  */
 const ADAPTER_REQUESTS_TIMEOUT_MS = 2_000;
 
@@ -132,8 +135,16 @@ const ADAPTER_REQUESTS_TIMEOUT_MS = 2_000;
  *   already subscribes to its own channel, whichever way it answers.
  * - `key`: the channel prefix. Pub/Sub ignores the Redis database number, so
  *   the prefix is the only isolation between stacks sharing a Redis.
+ * - `requestsTimeout`: see ADAPTER_REQUESTS_TIMEOUT_MS.
+ *
+ * No affinity anywhere (F4-51): the clients are websocket-only, so a socket
+ * lives on one replica by nature, and the adapter carries the rest
+ * (tests/unitaires/socket/websocket-only-clients.test.ts).
  */
-function socketAdapterOptions(env: { SOCKET_ADAPTER_KEY?: string }): {
+function socketAdapterOptions(env: {
+  SOCKET_ADAPTER_KEY?: string;
+  SOCKET_ADAPTER_REQUESTS_TIMEOUT_MS?: number;
+}): {
   key: string;
   publishOnSpecificResponseChannel: true;
   requestsTimeout: number;
@@ -141,7 +152,8 @@ function socketAdapterOptions(env: { SOCKET_ADAPTER_KEY?: string }): {
   return {
     key: env.SOCKET_ADAPTER_KEY || "socket.io",
     publishOnSpecificResponseChannel: true,
-    requestsTimeout: ADAPTER_REQUESTS_TIMEOUT_MS,
+    requestsTimeout:
+      env.SOCKET_ADAPTER_REQUESTS_TIMEOUT_MS ?? ADAPTER_REQUESTS_TIMEOUT_MS,
   };
 }
 

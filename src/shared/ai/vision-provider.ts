@@ -48,11 +48,7 @@ interface VisionResponse {
  *   circuit (ADR 0010 §3.2).
  */
 type ProviderFailureKind =
-  | "retryable"
-  | "permanent"
-  | "unauthorized"
-  | "quota_exhausted"
-  | "busy";
+  "retryable" | "permanent" | "unauthorized" | "quota_exhausted" | "busy";
 
 interface VisionProvider {
   /** Recorded on every AIProviderAttempt. */

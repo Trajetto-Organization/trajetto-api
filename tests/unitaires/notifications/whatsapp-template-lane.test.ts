@@ -22,13 +22,11 @@ import type { MetaTemplateUpdate } from "@/shared/providers/whatsapp-provider/me
  * early: the backlog waited out the hour even after Meta reinstated the
  * template.
  */
-const TEMPLATE = "trajetto_notification";
+const TEMPLATE = "trajetto_entrega_insucesso";
 
 const saved = {
   token: env.META_WHATSAPP_ACCESS_TOKEN,
   phone: env.META_WHATSAPP_PHONE_NUMBER_ID,
-  template: env.META_WHATSAPP_TEMPLATE_NAME,
-  customerTemplate: env.META_WHATSAPP_CUSTOMER_TEMPLATE_NAME,
 };
 
 function update(fields: Partial<MetaTemplateUpdate>): MetaTemplateUpdate {
@@ -61,20 +59,19 @@ function stubFetch(
 }
 
 const send = (provider: MetaCloudApiProvider) =>
-  provider.sendMessage({ phoneNumber: "11999990000", message: "Olá" });
+  provider.sendMessage({
+    phoneNumber: "11999990000",
+    template: { name: TEMPLATE, parameters: ["Mercado", "Cliente ausente"] },
+  });
 
 beforeEach(() => {
   env.META_WHATSAPP_ACCESS_TOKEN = "token-de-teste";
   env.META_WHATSAPP_PHONE_NUMBER_ID = "1234567890";
-  env.META_WHATSAPP_TEMPLATE_NAME = TEMPLATE;
-  env.META_WHATSAPP_CUSTOMER_TEMPLATE_NAME = undefined;
 });
 
 afterEach(() => {
   env.META_WHATSAPP_ACCESS_TOKEN = saved.token;
   env.META_WHATSAPP_PHONE_NUMBER_ID = saved.phone;
-  env.META_WHATSAPP_TEMPLATE_NAME = saved.template;
-  env.META_WHATSAPP_CUSTOMER_TEMPLATE_NAME = saved.customerTemplate;
 
   vi.unstubAllGlobals();
   vi.useRealTimers();

@@ -36,8 +36,8 @@ algo não foi medido, o texto diz isso.
    (`src/shared/cache/snapshot-cache.ts`). Fila, lock e fonte de verdade ficam
    fora dele.
 3. **O tempo real não passa por fila nenhuma** (pergunta 4).
-4. **Broker só por gatilho medido** (seção _Quando reabrir_), e só depois da
-   escada de respostas mais baratas.
+4. **Broker só por gatilho medido** (seção _Quando reabrir_), depois da
+   escada de respostas mais baratas, e com um ADR novo.
 
 ## O que a `main` antiga fazia
 
@@ -168,18 +168,209 @@ com nova conta de req/s contra o joelho, e não uma decisão de arquitetura.
 
 ### 5. Retentativa, DLQ, concorrência, timeout, backpressure, métricas, idempotência e recuperação
 
-| Fila               | Lease                     | Concorrência                                | Retentativas (backoff, jitter ±20%)                                  | Tentativas | Timeout da chamada                                            |
-| ------------------ | ------------------------- | ------------------------------------------- | -------------------------------------------------------------------- | ---------- | ------------------------------------------------------------- |
-| outbox (expansão)  | 60 s, renovado por evento | lote de 10                                  | 30 s, 2 min, 10 min, 30 min                                          | 5          | —                                                             |
-| entregas (2 raias) | 180 s                     | 5 por raia, lote de 20                      | 30 s, 2 min, 10 min, 30 min, 1 h, 3 h (~4h40); `Retry-After` até 1 h | 7          | backstop de 15 s por entrega; SMTP, Meta e Expo com 10 s cada |
-| webhooks           | 120 s                     | 5; por endpoint lote de 10 e 2 em paralelo  | 30 s, 2 min, 10 min, 1 h, 6 h                                        | 6          | 10 s; resposta lida até 8 kB                                  |
-| IA                 | 300 s                     | 4 (limitada por `AI_LOCAL_MAX_CONCURRENCY`) | 30 s, 2 min, 10 min; leitor ocupado: 5–15 s                          | 4          | leitor 15 s; foto do R2 com prazo de 15 s                     |
+| Fila               | Lease                     | Concorrência                                                                                                                                                      | Retentativas (backoff, jitter ±20%)                                  | Tentativas | Timeout da chamada                                            |
+| ------------------ | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- | ---------- | ------------------------------------------------------------- |
+| outbox (expansão)  | 60 s, renovado por evento | 1 por vez (`OUTBOX_EXPANSION_CONCURRENCY`), claim de até 10, 1 por agregado                                                                                       | 30 s, 2 min, 10 min, 30 min                                          | 5          | —                                                             |
+| entregas (2 raias) | 180 s                     | 5 por raia (`NOTIFICATION_INTERNAL_CONCURRENCY`, `NOTIFICATION_EXTERNAL_CONCURRENCY`), vaga a vaga                                                                | 30 s, 2 min, 10 min, 30 min, 1 h, 3 h (~4h40); `Retry-After` até 1 h | 7          | backstop de 15 s por entrega; SMTP, Meta e Expo com 10 s cada |
+| webhooks           | 120 s                     | 5 (`WEBHOOK_CONCURRENCY`); por endpoint 2 em paralelo por processo (`WEBHOOK_PER_ENDPOINT_CONCURRENCY`) e 4 somando todos (`WEBHOOK_ENDPOINT_GLOBAL_CONCURRENCY`) | 30 s, 2 min, 10 min, 1 h, 6 h                                        | 6          | 10 s; resposta lida até 8 kB                                  |
+| IA                 | 300 s                     | 4 (`AI_CONCURRENCY`, limitada por `AI_LOCAL_MAX_CONCURRENCY`)                                                                                                     | 30 s, 2 min, 10 min; leitor ocupado: 5–15 s                          | 4          | leitor 15 s; foto do R2 com prazo de 15 s                     |
 
 Constantes em `src/shared/notifications/pipeline-rules.ts`,
 `src/shared/integration/webhook-dispatch-rules.ts`,
 `src/shared/ai/ai-rules.ts` e `ai-analysis-pipeline-service.ts`. Os
 invariantes de lease (`ceil(lote/concorrência) × timeout < lease`) são
-verificados no import do módulo e no boot.
+verificados no import do módulo e no boot. A concorrência de cada fila vem
+do _Environment_ desde a onda 12 do plano de escala (F3-05; padrões iguais
+às constantes de antes, de 1 a 32): o invariante é conferido com o valor
+dado, e um valor que não cabe no lease para o boot.
+
+Desde a onda 13 (F3-06), cada fila é um **pool contínuo**
+(`src/shared/queue/continuous-pool.ts`), no lugar da barreira por lote: a
+vaga que libera é a hora de olhar a fila de novo, então uma entrega lenta
+segura só a própria vaga, e não as quatro que já tinham terminado. As raias
+reivindicam só para as vagas livres (o lease corre desde o claim); o outbox
+reivindica um lote de até 10 quando nada do claim anterior espera (cada
+evento renova o lease antes de expandir) e expande um evento por agregado
+por vez. Na parada, o que foi reivindicado e não começou volta na hora, por
+um UPDATE cercado (`PENDING`, `attempts − 1`, `availableAt = now()`), em vez
+de esperar o lease vencer; o que está em voo termina. O invariante das
+raias segue o da barreira, que o pool só melhora, porque a imagem anterior
+lê o mesmo _Environment_ no rolling e num rollback.
+
+Os webhooks entraram no mesmo pool (F3-07): até 20 linhas por claim quando
+nada do claim anterior espera vaga, no máximo
+`WEBHOOK_PER_ENDPOINT_CONCURRENCY` chamadas (2) a um mesmo endpoint por
+processo, e cada claim seguinte deixa de fora os endpoints que já estão no
+teto. Assim um endpoint lento segura as próprias chamadas e as próprias
+linhas, e as dos outros clientes seguem. Um ciclo reivindica por até 20 s
+(`WEBHOOK_DRAIN_BUDGET_MS`) e termina; a varredura ou o despertar
+seguinte começa outro. O invariante dos webhooks ganhou uma rodada: um
+claim sai enquanto as chamadas do anterior ainda estão em voo, e as linhas
+dele podem esperar por elas.
+
+A linha cuja última tentativa permitida morreu com o processo (`PROCESSING`,
+lease vencido, tentativas no teto) não é reivindicada de novo e vira
+`FAILED` com o motivo "O processo foi interrompido durante a última
+tentativa permitida.". Até a onda 13 isso rodava antes de cada claim, por
+um UPDATE que achava as linhas pelo índice do próprio claim: toda linha
+vencida, as `PENDING` também, lida para achar as poucas em voo, e uma
+enchente de e-mails vencidos fazia cada claim ler a enchente inteira.
+Desde a F3-08 é um timer de cada processo que consome a fila, uma vez por
+minuto e uma no boot (`src/shared/queue/exhausted-close.ts`), por um índice
+parcial só das linhas em voo (`<fila>_processing_lease_idx`), até 500 por
+UPDATE com `SKIP LOCKED`. A linha leva até um minuto a mais para aparecer
+como `FAILED`; nada sai nesse meio-tempo, porque nenhum claim a pega.
+
+**Justiça por empresa (F3-10).** As raias pegavam as linhas vencidas mais
+velhas, de quem fossem: uma transportadora que dispara 20 mil avisos punha
+a mensagem de todas as outras empresas atrás deles. Com
+`QUEUE_FAIR_CLAIM_ENABLED=true` (desligado por padrão, até a medida na
+staging), o claim de cada raia anda pelas empresas que têm linhas na
+fila, na ordem dos ids, a partir de um cursor que gira em cada processo,
+e pega até `QUEUE_FAIR_ROWS_PER_TENANT` (2) linhas vencidas de cada uma,
+visitando até `QUEUE_FAIR_MAX_TENANTS` (64); depois da última empresa
+vêm as linhas sem empresa (o balde nulo) e a volta ao começo, até o
+cursor. O que a volta não encheu, as mais velhas da raia enchem, então
+uma empresa sozinha ainda recebe claims cheios. A volta é um skip scan
+recursivo no índice `(business_id, availableAt)` da raia (F3-09): duas
+sondagens curtas por empresa visitada, nunca a leitura das linhas de uma
+empresa grande (`src/shared/queue/fair-claim.ts`).
+
+**Outbox pelo vencimento e por empresa (F3-11).** O claim do outbox
+ordenava por `created_at`, sob um OR das `PENDING` vencidas e das
+`PROCESSING` com o lease vencido, e os eventos em espera de nova
+tentativa ficavam na frente do índice, lidos por todo claim. Agora ele
+grava o fim do lease em `availableAt` (como as raias e os webhooks, e a
+renovação antes de cada expansão também) e reivindica um intervalo de
+`domain_outbox_event_due_idx`, que para em `now()`. Com
+`QUEUE_FAIR_CLAIM_ENABLED`, o outbox anda pelas empresas como as raias,
+por `domain_outbox_event_fair_idx` (`businessId`, `availableAt`): a
+expansão é o primeiro passo de toda notificação, então uma enchente de
+eventos de uma transportadora deixa de segurar o sino das outras. O
+índice antigo, `domain_outbox_event_claim_idx` (`created_at`), que a
+imagem anterior ainda lê no rolling e num rollback, sai na contração da
+onda 20.
+
+**IA por empresa, o canhoto primeiro (F3-12).** O claim da IA já tirava a
+primeira leitura de cada empresa antes da segunda de qualquer uma, mas por
+uma janela (`row_number()` por empresa) sobre todo o backlog vencido: uma
+enchente de canhotos de uma transportadora era lida por cada claim. Com
+`QUEUE_FAIR_CLAIM_ENABLED`, a IA anda pelas empresas como as raias e o
+outbox, e dentro de cada empresa lê primeiro os canhotos
+(`ai_analysis_request_proof_fair_idx`) e só depois, se eles não encheram a
+parte da empresa, o abastecimento e o checklist
+(`ai_analysis_request_other_fair_idx`), cada classe por um índice parcial
+próprio (`businessId`, `availableAt`). O canhoto é lido com o motorista
+ainda na porta do cliente, e o veredito é o que o manda refazer a foto;
+um abastecimento lido minutos depois não custa viagem a ninguém. O que a
+volta não encheu, as mais velhas vencidas enchem
+(`ai_analysis_request_due_idx`). Desligado, o claim é a janela de antes.
+
+**Webhooks com teto global por endpoint (F3-13).** O teto de chamadas a um
+mesmo endpoint era por processo (`WEBHOOK_PER_ENDPOINT_CONCURRENCY`, 2):
+com três despachantes, o ERP do cliente recebia seis de uma vez. Com
+`WEBHOOK_ENDPOINT_GLOBAL_CONCURRENCY` (4, o que as duas réplicas da
+produção já mandam; `0` desliga), o claim é em dois níveis: anda pelos
+endpoints com linha vencida, a partir de um cursor que gira em cada
+processo, por um skip scan de `webhook_delivery_endpoint_due_idx`
+(`endpointId`, `availableAt`, `id`), e de cada um pega as linhas vencidas
+em ordem, no máximo o teto por processo e nunca além do que o teto global
+deixa depois das linhas em voo do endpoint (`PROCESSING` com lease vivo,
+de qualquer processo), contadas uma vez por claim. As linhas são travadas
+enquanto a volta as lê, pulando as que outra transação segura, então a
+parte de um endpoint nunca se gasta numa linha que o claim não pode
+pegar. Sem as mais velhas enchendo o que a volta não encheu (as partes são
+o teto), uma volta que visitou 64 endpoints sem nada para pegar (linhas
+guardadas de um endpoint pausado por até 30 dias, em espera de nova
+tentativa ou em voo, um endpoint ou um host no teto) não encerra a busca:
+o cursor anda com ela mesmo quando nada foi reivindicado, e o claim segue
+dali, cada volta numa transação curta, até pegar alguma linha ou voltar ao
+cursor de onde partiu (no máximo 64 voltas, 4.096 endpoints; o resto fica
+para o claim seguinte). A contagem só vale com um claim por vez: cada um toma um
+`pg_advisory_xact_lock` na mesma transação, antes do comando, e o solta no
+commit; nenhuma chamada HTTP acontece com ele. A imagem anterior, no
+rolling, reivindica sem o lock e sem o teto global, até sair.
+
+**Teto por host de destino (F3-14).** O ERP de um agregador
+(Comprovei/Fusion) recebe um endpoint por empresa, todos no mesmo host: só
+o teto por endpoint deixaria ele receber 4 vezes o número de empresas de
+uma vez. `webhook_endpoint.destination_host` guarda o host da URL, em
+minúsculas, gravado com ela, e `WEBHOOK_HOST_GLOBAL_CONCURRENCY` (16; `0`
+desliga) limita as chamadas em voo a um host somando todos os endpoints
+dele: no mesmo claim, um endpoint de host já no teto não recebe parte, e
+as linhas achadas para endpoints do mesmo host são cortadas, na ordem do
+claim, no que o host ainda tem. Host nulo (um endpoint salvo pela imagem
+anterior, até o minuto do despachante preenchê-lo) conta como sem teto. Um
+host que ficou para trás porque a imagem anterior trocou a URL (no rolling
+ou num rollback, que não conhecem a coluna) é corrigido antes do envio
+seguinte do endpoint, que confere o host com a URL a cada chamada.
+
+**Tetos globais dos provedores (F3-15a).** A concorrência das raias é por
+processo, então cada processo a mais multiplica o que a Meta, a Resend e o
+Expo recebem de uma vez, e o contrato com eles é da plataforma.
+`WHATSAPP_GLOBAL_CONCURRENCY`, `EMAIL_GLOBAL_CONCURRENCY` e
+`PUSH_GLOBAL_CONCURRENCY` (`0`, o padrão, é sem teto global) valem para
+todos os processos juntos, e cada um fica com o teto dividido pelos
+processos vivos da raia (`process_heartbeat.queues`), nunca abaixo de 1
+(`src/shared/notifications/provider-caps.ts`). O divisor é o maior entre os
+vivos agora, o maior número visto nos últimos 10 minutos e
+`ROLE_EXPECTED_CONSUMERS`, e uma leitura que falha mantém o último: um
+soluço do banco não pode fazer cada processo achar que está sozinho e
+passar do contrato. Com algum teto ligado, o pool da raia separa as linhas
+por provedor: o claim deixa de fora o canal do provedor que está na sua
+parte e devolve na hora, sem gastar tentativa, o que pegou a mais, então
+nenhuma linha espera o provedor com o lease correndo. A parte conta as
+chamadas abertas no provedor, não as vagas do pool: um envio que passou do
+tempo de espera da entrega (`PER_DELIVERY_TIMEOUT_MS`) libera a vaga mas
+continua aberto, e segue contando na parte do provedor até ele responder,
+ou até o fim do lease da entrega; sem isso, um provedor lento recebia uma
+chamada nova para cada uma que ainda não tinha respondido. Concorrência
+não limita taxa; o balde de taxa por provedor é o F3-15c.
+
+**Balde de taxa por provedor (F3-15c).** Os contratos são taxas (80
+mensagens por segundo na Meta, 10 requisições na Resend, 600 notificações
+no Expo), e quatro vagas com envios de 100 ms já dão ~40 requisições por
+segundo. `WHATSAPP_SENDS_PER_SECOND`, `EMAIL_REQUESTS_PER_SECOND` e
+`PUSH_NOTIFICATIONS_PER_SECOND` (`0`, o padrão, é desligado: nenhuma
+conexão, nenhuma espera, o 429 tratado como antes) ligam um balde GCRA sem
+rajada no Redis, por provedor, que todos os processos dividem
+(`src/shared/notifications/provider-rate-bucket.ts`): a chave guarda o
+instante em que o próximo envio pode começar, no relógio do próprio Redis,
+e cada envio reserva a sua vez (um push a três celulares são três). Uma vez
+a até 1 s é esperada na vaga; uma mais longe devolve a linha para a fila,
+com `availableAt` nela, sem gastar tentativa. Um 429 do provedor (o 130429
+da Meta, a recusa por taxa da Resend, o 429 do Expo) empurra a chave para
+depois da pausa pedida (1 s sem Retry-After, até 1 min com ele), e a linha
+espera o mesmo, sem gastar tentativa. A chave é um contador de ritmo, não
+estado de negócio: perdê-la num despejo custa no máximo um segundo de taxa.
+Com o Redis fora, vale a divisão do F3-15a: cada processo fica com a taxa
+dividida pelo divisor estável da raia, localmente. O alerta
+`provider-throttled` soma as recusas por taxa das últimas 24 h (seção
+`provider_rate` das linhas `ops_sample`) e é o gatilho para ligar o balde
+(decisão D45).
+
+**Cota diária de WhatsApp por empresa (F3-15b).** Todas as empresas mandam
+WhatsApp pela mesma conta da plataforma na Meta: a rajada de uma
+transportadora gasta o nível de mensagens e a nota de qualidade de que
+todas dependem. Com `WHATSAPP_DAILY_QUOTA_PER_TENANT` acima de 0 (`0`, o
+padrão, é sem cota, até a conversa com a Meta), cada chamada à Meta toma
+uma unidade da `provider_quota_day` (provedor `whatsapp`, escopo
+`whatsapp:<businessId>`, o dia de negócio da empresa no fuso dela), no
+Postgres, porque o que é contrato não pode sumir num despejo do Redis
+(`src/shared/notifications/whatsapp-daily-quota.ts`). Passou da cota, a
+linha volta para a fila sem gastar tentativa, com `availableAt` no começo
+do próximo dia de negócio da empresa, um milissegundo depois da última já
+guardada para aquele dia: todas no mesmo instante saíam em qualquer ordem,
+e uma mais velha podia ficar para o dia seguinte atrás de mais novas. A
+guardada se reconhece pelo começo do `lastError`, então uma nova tentativa
+de outra mensagem marcada para depois da meia-noite não empurra as
+guardadas. Nunca cai para o e-mail. Os
+administradores recebem o aviso `whatsapp-quota.reached` no sino, uma vez
+por dia: a chave do evento no outbox (`whatsapp-quota.reached:<empresa>:<dia>`)
+é a deduplicação. Uma chamada que a Meta recusa por taxa (o 130429, ou um 429) não foi aceita por ela e devolve a unidade ao dia de onde saiu:
+enquanto a Meta segura o ritmo, a linha volta sem gastar tentativa
+(F3-15c), e cada nova tentativa gastava uma unidade da empresa sem
+nenhuma mensagem entregue.
 
 - **DLQ:** o status `FAILED`.
   - `GET /health/dead-letter` com `POST /health/dead-letter/replay` cobre
@@ -222,13 +413,15 @@ verificados no import do módulo e no boot.
   - o teto de reclaim evita que uma linha que derruba o worker derrube
     todas as réplicas;
   - no shutdown, os pipelines esperam até 10 s, dentro do teto de 35 s
-    (stop grace de 40 s no Dokploy).
+    (stop grace de 40 s no Dokploy, com `STOP_GRACE_PERIOD_MS=40000`); com
+    um grace menor, o plano de desligamento encurta essa espera
+    (`src/shared/lifecycle/shutdown-plan.ts`).
 
 ### 6. Como evitamos duplicação em redelivery, crash, restart e várias réplicas
 
 | Canal              | Proteção                                                                                                                                                                                   | Resíduo inevitável                                                                                        |
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------- |
-| Expansão do outbox | unique `(outboxEventId, userId, channel)` e unique parcial por destinatário externo; `createMany skipDuplicates`; PUBLISHED com fencing; `eventKey` único                                  | nenhum                                                                                                    |
+| Expansão do outbox | id da entrega decidido por evento, destinatário e canal (F5-03); unique parcial por destinatário até a onda 10; `createMany skipDuplicates`; PUBLISHED com fencing; `eventKey` único       | nenhum                                                                                                    |
 | In-app / atividade | unique `notification.deliveryId` / `activity_deliveryId_key`                                                                                                                               | nenhum                                                                                                    |
 | E-mail             | `Resend-Idempotency-Key` = id da entrega (retenção de 24 h; o cronograma de ~4h40 cabe nela)                                                                                               | reenvio manual depois de 24 h                                                                             |
 | Push               | invariante de lease e fencing; **novo:** id da entrega como `tag` (todo aparelho) e `collapseId` (só iPhone) em `push-provider.ts`; o aparelho troca a cópia pela anterior                 | a Expo não deduplica no servidor: um crash entre o aceite e o UPDATE envia de novo, mas a bandeja colapsa |
@@ -334,10 +527,28 @@ anterior não bastar:
 2. **Separar os workers do HTTP** com a mesma imagem
    (`WORKERS_ENABLED=false` nas réplicas HTTP; `docs/deploy.md`, _Separar os
    workers do HTTP_), refazendo o orçamento de conexões.
-3. **`LISTEN/NOTIFY` do Postgres** para acordar as outras réplicas sem
-   esperar a varredura.
-4. **Só então um broker.** O candidato é o Redis Streams com relay do outbox,
-   porque o Redis já opera, e não o RabbitMQ. O outbox continua sendo a fonte.
+3. **Uma dica de despertar pelo pub/sub do Redis** para acordar os outros
+   processos sem esperar a varredura (plano de escala, F3-04): um canal por
+   fila, com debounce e só o nome da réplica no corpo. É uma dica
+   descartável, como o resto do Redis ([ADR 0002](./0002-redis-descartavel.md)):
+   perdida, custa só a varredura de 2 s, e a fila continua no Postgres.
+4. **Filas particionadas e tetos por fila no Postgres** (plano de escala,
+   ondas 10 e 13), antes de qualquer componente novo.
+
+**Correção de 15/11/2026.** Esta escada tinha mais dois degraus, e os dois
+saíram:
+
+- o `LISTEN/NOTIFY` do Postgres deu lugar à dica pelo pub/sub. O `LISTEN`
+  não passa pelo PgBouncer em modo transaction (onda 17) e pediria uma
+  conexão direta por processo, e o `NOTIFY` pega um lock global no commit.
+  A dica pelo Redis dá a mesma garantia sem conexão especial. O `NOTIFY`
+  fora da transação fica só como plano B, se a medição reprovar a dica;
+- o Redis Streams com relay do outbox saiu. Ele contradizia o
+  [ADR 0002](./0002-redis-descartavel.md): o Redis de hoje despeja chaves
+  (`allkeys-lru`) e não persiste, e uma fila ali seria uma segunda
+  dependência com estado, backup e alerta próprios, para a mesma escrita no
+  Postgres feita depois. Um broker não está na escada: reabrir isso pede um
+  ADR novo, com o gatilho medido e o motivo de o Postgres não bastar.
 
 ## O que esta rodada mudou (28/10/2026)
 
@@ -400,9 +611,13 @@ As lacunas eram pequenas e reais, e nenhuma pedia broker:
    estornar mesmo com zero contadas, porque a linha em que ela travou ainda
    pode gravar depois da contagem.
 
-   Tudo isso cabe no teto de 35 s: importações até 22 s (15 + 5 + 2), e
-   depois os workers, com até 10 s (12 s no despachante de webhooks: o
-   timeout de 10 s da chamada mais 2 s). A varredura continua como piso para
+   Tudo isso cabe no teto de 35 s: importações até 22 s (15 + 5 + 2), o
+   HTTP também (12 s de dreno e até 10 s para os pedidos em andamento,
+   cujas conexões são fechadas depois disso), e então os workers, com até
+   10 s (12 s no despachante de webhooks: o timeout de 10 s da chamada
+   mais 2 s). São os prazos com o grace de 40 s;
+   todos saem de `STOP_GRACE_PERIOD_MS` (`src/shared/lifecycle/shutdown-plan.ts`),
+   e sem a variável cabem nos 10 s do Docker. A varredura continua como piso para
    SIGKILL, OOM e perda de nó, e escreve o mesmo tipo de relatório (o
    fechamento foi unificado em `import-repository.ts`).
 

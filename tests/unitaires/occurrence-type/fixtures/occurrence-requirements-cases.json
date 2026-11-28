@@ -1,5 +1,5 @@
 {
-  "$comment": "Shared cases of the occurrence category rules (decisions 14.3 and 14.4; src/modules/occurrence-type/rules/occurrence-category-rules.ts). The API, the web dialog (trajetto-ui/tests/unitaires/occurrence-category-rules.test.ts) and the app's proof screen (trajetto-mobile/tests/unitaires/delivered-requirements.test.ts) run the same file against their copy.",
+  "$comment": "Shared cases of the occurrence category rules (decisions 14.3 and 14.4; src/modules/occurrence-type/rules/occurrence-category-rules.ts). The API, the web dialog (trajetto-ui/tests/unitaires/occurrence-category-rules.test.ts) and the app's proof screen (trajetto-mobile/tests/unitaires/delivered-requirements.test.ts) run the same file against their copy. The K17 cases (plan of 02/11/2026) pin when each requirement binds: the receipt and the signature only when switched on (the signature is always offered and taken when sent), additional photos only when switched on, in delivered and not delivered types alike; the tower's authorization never refuses a report (it only defers its effect).",
   "matrix": [
     {
       "name": "default delivered type: receipt only",
@@ -155,6 +155,48 @@
           "message": "Tipos de pausa não exigem fotos, assinatura, formulário nem autorização."
         }
       ]
+    },
+    {
+      "name": "K17: delivered type asking only for the tower",
+      "shape": {
+        "category": "DELIVERED",
+        "requires_photo": false,
+        "requires_receipt_photo": false,
+        "requires_signature": false,
+        "requires_authorization": true,
+        "blocks_delivery": false,
+        "pause_kind": null,
+        "has_form": false
+      },
+      "issues": []
+    },
+    {
+      "name": "K17: not delivered type asking only for the tower",
+      "shape": {
+        "category": "NOT_DELIVERED",
+        "requires_photo": false,
+        "requires_receipt_photo": false,
+        "requires_signature": false,
+        "requires_authorization": true,
+        "blocks_delivery": false,
+        "pause_kind": null,
+        "has_form": false
+      },
+      "issues": []
+    },
+    {
+      "name": "K17: not delivered type asking nothing, not blocking",
+      "shape": {
+        "category": "NOT_DELIVERED",
+        "requires_photo": false,
+        "requires_receipt_photo": false,
+        "requires_signature": false,
+        "requires_authorization": false,
+        "blocks_delivery": false,
+        "pause_kind": null,
+        "has_form": false
+      },
+      "issues": []
     }
   ],
   "missing": [
@@ -245,6 +287,160 @@
         "requires_signature": false
       },
       "sent": { "receipt_photo": false, "signature": false, "photos": 0 },
+      "missing": []
+    },
+    {
+      "name": "K17: signature offered and sent on a delivered type that does not require it",
+      "type": {
+        "category": "DELIVERED",
+        "requires_photo": false,
+        "requires_receipt_photo": true,
+        "requires_signature": false
+      },
+      "sent": { "receipt_photo": true, "signature": true, "photos": 0 },
+      "missing": []
+    },
+    {
+      "name": "K17: additional photos sent on a delivered type that does not require them",
+      "type": {
+        "category": "DELIVERED",
+        "requires_photo": false,
+        "requires_receipt_photo": true,
+        "requires_signature": false
+      },
+      "sent": { "receipt_photo": true, "signature": false, "photos": 3 },
+      "missing": []
+    },
+    {
+      "name": "K17: additional photos required on a delivered type and not sent",
+      "type": {
+        "category": "DELIVERED",
+        "requires_photo": true,
+        "requires_receipt_photo": true,
+        "requires_signature": false
+      },
+      "sent": { "receipt_photo": true, "signature": false, "photos": 0 },
+      "missing": [
+        {
+          "code": "OCCURRENCE_PHOTO_REQUIRED",
+          "message": "Este tipo de ocorrência exige foto anexada ao registro."
+        }
+      ]
+    },
+    {
+      "name": "K17: signature required on a delivered type and not sent",
+      "type": {
+        "category": "DELIVERED",
+        "requires_photo": false,
+        "requires_receipt_photo": false,
+        "requires_signature": true
+      },
+      "sent": { "receipt_photo": false, "signature": false, "photos": 0 },
+      "missing": [
+        {
+          "code": "OCCURRENCE_SIGNATURE_REQUIRED",
+          "message": "Este tipo exige a assinatura de quem recebeu."
+        }
+      ]
+    },
+    {
+      "name": "K17: not delivered type asking for nothing",
+      "type": {
+        "category": "NOT_DELIVERED",
+        "requires_photo": false,
+        "requires_receipt_photo": false,
+        "requires_signature": false
+      },
+      "sent": { "receipt_photo": false, "signature": false, "photos": 0 },
+      "missing": []
+    },
+    {
+      "name": "K17: not delivered type asking for the receipt, sent without it",
+      "type": {
+        "category": "NOT_DELIVERED",
+        "requires_photo": false,
+        "requires_receipt_photo": true,
+        "requires_signature": false
+      },
+      "sent": { "receipt_photo": false, "signature": true, "photos": 1 },
+      "missing": [
+        {
+          "code": "OCCURRENCE_RECEIPT_PHOTO_REQUIRED",
+          "message": "Este tipo exige a foto do canhoto."
+        }
+      ]
+    },
+    {
+      "name": "K17: not delivered type asking for photos, sent with one",
+      "type": {
+        "category": "NOT_DELIVERED",
+        "requires_photo": true,
+        "requires_receipt_photo": false,
+        "requires_signature": false
+      },
+      "sent": { "receipt_photo": false, "signature": false, "photos": 1 },
+      "missing": []
+    },
+    {
+      "name": "K17: not delivered type asking for photos, sent without",
+      "type": {
+        "category": "NOT_DELIVERED",
+        "requires_photo": true,
+        "requires_receipt_photo": false,
+        "requires_signature": false
+      },
+      "sent": { "receipt_photo": false, "signature": false, "photos": 0 },
+      "missing": [
+        {
+          "code": "OCCURRENCE_PHOTO_REQUIRED",
+          "message": "Este tipo de ocorrência exige foto anexada ao registro."
+        }
+      ]
+    },
+    {
+      "name": "K17: not delivered type asking for everything, nothing sent, in the API's order",
+      "type": {
+        "category": "NOT_DELIVERED",
+        "requires_photo": true,
+        "requires_receipt_photo": true,
+        "requires_signature": true
+      },
+      "sent": { "receipt_photo": false, "signature": false, "photos": 0 },
+      "missing": [
+        {
+          "code": "OCCURRENCE_RECEIPT_PHOTO_REQUIRED",
+          "message": "Este tipo exige a foto do canhoto."
+        },
+        {
+          "code": "OCCURRENCE_SIGNATURE_REQUIRED",
+          "message": "Este tipo exige a assinatura de quem recebeu."
+        },
+        {
+          "code": "OCCURRENCE_PHOTO_REQUIRED",
+          "message": "Este tipo de ocorrência exige foto anexada ao registro."
+        }
+      ]
+    },
+    {
+      "name": "K17: not delivered type asking for everything, everything sent",
+      "type": {
+        "category": "NOT_DELIVERED",
+        "requires_photo": true,
+        "requires_receipt_photo": true,
+        "requires_signature": true
+      },
+      "sent": { "receipt_photo": true, "signature": true, "photos": 2 },
+      "missing": []
+    },
+    {
+      "name": "K17: signature sent on a not delivered type that does not require it",
+      "type": {
+        "category": "NOT_DELIVERED",
+        "requires_photo": false,
+        "requires_receipt_photo": false,
+        "requires_signature": false
+      },
+      "sent": { "receipt_photo": false, "signature": true, "photos": 0 },
       "missing": []
     }
   ]

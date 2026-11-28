@@ -3,6 +3,7 @@ import { inject, injectable } from "tsyringe";
 import { IRouteRepository } from "../../repositories/IRoute-repository";
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { IDriverRepository } from "@/modules/driver/repositories/IDriver-repository";
+import { IVehicleRepository } from "@/modules/vehicle/repositories/IVehicle-repository";
 
 import database from "@/../infra/database";
 import { sendRouteEventToBusiness, sendRouteEventToDriver } from "@/websocket";
@@ -12,6 +13,7 @@ import { WebhookFanOutService } from "@/shared/integration/webhook-fan-out-servi
 import { routeEventPayload } from "@/shared/integration/announce";
 
 import { assertRouteDispatcher } from "../shared/assert-route-dispatcher";
+import { RouteBranchGuard } from "../shared/route-branch-guard";
 import { assertDriverStillActive } from "../shared/driver-still-active";
 import {
   assertPlanVersion,
@@ -25,8 +27,10 @@ import {
   canReleaseRoute,
   canTransitionRoute,
   canUnreleaseRoute,
+  vehicleUnavailableReason,
 } from "@/shared/route/route-rules";
 import { routeDayLabel } from "@/shared/route/route-plan-rules";
+import { isVehicleOutOfOperation } from "@/shared/vehicle/vehicle-rules";
 
 import {
   RouteNotFoundError,
@@ -77,12 +81,19 @@ class ReleaseRouteUseCase {
     private user: IUserRepository,
     @inject("DriverRepository")
     private driver: IDriverRepository,
+    @inject("VehicleRepository")
+    private vehicle: IVehicleRepository,
     @inject("NotificationService")
     private notificationService: NotificationService,
     @inject("OutboxService")
     private outbox: OutboxService,
     @inject("WebhookFanOutService")
     private webhooks: WebhookFanOutService,
+    // Contract C1 (03/11/2026): the checklist's record branch, asked before
+    // the driver is at the truck. Optional so callers built before it keep
+    // working; the container always provides it.
+    @inject(RouteBranchGuard)
+    private branchGuard?: Pick<RouteBranchGuard, "assertResolvable">,
   ) {}
 
   async execute({
@@ -132,6 +143,40 @@ class ReleaseRouteUseCase {
       if (!readiness.allowed) {
         throw new AppError(readiness.reason!, 400, "ROUTE_NOT_RELEASABLE");
       }
+
+      // A truck blocked after planning (theft, crash, breakdown) is refused
+      // here, in the office, and not at the yard when "Iniciar rota" fails;
+      // the departure still asks again. No lock: the departure's check is
+      // the one that guards the street, so a block landing a moment after
+      // this read is still caught there. Only the handover asks — pulling a
+      // route back to planning is never refused for its vehicle.
+      const findVehicle = findRoute.vehicleId
+        ? await this.vehicle.findVehicleById(findRoute.vehicleId)
+        : null;
+
+      if (
+        findVehicle?.businessId === businessId &&
+        isVehicleOutOfOperation(findVehicle.status)
+      ) {
+        throw new AppError(
+          vehicleUnavailableReason(
+            findVehicle.license_plate,
+            findVehicle.status,
+            "release",
+          ),
+          400,
+          "ROUTE_VEHICLE_UNAVAILABLE",
+        );
+      }
+
+      // 409 ROUTE_BRANCH_REQUIRED when the company asks for the checklist
+      // and its branch resolves to nothing: the dispatcher completes the
+      // vehicle or the driver now, instead of the driver being refused.
+      await this.branchGuard?.assertResolvable({
+        businessId,
+        vehicleId: findRoute.vehicleId,
+        driverId: findRoute.driverId,
+      });
     } else {
       // Pulling back is only legal while nothing was executed. Once a stop has
       // been worked, the route is a record of what the driver did, and editing

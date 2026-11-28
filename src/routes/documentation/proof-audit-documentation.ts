@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { responseDateTime } from "./response-date";
 
 import {
   listProofAuditsSchema,
@@ -8,8 +9,6 @@ import {
 
 import { errorResponse } from "./common-responses";
 import { devicePrecheckSchema } from "@/shared/ai-precheck/device-precheck";
-
-const isoDateTime = z.union([z.string(), z.date()]);
 
 const proofAuditSchemas = {
   listProofAudits: listProofAuditsSchema,
@@ -45,6 +44,12 @@ const proofAuditResponses = {
           .describe(
             "Janela da taxa de concordância, em dias corridos (hoje incluído), contada no fuso da empresa.",
           ),
+        timeZone: z
+          .string()
+          .optional()
+          .describe(
+            "O fuso da empresa (IANA), ex.: America/Sao_Paulo: a aba da torre mostra os horários nele, com a nota, como o detalhe da rota (plano de 02/11/2026, H6; decisão D22). Sem ele (versão anterior da API), o navegador.",
+          ),
       }),
     }),
   }),
@@ -58,20 +63,20 @@ const proofAuditResponses = {
     ai_suggestion: z
       .object({
         reading: z
-          .record(z.unknown())
+          .record(z.string(), z.unknown())
           .describe(
             "A leitura da foto. Cada critério vale `yes`, `no`, `unknown` ou `not_applicable` (entrega sem número de NF-e para conferir): `isReceipt` (é um canhoto de entrega; ausente em leituras anteriores à decisão 6.9), `legible`, `hasSignature`, `dateVisible` e `documentMatches`. Traz também `photoQuality` e `confidence` (0 a 1) e `observation` (uma frase em português). Leituras novas trazem `extracted` (o que a IA transcreveu: `documentNumber`, `receiptDateText`, `receiptDate`, `recipientName`, `signatureOnPaper` e `digitalSignature`) e `expected` (o que a entrega esperava: `documentNumber`, `provenOn` e `recipientName`). Campos desconhecidos são preservados.",
           ),
-        assessment: z.record(z.unknown()),
+        assessment: z.record(z.string(), z.unknown()),
       })
       .nullable()
       .describe("O que a IA leu no canhoto e o que sugeriu; null sem análise."),
     ai_confidence: z.number().nullable(),
-    ai_analyzed_at: isoDateTime.nullable(),
+    ai_analyzed_at: responseDateTime().nullable(),
     reviewedById: z.string().nullable(),
-    reviewed_at: isoDateTime.nullable(),
+    reviewed_at: responseDateTime().nullable(),
     rejection_reason: z.string().nullable(),
-    created_at: isoDateTime,
+    created_at: responseDateTime(),
     delivery: z.object({
       id: z.string(),
       recipient_name: z.string(),
@@ -79,7 +84,7 @@ const proofAuditResponses = {
       uf: z.string(),
       invoice_number: z.string().nullable(),
       code: z.string().nullable(),
-      delivered_at: isoDateTime.nullable(),
+      delivered_at: responseDateTime().nullable(),
       received_by: z.string().nullable(),
       driverName: z.string().nullable(),
     }),
@@ -149,4 +154,3 @@ const proofAuditResponses = {
 };
 
 export { proofAuditSchemas, proofAuditResponses };
-export type { isoDateTime };

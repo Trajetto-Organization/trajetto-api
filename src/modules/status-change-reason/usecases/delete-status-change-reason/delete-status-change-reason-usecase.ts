@@ -10,6 +10,7 @@ import {
 } from "../errors/status-change-reason-errors";
 
 import { AppError } from "@/shared/errors/AppError";
+import { isForeignKeyViolation } from "@/shared/errors/prisma-error-meta";
 import { StatusChangeReason } from "../../dtos/status-change-reason-dto";
 
 import { callerNotFound } from "@/shared/delivery/caller-not-found";
@@ -67,6 +68,15 @@ class DeleteStatusChangeReasonUseCase {
     try {
       deleted = await this.reason.deleteStatusChangeReason(reasonId);
     } catch (error) {
+      // An override citing it committed between the count and the DELETE:
+      // the foreign key (RESTRICT) refused it. The same 409 the count gives,
+      // counted again, instead of a 500 (K16).
+      if (isForeignKeyViolation(error)) {
+        const cited = await this.reason.countEventsByReasonId(reasonId);
+
+        throw new StatusChangeReasonInUseError(Math.max(cited, 1));
+      }
+
       throw new AppError(
         "Houve um erro ao tentar excluir o motivo! Por favor, tente novamente.",
         500,

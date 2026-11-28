@@ -2,6 +2,8 @@ import { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
 import { IntegrationReadController } from "@/modules/integration/usecases/integration-read/integration-read-controller";
 import { CreateIntegrationDeliveryController } from "@/modules/integration/usecases/create-delivery/create-integration-delivery-controller";
+import { CancelIntegrationDeliveryController } from "@/modules/integration/usecases/cancel-delivery/cancel-integration-delivery-controller";
+import { CreateIntegrationDeliveriesBatchController } from "@/modules/integration/usecases/create-integration-deliveries-batch/create-integration-deliveries-batch-controller";
 
 import {
   ensureApiKey,
@@ -22,12 +24,17 @@ import {
 } from "./documentation/integration-documentation";
 
 import {
+  CANCEL_DELIVERY_REQUEST_EXAMPLE,
+  CREATE_DELIVERIES_BATCH_REQUEST_EXAMPLE,
   CREATE_DELIVERY_REQUEST_EXAMPLE,
+  integrationBatchResponses,
+  integrationCancelResponses,
   integrationWriteResponses,
   integrationWriteSchemas,
 } from "./documentation/integration-write-documentation";
 import {
   publicBadRequestResponse,
+  publicEventsBadRequestResponse,
   publicBusinessRateLimitResponse,
   publicInternalErrorResponse,
   publicNotFoundResponse,
@@ -40,9 +47,19 @@ import {
 } from "@/shared/integration/webhook-catalogue";
 
 import { apiUsageRecorder } from "@/shared/integration/api-usage-recorder";
+import {
+  BATCH_BODY_LIMIT_BYTES,
+  BATCH_BODY_LIMIT_LABEL,
+  BATCH_TOO_LARGE,
+  MAX_BATCH_DELIVERIES,
+} from "@/schemas/create-integration-deliveries-batch-schema";
+import { integrationKeyBucket } from "@/shared/integration/integration-units";
 
 const readController = new IntegrationReadController();
 const createDeliveryController = new CreateIntegrationDeliveryController();
+const cancelDeliveryController = new CancelIntegrationDeliveryController();
+const createDeliveriesBatchController =
+  new CreateIntegrationDeliveriesBatchController();
 
 const COMPANY_REFUSAL_HIDDEN_HEADERS = [
   "x-ratelimit-limit",
@@ -159,8 +176,9 @@ async function integrationRoutes(app: FastifyInstance) {
     // The fallback only applies if the key is somehow unresolved.
     max: (request) => request.apiKey?.rateLimitPerMinute ?? 600,
     timeWindow: "1 minute",
+    // integration-units.ts spends a batch's other units on this bucket.
     keyGenerator: (request) =>
-      `integration-key:${request.apiKey?.prefix ?? request.ip}`,
+      integrationKeyBucket(request.apiKey?.prefix ?? request.ip),
   });
 
   app.get(
@@ -202,7 +220,7 @@ async function integrationRoutes(app: FastifyInstance) {
         "x-scopes": ["deliveries:read"],
         summary: "Listar entregas",
         description:
-          "Paginação por CURSOR: passe o `next_cursor` da resposta anterior em `cursor`. A ordem é a do `id`, crescente (UUID v7, a ordem de criação). `updated_since` (ISO 8601) traz só o que mudou a partir daquele instante (`updated_at` maior ou igual), que é o que um ERP usa para sincronizar sem reler tudo. Cada objeto carrega os TRÊS identificadores — o nosso id, o `code` do seu ERP e a chave da NF-e quando existir — porque uma integração que só casa por um deles quebra na primeira vez que o ERP do cliente muda como numera as coisas.",
+          "Paginação por CURSOR: passe o `next_cursor` da resposta anterior em `cursor`. A ordem é a do `id`, crescente (UUID v7, a ordem de criação). `updated_since` (ISO 8601) traz só o que mudou a partir daquele instante (`updated_at` maior ou igual), que é o que um ERP usa para sincronizar sem reler tudo: na próxima sincronização, use o `sync_watermark` da primeira página desta. Cada objeto carrega os TRÊS identificadores — o nosso id, o `code` do seu ERP e a chave da NF-e quando existir — porque uma integração que só casa por um deles quebra na primeira vez que o ERP do cliente muda como numera as coisas.",
         querystring: integrationSchemas.listDeliveries,
         // 401, 403 and the key's 429 come from ensureApiKey, through the
         // OpenAPI transform, with their codes.
@@ -259,7 +277,7 @@ async function integrationRoutes(app: FastifyInstance) {
         "x-scopes": ["routes:read"],
         summary: "Listar rotas",
         description:
-          "Mesma paginação por cursor das entregas, na ordem do `id` crescente (a ordem de criação); `updated_since` filtra por `updated_at` maior ou igual. As paradas vêm na ordem que o despachante escolheu, com a entrega de cada uma pelos três identificadores.",
+          "Mesma paginação por cursor das entregas, na ordem do `id` crescente (a ordem de criação); `updated_since` filtra por `updated_at` maior ou igual, e o `sync_watermark` da primeira página é o da próxima sincronização. As paradas vêm na ordem que o despachante escolheu, com a entrega de cada uma pelos três identificadores.",
         querystring: integrationSchemas.listRoutes,
         response: {
           200: integrationResponses.routePage,
@@ -314,11 +332,11 @@ async function integrationRoutes(app: FastifyInstance) {
         "x-scopes": ["events:read"],
         summary: "Listar eventos (polling)",
         description:
-          "Oferecido AO LADO dos webhooks e não no lugar deles: um cliente atrás de firewall não consegue receber uma chamada, e dizer a ele 'exponha um endpoint ou fique sem nada' é como um projeto de integração morre. Lê do histórico permanente das entregas: consultar uma semana para trás não encontra buracos. Ordem do `id` crescente; aqui `updated_since` filtra pela hora em que o evento chegou ao Trajetto (`created_at` maior ou igual), não por `occurred_at`.",
+          "Oferecido AO LADO dos webhooks e não no lugar deles: um cliente atrás de firewall não consegue receber uma chamada, e dizer a ele 'exponha um endpoint ou fique sem nada' é como um projeto de integração morre. Lê do histórico permanente das entregas: consultar uma semana para trás não encontra buracos. A ordem é a da leitura do feed, não a do `id`: não ordene nem compare ids ou cursores, siga o `next_cursor` e, na última página, guarde o `resume_cursor` para a próxima consulta. O mesmo evento pode vir mais de uma vez (um cursor antigo, ou de antes de uma restauração do banco, é convertido sem pular nada): deduplique pelo `id` do evento. Aqui `updated_since` filtra pela hora em que o evento chegou ao Trajetto (`created_at` maior ou igual), não por `occurred_at`. Toda mudança de status aparece: a criação da entrega como `delivery.created`, a saída de uma rota como um `delivery.in_transit` por entrega que saiu e a volta à base de uma rota cancelada ou encerrada com pendências como `delivery.pending` (`data.status_from` diz de onde veio; nulo na criação).",
         querystring: integrationSchemas.listEvents,
         response: {
           200: integrationResponses.eventPage,
-          400: publicBadRequestResponse,
+          400: publicEventsBadRequestResponse,
           429: publicBusinessRateLimitResponse,
           500: publicInternalErrorResponse,
           503: publicServiceUnavailableResponse,
@@ -358,9 +376,11 @@ async function integrationRoutes(app: FastifyInstance) {
         "x-scopes": ["deliveries:write"],
         summary: "Criar uma entrega",
         description: [
-          "Escopo exigido: `deliveries:write` (que não dá leitura). Uma entrega por requisição: a v1 não tem criação em lote — para várias, uma chamada por documento, cada uma com a sua Idempotency-Key.",
+          "Escopo exigido: `deliveries:write` (que não dá leitura). Uma entrega por requisição; para várias de uma vez, em lote, use POST /integration/v1/deliveries/batch (até 100, cada uma com a sua `idempotency_key`).",
           "",
           "As regras são as do cadastro manual no painel, com as mesmas mensagens: destinatário e endereço obrigatórios, CEP com 8 dígitos, data prevista como dia (`AAAA-MM-DD`, sem hora), até 200 itens. O embarcador vem por `shipper_id` ou por `shipper_cnpj` (um dos dois) e precisa ser da sua empresa e estar ativo. Motorista e rota não vêm aqui: a entrega nasce Pendente e é atribuída no painel.",
+          "",
+          "Se você já tem o ponto do endereço, mande `latitude` e `longitude` (graus decimais, as duas juntas, dentro do Brasil): ele vira o ponto da entrega no mapa e na geocerca, e o Trajetto não o substitui pela geocodificação. Sem elas, o endereço é localizado automaticamente. As coordenadas fazem parte do corpo comparado na repetição com a mesma Idempotency-Key.",
           "",
           "`Idempotency-Key` é obrigatória. Repetir a mesma chave com o mesmo corpo devolve 200 com a entrega já criada, sem duplicar nem avisar de novo; com outro corpo, 409 IDEMPOTENCY_KEY_REUSED. A chave da NF-e também não se repete: uma nota já cadastrada na empresa responde 409 DELIVERY_INVOICE_KEY_EXISTS com o `delivery_id` dela.",
           "",
@@ -381,6 +401,113 @@ async function integrationRoutes(app: FastifyInstance) {
       },
     },
     createDeliveryController.handle,
+  );
+
+  /**
+   * The batch (plano-escala U-04, F4.5): up to 100 deliveries in one call,
+   * each the single create, in its own transaction. The same gates and
+   * scope as the single create; N deliveries spend N units of the key's and
+   * the company's minute (integration-units.ts), so a batch is never a way
+   * around the ceilings. Its own body limit (BATCH_BODY_LIMIT_BYTES): a
+   * hundred deliveries weigh more than Fastify's default of 1 MiB, the
+   * single create's, and a body past it is the batch's own 413.
+   */
+  app.post(
+    "/deliveries/batch",
+    {
+      onRequest: [ensureApiKey, perKeyCeiling, limitBusinessApiRate],
+      preHandler: [verifyApiScope("deliveries:write")],
+      bodyLimit: BATCH_BODY_LIMIT_BYTES,
+      config: {
+        rateLimit: false,
+        bodyTooLarge: BATCH_TOO_LARGE,
+        // Documentation only: each element is parsed by the use case.
+        openapi: { body: integrationWriteSchemas.createDeliveriesBatch },
+      },
+      schema: {
+        security: [{ apiKey: [] }],
+        tags: ["integration"],
+        operationId: "createDeliveriesBatch",
+        "x-scopes": ["deliveries:write"],
+        summary: "Criar entregas em lote",
+        description: [
+          `Escopo exigido: \`deliveries:write\`, o mesmo da criação avulsa. De 1 a ${MAX_BATCH_DELIVERIES} entregas por chamada, em \`deliveries\`: cada uma é o corpo da criação avulsa mais a sua \`idempotency_key\`, que faz aqui o papel do cabeçalho Idempotency-Key (obrigatória, as mesmas regras, única por empresa).`,
+          "",
+          "Cada entrega passa pelas mesmas regras e mensagens da criação avulsa, na ordem em que veio, e é gravada na sua própria transação, com o seu webhook `delivery.created`: o sucesso pode ser parcial. A resposta é 200 com um resultado por entrega (`status` 201 criada, 200 já criada por esta chave, ou a recusa com `code` e `message`) e as contagens. Uma lista vazia, com mais de 100 entregas ou com outro campo no corpo recusa a chamada inteira (400), sem ler nenhuma entrega.",
+          "",
+          `O corpo inteiro vai até ${BATCH_BODY_LIMIT_LABEL} (${BATCH_BODY_LIMIT_BYTES} bytes), o que cabe em ${MAX_BATCH_DELIVERIES} entregas de até 200 itens comuns; acima disso a chamada é recusada inteira com 413 \`BATCH_TOO_LARGE\`, sem ler nenhuma entrega nem contá-las nos limites por minuto (só a chamada conta, como uma avulsa): divida as entregas em lotes menores.`,
+          "",
+          "Reenviar o mesmo lote com as mesmas `idempotency_key` devolve os mesmos resultados, as já criadas como 200 com o mesmo `delivery_id`, sem duplicar nem avisar de novo. Se a chamada falhar no meio (500 ou 503), reenvie o lote inteiro do mesmo jeito.",
+          "",
+          `Cada entrega conta como uma requisição nos limites por minuto da chave e da empresa: um lote de ${MAX_BATCH_DELIVERIES} gasta ${MAX_BATCH_DELIVERIES}, e um lote que passa do que sobra do minuto é recusado inteiro com 429 e \`retry-after\`, sem gastar as unidades das entregas: só a chamada conta, e as chamadas avulsas seguem com o que sobrou.`,
+          "",
+          CREATE_DELIVERIES_BATCH_REQUEST_EXAMPLE,
+        ].join("\n"),
+        response: {
+          200: integrationBatchResponses.processed,
+          400: integrationBatchResponses.badRequest,
+          413: integrationBatchResponses.tooLarge,
+          429: integrationBatchResponses.tooManyRequests,
+          500: integrationBatchResponses.internalError,
+          503: integrationBatchResponses.unavailable,
+        },
+      },
+    },
+    createDeliveriesBatchController.handle,
+  );
+
+  /**
+   * The cancel (L9, D49): an ERP whose order was called off stops the
+   * delivery itself.
+   *
+   * Its own scope, not `deliveries:write`: every write key issued before it
+   * was granted to create documents, and none of them gains the power to
+   * call deliveries off unless somebody issues a key with it. The same gates
+   * as the create, the scope checked before the body is read, and the body
+   * parsed in the controller so every refusal names its field. No
+   * Idempotency-Key: a delivery already cancelled is the replay.
+   */
+  app.post(
+    "/deliveries/:id/cancel",
+    {
+      onRequest: [ensureApiKey, perKeyCeiling, limitBusinessApiRate],
+      preHandler: [verifyApiScope("deliveries:cancel")],
+      config: {
+        rateLimit: false,
+        // Documentation only; see integration-write-documentation.
+        openapi: { body: integrationWriteSchemas.cancelDelivery },
+      },
+      schema: {
+        security: [{ apiKey: [] }],
+        tags: ["integration"],
+        operationId: "cancelDelivery",
+        // The hook above enforces it; this only publishes it.
+        "x-scopes": ["deliveries:cancel"],
+        summary: "Cancelar uma entrega",
+        description: [
+          "Escopo exigido: `deliveries:cancel` (que não dá criação nem leitura; `deliveries:write` não basta). Qualquer entrega da sua empresa, criada pela API, pelo painel, por XML ou por planilha; uma de outra empresa responde o mesmo 404 de uma que não existe.",
+          "",
+          "Cancela entregas **Pendentes** (sem rota, ou numa rota que ainda não saiu) e com **Insucesso**. Entregue e Em rota respondem 409 DELIVERY_NOT_CANCELLABLE com o `delivery_status`: uma carga que já saiu com o motorista é cancelada pela transportadora, no painel.",
+          "",
+          "`reason` é obrigatório: é o motivo que fica no histórico da entrega, com a sua chave como autora, e o que o motorista lê no aviso. O cancelamento é o mesmo do painel: a parada sai da rota que ainda não saiu (o motorista de uma rota liberada é avisado), a mudança entra em `/integration/v1/events` como `delivery.cancelled` (com o motivo em `data.note`) e os assinantes de `delivery.cancelled` recebem o webhook — inclusive o seu próprio sistema, se assinar.",
+          "",
+          "Sem `Idempotency-Key`: repetir é seguro. Uma entrega já cancelada (por esta chamada, por outra chave ou pelo painel) responde 200 com o cabeçalho `idempotent-replayed: true`, sem gravar nem anunciar de novo; duas chamadas ao mesmo tempo cancelam uma vez só. As chamadas contam no mesmo limite por minuto da chave e da empresa que as demais.",
+          "",
+          CANCEL_DELIVERY_REQUEST_EXAMPLE,
+        ].join("\n"),
+        params: integrationSchemas.idParam,
+        response: {
+          200: integrationCancelResponses.cancelled,
+          400: integrationCancelResponses.badRequest,
+          404: integrationCancelResponses.notFound,
+          409: integrationCancelResponses.conflict,
+          429: integrationCancelResponses.tooManyRequests,
+          500: integrationCancelResponses.internalError,
+          503: integrationCancelResponses.unavailable,
+        },
+      },
+    },
+    cancelDeliveryController.handle,
   );
 }
 

@@ -15,9 +15,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const RECIPIENT = "pessoa.cadastrada@exemplo.com.br";
 
 vi.mock("@/shared/services/transactional-mail-service", async () => {
-  const { toMailDeliveryError } = await import(
-    "@/shared/providers/mail-provider/errors/mail-delivery-error"
-  );
+  const { toMailDeliveryError } =
+    await import("@/shared/providers/mail-provider/errors/mail-delivery-error");
 
   return {
     // What ResendMailProvider throws when the SMTP server refuses.

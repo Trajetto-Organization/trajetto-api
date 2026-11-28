@@ -31,6 +31,11 @@ interface Vehicle {
   fuelTypeId: string;
   driverId?: string | null;
   branchId?: string | null;
+  /**
+   * Who answers for the vehicle in the company (plan of 02/11/2026, F1):
+   * the person a failed checklist alerts. Null = the company's admins.
+   */
+  responsibleUserId?: string | null;
   created_at: Date | string;
   updated_at: Date | string;
 }
@@ -59,6 +64,8 @@ interface CreateVehicleProps {
   fuelTypeId: string;
   driverId?: string | null;
   branchId?: string | null;
+  /** F1. The use case checks it is a user of the same company. */
+  responsibleUserId?: string | null;
 }
 
 interface UpdateVehicleProps {
@@ -84,11 +91,22 @@ interface UpdateVehicleProps {
   fuelTypeId?: string;
   driverId?: string | null;
   branchId?: string | null;
+  /** F1. Null hands the vehicle back to the admins; undefined keeps it. */
+  responsibleUserId?: string | null;
 }
 
 interface UpdateVehicle {
   vehicleData: UpdateVehicleProps;
   vehicleId: string;
+
+  /**
+   * Unblocking a truck whose route is still on the road (decision 8.3): the
+   * status is the route's, read in the write's own transaction under the
+   * running route's lock — IN_ROUTE while it runs, ACTIVE once it ended —
+   * instead of `vehicleData.status`, which the caller decided on an older
+   * read. The company scopes that read.
+   */
+  statusFromRunningRoute?: { businessId: string };
 }
 
 /**
@@ -105,11 +123,25 @@ interface VehicleStatusCounts {
 }
 
 /**
+ * The names the vehicle form and the service order prefill read (plan of
+ * 02/11/2026, F1 and F4): the fleet's responsible user and the branch, null
+ * without one. `branch.name` is the label every branch picker shows (the
+ * corporate reason); `corporate_reason` stays for the clients that read it.
+ */
+interface VehicleRelationNames {
+  responsibleUser: { name: string } | null;
+  branch: { corporate_reason: string; name: string } | null;
+}
+
+/** One vehicle as the detail reads it, with those names. */
+type VehicleDetail = Vehicle & VehicleRelationNames;
+
+/**
  * One page of the listing plus the raw counts behind its cards and filters
  * (see usecases/list-vehicle/vehicle-list.ts for how they are summarised).
  */
 interface ListVehicleProps {
-  data: Vehicle[];
+  data: Array<Vehicle & VehicleRelationNames>;
   /** Grouped over every filter but status. */
   statusCounts: VehicleStatusCounts;
   /** Grouped over every filter but branch, with this company's names. */
@@ -128,7 +160,7 @@ interface GetVehicleByIdAndBusinessProps {
   vehicleId: string;
 }
 
-interface VehicleWithLastFuel extends Vehicle {
+interface VehicleWithLastFuel extends Vehicle, Partial<VehicleRelationNames> {
   last_fuel_mileage?: number | null;
   last_fuel_date?: Date | string | null;
 }
@@ -171,8 +203,18 @@ interface VehicleChoice {
   } | null;
 }
 
+/**
+ * A `full` picker row: the whole record plus the names its cards print —
+ * the driver, the type and the fuel (the driver's "Meus veículos" card read
+ * "Combustível: N/A" while the fuel was missing).
+ */
+interface VehicleSearchRow
+  extends Vehicle, Pick<VehicleChoice, "driver" | "vehicleType"> {
+  fuelType?: { description: string } | null;
+}
+
 interface CursorPaginatedVehicle {
-  data: Array<Vehicle | VehicleChoice>;
+  data: Array<VehicleSearchRow | VehicleChoice>;
   nextCursor: string | null;
   hasMore: boolean;
 }
@@ -196,8 +238,11 @@ export {
   ListVehicleByBusinessIdProps,
   GetVehicleByIdAndBusinessProps,
   VehicleWithLastFuel,
+  VehicleDetail,
+  VehicleRelationNames,
   SearchVehicleWithCursorProps,
   CursorPaginatedVehicle,
   VehicleChoice,
+  VehicleSearchRow,
   VehicleUsageCounts,
 };

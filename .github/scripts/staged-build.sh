@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# Which staging build covers a commit: the PR check (`staging-image`) and the
-# promote (`promote-production`) of deploy.yml ask the same question here.
+# Which staging build covers a commit: the `Staging evidence` of the PR into
+# main (pr.yml) and of the promote (production.yml) ask it here.
 #
 #   staged-build.sh <commit>
 #
@@ -10,8 +10,9 @@
 #
 # - <commit> itself, when staging deployed it: `staged-<7>` on the same
 #   digest as `sha-<7>`, for every image. An image with neither tag (the AI,
-#   for builds older than the service) is left out, with a warning; the
-#   first image (the API) never is.
+#   for builds older than the service; the PgBouncer's, for builds older
+#   than it or without it, plano-escala F4-35) is left out, with a warning;
+#   the first image (the API) never is.
 # - Otherwise, the nearest ancestor staging deployed, when everything that
 #   changed between the two is documentation: a `*.md` file anywhere, or
 #   anything under `docs/` (docs-only.sh, the one place with that rule). No
@@ -37,7 +38,7 @@ set -euo pipefail
 shopt -s inherit_errexit
 
 REPOSITORY=${GHCR_REPOSITORY:-ghcr.io/trajetto-organization}
-IMAGES=${STAGED_IMAGES:-trajetto-api trajetto-ai}
+IMAGES=${STAGED_IMAGES:-trajetto-api trajetto-ai trajetto-pgbouncer}
 DEPTH=${STAGED_DEPTH:-50}
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 

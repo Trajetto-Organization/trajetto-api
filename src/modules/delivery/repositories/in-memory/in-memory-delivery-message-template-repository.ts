@@ -24,9 +24,7 @@ const CHANNEL_ORDER = [
   "PUSH",
 ] as const;
 
-class InMemoryDeliveryMessageTemplateRepository
-  implements IDeliveryMessageTemplateRepository
-{
+class InMemoryDeliveryMessageTemplateRepository implements IDeliveryMessageTemplateRepository {
   public templates: DeliveryMessageTemplateRecord[] = [];
 
   async findActive(

@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import auth from "@/config/auth";
 import { businessDaysRange } from "@/shared/time/business-day";
 import { createPrismaClient } from "@/shared/database/database-client";
+import { env } from "@/env";
 
 /**
  * The activity table and summary over real HTTP and Postgres.
@@ -120,6 +121,8 @@ async function list(query: string, token = tokens.admin) {
     status: 200,
     rows,
     total: first.meta.total as number,
+    searchMeta: first.meta.searchMeta as
+      { totalCapped: boolean; periodDays: number | null } | undefined,
     body: response.body,
   };
 }
@@ -344,6 +347,50 @@ describe("GET /activity/list — filters on the server", () => {
   });
 });
 
+// plano-escala F2-19 (decision D42): the table reads a period (30 days
+// by default on the web) and stops counting at ACTIVITY_COUNT_CAP. The web
+// from before the period sends none and still reads the whole trail.
+describe("GET /activity/list — the period and the capped count", () => {
+  it("reads the period in the company's zone, and the whole trail without one", async () => {
+    const week = await list("period=7d&type=Multa");
+
+    expect(week.status).toBe(200);
+    expect(week.rows.map((row) => row.description)).toEqual(["Atividade 28"]);
+    expect(week.searchMeta).toEqual({ totalCapped: false, periodDays: 7 });
+
+    const whole = await list("type=Multa");
+
+    expect(whole.total).toBe(2);
+    expect(whole.searchMeta).toEqual({ totalCapped: false, periodDays: null });
+
+    expect((await list("period=2d")).status).toBe(400);
+  });
+
+  it("counts up to the cap, then says there are more", async () => {
+    const cap = env.ACTIVITY_COUNT_CAP;
+
+    env.ACTIVITY_COUNT_CAP = 5;
+
+    try {
+      const capped = await list("");
+
+      expect(capped.total).toBe(5);
+      expect(capped.searchMeta?.totalCapped).toBe(true);
+      // The page itself is whole.
+      expect(capped.rows).toHaveLength(10);
+
+      env.ACTIVITY_COUNT_CAP = 0;
+
+      const counted = await list("");
+
+      expect(counted.total).toBeGreaterThan(5);
+      expect(counted.searchMeta?.totalCapped).toBe(false);
+    } finally {
+      env.ACTIVITY_COUNT_CAP = cap;
+    }
+  });
+});
+
 describe("GET /activity/summary — the period in the company's zone", () => {
   it("counts civil days in the company's zone, today included", async () => {
     const response = await app.inject({
@@ -437,9 +484,8 @@ describe("GET /activity/list — the DRIVER facet is the presented DRIVER", () =
 
 describe("ActivityRepository.createActivity — one spelling per status", () => {
   it("stores a raw route enum and a variant as the catalog's label (FLEET-ACT-1/5)", async () => {
-    const { ActivityRepository } = await import(
-      "@/modules/activity/repositories/activity-repository"
-    );
+    const { ActivityRepository } =
+      await import("@/modules/activity/repositories/activity-repository");
     const repository = new ActivityRepository();
 
     const planned = await repository.createActivity({

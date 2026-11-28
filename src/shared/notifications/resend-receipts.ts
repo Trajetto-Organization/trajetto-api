@@ -12,7 +12,9 @@ import {
 import {
   advanceProviderStatus,
   furthestPerDelivery,
+  insertReceipts,
 } from "./provider-receipts";
+import { receiptIdFor } from "./receipt-id";
 
 const log = logger.child({ component: "provider-receipts" });
 
@@ -63,27 +65,31 @@ async function tieToDelivery(
 /**
  * Records one Resend event in the receipts ledger and advances the
  * delivery's providerStatus, never backwards. Idempotent: Svix delivers again
- * whatever it did not see a 2xx for, and the ledger's (provider, message id,
- * status) key absorbs the repeat. Throws on a database failure, so the route
- * answers 5xx and Svix retries.
+ * whatever it did not see a 2xx for, and insertReceipts keeps one row per
+ * (provider, message id, status), however each copy was tied. Throws on a
+ * database failure, so the route answers 5xx and Svix retries.
  */
 async function recordResendEvent(report: ResendEventReport): Promise<void> {
   const deliveryId = await tieToDelivery(report);
 
-  await database.notificationProviderReceipt.createMany({
-    data: [
-      {
+  await insertReceipts([
+    {
+      id: receiptIdFor({
         deliveryId,
         provider: "resend",
         providerMessageId: report.emailId,
         status: report.status,
-        errorCode: report.errorCode,
-        errorMessage: report.errorMessage,
         occurredAt: report.occurredAt,
-      },
-    ],
-    skipDuplicates: true,
-  });
+      }),
+      deliveryId,
+      provider: "resend",
+      providerMessageId: report.emailId,
+      status: report.status,
+      errorCode: report.errorCode,
+      errorMessage: report.errorMessage,
+      occurredAt: report.occurredAt,
+    },
+  ]);
 
   await advanceProviderStatus(
     furthestPerDelivery(

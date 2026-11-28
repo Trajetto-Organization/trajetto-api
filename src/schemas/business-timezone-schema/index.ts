@@ -9,9 +9,7 @@ import { BRAZILIAN_TIME_ZONES } from "@/shared/time/business-day";
  */
 const businessTimezoneField = z
   .enum(BRAZILIAN_TIME_ZONES, {
-    errorMap: () => ({
-      message: "Fuso horário inválido. Escolha um dos fusos do Brasil.",
-    }),
+    error: "Fuso horário inválido. Escolha um dos fusos do Brasil.",
   })
   .describe(
     `Fuso horário da empresa (IANA), um dos fusos do Brasil: ${BRAZILIAN_TIME_ZONES.join(", ")}. Define o "hoje" de todos os painéis e relatórios. Ausente no cadastro, America/Sao_Paulo.`,

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { responseDateTime } from "./response-date";
 
 import { createFineSchema } from "@/schemas/create-fine-schema";
 import { updateFineSchema } from "@/schemas/update-fine-schema";
@@ -27,8 +28,6 @@ const fineSchemas = {
   exportFinesQuery: exportFineQuerySchema,
 };
 
-const dateValue = z.union([z.string(), z.date()]);
-
 /** One line of GET /fines/list-fine, as FineRepository.listFines selects it. */
 const fineRow = z.object({
   id: z.string().describe("ID da multa."),
@@ -37,13 +36,13 @@ const fineRow = z.object({
     .describe(
       "Situação no dia de negócio da empresa: PAID (paga), PENDING (em aberto até o dia do vencimento), OVERDUE (em aberto depois dele).",
     ),
-  violation_date: dateValue.describe(
+  violation_date: responseDateTime().describe(
     "Data da infração: o instante em que o dia começa no fuso da empresa.",
   ),
-  due_date: dateValue.describe(
+  due_date: responseDateTime().describe(
     "Data de vencimento: o instante em que o dia começa no fuso da empresa.",
   ),
-  payment_date: dateValue
+  payment_date: responseDateTime()
     .nullable()
     .describe("Data do pagamento; null se não paga."),
   violation_day: z
@@ -87,7 +86,7 @@ const fineRow = z.object({
     .string()
     .nullable()
     .describe("Quem posicionou o ponto à mão."),
-  location_edited_at: dateValue
+  location_edited_at: responseDateTime()
     .nullable()
     .describe("Quando o ponto foi posicionado à mão."),
   created_from: z.string().describe("MOBILE_APP ou WEB_DASHBOARD."),
@@ -95,8 +94,8 @@ const fineRow = z.object({
     .string()
     .nullable()
     .describe("Chave de idempotência do cadastro."),
-  created_at: dateValue.describe("Criação."),
-  updated_at: dateValue.describe("Última alteração."),
+  created_at: responseDateTime().describe("Criação."),
+  updated_at: responseDateTime().describe("Última alteração."),
   branch: z.object({ corporate_reason: z.string() }).describe("Filial."),
   driver: z
     .object({ name: z.string(), cpf: z.string() })

@@ -1,8 +1,8 @@
 import fastify from "fastify";
-import {
-  serializerCompiler,
-  validatorCompiler,
-} from "fastify-type-provider-zod";
+import fastifyRateLimit from "@fastify/rate-limit";
+import { validatorCompiler } from "fastify-type-provider-zod";
+
+import { parsingSerializerCompiler } from "@/shared/http/response-serializer";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -32,28 +32,46 @@ vi.mock("@/shared/health/readiness-probe", () => ({
   probeDatabase: vi.fn(async () => probe.result),
 }));
 
+import database from "@/../infra/database";
 import { healthRoutes } from "@/routes/health-routes";
+import { probeDatabase } from "@/shared/health/readiness-probe";
 
+/**
+ * GET /health/readiness on a stopped clock. Nothing here is measured in
+ * milliseconds: a bound on the elapsed time (1 s) failed in a busy parallel
+ * run on 03/11/2026 (1.2 s, most of it registering the routes) with the
+ * route answering at once. Instead, a route that waited on a timer (a grace
+ * period, a race against the main pool) never answers here, and the test's
+ * own timeout fails it.
+ */
 async function readiness() {
   const app = fastify();
   app.setValidatorCompiler(validatorCompiler);
-  app.setSerializerCompiler(serializerCompiler);
+  app.setSerializerCompiler(parsingSerializerCompiler);
+  // health-routes builds its own namespaced bucket with app.rateLimit(),
+  // which only exists once the plugin is registered (as in src/http.ts).
+  app.register(fastifyRateLimit, { global: false });
   app.register(healthRoutes);
+  await app.ready();
 
-  const startedAt = Date.now();
-  const response = await app.inject({
-    method: "GET",
-    url: "/health/readiness",
-  });
-  const elapsed = Date.now() - startedAt;
+  vi.useFakeTimers({ toFake: ["setTimeout", "setInterval"] });
 
-  await app.close();
+  try {
+    const response = await app.inject({
+      method: "GET",
+      url: "/health/readiness",
+    });
 
-  return { response, elapsed };
+    return { response, pendingTimers: vi.getTimerCount() };
+  } finally {
+    vi.useRealTimers();
+    await app.close();
+  }
 }
 
 afterEach(() => {
   probe.result = true;
+  vi.clearAllMocks();
 });
 
 describe("GET /health/readiness with the main pool saturated", () => {
@@ -61,11 +79,15 @@ describe("GET /health/readiness with the main pool saturated", () => {
     "answers ready at once when the database itself answers",
     { timeout: 5_000 },
     async () => {
-      const { response, elapsed } = await readiness();
+      const { response, pendingTimers } = await readiness();
 
       expect(response.statusCode).toBe(200);
       expect(response.json()).toEqual({ status: "ready", ready: true });
-      expect(elapsed).toBeLessThan(1_000);
+      // On its own connection: the saturated pool is never asked (OBS-11).
+      expect(probeDatabase).toHaveBeenCalledTimes(1);
+      expect(database.$queryRaw).not.toHaveBeenCalled();
+      // And nothing is left waiting on the clock.
+      expect(pendingTimers).toBe(0);
     },
   );
 

@@ -11,8 +11,9 @@ import { createPrismaClient } from "@/shared/database/database-client";
 /**
  * The occurrence feed's search and the support inbox's search through the
  * deliveries' trigram index (occurrence-search.ts and
- * SupportTicketRepository.resolveSearchMatches; docs/desempenho/banco-2026-10.md
- * §9, limit 3), against the real database.
+ * SupportTicketRepository.resolveSearchMatches; the database pass of
+ * 07/10/2026, its §9 limit 3, docs/desempenho/README.md), against the real
+ * database.
  *
  * Two promises, as for the deliveries' search. Exactly the rows the joined
  * ILIKE search found — checked against that `where` itself, term by term,

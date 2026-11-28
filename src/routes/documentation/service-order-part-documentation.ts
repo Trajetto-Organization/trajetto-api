@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { responseDateTime } from "./response-date";
 
 import { createServiceOrderPartSchema } from "@/schemas/create-service-order-part-schema";
 import { updateServiceOrderPartSchema } from "@/schemas/update-service-order-part-schema";
@@ -87,16 +88,16 @@ const serviceOrderPartResponses = {
         businessId: z.string(),
         serviceOrderId: z.string(),
         partId: z.string(),
-        created_at: z.union([z.string(), z.date()]),
-        updated_at: z.union([z.string(), z.date()]),
+        created_at: responseDateTime(),
+        updated_at: responseDateTime(),
         part: z.object({
           id: z.string(),
           description: z.string(),
           unit_price: z.union([z.string(), z.number()]),
           businessId: z.string(),
           supplierId: z.string().nullable(),
-          created_at: z.union([z.string(), z.date()]),
-          updated_at: z.union([z.string(), z.date()]),
+          created_at: responseDateTime(),
+          updated_at: responseDateTime(),
         }),
         business: z
           .object({
@@ -105,9 +106,9 @@ const serviceOrderPartResponses = {
           .optional(),
         serviceOrder: z.object({
           id: z.string(),
-          date: z.union([z.string(), z.date()]),
+          date: responseDateTime(),
           total_amount: z.number(),
-          completion_date: z.union([z.string(), z.date()]).nullable(),
+          completion_date: responseDateTime().nullable(),
           vehicle: z.object({
             license_plate: z.string(),
             description: z.string(),

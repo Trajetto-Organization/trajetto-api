@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { responseDateTime } from "./response-date";
 
 import { createStatusChangeReasonSchema } from "@/schemas/create-status-change-reason-schema";
 import { updateStatusChangeReasonSchema } from "@/schemas/update-status-change-reason-schema";
@@ -13,16 +14,14 @@ import { updateDeleteBusinessSchema } from "@/schemas/update-delete-business-sch
  * handler passes, so a plain `z.string()` here would reject the endpoint's own
  * real payload with a 500.
  */
-const isoDateTime = z.union([z.string(), z.date()]);
-
 const statusChangeReasonEntity = z.object({
   id: z.string(),
   name: z.string(),
   description: z.string().nullable(),
   is_active: z.boolean(),
   businessId: z.string(),
-  created_at: isoDateTime,
-  updated_at: isoDateTime,
+  created_at: responseDateTime(),
+  updated_at: responseDateTime(),
 });
 
 const statusChangeReasonSchemas = {

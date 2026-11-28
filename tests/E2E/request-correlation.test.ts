@@ -129,13 +129,11 @@ beforeAll(async () => {
 
   ({ app } = await import("@/http"));
 
-  const { ensureAuthenticated } = await import(
-    "@/modules/middlewares/ensure-authenticated"
-  );
+  const { ensureAuthenticated } =
+    await import("@/modules/middlewares/ensure-authenticated");
   const { ensureApiKey } = await import("@/modules/middlewares/ensure-api-key");
-  const { OutboxService } = await import(
-    "@/shared/notifications/outbox-service"
-  );
+  const { OutboxService } =
+    await import("@/shared/notifications/outbox-service");
   const database = (await import("@/../infra/database")).default;
 
   // Test-only routes on the real app, before it boots: the root hooks and the
@@ -160,7 +158,9 @@ beforeAll(async () => {
           aggregateType: "account-payable",
           aggregateId: randomUUID(),
           businessId: BUSINESS,
-          actorId: USER,
+          // Nobody's action: the bill's responsible is told of a bill
+          // somebody else registered (actor-notice.test.ts).
+          actorId: null,
           payload: {
             accountPayableId: randomUUID(),
             businessId: BUSINESS,
@@ -177,6 +177,13 @@ beforeAll(async () => {
 
   app.get("/__test__/boom", async () => {
     throw new Error("falha interna simulada");
+  });
+
+  // A library that rejects with no reason, or throws null: not an Error.
+  app.get("/__test__/boom-nothing", () => Promise.reject());
+
+  app.get("/__test__/boom-null", async () => {
+    throw null;
   });
 
   await app.ready();
@@ -308,6 +315,21 @@ describe("the request id", () => {
       requestId: response.headers["x-request-id"],
     });
   });
+
+  // Reading `.code` off `undefined` used to throw inside the error handler,
+  // and Fastify's default body went out instead: no code, no request id.
+  it.each(["/__test__/boom-nothing", "/__test__/boom-null"])(
+    "is in the body of a 500 when what was thrown is not an Error (%s)",
+    async (url) => {
+      const response = await app.inject({ method: "GET", url });
+
+      expect(response.statusCode).toBe(500);
+      expect(response.json()).toMatchObject({
+        code: "INTERNAL_ERROR",
+        requestId: response.headers["x-request-id"],
+      });
+    },
+  );
 });
 
 describe("an authenticated request", () => {
@@ -364,12 +386,10 @@ describe("an event published by a request", () => {
   });
 
   it("has none when published outside a request (a cron, a worker)", async () => {
-    const { OutboxService } = await import(
-      "@/shared/notifications/outbox-service"
-    );
-    const { withoutRequestContext } = await import(
-      "@/shared/http/request-context"
-    );
+    const { OutboxService } =
+      await import("@/shared/notifications/outbox-service");
+    const { withoutRequestContext } =
+      await import("@/shared/http/request-context");
 
     // As a worker runs. `inject` calls the request hooks from this test's own
     // async context, so the previous request's scope would otherwise still be

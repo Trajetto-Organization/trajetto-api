@@ -35,12 +35,45 @@ function addressChanged(current: AddressFields, next: AddressFields): boolean {
   );
 }
 
-/** The columns an address change clears. */
+/**
+ * The address after an edit: what the edit sends, and the stored value for
+ * a field it leaves out — the address the new address key is computed from
+ * (address-key.ts), so the edit can take the point another delivery of the
+ * company already has there.
+ */
+function editedAddress(
+  current: AddressFields,
+  next: AddressFields,
+): AddressFields {
+  return Object.fromEntries(
+    ADDRESS_FIELDS.map((field) => [
+      field,
+      next[field] !== undefined ? next[field] : (current[field] ?? null),
+    ]),
+  ) as AddressFields;
+}
+
+/**
+ * The columns an address change clears: the point, and the geocoder's
+ * bookkeeping with it (plan of 02/11/2026, E1), so the new address is
+ * geocoded again — and a lookup of the old one still in flight finds its
+ * claim gone and writes nothing. The link to the delivery a copied point
+ * came from goes too (geo_copied_from): the copy was of the old door. The
+ * same columns a fresh delivery without a point has, which is also what a
+ * copy becomes when its source's pin is cleared (followSource).
+ */
 const CLEARED_ADDRESS_POINT = {
   latitude: null,
   longitude: null,
   geo_source: null,
   geo_updated_at: null,
+  geo_precision: null,
+  geocode_status: null,
+  geocode_attempted_at: null,
+  geocode_attempts: 0,
+  geocode_verdict_at: null,
+  geo_copied_from: null,
 } as const;
 
-export { ADDRESS_FIELDS, CLEARED_ADDRESS_POINT, addressChanged };
+export { ADDRESS_FIELDS, CLEARED_ADDRESS_POINT, addressChanged, editedAddress };
+export type { AddressFields };

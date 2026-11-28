@@ -57,7 +57,9 @@ class UpdateStatusChangeReasonUseCase {
         reasonData.name,
       );
 
-      if (findByName) {
+      // The lookup ignores case, so fixing the case of the reason's own name
+      // finds the reason itself: only another one is a conflict.
+      if (findByName && findByName.id !== findReason.id) {
         throw new StatusChangeReasonNameAlreadyExistsError();
       }
     }

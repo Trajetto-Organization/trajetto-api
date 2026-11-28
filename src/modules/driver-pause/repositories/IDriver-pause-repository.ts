@@ -31,25 +31,28 @@ interface IDriverPauseRepository {
   ): Promise<DriverPause | null>;
 
   /**
-   * The driver's route that was on the street at `at`: started at or before
-   * it and not yet finished (completed, or cancelled) by then.
+   * The driver's latest ENDED pause that started before `before`, scoped by
+   * the company AND the driver: what the cooldown between pauses is measured
+   * from (pause-rules.ts pauseCooldown). Latest by start, then id: one
+   * driver's pauses do not overlap (one open at a time), so the last started
+   * is the last ended, and the index (driverId, started_at) serves it.
    */
-  findRouteRunningAt(
-    businessId: string,
-    driverId: string,
-    at: Date,
-  ): Promise<string | null>;
+  findLastEndedPause(query: {
+    businessId: string;
+    driverId: string;
+    before: Date;
+  }): Promise<DriverPause | null>;
 
   /**
-   * The driver's journey route at `at` (decision 14.4): released by then,
-   * not finished by then, and that business day's (`dayKey`, the company's
-   * zone) or already started. Null = no journey: a pause may not start.
+   * The driver's journey route at `at` (decision 14.4, revised 12/11/2026):
+   * started by then (started_at, with PAUSE_ROUTE_START_SLACK_MS of clock
+   * slack) and not finished by then, whatever its day. A route only
+   * released is none. Null = no journey: a pause may not start.
    */
   findJourneyRouteAt(
     businessId: string,
     driverId: string,
     at: Date,
-    dayKey: string,
   ): Promise<string | null>;
 
   /** This company's occurrence type, any category; null for another tenant's. */

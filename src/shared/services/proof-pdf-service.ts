@@ -481,8 +481,8 @@ async function renderProofPdf(
   // /verificar, and a second one would repeat it.
   const secondaryQr = Boolean(
     model.signed &&
-      auth.verificationLine &&
-      auth.verificationLine.url !== auth.qrUrl,
+    auth.verificationLine &&
+    auth.verificationLine.url !== auth.qrUrl,
   );
   const qrColumnWidth = QR_SIZE + (secondaryQr ? SECONDARY_QR_SIZE + 10 : 0);
   const columnWidth = contentWidth - qrColumnWidth - 14;

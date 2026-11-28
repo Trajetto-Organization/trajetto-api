@@ -27,15 +27,29 @@ import { countInFixedWindow } from "@/shared/services/fixed-window-counter";
  * - by address, BEFORE the token is verified, to bound connection churn from
  *   somebody with no token at all. Generous on purpose: Brazilian carriers put
  *   whole dispatch offices behind one NAT, and a network blip reconnects every
- *   tab in the building at once.
+ *   tab in the building at once. Since plano-escala U-01 it keeps only the
+ *   FAILED attempts: each upgrade is counted at the engine, as before, and
+ *   given back (`refund`) once its handshake ends in anything that says
+ *   nothing against the credential — a socket admitted, a replica at its
+ *   capacity, the database blinking. A mobile carrier's CGNAT puts hundreds
+ *   of drivers behind one address, and a deploy reconnects all of them in
+ *   seconds: counted by attempt, the 301st was locked out of realtime for a
+ *   minute by colleagues who did nothing wrong. A bad token, a bad ticket,
+ *   a user over their own budget or sockets (or one valid token looped
+ *   handshakes from one address with no bound) and an upgrade that never
+ *   sends CONNECT keep their count (shared/socket/admission.ts,
+ *   `keepsAddressCharge`);
  * - by user, AFTER it verifies and before the queries, to bound the database
- *   work one account can ask for.
+ *   work one account can ask for. Every attempt counts there.
  *
  * The keys are the same shape as `clientRateLimitKey` uses for HTTP, on
  * purpose: one idea of who a client is, in one vocabulary.
  */
 
-/** Matches the global HTTP budget: a whole office behind one address. */
+/**
+ * Matches the global HTTP budget: a whole office behind one address. Failed
+ * handshakes only, plus the ones still running (see above).
+ */
 export const HANDSHAKES_PER_ADDRESS = 300;
 
 /**
@@ -109,10 +123,41 @@ export const userHandshakeKey = (userId: string): string =>
  */
 export interface HandshakeLimiter {
   allow: (key: string, max: number) => Promise<boolean>;
+
+  /**
+   * Gives back one attempt `allow` counted under `key`. Never below zero,
+   * and never on a bucket whose window already ended: a DECR on a missing
+   * key would create it at -1 with no TTL, a bucket that never expires.
+   * Fails silently, like `allow` fails open.
+   */
+  refund: (key: string) => Promise<void>;
 }
 
-export function createHandshakeLimiter(redis: Redis): HandshakeLimiter {
+/**
+ * One attempt back, in one script: read and decrement together, so two
+ * refunds racing a window's end cannot take the count below zero, and a
+ * key that already expired stays absent. DECR keeps the key's TTL.
+ */
+export const REFUND_ATTEMPT = [
+  "local count = tonumber(redis.call('GET', KEYS[1]) or '0')",
+  "if count > 0 then",
+  "  return redis.call('DECR', KEYS[1])",
+  "end",
+  "return 0",
+].join("\n");
+
+export function createHandshakeLimiter(
+  redis: Pick<Redis, "eval">,
+): HandshakeLimiter {
   return {
+    async refund(key) {
+      try {
+        await redis.eval(REFUND_ATTEMPT, 1, key);
+      } catch {
+        // A refund lost to a Redis blink leaves one attempt counted for at
+        // most the rest of the window: the generous budget absorbs it.
+      }
+    },
     async allow(key, max) {
       try {
         const count = await countInFixedWindow(
@@ -139,4 +184,5 @@ export function createHandshakeLimiter(redis: Redis): HandshakeLimiter {
 /** A limiter that never refuses, for the paths that have no Redis. */
 export const unlimitedHandshakes: HandshakeLimiter = {
   allow: async () => true,
+  refund: async () => undefined,
 };

@@ -2,9 +2,7 @@ import { Prisma } from "@prisma/client";
 import { uniqueTargetOf } from "@/shared/errors/prisma-error-meta";
 
 type PauseConflict =
-  | "start-submission-taken"
-  | "end-submission-taken"
-  | "already-open";
+  "start-submission-taken" | "end-submission-taken" | "already-open";
 
 /**
  * Which unique index of `driver_pause` refused a write, or null when the

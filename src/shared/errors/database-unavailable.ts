@@ -4,6 +4,7 @@ import {
   DatabaseUnavailableError,
   UNMAPPED_SOCKET_ERRNOS,
 } from "@/shared/database/pg-driver";
+import { pgBouncerRefusal } from "@/shared/errors/database-error-map";
 import {
   driverAdapterCauseOf,
   isDriverAdapterError,
@@ -69,9 +70,11 @@ const UNAVAILABLE_KINDS = new Set([
  * down or recovering (57P01-57P03), the connection itself failing (class 08),
  * no connection slot left (53300). Under Prisma 7 a model query gets them as
  * P2039 "Database error", a raw one as P2010 and a COMMIT as the bare
- * adapter error (kind `postgres`). Everything else Postgres refuses (42P01,
- * 22003, 57014 for the statement_timeout...) is an answer about the SQL: a
- * 500.
+ * adapter error (kind `postgres`). The ceilings that ran out (55P03 for the
+ * lock_timeout, 57014 for the statement_timeout) are not an outage either:
+ * the server is up and busy, a 503 SERVICE_BUSY of their own
+ * (database-error-map.ts). Everything else Postgres refuses (42P01,
+ * 22003...) is an answer about the SQL: a 500.
  */
 const UNAVAILABLE_SQLSTATES = new Set([
   "57P01",
@@ -113,7 +116,14 @@ function isAdapterVerdictWithoutAnswer(error: unknown): boolean {
 
   const state = sqlStateOf(error);
 
-  return state !== undefined && UNAVAILABLE_SQLSTATES.has(state);
+  if (state !== undefined && UNAVAILABLE_SQLSTATES.has(state)) return true;
+
+  // PgBouncer's 08P01 for the database (or the pooler) going away: it
+  // cannot log in to Postgres, the server connection died under the
+  // statement, or the old task of a rolling refuses a login (plano-escala
+  // F4-32). A closed list of its exact words, kept with the busy ones in
+  // database-error-map.ts; any other 08P01 is no outage.
+  return pgBouncerRefusal(error)?.answer === "outage";
 }
 
 /** P2010/P2039 whose driver-adapter cause is the database going away. */

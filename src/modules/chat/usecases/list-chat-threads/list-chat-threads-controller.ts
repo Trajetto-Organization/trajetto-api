@@ -28,9 +28,12 @@ class ListChatThreadsController {
     });
 
     // Presence is transport state, so it is stitched in here — asked about
-    // the drivers on THIS page only. Asking about the whole company fetched
-    // every socket of the tenant through Redis to colour a page of dots,
-    // and the unread badge refetches this list on every chat message.
+    // the drivers on THIS page only, in one read of the beats the realtime
+    // processes write (plano-escala U-05: user_presence, so a process that
+    // takes no sockets answers it too, and a driver whose signal dropped
+    // stays online for PRESENCE_GRACE_MS). It used to fetch sockets
+    // through Redis, the whole company's at first, on every GET, and the
+    // unread badge refetches this list on every chat message.
     const driverUserIds = [
       ...new Set(
         data.flatMap((entry) =>

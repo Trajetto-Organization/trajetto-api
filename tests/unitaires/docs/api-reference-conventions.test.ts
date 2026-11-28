@@ -140,6 +140,56 @@ describe("the refusals of the public API (DOCS-04)", () => {
     }
   });
 
+  it("says a code once: a route that explains the hook's code keeps its own words", () => {
+    // Red before: every keyed route's 503 read the outage twice, the
+    // route's paragraph and then the transform's, and the cancel's second
+    // one gave the Idempotency-Key advice of a route that takes none.
+    const keyedRoute = (responses: Record<number, z.ZodType>) => {
+      const { response } = (
+        openapiTransform({
+          url: "/integration/v1/probe",
+          schema: { response: responses } as never,
+          route: {
+            method: "POST",
+            url: "/integration/v1/probe",
+            onRequest: [ensureApiKey],
+            config: { rateLimit: false },
+          } as unknown as RouteOptions,
+        }) as { schema: { response: Record<string, Json> } }
+      ).schema;
+
+      // Where @fastify/swagger reads a response's description from.
+      return (status: string): string =>
+        response[status]["x-response-description"] ??
+        response[status].description;
+    };
+
+    // Both codes of the hook (SERVICE_BUSY since plano-escala U-13), in the
+    // route's own words.
+    const own =
+      "SERVICE_UNAVAILABLE: o banco caiu. SERVICE_BUSY: o banco está ocupado. Repetir é seguro sem chave nenhuma.";
+    const described = keyedRoute({
+      503: z.object({ code: z.string(), message: z.string() }).describe(own),
+      429: z
+        .object({ code: z.string(), message: z.string() })
+        .describe("RATE_LIMITED também quando a empresa passou do teto."),
+    });
+
+    expect(described("503")).toBe(own);
+
+    // Prose that only mentions the code still gets the hook's explanation.
+    expect(described("429")).toMatch(
+      /^RATE_LIMITED também quando a empresa passou do teto\. RATE_LIMITED: acabou o teto por minuto da chave/,
+    );
+
+    for (const { id, operation } of keyed()) {
+      expect(
+        operation.responses["503"].description.match(/SERVICE_UNAVAILABLE:/g),
+        id,
+      ).toHaveLength(1);
+    }
+  });
+
   it("names the company's ceiling in the 429, as a number", () => {
     // Red before: the per-company limit (limitBusinessApiRate) was only
     // "o teto por minuto", with no number for the integrator to size by.

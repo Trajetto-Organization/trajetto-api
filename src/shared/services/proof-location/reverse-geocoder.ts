@@ -42,7 +42,7 @@ function text(value: unknown): string | null {
 }
 
 /**
- * A Nominatim `jsonv2` answer as the address the PDF prints. Null when it has
+ * A Nominatim-compatible answer as the address the PDF prints. Null when it has
  * nothing usable (an error object, or no address at all). A country other
  * than Brazil is kept as it came: it is evidence, not ours to correct.
  */
@@ -84,7 +84,10 @@ function reverseUrl(
 ): string {
   const url = new URL(`${config.url!.replace(/\/+$/, "")}/reverse`);
 
-  url.searchParams.set("format", "jsonv2");
+  // `json`, never `jsonv2`: LocationIQ refuses `format=jsonv2` with a 400
+  // before it reads the key, and the PDF then fell back for every proof.
+  // Only `address` is read, which both formats carry.
+  url.searchParams.set("format", "json");
   url.searchParams.set("lat", String(latitude));
   url.searchParams.set("lon", String(longitude));
   url.searchParams.set("zoom", "18");

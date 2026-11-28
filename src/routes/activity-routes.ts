@@ -27,10 +27,13 @@ async function activityRoutes(app: FastifyInstance) {
         tags: ["activity"],
         summary: "Lista o registro de atividades (tabela)",
         description:
-          "O registro de atividades em páginas, mais recentes primeiro (`order=asc` inverte). Filtra no servidor, sobre o registro inteiro e não sobre a página: `status`, `type`, `action` e `role` (um ou mais valores do catálogo, separados por vírgula). O status filtrado também encontra as grafias antigas do mesmo status. `role=DRIVER` são as ações do motorista pelo aplicativo; `PLATFORM`/`MASTER`, as da equipe Trajetto. O MASTER vê todas as empresas ou uma (`businessId`); o administrador vê a própria empresa, sem as ações do MASTER exceto as mudanças do plano dela.",
+          "O registro de atividades em páginas, mais recentes primeiro (`order=asc` inverte). Filtra no servidor, sobre o registro inteiro e não sobre a página: `status`, `type`, `action` e `role` (um ou mais valores do catálogo, separados por vírgula). O status filtrado também encontra as grafias antigas do mesmo status. `role=DRIVER` são as ações do motorista pelo aplicativo; `PLATFORM`/`MASTER`, as da equipe Trajetto. O MASTER vê todas as empresas ou uma (`businessId`); o administrador vê a própria empresa, sem as ações do MASTER exceto as mudanças do plano dela. `period` (7d, 30d, 90d ou 365d) recorta a tabela em dias civis no fuso da empresa; sem ele, o registro inteiro. O total para de contar em 10.000: acima disso, `meta.searchMeta.totalCapped` vem true e o total é 10.000 (mostre `10.000+`).",
         querystring: activitySchemas.listAllActivitiesQuery,
         response: {
-          200: ndjsonList(activityResponses.activityRow),
+          200: ndjsonList(
+            activityResponses.activityRow,
+            activityResponses.activityListMeta,
+          ),
           400: activityResponses.listActivitiesErrors,
           403: activityResponses.activityForbidden,
           500: activityResponses.internalServerError,
@@ -50,7 +53,7 @@ async function activityRoutes(app: FastifyInstance) {
         tags: ["activity"],
         summary: "Linha do tempo de atividades (cursor, NDJSON)",
         description:
-          "Feed da linha do tempo, mais recentes primeiro, paginado por cursor (o registro é escrito o tempo todo: com páginas por posição, a segunda repetiria linhas da primeira). A janela `period` (7d ou 30d) conta dias civis no fuso da empresa, hoje incluído, e faz parte do contrato do cursor: ao trocá-la, descarte o cursor e recomece. O escopo é o da tabela — o MASTER vê tudo ou uma empresa (`businessId`); o administrador, a própria empresa sem as ações do MASTER, exceto as mudanças do plano dela.",
+          "Feed da linha do tempo, mais recentes primeiro, paginado por cursor (o registro é escrito o tempo todo: com páginas por posição, a segunda repetiria linhas da primeira). A janela `period` (7d ou 30d) conta dias civis no fuso da empresa, hoje incluído, e faz parte do contrato do cursor: ao trocá-la, descarte o cursor e recomece. O escopo é o da tabela — o MASTER vê tudo ou uma empresa (`businessId`); o administrador, a própria empresa sem as ações do MASTER, exceto as mudanças do plano dela. O cabeçalho `x-trajetto-data-version` diz em que geração de ids a página está (`1` até a janela do histórico, `2` depois dela, quando os ids anteriores ao uuid v7 ganham um novo): se ele mudar entre duas páginas, descarte o que já foi lido e o cursor e recomece do topo.",
         querystring: activitySchemas.listActivitiesCursorQuery,
         response: {
           200: ndjsonCursor(

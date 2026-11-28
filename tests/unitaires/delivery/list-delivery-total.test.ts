@@ -100,6 +100,7 @@ function build() {
       new InMemoryBusinessRepository(),
     ),
     listing,
+    deliveries,
   };
 }
 
@@ -262,5 +263,139 @@ describe("a driver", () => {
 
     expect(result.total).toBe(3);
     expect(result.data.every((row) => row.driverId === DRIVER)).toBe(true);
+  });
+});
+
+/**
+ * Plan of 02/11/2026, H3 (decision D26): the "Em Rota" card counts the
+ * documents still open on a route left "Em andamento" since an earlier day.
+ * The listing says how many of them, and since when, for the note "inclui N
+ * de rotas abertas desde dd/mm" — counted like the card (every filter but
+ * the status), with the tower's rule for a route left open.
+ */
+describe("what the cards inherited from routes left open (H3)", () => {
+  // 10:00 in São Paulo (the default zone) on 03/11.
+  const NOW = new Date("2026-11-03T13:00:00.000Z");
+  const LEFT_ON_THE_31ST = new Date("2026-10-31T11:00:00.000Z");
+  const THIS_MORNING = new Date("2026-11-03T10:30:00.000Z");
+
+  function withRoutes() {
+    const built = build();
+    const repository = built.deliveries;
+
+    const transit = (id: string, shipperId: string) =>
+      repository.deliveries.push({
+        id,
+        businessId: BUSINESS,
+        shipperId,
+        driverId: DRIVER,
+        recipient_name: `Herdada ${id}`,
+        city: "Campinas",
+        uf: "SP",
+        street: "Rua",
+        status: "IN_TRANSIT",
+        created_at: new Date(Date.UTC(2026, 9, 31, 12)),
+      } as never);
+
+    transit("old-1", SHIPPER);
+    transit("old-2", OTHER_SHIPPER);
+
+    repository.routeStops.push(
+      {
+        deliveryId: "old-1",
+        status: "PENDING",
+        routeId: "route-old",
+        routeStatus: "IN_PROGRESS",
+        routeStartedAt: LEFT_ON_THE_31ST,
+      },
+      {
+        deliveryId: "old-2",
+        status: "ARRIVED",
+        routeId: "route-old",
+        routeStatus: "IN_PROGRESS",
+        routeStartedAt: LEFT_ON_THE_31ST,
+      },
+      // Today's route: not inherited.
+      {
+        deliveryId: "delivery-2",
+        status: "PENDING",
+        routeId: "route-today",
+        routeStatus: "IN_PROGRESS",
+        routeStartedAt: THIS_MORNING,
+      },
+    );
+
+    return built;
+  }
+
+  const list = (
+    useCase: ListDeliveryUseCase,
+    extra: Partial<Parameters<ListDeliveryUseCase["execute"]>[0]> = {},
+  ) => useCase.execute({ userId: MANAGER, page: 1, pageSize: 10, ...extra });
+
+  it("counts the documents still open on routes left open, and since when", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+
+    try {
+      const { useCase } = withRoutes();
+
+      const result = await list(useCase);
+
+      expect(result.meta?.inherited).toEqual({
+        routes: 1,
+        deliveries: 2,
+        since: LEFT_ON_THE_31ST.toISOString(),
+      });
+      // A part of the card, never more than it.
+      expect(result.meta?.statusCounts.IN_TRANSIT).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("follows the card's filters: the shipper and the search, but not the status", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+
+    try {
+      const { useCase } = withRoutes();
+
+      const byShipper = await list(useCase, { shipperIds: [OTHER_SHIPPER] });
+      const byStatus = await list(useCase, { statuses: ["PENDING"] });
+      const unmatched = await list(useCase, { search: "Padaria" });
+
+      expect(byShipper.meta?.inherited).toMatchObject({
+        routes: 1,
+        deliveries: 1,
+      });
+      expect(byStatus.meta?.inherited).toMatchObject({ deliveries: 2 });
+      expect(unmatched.meta?.inherited).toEqual({
+        routes: 0,
+        deliveries: 0,
+        since: null,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("is nothing while every running route is today's", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+
+    try {
+      const { useCase } = build();
+
+      const result = await list(useCase);
+
+      expect(result.meta?.inherited).toEqual({
+        routes: 0,
+        deliveries: 0,
+        since: null,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

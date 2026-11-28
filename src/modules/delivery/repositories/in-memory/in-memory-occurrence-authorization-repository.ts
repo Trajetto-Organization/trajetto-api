@@ -24,9 +24,7 @@ type StoredOccurrence = InMemoryDeliveryRepository["occurrences"][number];
  * only" condition, same order (created_at, id), same once-only escalation,
  * and the same liveness rule — the function the SQL transcribes.
  */
-class InMemoryOccurrenceAuthorizationRepository
-  implements IOccurrenceAuthorizationRepository
-{
+class InMemoryOccurrenceAuthorizationRepository implements IOccurrenceAuthorizationRepository {
   constructor(
     private readonly deliveries: InMemoryDeliveryRepository,
     private readonly types: InMemoryOccurrenceTypeRepository,
@@ -88,6 +86,7 @@ class InMemoryOccurrenceAuthorizationRepository
       occurrenceType: {
         id: occurrence.occurrenceTypeId,
         name: type?.name ?? "Tipo de ocorrência",
+        code: type?.code ?? null,
         blocks_delivery: type?.blocks_delivery === true,
         requires_authorization: type?.requires_authorization === true,
         form_fields: type?.form_fields ?? null,
@@ -106,6 +105,24 @@ class InMemoryOccurrenceAuthorizationRepository
 
   private isLive(occurrence: StoredOccurrence): boolean {
     return this.liveness(occurrence) === true;
+  }
+
+  /**
+   * The delivery's open stop now (ATTEMPT_JOINS' `s`): the newest PENDING or
+   * ARRIVED stop on a route.
+   */
+  private openStopOf(deliveryId: string) {
+    return this.deliveries.routeStops
+      .filter(
+        (stop) =>
+          stop.deliveryId === deliveryId &&
+          stop.routeId &&
+          (stop.status === "PENDING" || stop.status === "ARRIVED"),
+      )
+      .sort(
+        (a, b) =>
+          (b.created_at?.getTime() ?? 0) - (a.created_at?.getTime() ?? 0),
+      )[0];
   }
 
   /**
@@ -129,22 +146,17 @@ class InMemoryOccurrenceAuthorizationRepository
       )
       .sort((a, b) => a.created_at.getTime() - b.created_at.getTime())[0];
 
-    const openStop = this.deliveries.routeStops
-      .filter(
-        (stop) =>
-          stop.deliveryId === delivery.id &&
-          stop.routeId &&
-          (stop.status === "PENDING" || stop.status === "ARRIVED"),
-      )
-      .sort(
-        (a, b) =>
-          (b.created_at?.getTime() ?? 0) - (a.created_at?.getTime() ?? 0),
-      )[0];
+    const openStop = this.openStopOf(delivery.id!);
 
     const statusChangedSince = this.deliveries.events.some(
       (event) =>
         event.deliveryId === delivery.id &&
         event.type === "STATUS_CHANGE" &&
+        // A person's (or a key's) move, as the SQL: the lines a departure or
+        // a route ending writes by itself (F2-06) are the route's doing, and
+        // the creation line comes before any request.
+        event.actor !== "SYSTEM" &&
+        !(event.status_from === null && event.status_to === "PENDING") &&
         event.created_at.getTime() > occurrence.created_at.getTime(),
     );
 
@@ -309,12 +321,14 @@ class InMemoryOccurrenceAuthorizationRepository
   async listPending(
     businessId: string,
     limit: number,
+    filter: { occurrenceId?: string } = {},
   ): Promise<{ rows: PendingAuthorizationRow[]; total: number }> {
     const pending = this.deliveries.occurrences
       .filter(
         (occurrence) =>
           occurrence.authorization_status === "PENDING" &&
           this.businessOf(occurrence) === businessId &&
+          (!filter.occurrenceId || occurrence.id === filter.occurrenceId) &&
           this.isLive(occurrence),
       )
       .sort((a, b) => this.oldestFirst(a, b));
@@ -350,6 +364,30 @@ class InMemoryOccurrenceAuthorizationRepository
     });
 
     return { rows, total: pending.length };
+  }
+
+  async countPendingByRoute(
+    businessId: string,
+    routeIds: string[],
+  ): Promise<Map<string, number>> {
+    const wanted = new Set(routeIds);
+    const counts = new Map<string, number>();
+
+    for (const occurrence of this.deliveries.occurrences) {
+      if (occurrence.authorization_status !== "PENDING") continue;
+      if (this.businessOf(occurrence) !== businessId) continue;
+      if (!this.isLive(occurrence)) continue;
+
+      // Live with no open stop is a request outside any route (a panel
+      // request on a delivery waiting in the queue): no row counts it.
+      const routeId = this.openStopOf(occurrence.deliveryId)?.routeId;
+
+      if (!routeId || !wanted.has(routeId)) continue;
+
+      counts.set(routeId, (counts.get(routeId) ?? 0) + 1);
+    }
+
+    return counts;
   }
 
   async claimDueEscalations(

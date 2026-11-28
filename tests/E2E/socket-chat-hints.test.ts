@@ -31,6 +31,13 @@ import { createPrismaClient } from "@/shared/database/database-client";
  */
 const prisma = createPrismaClient();
 
+// Offline at once, as before the wait of plano-escala U-05: the case of a
+// driver leaving while Redis is away waits for the stamp, not for the
+// 45 s of the default (socket-presence-grace.test.ts has the wait).
+vi.hoisted(() => {
+  process.env.PRESENCE_GRACE_MS = "0";
+});
+
 const CARRIER = "018fd000-0000-7000-8000-0000000c4a01";
 const OTHER_CARRIER = "018fd000-0000-7000-8000-0000000c4a02";
 

@@ -43,6 +43,20 @@ const occurrenceTypeEntity = z.object({
     .string()
     .nullable()
     .describe("Quando foi desativado pela última vez; nulo enquanto ativo."),
+  code: z
+    .string()
+    .nullable()
+    .optional()
+    .describe(
+      "O código deste tipo no ERP da empresa (plano de 02/11/2026, L8): único na empresa, sai como `occurrence_code` no webhook `occurrence.reported` e em /integration/v1/events. Nulo quando a empresa não definiu.",
+    ),
+  requirements_changed_at: z
+    .string()
+    .nullable()
+    .optional()
+    .describe(
+      "Quando uma exigência de anexo (foto, canhoto, assinatura) mudou pela última vez; nulo se nunca mudou. Um relato do motorista tocado offline antes desse instante é aceito mesmo sem o anexo exigido depois, e sinalizado na linha do tempo da entrega (K2).",
+    ),
   is_default: z
     .boolean()
     .describe(

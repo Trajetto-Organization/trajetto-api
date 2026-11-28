@@ -1,3 +1,5 @@
+import { uuid7Instant } from "@/shared/time/uuid7-floor";
+
 /**
  * What counts as a usable position, and how many of them a screen gets.
  *
@@ -264,7 +266,11 @@ interface PartitionRange {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** One edge of a bound as pg_get_expr prints it: 'timestamp', MINVALUE or MAXVALUE. */
+/**
+ * One edge of a bound as pg_get_expr prints it: 'timestamp', a uuid v7
+ * floor (a table partitioned on its id, plano-escala F2-16), MINVALUE or
+ * MAXVALUE. Either literal comes back as the epoch ms it starts at.
+ */
 function parseBoundEdge(edge: string): number | null {
   if (/^MINVALUE$/i.test(edge)) return -Infinity;
   if (/^MAXVALUE$/i.test(edge)) return Infinity;
@@ -272,6 +278,10 @@ function parseBoundEdge(edge: string): number | null {
   const literal = /^'(.+)'$/.exec(edge)?.[1];
 
   if (!literal) return null;
+
+  const idInstant = uuid7Instant(literal);
+
+  if (idInstant !== null) return idInstant;
 
   // recorded_at is `timestamp without time zone` holding UTC, so a bare
   // literal is UTC. An explicit offset ("+03", "+05:30") is honoured.
@@ -338,7 +348,7 @@ function splitByPartition<T extends { recorded_at: Date }>(
 /**
  * Whether a partition for this instant may still appear.
  *
- * The nightly driver-position-partitions job creates from YESTERDAY (UTC)
+ * The nightly partition-maintenance job creates from YESTERDAY (UTC)
  * through its lookahead on every run, and never behind that. So a point from
  * before yesterday with no partition has none for good — the migration's
  * first day, a gap left by nights the job missed — and is dropped. A point
@@ -359,6 +369,23 @@ function partitionMayStillBeCreated(
   return recordedAt.getTime() >= todayUtc - DAY_MS;
 }
 
+/**
+ * Postgres' refusal of a row no partition covers (SQLSTATE 23514). Prisma
+ * surfaces it as an unknown request error, so the message is all there is.
+ * The lean trail's name (plano-escala F2-10), and the legacy one's, which
+ * the image before it writes. Shared by the repository's fallback and the
+ * group commit's breaker (plano-escala F5-19), which must not count one
+ * flush's old point as the path being unhealthy.
+ */
+function isMissingPartition(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    /no partition of relation \\?"?driver_position(?:_v2)?\\?"? found for row/i.test(
+      error.message,
+    )
+  );
+}
+
 export {
   APP_MAX_BUFFERED,
   FUTURE_TOLERANCE_MS,
@@ -369,6 +396,7 @@ export {
   acceptPings,
   downsample,
   hasRealCoordinates,
+  isMissingPartition,
   isPositionFresh,
   latestPing,
   parsePartitionBound,

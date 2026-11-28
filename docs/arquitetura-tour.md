@@ -65,7 +65,7 @@ flowchart LR
     api["trajetto-api ×2<br/>Fastify + Socket.IO<br/>workers + crons"]
     ai["trajetto-ai<br/>OCR em CPU, sem domínio"]
     pg[("PostgreSQL 16<br/>dados, outbox, filas, leases")]
-    rd[("Redis 7<br/>rate limit, adapter do Socket.IO,<br/>tickets, cooldown, fotos do MASTER")]
+    rd[("Redis 7<br/>rate limit, adapter do Socket.IO,<br/>tickets, cooldown, fotos do MASTER,<br/>geocodificador e busca de endereço")]
   end
 
   r2[("Cloudflare R2<br/>fotos, PDFs, backups")]
@@ -172,7 +172,11 @@ flowchart TD
   da rota, então um token em loop recebe 429 sem custar a busca da sessão
   (`src/http.ts`, `src/config/rate-limit.ts`). Sem Redis, o pedido passa: o
   limite falha aberto.
-- **Acesso.** `ensureAuthenticated` confere o JWT e a versão da sessão. No
+- **Acesso.** `ensureAuthenticated` confere o JWT e a versão da sessão. A
+  assinatura do token é conferida uma vez só por pedido: o limitador confere
+  primeiro e o `ensureAuthenticated` reaproveita o veredito, com os mesmos
+  códigos de recusa; as claims ficam em `request.accessClaims`, que ainda não
+  provam a sessão (`src/shared/auth/access-token-once.ts`). No
   `preHandler` vêm o guard de tenant (só ali o corpo já foi lido), a empresa
   ativa, o módulo contratado e a permissão (`src/modules/middlewares/`). Os
   passos 2 e 3 detalham.
@@ -221,7 +225,7 @@ flowchart LR
     api["trajetto-api ×2<br/>Fastify + Socket.IO<br/>workers + crons"]
     ai["trajetto-ai<br/>OCR em CPU, sem domínio"]
     pg[("PostgreSQL 16<br/>dados, outbox, filas, leases")]
-    rd[("Redis 7<br/>rate limit, adapter do Socket.IO,<br/>tickets, cooldown, fotos do MASTER")]
+    rd[("Redis 7<br/>rate limit, adapter do Socket.IO,<br/>tickets, cooldown, fotos do MASTER,<br/>geocodificador e busca de endereço")]
   end
 
   r2[("Cloudflare R2<br/>fotos, PDFs, backups")]
@@ -358,7 +362,7 @@ flowchart LR
     api["trajetto-api ×2<br/>Fastify + Socket.IO<br/>workers + crons"]
     ai["trajetto-ai<br/>OCR em CPU, sem domínio"]
     pg[("PostgreSQL 16<br/>dados, outbox, filas, leases")]
-    rd[("Redis 7<br/>rate limit, adapter do Socket.IO,<br/>tickets, cooldown, fotos do MASTER")]
+    rd[("Redis 7<br/>rate limit, adapter do Socket.IO,<br/>tickets, cooldown, fotos do MASTER,<br/>geocodificador e busca de endereço")]
   end
 
   r2[("Cloudflare R2<br/>fotos, PDFs, backups")]
@@ -487,7 +491,7 @@ flowchart LR
     api["trajetto-api ×2<br/>Fastify + Socket.IO<br/>workers + crons"]
     ai["trajetto-ai<br/>OCR em CPU, sem domínio"]
     pg[("PostgreSQL 16<br/>dados, outbox, filas, leases")]
-    rd[("Redis 7<br/>rate limit, adapter do Socket.IO,<br/>tickets, cooldown, fotos do MASTER")]
+    rd[("Redis 7<br/>rate limit, adapter do Socket.IO,<br/>tickets, cooldown, fotos do MASTER,<br/>geocodificador e busca de endereço")]
   end
 
   r2[("Cloudflare R2<br/>fotos, PDFs, backups")]
@@ -618,7 +622,7 @@ flowchart LR
     api["trajetto-api ×2<br/>Fastify + Socket.IO<br/>workers + crons"]
     ai["trajetto-ai<br/>OCR em CPU, sem domínio"]
     pg[("PostgreSQL 16<br/>dados, outbox, filas, leases")]
-    rd[("Redis 7<br/>rate limit, adapter do Socket.IO,<br/>tickets, cooldown, fotos do MASTER")]
+    rd[("Redis 7<br/>rate limit, adapter do Socket.IO,<br/>tickets, cooldown, fotos do MASTER,<br/>geocodificador e busca de endereço")]
   end
 
   r2[("Cloudflare R2<br/>fotos, PDFs, backups")]
@@ -710,7 +714,9 @@ que rodam dentro de cada réplica da API (`src/workers/index.ts`, ligados por
   28/10/2026, `POST /health/dead-letter/events/replay` para os eventos (até 100
   ids; a expansão idempotente só cria o que faltava). Quem pediu fica na linha
   de log `failed outbox events requeued by hand`; o `lastError` do evento só
-  mostra isso até a próxima expansão.
+  mostra isso até a próxima expansão. Depois de 30 dias o evento FAILED vai
+  para a `outbox_event_dead_letter` (até 90 dias da falha), continua na
+  listagem e o reenvio dele cria um evento novo.
 - **Crons sem duplicar.** Um lease por `(jobName, scheduledFor)` garante uma
   execução por horário com várias réplicas (`src/jobs/cron/index.ts`).
 - **Por que não um broker.** A `main` antiga tinha RabbitMQ (legado, removido
@@ -747,7 +753,7 @@ flowchart LR
     api["trajetto-api ×2<br/>Fastify + Socket.IO<br/>workers + crons"]
     ai["trajetto-ai<br/>OCR em CPU, sem domínio"]
     pg[("PostgreSQL 16<br/>dados, outbox, filas, leases")]
-    rd[("Redis 7<br/>rate limit, adapter do Socket.IO,<br/>tickets, cooldown, fotos do MASTER")]
+    rd[("Redis 7<br/>rate limit, adapter do Socket.IO,<br/>tickets, cooldown, fotos do MASTER,<br/>geocodificador e busca de endereço")]
   end
 
   r2[("Cloudflare R2<br/>fotos, PDFs, backups")]
@@ -881,7 +887,7 @@ flowchart LR
     api["trajetto-api ×2<br/>Fastify + Socket.IO<br/>workers + crons"]
     ai["trajetto-ai<br/>OCR em CPU, sem domínio"]
     pg[("PostgreSQL 16<br/>dados, outbox, filas, leases")]
-    rd[("Redis 7<br/>rate limit, adapter do Socket.IO,<br/>tickets, cooldown, fotos do MASTER")]
+    rd[("Redis 7<br/>rate limit, adapter do Socket.IO,<br/>tickets, cooldown, fotos do MASTER,<br/>geocodificador e busca de endereço")]
   end
 
   r2[("Cloudflare R2<br/>fotos, PDFs, backups")]
@@ -968,9 +974,17 @@ leva os eventos entre réplicas pelo `@socket.io/redis-adapter`
 - **App.** Conecta na mesma URL da API com o próprio token
   (`trajetto-mobile/providers/socket-provider.tsx`).
 - **Salas.** Por usuário, sessão, empresa (`business:<id>`) e operação
-  (`operations:<id>`). A autorização é relida do banco a cada inscrição e
-  revalidada a cada 3 min, com jitter (`SOCKET_REVALIDATE_MS`). O handshake tem
-  rate limit próprio (`src/shared/socket/handshake-rate-limit.ts`).
+  (`operations:<id>`). A autorização é relida do banco a cada inscrição; a
+  sessão é relida no banco logo depois de o socket entrar nas salas (fecha a
+  janela entre o handshake e o join, `src/shared/socket/admission-recheck.ts`)
+  e revalidada a cada 3 min, com jitter (`SOCKET_REVALIDATE_MS`). O handshake tem
+  rate limit próprio (`src/shared/socket/handshake-rate-limit.ts`). A web da
+  equipe de despacho entra na operação e no SAC da própria empresa no
+  connect; o app (`x-trajetto-client: mobile`) só entra com
+  `operationsSubscribe`, quando a tela de operação ganha foco, e sai com
+  `operationsUnsubscribe` (`src/shared/socket/socket-client.ts`, onda 4). Um
+  unsubscribe que chega enquanto o subscribe ainda lê o banco cancela a
+  entrada (`src/shared/socket/subscription-intent.ts`).
 - **No máximo uma vez.** Um evento pode se perder; a verdade está no banco, e
   as telas refazem a consulta ao reconectar (ADR 0007). `catalogChanged` faz a
   web invalidar a lista daquela entidade
@@ -1008,7 +1022,7 @@ flowchart LR
     api["trajetto-api ×2<br/>Fastify + Socket.IO<br/>workers + crons"]
     ai["trajetto-ai<br/>OCR em CPU, sem domínio"]
     pg[("PostgreSQL 16<br/>dados, outbox, filas, leases")]
-    rd[("Redis 7<br/>rate limit, adapter do Socket.IO,<br/>tickets, cooldown, fotos do MASTER")]
+    rd[("Redis 7<br/>rate limit, adapter do Socket.IO,<br/>tickets, cooldown, fotos do MASTER,<br/>geocodificador e busca de endereço")]
   end
 
   r2[("Cloudflare R2<br/>fotos, PDFs, backups")]
@@ -1137,7 +1151,7 @@ flowchart LR
     api["trajetto-api ×2<br/>Fastify + Socket.IO<br/>workers + crons"]
     ai["trajetto-ai<br/>OCR em CPU, sem domínio"]
     pg[("PostgreSQL 16<br/>dados, outbox, filas, leases")]
-    rd[("Redis 7<br/>rate limit, adapter do Socket.IO,<br/>tickets, cooldown, fotos do MASTER")]
+    rd[("Redis 7<br/>rate limit, adapter do Socket.IO,<br/>tickets, cooldown, fotos do MASTER,<br/>geocodificador e busca de endereço")]
   end
 
   r2[("Cloudflare R2<br/>fotos, PDFs, backups")]
@@ -1233,7 +1247,10 @@ esperavam ("não iniciada: envie de novo", sem nenhuma entrega), dá até 15 s �
 que está rodando e depois a para entre duas linhas, com o relatório até ali. Se
 ela não parar em 5 s, a própria fila a fecha, e espera no máximo 2 s por essas
 gravações. Tudo antes dos workers, dentro do teto de 35 s
-(`src/shared/lifecycle/shutdown.ts`). Quando é certo que nenhuma entrega foi
+(`src/shared/lifecycle/shutdown.ts`). Esses são os prazos com
+`STOP_GRACE_PERIOD_MS=40000`; sem a variável, saem da mesma fórmula sobre os
+10 s do Docker (3,75 + 1,25 + 0,5 s, teto de 8,75 s;
+`src/shared/lifecycle/shutdown-plan.ts`). Quando é certo que nenhuma entrega foi
 criada, o relatório diz "nenhuma entrega foi criada. Envie o arquivo de novo."
 em vez de mandar estornar (detalhes no ADR 0001). Uma réplica que morre sem SIGTERM deixa a importação sem batimento, e
 o cron `close-abandoned-imports` (a cada 5 min) a fecha com o que ela fez.
@@ -1271,7 +1288,7 @@ flowchart LR
     api["trajetto-api ×2<br/>Fastify + Socket.IO<br/>workers + crons"]
     ai["trajetto-ai<br/>OCR em CPU, sem domínio"]
     pg[("PostgreSQL 16<br/>dados, outbox, filas, leases")]
-    rd[("Redis 7<br/>rate limit, adapter do Socket.IO,<br/>tickets, cooldown, fotos do MASTER")]
+    rd[("Redis 7<br/>rate limit, adapter do Socket.IO,<br/>tickets, cooldown, fotos do MASTER,<br/>geocodificador e busca de endereço")]
   end
 
   r2[("Cloudflare R2<br/>fotos, PDFs, backups")]
@@ -1348,10 +1365,12 @@ flowchart LR
 Uma imagem por serviço, construída uma vez e promovida por digest. Staging e
 produção mudam só o Environment de cada Application do Dokploy.
 
-1. **Branch de trabalho**: `.github/workflows/ci.yml` (Prettier, typecheck,
-   unitários com cobertura, audit, gitleaks).
-2. **Push em `staging`**: `.github/workflows/deploy.yml` roda a validação
-   completa com E2E e constrói as imagens uma vez, em
+1. **Branch de trabalho**: `.github/workflows/ci.yml`, que chama a validação
+   do `validate.yml` (Prettier, typecheck, unitários com cobertura, audit) e
+   o gitleaks, sem E2E.
+2. **Push em `staging`**: `.github/workflows/staging.yml` roda a validação
+   completa com o E2E em 3 jobs paralelos, junta tudo no `Gate` e só então
+   constrói as imagens uma vez, em
    `ghcr.io/trajetto-organization/*:sha-<sha>`, com SBOM, proveniência e Trivy.
    A imagem da IA só é reconstruída quando `infra/ai-ocr` muda e, desde
    28/10/2026, passa por um smoke sem rede antes do push; a web faz o mesmo no
@@ -1361,10 +1380,13 @@ produção mudam só o Environment de cada Application do Dokploy.
    (`.github/scripts/dokploy-deploy.mjs`), na ordem IA → API. Ele espera a
    liveness pública responder o commit novo
    (`.github/scripts/wait-for-version.mjs`) e grava o marcador `staged-<sha>`.
-4. **Produção**: PR de `staging` para `main` com merge commit; a promoção não
-   reconstrói nada. Roda as migrations como job, move a tag `stable` para o
-   mesmo digest e faz o deploy, com aprovação do environment `production`.
-5. **Rollback**: Actions → Deploy → Run workflow na `main` com
+4. **Produção**: PR de `staging` para `main` com merge commit (o `pr.yml`
+   não valida de novo: confere o `staged-<sha>` e o `Gate`); a promoção
+   (`production.yml`) não reconstrói nada. Roda as migrations pela
+   Application, move a tag `stable` para o mesmo digest e faz o deploy, com
+   aprovação do environment `production`, pela mesma ação de deploy do
+   staging.
+5. **Rollback**: Actions → Production → Run workflow na `main` com
    `image_tag=sha-<commit bom>`. O banco não volta junto; por isso toda
    migration é expandir/contrair.
 
@@ -1401,7 +1423,7 @@ flowchart LR
     api["trajetto-api ×2<br/>Fastify + Socket.IO<br/>workers + crons"]
     ai["trajetto-ai<br/>OCR em CPU, sem domínio"]
     pg[("PostgreSQL 16<br/>dados, outbox, filas, leases")]
-    rd[("Redis 7<br/>rate limit, adapter do Socket.IO,<br/>tickets, cooldown, fotos do MASTER")]
+    rd[("Redis 7<br/>rate limit, adapter do Socket.IO,<br/>tickets, cooldown, fotos do MASTER,<br/>geocodificador e busca de endereço")]
   end
 
   r2[("Cloudflare R2<br/>fotos, PDFs, backups")]
@@ -1479,8 +1501,9 @@ Cada réplica responde por si; o MASTER vê o conjunto na aba Sistema do
 `/admin`.
 
 - `GET /health/liveness`: o processo responde (`alive`), com `version` e
-  `commit` do build. Não toca dependência nenhuma: é a sonda do Swarm, e uma
-  dependência fora nunca deve reiniciar o contêiner.
+  `commit` do build e o `environment` (o `APP_ENV`), que a web confere no
+  boot. Não toca dependência nenhuma: é a sonda do Swarm, e uma dependência
+  fora nunca deve reiniciar o contêiner.
 - `GET /health/readiness`: `ready`, `not ready` (banco inacessível, 503) ou
   `draining` (desligando, 503). Usa uma conexão própria; o Redis fica de fora
   de propósito.
@@ -1489,7 +1512,8 @@ Cada réplica responde por si; o MASTER vê o conjunto na aba Sistema do
 - `GET /health/metrics` (MASTER): filas e atraso do outbox, workers e crons,
   pool, conexões, sockets, Redis e certificado, numa foto de 10 s por réplica.
 - `GET /health/providers` (MASTER): Resend, Meta, Expo, R2, `trajetto-ai`,
-  certificado e heartbeat, sem enviar nada. Cada um é `ok`, `warning`, `error`,
+  LocationIQ (a localização das entregas e a busca do "Fixar no mapa", pelo
+  estado no Redis, sem sonda), certificado e heartbeat, sem enviar nada. Cada um é `ok`, `warning`, `error`,
   `not_configured` ou `disabled`; desde 28/10/2026, `transient`, `attempts` e
   `failure_kind` dizem se o veredito depende de uma falha passageira (3,5 s por
   tentativa, no máximo duas dentro de 5 s;

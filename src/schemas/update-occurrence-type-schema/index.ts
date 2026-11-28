@@ -4,6 +4,7 @@ import {
   occurrenceTypeNameSchema,
   occurrenceTypeDescriptionSchema,
   occurrenceTypeFormFieldsSchema,
+  occurrenceTypeCodeSchema,
   occurrenceCategorySchema,
   pauseKindSchema,
 } from "@/schemas/create-occurrence-type-schema";
@@ -31,6 +32,8 @@ const updateOccurrenceTypeSchema = z.object({
   requires_receipt_photo: z.boolean().optional(),
   requires_signature: z.boolean().optional(),
   pause_kind: pauseKindSchema.optional(),
+  // L8: absent keeps the code, null (or "") clears it.
+  code: occurrenceTypeCodeSchema,
 });
 
 export { updateOccurrenceTypeSchema };

@@ -1,0 +1,57 @@
+# The routes of the roles by Path, as Dokploy writes them (plano-escala
+# F5-26), for the harness's Traefik (tests/load/compose.load.yaml mounts
+# this folder on its file provider).
+#
+# In staging and production each Application's Domain becomes a file
+# /etc/dokploy/traefik/dynamic/<App Name>.yml with exactly this shape:
+# the router `<App Name>-router-<key>` with rule Host(...) and, when the
+# Domain has a Path, `&& PathPrefix(...)`, no priority (Traefik orders by
+# the rule's length, so the longer Path wins over the API's bare host),
+# no middleware with Strip Path off, and the service
+# `<App Name>-service-<key>` on http://<App Name>:<port> with
+# passHostHeader. Dokploy also writes a router on `websecure` with the
+# certificate and a redirect-to-https middleware on `web`; the harness
+# has only `web`, so only that router is here, without the redirect.
+#
+# Only for the host roles.load.localhost: the scenes of the harness keep
+# the docker labels of compose.load.yaml, and tests/load/roles-routing.sh
+# sends this host to prove the order (docs/runbooks/roteamento-por-path.md).
+# The ingest has no container without --profile ingest (or with
+# --scale ingest=0): Traefik answers 502 on its Path, which is why its
+# Domain exists only with Replicas >= 1.
+http:
+  routers:
+    trajetto-api-router-1:
+      rule: Host(`roles.load.localhost`)
+      service: trajetto-api-service-1
+      middlewares: []
+      entryPoints:
+        - web
+    trajetto-realtime-router-1:
+      rule: Host(`roles.load.localhost`) && PathPrefix(`/socket.io`)
+      service: trajetto-realtime-service-1
+      middlewares: []
+      entryPoints:
+        - web
+    trajetto-ingest-router-1:
+      rule: Host(`roles.load.localhost`) && PathPrefix(`/route/positions`)
+      service: trajetto-ingest-service-1
+      middlewares: []
+      entryPoints:
+        - web
+  services:
+    trajetto-api-service-1:
+      loadBalancer:
+        servers:
+          - url: http://api:3333
+        passHostHeader: true
+    trajetto-realtime-service-1:
+      loadBalancer:
+        servers:
+          - url: http://realtime:3333
+        passHostHeader: true
+    trajetto-ingest-service-1:
+      loadBalancer:
+        servers:
+          - url: http://ingest:3333
+        passHostHeader: true

@@ -6,11 +6,12 @@
 #   migrate-source.sh          the key on stdout (40 hex characters)
 #   migrate-source.sh --list   the paths it hashes, one per line
 #
-# build-and-push tags every release image `src-<key>` and reuses the one it
-# finds for the key instead of building again, as it does for the AI with
-# infra/ai-ocr. The deploys run the release step only when that digest is
-# not the one their database last applied, so a push that changes none of
-# these files neither rebuilds the image nor runs the step again.
+# The Build job (staging.yml) tags every release image `src-<key>` and
+# reuses the one it finds for the key instead of building again, as it does
+# for the AI with infra/ai-ocr. The deploys run the release step only when
+# that digest is not the one their database last applied, so a push that
+# changes none of these files neither rebuilds the image nor runs the step
+# again.
 #
 # What is listed: the migrations and the schema; the seeds, wait-for-postgres
 # and every file of ours they import (tsup bundles them into the image); the
@@ -36,6 +37,9 @@ PATHS=(
   prisma.config.ts
   prisma/schema.prisma
   prisma/migrations
+  prisma/concurrent
+  prisma/post-deploy
+  infra/sql
   tabela-codigo-infracoes-renainf-xlsx.xlsx
   infra/database.ts
   infra/scripts/docker-entrypoint.sh
@@ -44,7 +48,13 @@ PATHS=(
   infra/scripts/schema-guard.ts
   infra/scripts/seed.ts
   infra/scripts/import-violation-codes.ts
+  infra/scripts/prebuild-online-ddl.ts
+  infra/scripts/online-ddl.ts
+  infra/scripts/release-connection.ts
+  infra/scripts/release-steps.ts
+  infra/scripts/release-step-runner.ts
   src/shared/database
+  src/shared/lifecycle/process-role.ts
 )
 
 case "${1:-}" in

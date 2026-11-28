@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { APP_BOOT_TIMEOUT_MS } from "../../support/app-boot";
-import type { ZodTypeAny } from "zod";
+import type { ZodType } from "zod";
 
 import { documentedDocFor } from "@/routes/documentation/doc-only-responses";
 
@@ -50,12 +50,9 @@ afterAll(async () => {
 
 function successOf(route: IntrospectedRoute): {
   status: string;
-  runtime: ZodTypeAny;
+  runtime: ZodType;
 } {
-  const responses = (route.schema?.response ?? {}) as Record<
-    string,
-    ZodTypeAny
-  >;
+  const responses = (route.schema?.response ?? {}) as Record<string, ZodType>;
   const status = Object.keys(responses).find((code) => /^2\d\d$/.test(code));
 
   if (!status) throw new Error(`${route.id}: sem resposta 2xx declarada`);
@@ -65,8 +62,7 @@ function successOf(route: IntrospectedRoute): {
 
 function publishedExample(route: IntrospectedRoute, status: string): unknown {
   return route.operation?.responses?.[status]?.content?.["application/json"] as
-    | { example?: unknown }
-    | undefined;
+    { example?: unknown } | undefined;
 }
 
 function covered(): IntrospectedRoute[] {
@@ -99,8 +95,7 @@ describe("the 2xx of the public API and of the driver's loop", () => {
       .filter((route) => {
         const { status } = successOf(route);
         const media = publishedExample(route, status) as
-          | { example?: unknown }
-          | undefined;
+          { example?: unknown } | undefined;
 
         return media?.example === undefined;
       })
@@ -113,8 +108,7 @@ describe("the 2xx of the public API and of the driver's loop", () => {
     const wrong = covered().flatMap((route) => {
       const { status, runtime } = successOf(route);
       const media = publishedExample(route, status) as
-        | { example?: unknown }
-        | undefined;
+        { example?: unknown } | undefined;
 
       if (media?.example === undefined) return [];
 
@@ -133,8 +127,7 @@ describe("the 2xx of the public API and of the driver's loop", () => {
     const changed = covered().flatMap((route) => {
       const { status, runtime } = successOf(route);
       const media = publishedExample(route, status) as
-        | { example?: unknown }
-        | undefined;
+        { example?: unknown } | undefined;
 
       if (media?.example === undefined) return [];
 

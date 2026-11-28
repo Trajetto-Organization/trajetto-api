@@ -87,10 +87,12 @@ class DeleteDriverUseCase {
 
     /**
      * The history that keeps a driver from being deleted, counted (never
-     * loaded) and refused with the first reason found. Deliveries and routes
+     * loaded) and refused with the first reason found — the work before the
+     * app login (driverHistoryRefusal says why). Deliveries and routes
      * matter as much as fines: `Delivery.driver` is optional, so without the
      * guard a DELIVERED delivery would lose who delivered it
-     * (tests/E2E/delete-cascade-integrity). The repository counts all of it
+     * (tests/E2E/delete-cascade-integrity); the conversation went with the
+     * chat thread's CASCADE (decision D-39). The repository counts all of it
      * again under the driver row's lock before the DELETE.
      */
     const refusal = driverHistoryRefusal(await this.historyOf(driverId));
@@ -149,8 +151,20 @@ class DeleteDriverUseCase {
     // `driver_pause.driverId` is RESTRICT: without this the database refused
     // and the refusal surfaced as a 500.
     const pauses = await this.driver.countDriverPauses(driverId);
+    const { chatMessages, supportTickets } =
+      await this.driver.countDriverConversation(driverId);
 
-    return { users, fines, fuels, checklists, deliveries, routes, pauses };
+    return {
+      users,
+      fines,
+      fuels,
+      checklists,
+      deliveries,
+      routes,
+      pauses,
+      chatMessages,
+      supportTickets,
+    };
   }
 }
 

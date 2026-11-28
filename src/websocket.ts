@@ -14,16 +14,61 @@ import { UserTokensRepository } from "@/modules/user/repositories/user-tokens-re
 
 import { DriverRepository } from "@/modules/driver/repositories/driver-repository";
 import { assertSessionEligible } from "@/modules/user/services/session-eligibility";
+import { lookUpSession } from "@/modules/user/services/session-lookup";
 
 import { SessionJwtPayload } from "@/modules/user/services/session-service";
 import { AppError } from "@/shared/errors/AppError";
 
 import {
   canWatchOperationsOf,
+  driverPositionRooms,
   mayReadDeliveries,
   operationsRoom,
+  positionsRoom,
   readOperationsBusinessId,
 } from "@/shared/socket/operations-access";
+import {
+  SOCKET_CLIENT_HEADER,
+  joinsOwnDispatchRoomsOnConnect,
+  mayLeaveOwnDispatchRooms,
+  socketClientOf,
+} from "@/shared/socket/socket-client";
+import {
+  createHandshakeMetrics,
+  createSocketAdmission,
+  engineOverCapacity,
+  handshakeRefusalOf,
+  keepsAddressCharge,
+  type HandshakeWindow,
+  type SocketAdmissionLimits,
+} from "@/shared/socket/admission";
+import { startGradualClose } from "@/shared/socket/gradual-close";
+import { createSocketEmitter, type Broadcaster } from "@/shared/socket/emitter";
+import {
+  ADOPT_SESSION_VERSION_EVENT,
+  REFRESH_DELIVERY_ROOMS_EVENT,
+  WHATSAPP_TEMPLATE_LANE_EVENT,
+  adoptSessionVersionMessage,
+  readAdoptSessionVersion,
+  readRefreshDeliveryRooms,
+  readTemplateLaneFrame,
+  refreshDeliveryRoomsArgs,
+  templateLaneFrame,
+} from "@/shared/socket/messages";
+import {
+  createLegacyPeerCheck,
+  createPresenceStore,
+  createPresenceTracker,
+  readOnlineUserIds,
+  type PresenceSubject,
+  type PresenceTracker,
+} from "@/shared/socket/presence";
+import { readLiveSocketProcesses } from "@/shared/health/process-heartbeat";
+import {
+  effectiveSocketCap,
+  readOpenFilesSoftLimit,
+  type SocketCap,
+} from "@/shared/socket/socket-cap";
 
 import {
   canSubscribeToChatBusiness,
@@ -34,6 +79,7 @@ import {
   readDriverUserIdPayload,
 } from "@/modules/chat/usecases/shared/chat-access-rules";
 import { takeHint, type HintBucket } from "@/shared/socket/hint-throttle";
+import { createSubscriptionIntents } from "@/shared/socket/subscription-intent";
 import {
   AI_ANALYSIS_CHANGED_EVENT,
   aiAnalysisHint,
@@ -58,24 +104,42 @@ import {
   socketTicketStore,
 } from "@/shared/socket/socket-ticket";
 import {
-  createAdapterRedisClients,
   socketAdapterOptions,
   waitForAdapterRedis,
 } from "@/shared/socket/adapter-redis";
 import {
+  adapterClients as createPubSubAdapterClients,
+  closePubSub,
+} from "@/shared/redis/pubsub-redis";
+import {
+  createRevokedSubjects,
+  hasRevokedSubjects,
   jitteredInterval,
   judgeConnection,
   loadSubjectRows,
+  noteRevocation,
   subjectOf,
   sweepConnections,
+  takeRevokedSockets,
+  type SocketSubject,
   type SocketVerdict,
+  type SweepResult,
 } from "@/shared/socket/socket-revalidation";
+import {
+  createAdmissionRecheck,
+  keepAdmitted,
+} from "@/shared/socket/admission-recheck";
 import { withoutRequestContext } from "@/shared/http/request-context";
+import { revocationFeed } from "@/shared/auth/revocation-feed";
+import { forgetCachedSessions } from "@/shared/auth/session-cache";
+import type { SessionRevocationKind } from "@/shared/auth/session-revocation";
 import { logger } from "@/shared/logging/logger";
+import { createOutageReport } from "@/shared/logging/outage-report";
 import {
   applyWhatsAppTemplateLaneChange,
   type TemplateLaneChange,
 } from "@/shared/providers/whatsapp-provider/template-lane";
+import { publishTemplateLaneChange } from "@/shared/providers/whatsapp-provider/template-lane-bus";
 import { env } from "./env";
 
 import database from "@/../infra/database";
@@ -96,36 +160,61 @@ const SOCKET_MAX_MESSAGE_BYTES = 16 * 1024;
 const SOCKET_CONNECT_TIMEOUT_MS = 10_000;
 
 /**
- * One line per outage, not one per dropped frame: while Redis is down every
- * position and every notification nudge fails to publish, and logging each of
- * them would bury the log. The connection log already says when Redis went
- * away and came back; this counts what was dropped in between.
+ * The heartbeat and the compression, pinned (plano-escala F5-31) rather than
+ * left to the library's defaults, which a major version may move. 25 s
+ * between pings keeps each socket's traffic through Cloudflare and Traefik
+ * well under their idle timeouts (100 s at Cloudflare) at one small frame
+ * per socket per 25 s, which is what 5,000 sockets cost the replica in
+ * timers. 20 s without the answer is a dead peer: the app's GPS keeps
+ * going over HTTP and the socket comes back with the network.
+ * permessage-deflate stays off: zlib holds tens of kilobytes per socket,
+ * and the frames here are a few hundred bytes of JSON.
  */
-let droppedFramesSinceLastReport = 0;
-let lastDropReportAt = 0;
+const SOCKET_PING_INTERVAL_MS = 25_000;
+const SOCKET_PING_TIMEOUT_MS = 20_000;
 
-const DROP_REPORT_INTERVAL_MS = 60_000;
+/**
+ * At most one line a minute while something this file depends on is away
+ * (shared/logging/outage-report.ts): Redis for the adapter's frames just
+ * below, Postgres for the admission recheck further down.
+ */
+const OUTAGE_REPORT_INTERVAL_MS = 60_000;
+
+/**
+ * Not one line per dropped frame: while Redis is down every position and
+ * every notification nudge fails to publish, and logging each of them would
+ * bury the log. The connection log already says when Redis went away and
+ * came back; this counts what was dropped in between.
+ */
+const droppedFrames = createOutageReport<unknown>({
+  intervalMs: OUTAGE_REPORT_INTERVAL_MS,
+  report: (dropped, error) =>
+    log.error(
+      {
+        dropped,
+        error: error instanceof Error ? error.message : String(error),
+      },
+      "realtime events did not cross replicas (Redis unavailable)",
+    ),
+});
 
 function reportAdapterPublishFailure(error: unknown): void {
-  droppedFramesSinceLastReport += 1;
-
-  const now = Date.now();
-  if (now - lastDropReportAt < DROP_REPORT_INTERVAL_MS) return;
-
-  log.error(
-    {
-      dropped: droppedFramesSinceLastReport,
-      error: error instanceof Error ? error.message : String(error),
-    },
-    "realtime events did not cross replicas (Redis unavailable)",
-  );
-
-  droppedFramesSinceLastReport = 0;
-  lastDropReportAt = now;
+  droppedFrames.failed(1, error);
 }
 
 // Socket.IO instance
 let io: SocketIOServer | null = null;
+
+/**
+ * Where the emit helpers below send: `io` itself where this process takes
+ * sockets (its adapter crosses replicas), the Redis emitter where it does
+ * not (SOCKETS_ENABLED=false, plano-escala U-07, shared/socket/emitter.ts):
+ * the same frames, with no subscription to the cluster's.
+ */
+let out: Broadcaster | null = null;
+
+/** The emitter's connection, in a process that takes no sockets. */
+let emitterRedis: Redis | null = null;
 
 /** Every MASTER socket, joined at connect (see sendCatalogChangedEvent). */
 const MASTERS_ROOM = "masters";
@@ -154,6 +243,109 @@ function socketAuthenticationError(message: string, code: string): Error {
 
   error.data = { code };
   return error;
+}
+
+/**
+ * The replica's real socket ceiling (plano-escala F5-31,
+ * shared/socket/socket-cap.ts): SOCKET_MAX_CONNECTIONS, lowered to the
+ * process's descriptor limit minus SOCKET_FD_RESERVE. Read once, at the
+ * first use: the limit does not change while the process runs.
+ */
+let socketCap: SocketCap | null = null;
+
+function currentSocketCap(): SocketCap {
+  socketCap ??= effectiveSocketCap({
+    maxConnections: env.SOCKET_MAX_CONNECTIONS,
+    fdLimit: readOpenFilesSoftLimit(),
+    fdReserve: env.SOCKET_FD_RESERVE,
+  });
+
+  return socketCap;
+}
+
+/**
+ * This replica's ceilings (plano-escala U-01, shared/socket/admission.ts),
+ * read at every handshake.
+ */
+function admissionLimits(): SocketAdmissionLimits {
+  return {
+    maxInflight: env.SOCKET_HANDSHAKE_MAX_INFLIGHT,
+    maxConnections: currentSocketCap().cap,
+  };
+}
+
+/**
+ * The handshakes in flight and the sockets held, judged before the
+ * credential is read. `clientsCount` is the engine's: every upgrade holds a
+ * file descriptor, the one being judged included, CONNECT or not.
+ */
+const socketAdmission = createSocketAdmission({
+  limits: admissionLimits,
+  connections: () => io?.engine.clientsCount ?? 0,
+});
+
+/**
+ * How long the handshakes take and why they are refused, per minute in the
+ * ops_sample row (the source of the `trajetto-realtime` trigger: handshake
+ * p99 over 1 s during a deploy) and so far on /health/metrics.
+ */
+const handshakeMetrics = createHandshakeMetrics();
+
+/**
+ * A replica at its capacity, said the way the clients wait it out: the code
+ * of every handshake failure that is not about the credential, and the wait
+ * (F2-27 in the app, F2-29 on the web).
+ */
+function capacityRefusal(retryAfterMs: number): Error {
+  const error = new Error(
+    "Tempo real cheio nesta réplica. Tentando de novo em instantes.",
+  ) as Error & { data?: { code: string; retryAfterMs: number } };
+
+  error.data = { code: "SOCKET_UNAVAILABLE", retryAfterMs };
+  return error;
+}
+
+/**
+ * What the engine learned about an upgrade before its request was let go
+ * (`rawSocket.request = null` at the engine's connection): the address
+ * bucket the attempt was charged to, and the client's own marker, which
+ * decides the rooms (socket-client.ts). Keyed by the engine connection and
+ * held beside it, never in `socket.data`.
+ */
+interface EngineAttempt {
+  /** Charged at the engine and not yet settled; null once settled. */
+  addressKey: string | null;
+  clientHeader: string | string[] | undefined;
+}
+
+/** The address bucket each upgrade request was charged to, until it connects. */
+const chargedAddresses = new WeakMap<object, string>();
+
+const engineAttempts = new WeakMap<object, EngineAttempt>();
+
+/**
+ * Settles the address's charge for this handshake, once: given back when it
+ * was admitted or refused for capacity, kept for a credential failure or a
+ * user over their own limits (`keepsAddressCharge`). An upgrade that never
+ * sends CONNECT never gets here, and keeps its charge.
+ */
+function settleAddressCharge(
+  socket: Socket,
+  outcome: Error | null | undefined,
+): void {
+  const attempt = engineAttempts.get(socket.conn);
+  const key = attempt?.addressKey;
+
+  if (!attempt || !key) return;
+
+  attempt.addressKey = null;
+
+  if (keepsAddressCharge(outcome)) return;
+
+  // Fails silently, like every counter here (ADR 0002).
+  void Promise.resolve()
+    .then(() => handshakeLimiter.refund(key))
+    .catch(() => undefined);
 }
 
 /**
@@ -212,6 +404,13 @@ function allowHint(socket: Socket): boolean {
 }
 
 /**
+ * The subscribe each socket is still waiting to join (see
+ * shared/socket/subscription-intent): an unsubscribe sent while the staff
+ * check reads the database cancels it instead of finding nothing to leave.
+ */
+const subscribeIntents = createSubscriptionIntents();
+
+/**
  * Whether this socket is dispatch staff right now, from the database.
  *
  * `null` means "join nothing": the read failed (closed on purpose — a room is
@@ -251,13 +450,22 @@ function leaveDeliveryRooms(socket: Socket): void {
   socket.data.isDeliveryStaff = false;
 
   for (const room of [...socket.rooms]) {
-    if (room.startsWith("chat-staff:") || room.startsWith("operations:")) {
+    if (
+      room.startsWith("chat-staff:") ||
+      room.startsWith("operations:") ||
+      room.startsWith("positions:")
+    ) {
       socket.leave(room);
     }
   }
 
   socket.data.chatBusinessId = null;
   socket.data.operationsBusinessId = null;
+  socket.data.positionsBusinessId = null;
+
+  // A subscribe still waiting may hold a verdict read before the right was
+  // lost; it joins nothing when it comes back.
+  subscribeIntents.cancelAll(socket);
 }
 
 /**
@@ -313,6 +521,53 @@ async function socketsOfUser(userId: string): Promise<unknown[]> {
   }
 }
 
+/**
+ * Chat presence in Postgres (plano-escala U-05, shared/socket/presence.ts):
+ * this process beats the logins whose sockets it holds, and a login is
+ * offline only once its last socket in the cluster stayed gone for
+ * PRESENCE_GRACE_MS. Null in a process that takes no sockets.
+ */
+let presence: PresenceTracker | null = null;
+
+function presenceSubjectOf(socket: Socket): PresenceSubject {
+  return {
+    userId: String(socket.data.userId),
+    businessId: (socket.data.businessId as string | null) ?? null,
+    driverId: (socket.data.driverId as string | null) ?? null,
+  };
+}
+
+/** A driver came online or went offline: the SAC of their company hears it. */
+function announcePresence(
+  subject: PresenceSubject,
+  online: boolean,
+  lastSeenAt: Date | null,
+): void {
+  if (!subject.businessId || !subject.driverId) return;
+
+  io?.to(chatStaffRoom(subject.businessId)).emit("chatPresence", {
+    driverId: subject.driverId,
+    userId: subject.userId,
+    online,
+    last_seen_at: lastSeenAt ? lastSeenAt.toISOString() : null,
+  });
+}
+
+function startPresence(): void {
+  presence?.stop();
+
+  presence = createPresenceTracker({
+    store: createPresenceStore(),
+    graceMs: env.PRESENCE_GRACE_MS,
+    stillConnected: async (userId) => (await socketsOfUser(userId)).length > 0,
+    localSubjects: () =>
+      io ? [...io.of("/").sockets.values()].map(presenceSubjectOf) : [],
+    announce: announcePresence,
+  });
+
+  presence.start();
+}
+
 /** This replica's sockets in a room — real ones, never adapter copies. */
 function localSocketsIn(room: string): Socket[] {
   if (!io) return [];
@@ -326,6 +581,60 @@ function localSocketsIn(room: string): Socket[] {
     .map((id) => namespace.sockets.get(id))
     .filter((socket): socket is Socket => Boolean(socket));
 }
+
+/**
+ * The rows the sweep and the admission recheck judge, read outside any
+ * request's memory of users. From the primary: a read replica could still
+ * lack a revocation committed before the read, and the recheck would let in
+ * the very socket it exists to catch.
+ */
+const loadSessionRows = (subjects: SocketSubject[]) =>
+  withoutRequestContext(() => loadSubjectRows(database, subjects));
+
+/**
+ * Sockets whose recheck was left to the sweep because Postgres could not be
+ * read. While it is away the handshakes fail before any socket gets this
+ * far, so what lands here is the edge of an outage; a line per pass would
+ * still bury the log on a replica taking a reconnect storm.
+ */
+const postponedAdmissions = createOutageReport({
+  intervalMs: OUTAGE_REPORT_INTERVAL_MS,
+  report: (postponed) =>
+    log.error(
+      { postponed },
+      "admission recheck postponed to the sweep: the database could not be read",
+    ),
+});
+
+function reportAdmissionRecheck(result: SweepResult, admitted: number): void {
+  if (result.ended > 0) {
+    // How often the race really happens: the reason this check exists.
+    log.info(
+      { ended: result.ended, checked: result.checked },
+      "sockets ended right after their handshake: revoked while it ran",
+    );
+  }
+
+  if (result.skipped) postponedAdmissions.failed(admitted);
+}
+
+/**
+ * The session read again right after a new socket joined its rooms
+ * (shared/socket/admission-recheck.ts). The handshake reads it before the
+ * joins, and a revocation announced in between reached no room the socket
+ * was in: it connected with the rights it had before, until the sweep.
+ */
+const admission = createAdmissionRecheck<Socket>({
+  load: loadSessionRows,
+  actions: {
+    end: endLocalSocket,
+    keep: keepAdmitted(leaveDeliveryRooms, (socket, reason) =>
+      socket.emit("securityAction", { reason }),
+    ),
+  },
+  report: reportAdmissionRecheck,
+  fail: (error) => log.error({ err: error }, "admission recheck failed"),
+});
 
 let revalidationTimer: NodeJS.Timeout | null = null;
 let revalidationStopped = true;
@@ -346,15 +655,10 @@ async function revalidateLocalSockets(): Promise<void> {
 
   const sockets = [...io.of("/").sockets.values()];
 
-  const result = await sweepConnections(
-    sockets,
-    (subjects) =>
-      withoutRequestContext(() => loadSubjectRows(database, subjects)),
-    {
-      end: endLocalSocket,
-      keep: applyDeliveryStaff,
-    },
-  );
+  const result = await sweepConnections(sockets, loadSessionRows, {
+    end: endLocalSocket,
+    keep: applyDeliveryStaff,
+  });
 
   if (result.skipped) {
     log.error("session revalidation postponed: the database could not be read");
@@ -386,12 +690,270 @@ function stopRevalidation(): void {
 
   if (revalidationTimer) clearTimeout(revalidationTimer);
   revalidationTimer = null;
+
+  stopRevocationRechecks();
+}
+
+/**
+ * How long a revocation from the feed waits before this replica re-reads
+ * the sockets it names. A session that changed its own password keeps
+ * going (adoptSessionVersion): the version its sockets carry moves by a
+ * frame on the adapter, which may arrive a few milliseconds after the
+ * feed's hint. Re-read before it, the socket would be ended as
+ * `user_updated` and the person signed out of a session the change kept.
+ * 300 ms is far longer than that frame takes, and keeps a revocation made
+ * only by SQL under 2 s (a second of poll at most).
+ */
+const REVOCATION_SETTLE_MS = 300;
+
+/** Whose sockets the feed asked to re-read, waiting for the next pass. */
+const revokedSubjects = createRevokedSubjects();
+
+let stopRevocationListener: (() => void) | null = null;
+let revocationTimer: NodeJS.Timeout | null = null;
+let revocationPass: Promise<void> | null = null;
+
+/**
+ * The users a profile or a branch of the feed concerns, from the primary
+ * (a replica could still lack the change): the users of the profiles and
+ * the logins of the drivers of the branches. Both columns are indexed.
+ */
+async function usersOfRevokedCatalog(
+  profiles: string[],
+  branches: string[],
+): Promise<Set<string>> {
+  return withoutRequestContext(async () => {
+    const or = [
+      ...(profiles.length > 0 ? [{ profileAccessId: { in: profiles } }] : []),
+      ...(branches.length > 0
+        ? [{ driver: { is: { branchId: { in: branches } } } }]
+        : []),
+    ];
+
+    if (or.length === 0) return new Set<string>();
+
+    const users = await database.user.findMany({
+      where: { OR: or },
+      select: { id: true },
+    });
+
+    return new Set(users.map((user) => user.id));
+  });
+}
+
+/**
+ * Re-reads, from the primary, the sockets the feed named: the periodic
+ * sweep's rule and actions (end, or keep with the rooms adjusted), on the
+ * few sockets a revocation concerns. One pass at a time; what arrives
+ * during one waits for the next.
+ */
+function scheduleRevocationPass(): void {
+  if (revocationTimer || revocationPass) return;
+
+  revocationTimer = withoutRequestContext(() =>
+    setTimeout(() => {
+      revocationTimer = null;
+
+      revocationPass = takeRevokedSockets(
+        io ? [...io.of("/").sockets.values()] : [],
+        revokedSubjects,
+        usersOfRevokedCatalog,
+      )
+        .then((sockets) =>
+          sockets.length === 0
+            ? null
+            : sweepConnections(sockets, loadSessionRows, {
+                end: endLocalSocket,
+                keep: applyDeliveryStaff,
+              }).then((result) => ({ result, sockets })),
+        )
+        .then((outcome) => {
+          if (!outcome) return;
+
+          const { result, sockets } = outcome;
+
+          if (result.skipped) {
+            log.error(
+              { sockets: sockets.length },
+              "revocation re-check postponed: the database could not be read",
+            );
+          } else if (result.ended > 0) {
+            log.info(
+              { ended: result.ended, checked: result.checked },
+              "sockets ended by the revocation feed",
+            );
+          }
+        })
+        .catch((error) =>
+          log.error({ err: error }, "revocation re-check failed"),
+        )
+        .finally(() => {
+          revocationPass = null;
+
+          if (hasRevokedSubjects(revokedSubjects)) scheduleRevocationPass();
+        });
+    }, REVOCATION_SETTLE_MS),
+  );
+
+  revocationTimer.unref?.();
+}
+
+/**
+ * The sockets' listener of the revocation feed (plano-escala F5-24,
+ * shared/auth/revocation-feed.ts). Before it, a revocation reached a
+ * socket on another replica only by a frame on the adapter, which is at
+ * most once and absent for a change made by SQL: the socket kept the
+ * company's positions, routes and chat until the sweep, up to 225 s.
+ * Now every revocation the database logs re-reads the sockets it names
+ * within the feed's second, and a gap re-reads them all.
+ */
+function listenToRevocations(): void {
+  stopRevocationListener?.();
+
+  stopRevocationListener = revocationFeed().listen({
+    revoked: (entries) => {
+      for (const entry of entries) {
+        noteRevocation(revokedSubjects, entry.kind, entry.subjectId);
+      }
+
+      scheduleRevocationPass();
+    },
+    gap: () => {
+      revokedSubjects.everything = true;
+      scheduleRevocationPass();
+    },
+  });
+}
+
+function stopRevocationRechecks(): void {
+  stopRevocationListener?.();
+  stopRevocationListener = null;
+
+  if (revocationTimer) clearTimeout(revocationTimer);
+  revocationTimer = null;
+}
+
+/**
+ * The Redis adapter, for a process that takes sockets.
+ *
+ * Plugged in BEFORE any `io.use`/`io.on` so that every later `emit` routes
+ * via pub/sub. Without it, an `emit` on one replica doesn't reach the
+ * sockets connected to another — the real-time events (pushNotification,
+ * securityAction, aiVerification) are lost between instances when scaling
+ * horizontally.
+ *
+ * Installed WHETHER OR NOT Redis answers right now. The boot used to refuse
+ * to finish in production without Redis, which turned a Redis restart into
+ * a fleet that could not start: every recreated replica exited, and the
+ * restart policy could run out before Redis came back. The HTTP API and the
+ * workers do not need Redis to be correct; realtime across replicas does.
+ * So the replica starts, logs that realtime is degraded, and the adapter
+ * starts delivering across replicas the moment Redis answers — the sub
+ * connection waits for it, and ioredis re-subscribes on every reconnect.
+ *
+ * From the pub/sub factory (plano-escala F5-01): the pub/sub's own Redis
+ * when there is one, REDIS_URL otherwise, as before.
+ */
+async function installAdapter(server: SocketIOServer): Promise<void> {
+  const adapterClients = createPubSubAdapterClients((error) =>
+    reportAdapterPublishFailure(error),
+  );
+
+  adapterPubClient = adapterClients.pub;
+  adapterSubClient = adapterClients.sub;
+
+  // Persistent handlers: an ioredis `error` event with no listener is
+  // rethrown by the EventEmitter and takes the process down.
+  attachRedisConnectionLog(adapterPubClient, "socket.io/pub");
+  attachRedisConnectionLog(adapterSubClient, "socket.io/sub");
+
+  server.adapter(
+    createAdapter(
+      adapterPubClient,
+      adapterSubClient,
+      socketAdapterOptions(env),
+    ),
+  );
+
+  out = server as unknown as Broadcaster;
+
+  if (await waitForAdapterRedis(adapterClients, ADAPTER_BOOT_WAIT_MS)) {
+    log.info("Redis adapter connected: realtime crosses replicas");
+  } else {
+    log.error(
+      "Redis unavailable at boot: realtime across replicas is DEGRADED until " +
+        "Redis answers. The adapter reconnects by itself; HTTP, queues and " +
+        "workers are unaffected.",
+    );
+  }
+}
+
+/**
+ * The Redis emitter, for a process that takes no sockets (plano-escala
+ * U-07, shared/socket/emitter.ts): what it emits reaches the sockets of the
+ * realtime processes without it subscribing to every frame they publish.
+ * The Socket.IO server stays, on its in-memory adapter, only to refuse the
+ * upgrades with SOCKET_UNAVAILABLE. Same as the adapter: installed whether
+ * or not Redis answers, and the frames emitted while it is away are lost.
+ */
+async function installEmitter(): Promise<void> {
+  const emitter = createSocketEmitter(env, reportAdapterPublishFailure);
+
+  emitterRedis = emitter.client;
+  attachRedisConnectionLog(emitterRedis, "socket.io/emitter");
+  out = emitter.broadcaster;
+
+  const client = emitterRedis;
+  const ready = await new Promise<boolean>((resolve) => {
+    if (client.status === "ready") return resolve(true);
+
+    const timer = setTimeout(() => resolve(false), ADAPTER_BOOT_WAIT_MS);
+
+    client.once("ready", () => {
+      clearTimeout(timer);
+      resolve(true);
+    });
+  });
+
+  if (ready) {
+    log.info(
+      "Redis emitter connected: this process emits to the realtime " +
+        "processes without subscribing (SOCKETS_ENABLED=false)",
+    );
+  } else {
+    log.error(
+      "Redis unavailable at boot: events from this process do not reach " +
+        "the sockets until Redis answers. The emitter reconnects by itself.",
+    );
+  }
 }
 
 // Function to initialize Socket.IO with HTTP server
 async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
   const trustedProxy = (env.RATE_LIMIT_TRUSTED_PROXY ??
     "none") as TrustedProxyMode;
+
+  // The ceiling on the boot line, so a deploy's log says what this replica
+  // will hold and why (F5-31).
+  const cap = currentSocketCap();
+
+  log.info(
+    { socket_cap: cap.cap, fd_limit: cap.fdLimit, source: cap.source },
+    "socket ceiling",
+  );
+
+  if (cap.fdTooLow) {
+    log.warn(
+      {
+        fd_limit: cap.fdLimit,
+        fd_reserve: env.SOCKET_FD_RESERVE,
+        socket_cap: cap.cap,
+      },
+      "the file descriptor limit is too low for SOCKET_FD_RESERVE: the " +
+        "reserve shrinks to keep the socket ceiling at socket_cap; raise " +
+        "the container's nofile limit",
+    );
+  }
 
   // Create a Socket.IO instance connected to the HTTP server
   io = new SocketIOServer(httpServer, {
@@ -413,6 +975,11 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
     // (the default) was a long time to hold it.
     connectTimeout: SOCKET_CONNECT_TIMEOUT_MS,
 
+    // Pinned (F5-31): see the constants.
+    pingInterval: SOCKET_PING_INTERVAL_MS,
+    pingTimeout: SOCKET_PING_TIMEOUT_MS,
+    perMessageDeflate: false,
+
     // WebSocket only. Both clients have been websocket-only since March (the
     // polling handshake cannot survive more than one replica without
     // affinity), so long-polling served nobody but a caller opening sessions
@@ -430,10 +997,41 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
      * websocket (engine.io answers the upgrade 400, reason in the body), and
      * socket.io-client retries it like any transport error.
      *
+     * Since U-01 the count is given back once the handshake ends admitted or
+     * refused for capacity (`settleAddressCharge`), so the budget holds the
+     * failures, the users over their own limits and the handshakes still
+     * running: hundreds of drivers behind one CGNAT reconnecting in a deploy
+     * no longer use it up.
+     *
+     * Before it, and never charged: a process whose role takes no sockets
+     * (SOCKETS_ENABLED=false, plano-escala F3-02: a worker, a scheduler,
+     * the api once the realtime role exists) refuses every upgrade, and a
+     * replica past its socket ceiling by the in-flight headroom refuses the
+     * upgrade outright (admission.ts). Below that, the middleware refuses
+     * with the wait the clients honour.
+     *
      * Fails open like every counter (ADR 0002): the limiter never rejects,
      * and should it ever, the connection is admitted rather than refused.
      */
     allowRequest: (request, callback) => {
+      // The first check, so nothing is charged or counted against a budget:
+      // hundreds of drivers behind one CGNAT sent here by a misrouted
+      // Domain must not lock their address out of the process that does
+      // take sockets (U-01). A refused upgrade carries no data the
+      // browser's or the app's WebSocket could read, so the clients wait
+      // their own backoff, as for engine_capacity.
+      if (!env.SOCKETS_ENABLED) {
+        handshakeMetrics.refuse("sockets_disabled");
+
+        return callback("SOCKET_UNAVAILABLE", false);
+      }
+
+      if (engineOverCapacity(io?.engine.clientsCount ?? 0, admissionLimits())) {
+        handshakeMetrics.refuse("engine_capacity");
+
+        return callback("SOCKET_UNAVAILABLE", false);
+      }
+
       const address = handshakeAddress(
         {
           address: request.socket.remoteAddress,
@@ -445,59 +1043,52 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
         trustedProxy,
       );
 
+      const key = addressHandshakeKey(address);
+
       // Read at call time: the limiter is built after the server, below.
-      handshakeLimiter
-        .allow(addressHandshakeKey(address), HANDSHAKES_PER_ADDRESS)
-        .then(
-          (allowed) =>
-            callback(allowed ? null : "SOCKET_RATE_LIMITED", allowed),
-          () => callback(null, true),
-        );
+      handshakeLimiter.allow(key, HANDSHAKES_PER_ADDRESS).then(
+        (allowed) => {
+          if (allowed) chargedAddresses.set(request, key);
+          else handshakeMetrics.refuse("address_budget");
+
+          callback(allowed ? null : "SOCKET_RATE_LIMITED", allowed);
+        },
+        () => callback(null, true),
+      );
     },
   });
 
-  // Plug in the Redis adapter BEFORE any `io.use`/`io.on` to ensure
-  // that all subsequent `emit` operations route via pub/sub. Without it, an
-  // `emit` on one replica doesn't reach the sockets connected to another — the
-  // real-time events (pushNotification, securityAction, aiVerification)
-  // are lost between instances when scaling horizontally.
-  //
-  // Installed WHETHER OR NOT Redis answers right now. The boot used to refuse
-  // to finish in production without Redis, which turned a Redis restart into
-  // a fleet that could not start: every recreated replica exited, and the
-  // restart policy could run out before Redis came back. The HTTP API and the
-  // workers do not need Redis to be correct; realtime across replicas does.
-  // So the replica starts, logs that realtime is degraded, and the adapter
-  // starts delivering across replicas the moment Redis answers — the sub
-  // connection waits for it, and ioredis re-subscribes on every reconnect.
-  const adapterClients = createAdapterRedisClients(env.REDIS_URL, (error) =>
-    reportAdapterPublishFailure(error),
+  /**
+   * The upgrade's request, let go as soon as the connection exists (U-01).
+   *
+   * The engine kept the whole IncomingMessage (headers, the parsed URL, the
+   * socket's own references) for as long as the websocket lived: a few
+   * kilobytes per socket that nothing read after the handshake. What the
+   * handshake does need from it is taken first: the address bucket charged
+   * above and the client's marker header.
+   */
+  io.engine.on(
+    "connection",
+    (raw: {
+      request?: {
+        headers?: Record<string, string | string[] | undefined>;
+      } | null;
+    }) => {
+      const request = raw.request;
+
+      engineAttempts.set(raw, {
+        addressKey: request ? (chargedAddresses.get(request) ?? null) : null,
+        clientHeader: request?.headers?.[SOCKET_CLIENT_HEADER],
+      });
+
+      raw.request = null;
+    },
   );
 
-  adapterPubClient = adapterClients.pub;
-  adapterSubClient = adapterClients.sub;
-
-  // Persistent handlers: an ioredis `error` event with no listener is
-  // rethrown by the EventEmitter and takes the process down.
-  attachRedisConnectionLog(adapterPubClient, "socket.io/pub");
-  attachRedisConnectionLog(adapterSubClient, "socket.io/sub");
-
-  io.adapter(
-    createAdapter(
-      adapterPubClient,
-      adapterSubClient,
-      socketAdapterOptions(env),
-    ),
-  );
-
-  if (await waitForAdapterRedis(adapterClients, ADAPTER_BOOT_WAIT_MS)) {
-    log.info("Redis adapter connected: realtime crosses replicas");
+  if (env.SOCKETS_ENABLED) {
+    await installAdapter(io);
   } else {
-    log.error(
-      "Redis unavailable at boot: realtime across replicas is DEGRADED until " +
-        "Redis answers. The adapter reconnects by itself; HTTP, queues and " +
-        "workers are unaffected.",
-    );
+    await installEmitter();
   }
 
   /**
@@ -507,23 +1098,32 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
    * immediate error the limiter swallows — it fails open — rather than a
    * connection attempt that hangs waiting for a counter.
    */
+  //
+  // Only where sockets connect: a process without them refuses every
+  // upgrade before any budget is read, and opens no connection for it.
   try {
-    handshakeRedis = new Redis(
-      env.REDIS_URL,
-      redisClientOptions("socket-handshake"),
-    );
+    if (env.SOCKETS_ENABLED) {
+      handshakeRedis = new Redis(
+        env.REDIS_URL,
+        redisClientOptions("socket-handshake"),
+      );
 
-    attachRedisConnectionLog(handshakeRedis, "socket.io/handshake");
+      attachRedisConnectionLog(handshakeRedis, "socket.io/handshake");
 
-    handshakeLimiter = createHandshakeLimiter(handshakeRedis);
+      handshakeLimiter = createHandshakeLimiter(handshakeRedis);
+    }
   } catch {
     // Without counters the handshake still works; it is simply not capped.
     handshakeLimiter = unlimitedHandshakes;
   }
 
   // Authentication Middleware for Socket.IO. The address budget already ran
-  // at the engine (`allowRequest` above), before this connection existed.
-  io.use(async (socket, next) => {
+  // at the engine (`allowRequest` above), before this connection existed,
+  // and the admission below runs this only with a pass.
+  const authenticateHandshake = async (
+    socket: Socket,
+    next: (error?: Error) => void,
+  ): Promise<void> => {
     try {
       const token = socket.handshake.auth.token;
       const ticket = socket.handshake.auth.ticket;
@@ -603,11 +1203,12 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
       /**
        * Counted by user before the queries start.
        *
-       * From here the handshake costs three round trips — the user, the
-       * driver eligibility and the refresh-token family. That is the work a
-       * caller holding one valid token could ask for in a loop, and the
-       * address budget above does not bound it: the same account reconnecting
-       * from many places is many addresses.
+       * From here the handshake costs the session lookup — one round trip
+       * with SESSION_LOOKUP_MODE=single (plano-escala F4-05), the user, the
+       * driver eligibility and the refresh-token family with `legacy`. That
+       * is the work a caller holding one valid token could ask for in a
+       * loop, and the address budget above does not bound it: the same
+       * account reconnecting from many places is many addresses.
        */
       if (
         !(await handshakeLimiter.allow(
@@ -623,9 +1224,11 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
         );
       }
 
-      // Check if user exists
-      const userRepository = new UserRepository();
-      const user = await userRepository.findUserById(userId);
+      // The user and the refresh-token family, in one statement by default.
+      // The checks below keep their order and codes in both modes; the
+      // family is asked last, as it always was.
+      const session = await lookUpSession(userId, payload.familyId);
+      const { user } = session;
 
       if (!user) {
         return next(new Error("Usuário não encontrado"));
@@ -652,15 +1255,8 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
         );
       }
 
-      const driverRepository = new DriverRepository();
-      const tokenRepository = new UserTokensRepository();
-
-      await assertSessionEligible(user, driverRepository);
-      const hasActiveSession =
-        await tokenRepository.hasActiveRefreshTokenFamily(
-          userId,
-          payload.familyId,
-        );
+      await assertSessionEligible(user, new DriverRepository());
+      const hasActiveSession = await session.familyActive();
 
       if (!hasActiveSession) {
         return next(
@@ -677,8 +1273,9 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
       socket.data.businessId = user.businessId;
       socket.data.sessionId = payload.familyId;
 
-      // What the periodic sweep compares the row against: an edit that bumps
-      // the version has ended this session, whether or not its frame arrived.
+      // What the admission recheck and the periodic sweep compare the row
+      // against: an edit that bumps the version has ended this session,
+      // whether or not its frame arrived.
       socket.data.sessionVersion = payload.sessionVersion;
 
       socket.data.userName = user.name;
@@ -701,8 +1298,21 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
         driverId: user.driverId,
         businessId: user.businessId,
         permissions: user.profileAccess?.permissions as
-          | Array<{ permissionKey: string; canRead: boolean }>
-          | undefined,
+          Array<{ permissionKey: string; canRead: boolean }> | undefined,
+      });
+
+      // The app or the web (wave 4): decides whether the dispatch rooms are
+      // joined at connect or only on a screen's subscribe (socket-client.ts).
+      // Read before the credential is stripped from the handshake below.
+      // The header from what the engine kept of the request: the request
+      // itself was let go at the engine's connection, above.
+      const engineAttempt = engineAttempts.get(socket.conn);
+
+      socket.data.client = socketClientOf({
+        headers: engineAttempt
+          ? { [SOCKET_CLIENT_HEADER]: engineAttempt.clientHeader }
+          : socket.handshake.headers,
+        auth: socket.handshake.auth,
       });
 
       // Read once, above, and never again. Kept on the handshake it rode
@@ -760,6 +1370,55 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
         ),
       );
     }
+  };
+
+  /**
+   * The admission (plano-escala U-01, shared/socket/admission.ts), before
+   * the credential is read: a pass while the replica has room for one more
+   * handshake and one more socket, or SOCKET_UNAVAILABLE with the wait.
+   * Every handshake's time and outcome is counted, and the address's charge
+   * settled once it ends.
+   */
+  io.use((socket, next) => {
+    const verdict = socketAdmission.enter();
+
+    if (!verdict.admitted) {
+      handshakeMetrics.refuse(verdict.reason);
+      settleAddressCharge(socket, null);
+
+      return next(capacityRefusal(verdict.retryAfterMs));
+    }
+
+    const startedAt = performance.now();
+    let settled = false;
+
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+
+      verdict.release();
+      handshakeMetrics.record(
+        performance.now() - startedAt,
+        error ? handshakeRefusalOf(error) : null,
+      );
+      settleAddressCharge(socket, error);
+
+      next(error);
+    };
+
+    authenticateHandshake(socket, finish).catch((error: unknown) => {
+      log.error(
+        { error: error instanceof Error ? error.message : String(error) },
+        "socket handshake failed on an infrastructure error",
+      );
+
+      finish(
+        socketAuthenticationError(
+          "Serviço temporariamente indisponível. Tentando reconectar.",
+          "SOCKET_UNAVAILABLE",
+        ),
+      );
+    });
   });
 
   // Manage connections
@@ -796,11 +1455,18 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
       socket.join(MASTERS_ROOM);
     }
 
+    // The app's sockets skip both rooms below (wave 4): its screens subscribe
+    // when they need the operation and leave when they go, so a manager's
+    // phone in a pocket is not sent the whole fleet's positions and chat.
+    const joinsOwnDispatchRooms = joinsOwnDispatchRoomsOnConnect(
+      socket.data.client,
+    );
+
     // The SAC side of the driver chat listens as a team. Whoever has a
     // company of their own is put in its room right away — that room is
     // theirs for the whole connection. A MASTER has no company here and
     // subscribes explicitly.
-    if (socket.data.isDeliveryStaff && businessId) {
+    if (socket.data.isDeliveryStaff && businessId && joinsOwnDispatchRooms) {
       socket.join(chatStaffRoom(businessId));
       socket.data.chatBusinessId = businessId;
     }
@@ -808,7 +1474,7 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
     // Where the trucks are, and what the routes are doing. Same rule as the
     // chat room, same reason: this is the manager's view of everybody, and a
     // driver holding `delivery_manage` for their own day must not receive it.
-    if (socket.data.isDeliveryStaff && businessId) {
+    if (socket.data.isDeliveryStaff && businessId && joinsOwnDispatchRooms) {
       socket.join(operationsRoom(businessId));
       socket.data.operationsBusinessId = businessId;
     }
@@ -820,23 +1486,17 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
       socket.join(chatDriverRoom(businessId, userId));
     }
 
-    // A driver coming online is chat presence the SAC cares about. Announce
-    // only the offline→online transition: fetchSockets goes through the
-    // Redis adapter, so the answer is cluster-wide, not per-replica.
-    if (socket.data.driverId && businessId && io) {
-      socketsOfUser(userId)
-        .then((sockets) => {
-          if (sockets.length === 1) {
-            io?.to(chatStaffRoom(businessId)).emit("chatPresence", {
-              driverId: socket.data.driverId,
-              userId,
-              online: true,
-              last_seen_at: null,
-            });
-          }
-        })
-        .catch(() => undefined);
-    }
+    // The handshake read the session before these joins, and a revocation
+    // announced in between reached no room this socket was in. Read it again
+    // now that it is in every room it will hear from. Last of the joins: one
+    // added below this line would be a room joined after the read.
+    admission.admit(socket);
+
+    // Presence (plano-escala U-05): the login's beat, batched. A driver
+    // whose row was missing or stale went online, and that write is what
+    // tells the SAC; one back within PRESENCE_GRACE_MS never went offline,
+    // so nothing is announced. No cluster-wide question per connection.
+    presence?.arrive(presenceSubjectOf(socket));
 
     // Explicit company subscription. This is the one place where a socket
     // asks for another tenant's data, so the decision is taken only from
@@ -878,9 +1538,20 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
         // a subscribe is a message anyone connected can send in a loop.
         if (!allowedFor(true)) return;
 
+        // Taken before the wait, so an unsubscribe (or a newer subscribe)
+        // sent while the database answers can call this one off.
+        const ticket = subscribeIntents.begin(
+          socket,
+          "chat",
+          requestedBusinessId,
+        );
+
         const isStaff = await currentDeliveryStaff(socket);
 
         if (isStaff === null || !allowedFor(isStaff)) return;
+
+        // The screen that asked may have gone while the database answered.
+        if (!subscribeIntents.isCurrent(socket, "chat", ticket)) return;
 
         // Read after the wait: another subscribe may have moved the socket
         // while the database answered.
@@ -903,7 +1574,9 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
     });
 
     /**
-     * A MASTER following a company's operation, or anyone reconnecting.
+     * A MASTER following a company's operation, anyone reconnecting, or the
+     * app's operations screen gaining focus (wave 4: the app's socket joins
+     * no dispatch room at connect).
      *
      * Same shape as `chatSubscribe`, for the same two reasons. A master has
      * no company of their own, so the server cannot guess which operation
@@ -937,9 +1610,19 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
         // then ask the database whether this person is still dispatch.
         if (!allowedFor(true)) return;
 
+        // Same ticket as the chat's. The app focuses and leaves its tab within
+        // one staff check when a push opens a screen on top of it; without
+        // this the late join kept the fleet's feed on that phone.
+        const ticket = subscribeIntents.begin(
+          socket,
+          "operations",
+          requestedBusinessId,
+        );
+
         const isStaff = await currentDeliveryStaff(socket);
 
         if (isStaff === null || !allowedFor(isStaff)) return;
+        if (!subscribeIntents.isCurrent(socket, "operations", ticket)) return;
 
         const previous = socket.data.operationsBusinessId as string | undefined;
 
@@ -958,39 +1641,145 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
       }
     });
 
-    socket.on("operationsUnsubscribe", (payload?: unknown) => {
+    // The optional acknowledgement is the subscribe's: "handled", whichever
+    // way, so a caller (the E2E suite) can wait for the room to be left. The
+    // web emits without one.
+    socket.on("operationsUnsubscribe", (payload?: unknown, ack?: unknown) => {
       try {
         const requestedBusinessId = readOperationsBusinessId(payload);
 
         if (!requestedBusinessId) return;
-        if (socket.data.operationsBusinessId !== requestedBusinessId) return;
 
-        // The own-company room joined at connect stays: it is what keeps a
-        // user's own operation live from anywhere in the app.
-        if (requestedBusinessId === socket.data.businessId) return;
+        // On the web the own-company room joined at connect stays: it is what
+        // keeps a user's own operation live from anywhere in the panel. The
+        // app never got it at connect (wave 4), so its screen gives it back
+        // on blur and in the background.
+        if (
+          requestedBusinessId === socket.data.businessId &&
+          !mayLeaveOwnDispatchRooms(socket.data.client)
+        ) {
+          return;
+        }
+
+        // Before the room check: a subscribe still reading the database has
+        // not joined yet, and must not once it comes back.
+        subscribeIntents.cancel(socket, "operations", requestedBusinessId);
+
+        if (socket.data.operationsBusinessId !== requestedBusinessId) return;
 
         socket.leave(operationsRoom(requestedBusinessId));
         socket.data.operationsBusinessId = null;
       } catch {
         // Same as above.
+      } finally {
+        acknowledgeHandled(ack);
       }
     });
 
-    // Leaving the chat screen. The own-company room joined at connect stays:
-    // it is what feeds the tab badge from anywhere in the app, and dropping
-    // it here would regress the behaviour every non-master user has today.
-    socket.on("chatUnsubscribe", (payload?: unknown) => {
+    /**
+     * The live positions of one company (plano-escala U-01, F2.19): what the
+     * tower and a route's detail subscribe to, and nothing else.
+     *
+     * The operations room's rule, the operations room's steps: another
+     * tenant refused with no query, the staff fact re-read from the
+     * database, the last wish winning (subscription-intent.ts), one company
+     * per socket. Never joined at connect, so any client may leave it.
+     * Silent on refusal; the optional acknowledgement says only "handled".
+     */
+    socket.on("positionsSubscribe", async (payload: unknown, ack: unknown) => {
+      try {
+        const requestedBusinessId = readOperationsBusinessId(payload);
+
+        if (!requestedBusinessId) return;
+
+        const allowedFor = (isDeliveryStaff: boolean) =>
+          canWatchOperationsOf(
+            {
+              role: socket.data.role,
+              businessId: socket.data.businessId,
+              isDeliveryStaff,
+            },
+            requestedBusinessId,
+          );
+
+        if (!allowedFor(true)) return;
+
+        const ticket = subscribeIntents.begin(
+          socket,
+          "positions",
+          requestedBusinessId,
+        );
+
+        const isStaff = await currentDeliveryStaff(socket);
+
+        if (isStaff === null || !allowedFor(isStaff)) return;
+        if (!subscribeIntents.isCurrent(socket, "positions", ticket)) return;
+
+        const previous = socket.data.positionsBusinessId as string | undefined;
+
+        // One company's trucks per socket, as in the operations room.
+        if (previous && previous !== requestedBusinessId) {
+          socket.leave(positionsRoom(previous));
+        }
+
+        socket.join(positionsRoom(requestedBusinessId));
+        socket.data.positionsBusinessId = requestedBusinessId;
+      } catch {
+        // A failed subscription is never worth a dropped connection.
+      } finally {
+        acknowledgeHandled(ack);
+      }
+    });
+
+    socket.on("positionsUnsubscribe", (payload?: unknown, ack?: unknown) => {
+      try {
+        const requestedBusinessId = readOperationsBusinessId(payload);
+
+        if (!requestedBusinessId) return;
+
+        // A subscribe still reading the database joins nothing once back.
+        subscribeIntents.cancel(socket, "positions", requestedBusinessId);
+
+        if (socket.data.positionsBusinessId !== requestedBusinessId) return;
+
+        socket.leave(positionsRoom(requestedBusinessId));
+        socket.data.positionsBusinessId = null;
+      } catch {
+        // Leaving a room is never worth a dropped socket.
+      } finally {
+        acknowledgeHandled(ack);
+      }
+    });
+
+    // Leaving the chat screen. On the web the own-company room joined at
+    // connect stays: it is what feeds the tab badge from anywhere in the
+    // panel, and dropping it here would regress the behaviour every
+    // non-master user has today. The app's socket never joined it at connect
+    // and may leave what it subscribed to (wave 4).
+    socket.on("chatUnsubscribe", (payload?: unknown, ack?: unknown) => {
       try {
         const requestedBusinessId = readBusinessIdPayload(payload);
 
         if (!requestedBusinessId) return;
+
+        if (
+          requestedBusinessId === socket.data.businessId &&
+          !mayLeaveOwnDispatchRooms(socket.data.client)
+        ) {
+          return;
+        }
+
+        // Same as the operations room: a subscribe still waiting is called off.
+        subscribeIntents.cancel(socket, "chat", requestedBusinessId);
+
         if (socket.data.chatBusinessId !== requestedBusinessId) return;
-        if (requestedBusinessId === socket.data.businessId) return;
 
         socket.leave(chatStaffRoom(requestedBusinessId));
         socket.data.chatBusinessId = null;
       } catch {
         // Same as above: leaving a room is never worth a dropped socket.
+      } finally {
+        acknowledgeHandled(ack);
       }
     });
 
@@ -1105,43 +1894,22 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
     socket.on("disconnect", (reason) => {
       log.debug({ userId, socketId: socket.id, reason }, "socket disconnected");
 
-      // Chat presence: when the driver's LAST socket in the whole cluster is
-      // gone, stamp "visto por último" and tell the SAC. By the time
-      // "disconnect" fires this socket already left its rooms, so the
-      // adapter answer no longer includes it.
-      if (socket.data.driverId && businessId && io) {
-        socketsOfUser(userId)
-          .then(async (sockets) => {
-            if (sockets.length > 0) return;
-
-            const lastSeenAt = new Date();
-
-            // Transport-layer bookkeeping, stamped straight on the column:
-            // best-effort on purpose — presence must never crash a
-            // disconnect.
-            await database.user
-              .update({
-                where: { id: userId },
-                data: { last_seen_at: lastSeenAt },
-              })
-              .catch(() => undefined);
-
-            io?.to(chatStaffRoom(businessId)).emit("chatPresence", {
-              driverId: socket.data.driverId,
-              userId,
-              online: false,
-              last_seen_at: lastSeenAt.toISOString(),
-            });
-          })
-          .catch(() => undefined);
-      }
+      // Chat presence (plano-escala U-05): offline only when the login's
+      // LAST socket in the whole cluster stayed gone for PRESENCE_GRACE_MS;
+      // then "visto por último" is stamped with the moment it went and the
+      // SAC hears it. A signal drop the driver comes back from changes
+      // nothing. Best-effort: presence never fails a disconnect.
+      presence?.leave(presenceSubjectOf(socket));
     });
   });
 
   // Another replica changed a permission of a company whose sockets may be
-  // here. Only this replica can touch them for real.
-  io.on(REFRESH_DELIVERY_ROOMS_EVENT, (businessId: unknown) => {
-    if (typeof businessId !== "string") return;
+  // here. Only this replica can touch them for real. Any version of the
+  // message (shared/socket/messages.ts, F3-31c).
+  io.on(REFRESH_DELIVERY_ROOMS_EVENT, (raw: unknown, meta?: unknown) => {
+    const businessId = readRefreshDeliveryRooms(raw, meta);
+
+    if (!businessId) return;
 
     void refreshLocalDeliveryRooms(businessId).catch((error) =>
       log.error(
@@ -1154,20 +1922,38 @@ async function initializeSocketIO(httpServer: Server): Promise<SocketIOServer> {
   // Meta's template status callback reached another replica: this one's
   // WhatsApp sender pauses or resumes the template too. Validated there —
   // what comes off the adapter is input like any other.
-  io.on(WHATSAPP_TEMPLATE_LANE_EVENT, (change: unknown) => {
-    applyWhatsAppTemplateLaneChange(change);
+  io.on(WHATSAPP_TEMPLATE_LANE_EVENT, (frame: unknown) => {
+    applyWhatsAppTemplateLaneChange(readTemplateLaneFrame(frame));
+  });
+
+  // A session changed its own password on another replica: this one's
+  // sockets of that session keep going with the new version. Validated: what
+  // comes off the adapter is input like any other.
+  io.on(ADOPT_SESSION_VERSION_EVENT, (frame: unknown) => {
+    const adopted = readAdoptSessionVersion(frame);
+
+    if (!adopted) return;
+
+    adoptLocalSessionVersion(adopted.sessionId, adopted.version);
   });
 
   revalidationStopped = false;
   scheduleRevalidation();
+
+  // Only where sockets connect: the beat is of the logins held here, and
+  // the revocation feed re-reads the sockets held here (F5-24).
+  if (env.SOCKETS_ENABLED) {
+    startPresence();
+    listenToRevocations();
+  }
 
   return io;
 }
 
 // Function to send notification to a specific user
 const sendNotificationToUser = (userId: string, notification: any) => {
-  if (io) {
-    io.to(`user:${userId}`).emit("pushNotification", notification);
+  if (out) {
+    out.to(`user:${userId}`).emit("pushNotification", notification);
   } else {
     log.error("Socket.IO is not initialized yet");
   }
@@ -1186,15 +1972,15 @@ const sendNotificationsReadToUser = (
   userId: string,
   payload: { notificationId: string | null },
 ) => {
-  if (!io) return;
+  if (!out) return;
 
-  io.to(`user:${userId}`).emit("notificationsRead", payload);
+  out.to(`user:${userId}`).emit("notificationsRead", payload);
 };
 
 // Function to send notification to all users of a company
 const sendNotificationToBusiness = (businessId: string, notification: any) => {
-  if (io) {
-    io.to(`business:${businessId}`).emit("pushNotification", notification);
+  if (out) {
+    out.to(`business:${businessId}`).emit("pushNotification", notification);
   } else {
     log.error("Socket.IO is not initialized yet");
   }
@@ -1202,8 +1988,8 @@ const sendNotificationToBusiness = (businessId: string, notification: any) => {
 
 // Function to send AI verification event to a specific user
 const sendAIVerificationEvent = (userId: string, event: any) => {
-  if (io) {
-    io.to(`user:${userId}`).emit("aiVerification", event);
+  if (out) {
+    out.to(`user:${userId}`).emit("aiVerification", event);
 
     // The end of an analysis, as a data-free hint to the company's screens
     // (AI-6): the admin on the web is rarely the requester.
@@ -1215,7 +2001,8 @@ const sendAIVerificationEvent = (userId: string, event: any) => {
           ? operationsRoom(hint.payload.businessId)
           : `business:${hint.payload.businessId}`;
 
-      io.to(room)
+      out
+        .to(room)
         .to(MASTERS_ROOM)
         .emit(AI_ANALYSIS_CHANGED_EVENT, hint.payload);
     }
@@ -1237,16 +2024,58 @@ const sendAIVerificationEvent = (userId: string, event: any) => {
  * lost one.
  */
 function endSessionsIn(room: string): void {
-  if (!io) return;
+  if (!out) return;
 
-  io.local.in(room).disconnectSockets(true);
-  io.in(room).disconnectSockets(true);
+  io?.local.in(room).disconnectSockets(true);
+  out.in(room).disconnectSockets(true);
 }
+
+/**
+ * The publishers of the revocation feed (plano-escala F5-22) are these
+ * helpers: every revocation already calls one of them after its commit.
+ * The nudge reads session_revocation_log at once in this process and
+ * hints the others to (shared/auth/revocation-feed.ts), whether or not
+ * this process holds sockets. The row itself was written by a trigger in
+ * the revoking transaction; the nudge only makes it travel faster.
+ *
+ * The subject's sessions also leave this process's session cache here
+ * (plano-escala F5-23), before the request that revoked answers: on the
+ * replica that revokes, the invalidation is synchronous; the others hear
+ * it from the feed.
+ */
+function nudgeRevocationFeed(
+  kind: SessionRevocationKind,
+  subjectId: string,
+): void {
+  forgetCachedSessions(kind, subjectId);
+
+  try {
+    revocationFeed().nudge();
+  } catch (error) {
+    // The next poll still reads the row.
+    log.warn({ err: error }, "the revocation feed could not be nudged");
+  }
+}
+
+/**
+ * A revocation committed by a path that sends no security event (a branch
+ * switched off, a driver moved to another branch): its sessions leave this
+ * process's cache now and the feed reads the trigger's row at once, here
+ * and, by the hint, on the others.
+ */
+const announceSessionRevocation = (
+  kind: SessionRevocationKind,
+  subjectId: string,
+) => {
+  nudgeRevocationFeed(kind, subjectId);
+};
 
 // Function to send security event to a specific user
 const sendSecurityEventToUser = (userId: string, event: { reason: string }) => {
-  if (io) {
-    io.to(`user:${userId}`).emit("securityAction", event);
+  nudgeRevocationFeed("user", userId);
+
+  if (out) {
+    out.to(`user:${userId}`).emit("securityAction", event);
 
     if (endsSession(event.reason)) {
       endSessionsIn(`user:${userId}`);
@@ -1259,8 +2088,10 @@ const sendSecurityEventToSession = (
   sessionId: string,
   event: { reason: string },
 ) => {
-  if (io) {
-    io.to(`session:${sessionId}`).emit("securityAction", event);
+  nudgeRevocationFeed("refresh_family", sessionId);
+
+  if (out) {
+    out.to(`session:${sessionId}`).emit("securityAction", event);
 
     if (endsSession(event.reason)) {
       endSessionsIn(`session:${sessionId}`);
@@ -1268,8 +2099,44 @@ const sendSecurityEventToSession = (
   }
 };
 
-/** The server-side event each replica re-evaluates its own sockets on. */
-const REFRESH_DELIVERY_ROOMS_EVENT = "trajetto:refresh-delivery-rooms";
+/**
+ * A session that changed its own password keeps going (wave 2): the change
+ * bumped session_version and re-issued THIS session's tokens, and its open
+ * sockets carry the old version — the periodic sweep would end them as
+ * `user_updated`, which both clients read as "signed out". Each replica moves
+ * the version its own sockets of that session recorded; only forward, so a
+ * frame arriving late never lowers it. At-most-once like every adapter frame
+ * (ADR 0002): a replica that misses it ends that socket on the next sweep as
+ * `user_updated`, which a client still on the old socket reads as a sign-out
+ * — the web reconnects with a ticket of the new pair right after the change
+ * for that reason.
+ */
+function adoptLocalSessionVersion(sessionId: string, version: number): void {
+  for (const socket of localSocketsIn(`session:${sessionId}`)) {
+    if (Number(socket.data.sessionVersion) < version) {
+      socket.data.sessionVersion = version;
+    }
+  }
+}
+
+const adoptSessionVersion = (sessionId: string, version: number): void => {
+  if (!out) return;
+
+  try {
+    out.serverSideEmit(
+      ADOPT_SESSION_VERSION_EVENT,
+      adoptSessionVersionMessage(sessionId, version),
+    );
+  } catch (error) {
+    // No cluster to tell: this replica is the only one, and it runs below.
+    log.warn(
+      { err: error, sessionId },
+      "other replicas could not be told a session's new version",
+    );
+  }
+
+  adoptLocalSessionVersion(sessionId, version);
+};
 
 /**
  * Pulls out of the dispatch rooms whoever is no longer dispatch staff.
@@ -1292,10 +2159,13 @@ const REFRESH_DELIVERY_ROOMS_EVENT = "trajetto:refresh-delivery-rooms";
  * "staff" and walked back in with the next subscribe on the same connection.
  */
 const refreshDeliveryRooms = async (businessId: string): Promise<void> => {
-  if (!io) return;
+  if (!out) return;
 
   try {
-    io.serverSideEmit(REFRESH_DELIVERY_ROOMS_EVENT, businessId);
+    out.serverSideEmit(
+      REFRESH_DELIVERY_ROOMS_EVENT,
+      ...refreshDeliveryRoomsArgs(businessId),
+    );
   } catch (error) {
     // No cluster to tell: this replica is the only one, and it runs below.
     log.error(
@@ -1307,23 +2177,28 @@ const refreshDeliveryRooms = async (businessId: string): Promise<void> => {
   await refreshLocalDeliveryRooms(businessId);
 };
 
-/** The server-side event a WhatsApp template's pause crosses replicas on. */
-const WHATSAPP_TEMPLATE_LANE_EVENT = "trajetto:whatsapp-template-lane";
-
 /**
- * Tells the other replicas that Meta paused or reinstated a template, so
+ * Tells the other processes that Meta paused or reinstated a template, so
  * their WhatsApp sender stops (or resumes) before a send is refused
- * (template-lane.ts). The caller has already applied it here. At-most-once,
- * like every adapter frame (ADR 0002): a replica that misses it learns the
- * pause from its own first refused send, as it always did.
+ * (template-lane.ts). The caller has already applied it here.
+ *
+ * Two ways, each to whoever hears it (plano-escala U-07): the adapter's
+ * `serverSideEmit` reaches the processes with the adapter (the `all` role,
+ * and the image before during a rolling deploy), and the lane's own channel
+ * (template-lane-bus.ts) reaches the ones that drain `external` without it,
+ * which no longer hear a `serverSideEmit`. Neither process applies it
+ * twice. At-most-once, like every frame (ADR 0002): a process that misses
+ * it learns the pause from its own first refused send, as it always did.
  */
 const broadcastWhatsAppTemplateLaneChange = (
   change: TemplateLaneChange,
 ): void => {
-  if (!io) return;
+  void publishTemplateLaneChange(change);
+
+  if (!out) return;
 
   try {
-    io.serverSideEmit(WHATSAPP_TEMPLATE_LANE_EVENT, change);
+    out.serverSideEmit(WHATSAPP_TEMPLATE_LANE_EVENT, templateLaneFrame(change));
   } catch (error) {
     log.warn(
       { err: error, ...change },
@@ -1369,14 +2244,13 @@ async function refreshLocalDeliveryRooms(businessId: string): Promise<void> {
         // here was the shortest way to two answers that disagree.
         const stillStaff = Boolean(
           user &&
-            mayReadDeliveries({
-              role: user.role,
-              driverId: user.driverId,
-              businessId: user.businessId,
-              permissions: user.profileAccess?.permissions as
-                | Array<{ permissionKey: string; canRead: boolean }>
-                | undefined,
-            }),
+          mayReadDeliveries({
+            role: user.role,
+            driverId: user.driverId,
+            businessId: user.businessId,
+            permissions: user.profileAccess?.permissions as
+              Array<{ permissionKey: string; canRead: boolean }> | undefined,
+          }),
         );
 
         applyDeliveryStaff(socket, stillStaff);
@@ -1400,8 +2274,10 @@ const sendSecurityEventToBusiness = (
   businessId: string,
   event: { reason: string },
 ) => {
-  if (io) {
-    io.to(`business:${businessId}`).emit("securityAction", event);
+  nudgeRevocationFeed("business", businessId);
+
+  if (out) {
+    out.to(`business:${businessId}`).emit("securityAction", event);
 
     if (endsSession(event.reason)) {
       endSessionsIn(`business:${businessId}`);
@@ -1434,8 +2310,11 @@ const sendEntitlementsChangedEvent = (
   businessId: string,
   event: { module: string; enabled: boolean },
 ) => {
-  if (io) {
-    io.to(`business:${businessId}`).emit("entitlementsChanged", event);
+  // A module switched off narrows every session of the company.
+  nudgeRevocationFeed("business", businessId);
+
+  if (out) {
+    out.to(`business:${businessId}`).emit("entitlementsChanged", event);
   }
 };
 
@@ -1451,7 +2330,10 @@ type CatalogEntity =
   | "part"
   | "vehicle_type"
   | "fuel_type"
-  | "profile_access";
+  | "profile_access"
+  // Plan of 02/11/2026 (M1): the company's own settings (checklist on the
+  // route, geofence). The app refetches its payload and applies them.
+  | "settings";
 
 /**
  * Tells every open screen of a company that a catalog it may be showing in a
@@ -1463,13 +2345,14 @@ type CatalogEntity =
  * the "Revalidar" button is needed. Call it after the transaction commits.
  */
 const sendCatalogChangedEvent = (businessId: string, entity: CatalogEntity) => {
-  if (io) {
+  if (out) {
     // Also the MASTER sockets (REV-22): they belong to no company, so they
     // are never in `business:<id>` and their /admin tabs never heard it. The
     // payload names the company and the web keeps only the one it shows; a
     // MASTER may read every company anyway. Two rooms in one emit: a socket
     // in both hears it once.
-    io.to(`business:${businessId}`)
+    out
+      .to(`business:${businessId}`)
       .to(MASTERS_ROOM)
       .emit("catalogChanged", { businessId, entity });
   }
@@ -1485,12 +2368,12 @@ const sendChatMessageEvent = (
   driverUserId: string | null,
   message: unknown,
 ) => {
-  if (!io) return;
+  if (!out) return;
 
-  io.to(chatStaffRoom(businessId)).emit("chatMessage", message);
+  out.to(chatStaffRoom(businessId)).emit("chatMessage", message);
 
   if (driverUserId) {
-    io.to(`user:${driverUserId}`).emit("chatMessage", message);
+    out.to(`user:${driverUserId}`).emit("chatMessage", message);
   }
 };
 
@@ -1520,6 +2403,18 @@ const sendChatMessageEvent = (
  */
 interface RouteRealtimeEvent {
   type:
+    // A route was planned (the Rotas screen or the batch assignment). The
+    // operations room only: a draft is not the driver's yet. Every other
+    // write already had an event, and without this one the pickers that
+    // list routes ("Adicionar à rota") in a colleague's open tab never
+    // learned it existed until a reload.
+    | "route.created"
+
+    // A PLANNED route deleted outright: the undo of the spreadsheet import
+    // that built it (audit of 25/11/2026). The operations room only, like
+    // its creation. Not "route.cancelled": a cancelled route stays, with its
+    // reason, and this one is gone — opening it answers 404.
+    | "route.removed"
     | "route.released"
 
     // A route pulled BACK to planning. It leaves the driver's phone, so the
@@ -1536,9 +2431,20 @@ interface RouteRealtimeEvent {
     | "route-stop.on_the_way"
 
     // The plan changed: stops added, removed, moved or reordered, a stop
-    // pinned on the map, crew or window edited (decision 14.7). A hint, like
-    // the rest: every listener refetches the route.
-    | "route.stops_changed";
+    // of a planned or released route pinned on the map, crew or window
+    // edited (decision 14.7). A hint, like the rest: every listener
+    // refetches the route.
+    | "route.stops_changed"
+
+    // The address point of a stop of the driver's route changed: the
+    // geocoder found it (plan of 02/11/2026, E1), or the dispatcher pinned
+    // or cleared it on the running route (D23, set-delivery-location). The
+    // driver's room only, so the app reads the new point for its geofence
+    // and navigation. Not a plan change — no plan_version, no toast, no
+    // push — and every app build refetches on any routeEvent type silently.
+    // The operations room hears the geocoder's as `routeStopsLocated`
+    // instead (sendRouteStopsLocatedToBusiness).
+    | "route-stop.located";
 
   routeId: string;
 
@@ -1569,11 +2475,11 @@ const sendRouteEventToBusiness = (
   businessId: string,
   event: RouteRealtimeEvent,
 ) => {
-  if (io) {
+  if (out) {
     // The operations room, not the company room. What a route is doing is the
     // dispatcher's view of the whole fleet; the driver's own copy goes to
     // their user room through `sendRouteEventToDriver`.
-    io.to(operationsRoom(businessId)).emit("routeEvent", event);
+    out.to(operationsRoom(businessId)).emit("routeEvent", event);
   }
 };
 
@@ -1605,11 +2511,41 @@ const sendDeliveryStatusToBusiness = (
   businessId: string,
   event: Omit<DeliveryStatusRealtimeEvent, "type">,
 ) => {
-  if (io) {
-    io.to(operationsRoom(businessId)).emit("routeEvent", {
+  if (out) {
+    out.to(operationsRoom(businessId)).emit("routeEvent", {
       type: "delivery.status_changed",
       ...event,
     } satisfies DeliveryStatusRealtimeEvent);
+  }
+};
+
+/**
+ * Stops of a route whose address lookup just ended (plan of 02/11/2026, E1;
+ * owner's report of 09/11/2026): the geocoder found the point, or gave up
+ * ("não localizado"). The route page open on it refetches and draws the
+ * pin without a reload.
+ *
+ * Its own event name and not a `routeEvent`, for the reason the driver's
+ * position has one: every board, the tower, the Entregas tabs and the
+ * occurrence queue refetch on any routeEvent, and none of them draws an
+ * address point — a minute's batch of twenty answers would refetch every
+ * open screen of the company for nothing. Only the route detail listens.
+ *
+ * A hint, like the rest: the page refetches the route. Sent by whichever
+ * replica settled the lookup (the job or the lookup after a commit), after
+ * the write.
+ */
+interface RouteStopsLocatedEvent {
+  routeId: string;
+  deliveryIds: string[];
+}
+
+const sendRouteStopsLocatedToBusiness = (
+  businessId: string,
+  event: RouteStopsLocatedEvent,
+) => {
+  if (out) {
+    out.to(operationsRoom(businessId)).emit("routeStopsLocated", event);
   }
 };
 
@@ -1619,8 +2555,8 @@ const sendRouteEventToDriver = (
 ) => {
   // Null is ordinary, not an error: operations register drivers before handing
   // out phones, and that driver simply has no room to reach.
-  if (io && driverUserId) {
-    io.to(`user:${driverUserId}`).emit("routeEvent", event);
+  if (out && driverUserId) {
+    out.to(`user:${driverUserId}`).emit("routeEvent", event);
   }
 };
 
@@ -1656,10 +2592,23 @@ const sendDriverPositionToBusiness = (
   businessId: string,
   event: DriverPositionEvent,
 ) => {
-  if (io) {
+  if (out) {
     // Where a named person physically is, every few seconds, for a whole
-    // shift. It goes only to the room that has a permission check on it.
-    io.to(operationsRoom(businessId)).emit("driverPosition", event);
+    // shift. It goes only to rooms with a permission check on them: the
+    // positions room, and the operations room while
+    // SOCKET_POSITIONS_ON_OPERATIONS_ROOM is on (plano-escala U-01). One
+    // emit to both, so a socket in both hears it once. Volatile: a dot the
+    // socket cannot take now (its previous frame still being written, a
+    // slow tab) is dropped rather than queued behind the others; the
+    // tower's own cadence read and the next point redraw it.
+    out
+      .to(
+        driverPositionRooms(
+          businessId,
+          env.SOCKET_POSITIONS_ON_OPERATIONS_ROOM,
+        ),
+      )
+      .volatile.emit("driverPosition", event);
   }
 };
 
@@ -1681,8 +2630,8 @@ const sendDeliveryEventToDriver = (
 ) => {
   // Null is ordinary, not an error: operations register drivers before handing
   // out phones, and that driver simply has no room to reach.
-  if (io && driverUserId) {
-    io.to(`user:${driverUserId}`).emit("deliveryEvent", event);
+  if (out && driverUserId) {
+    out.to(`user:${driverUserId}`).emit("deliveryEvent", event);
   }
 };
 
@@ -1714,8 +2663,8 @@ const sendOccurrenceAuthorizationToBusiness = (
   businessId: string,
   event: OccurrenceAuthorizationRealtimeEvent,
 ) => {
-  if (io) {
-    io.to(operationsRoom(businessId)).emit("occurrenceAuthorization", event);
+  if (out) {
+    out.to(operationsRoom(businessId)).emit("occurrenceAuthorization", event);
   }
 };
 
@@ -1742,8 +2691,8 @@ const sendOccurrenceDecisionToDriver = (
   driverUserId: string | null,
   event: OccurrenceDecisionDriverEvent,
 ) => {
-  if (io && driverUserId) {
-    io.to(`user:${driverUserId}`).emit("deliveryEvent", event);
+  if (out && driverUserId) {
+    out.to(`user:${driverUserId}`).emit("deliveryEvent", event);
   }
 };
 
@@ -1787,12 +2736,12 @@ const sendSupportTicketEvent = (
   event: SupportTicketRealtimeEvent,
   driverTicket: Record<string, unknown> | null,
 ): void => {
-  if (!io) return;
+  if (!out) return;
 
-  io.to(chatStaffRoom(businessId)).emit("supportTicket", event);
+  out.to(chatStaffRoom(businessId)).emit("supportTicket", event);
 
   if (driverUserId && driverTicket && DRIVER_TICKET_EVENTS.has(event.type)) {
-    io.to(`user:${driverUserId}`).emit("supportTicket", {
+    out.to(`user:${driverUserId}`).emit("supportTicket", {
       type: event.type,
       ticket: driverTicket,
     });
@@ -1811,12 +2760,12 @@ const sendChatReadEvent = (
     ticketId?: string;
   },
 ) => {
-  if (!io) return;
+  if (!out) return;
 
-  io.to(chatStaffRoom(businessId)).emit("chatRead", event);
+  out.to(chatStaffRoom(businessId)).emit("chatRead", event);
 
   if (driverUserId) {
-    io.to(`user:${driverUserId}`).emit("chatRead", event);
+    out.to(`user:${driverUserId}`).emit("chatRead", event);
   }
 };
 
@@ -1839,16 +2788,16 @@ const sendChatDeliveredEvent = (
     delivered_at: string;
   },
 ): void => {
-  if (!io) return;
+  if (!out) return;
 
   if (event.side === "DRIVER") {
-    io.to(chatStaffRoom(businessId)).emit("chatDelivered", event);
+    out.to(chatStaffRoom(businessId)).emit("chatDelivered", event);
     return;
   }
 
   // A staff receipt is news for exactly one phone.
   if (event.driverUserId) {
-    io.to(`user:${event.driverUserId}`).emit("chatDelivered", event);
+    out.to(`user:${event.driverUserId}`).emit("chatDelivered", event);
   }
 };
 
@@ -1856,30 +2805,83 @@ const sendChatDeliveredEvent = (
  * Which of these users are connected right now, cluster-wide. Feeds the
  * thread list's presence dots.
  *
- * Asks for the users' own rooms, never the company's. The company room held
- * every socket of the tenant, and each replica answered with the handshake of
- * every one of them through Redis — on every GET of the thread list, which
- * the unread badge refetches on every chat message. A page names at most a
- * page of drivers, and that is all the dots need.
+ * From Postgres since plano-escala U-05 (shared/socket/presence.ts): a
+ * beat younger than 90 s, which every process holding sockets writes, so
+ * any process answers, one that takes no sockets included (the api once
+ * the realtime role holds them, U-07). It used to ask every replica for
+ * its sockets through Redis on every GET of the thread list, which the
+ * unread badge refetches on every chat message. A login that dropped its
+ * signal is still online for PRESENCE_GRACE_MS. This process's own
+ * sockets are online too, before their first beat lands. Presence is
+ * decoration: a failed read answers what this process can see, never a
+ * failed request.
+ *
+ * While a replica that never beats may hold sockets (the image before
+ * U-05, during the rolling deploy that ships it: legacySocketPeers), a
+ * process with sockets also asks the cluster for the logins the beats did
+ * not name, as the list did before U-05: without it, every driver on the
+ * old replica read offline until it drained. Once every socket process
+ * beats, the cluster is never asked.
  */
 async function getOnlineUserIds(userIds: readonly string[]): Promise<string[]> {
-  if (!io || userIds.length === 0) return [];
+  if (userIds.length === 0) return [];
+
+  const wanted = [...new Set(userIds)];
+  const online = new Set(
+    wanted.filter((userId) => localSocketsIn(`user:${userId}`).length > 0),
+  );
+
+  try {
+    for (const userId of await readOnlineUserIds(wanted)) online.add(userId);
+  } catch (error) {
+    log.warn({ err: error }, "presence could not be read: local view only");
+  }
+
+  const missing = wanted.filter((userId) => !online.has(userId));
+
+  if (
+    missing.length > 0 &&
+    io &&
+    env.SOCKETS_ENABLED &&
+    (await legacySocketPeers())
+  ) {
+    for (const userId of await usersConnectedInCluster(missing)) {
+      online.add(userId);
+    }
+  }
+
+  return wanted.filter((userId) => online.has(userId));
+}
+
+/**
+ * Whether the adapter has more servers than live processes beating
+ * presence (shared/socket/presence.ts, createLegacyPeerCheck).
+ */
+const legacySocketPeers = createLegacyPeerCheck({
+  serverCount: async () => (io ? await io.of("/").adapter.serverCount() : 0),
+  beatingSocketProcesses: readLiveSocketProcesses,
+});
+
+/**
+ * Which of these logins have a socket anywhere in the cluster, asked
+ * through the adapter on their own rooms (never the company's: a page
+ * names at most a page of drivers). Redis away or a replica too slow is
+ * nobody more: presence is decoration.
+ */
+async function usersConnectedInCluster(
+  userIds: readonly string[],
+): Promise<string[]> {
+  if (!io) return [];
 
   const wanted = new Set(userIds);
-  const rooms = [...wanted].map((userId) => `user:${userId}`);
-
   let sockets: Array<{ data: { userId?: unknown } }>;
 
   try {
-    sockets = await io.in(rooms).fetchSockets();
+    sockets = await io
+      .in(userIds.map((userId) => `user:${userId}`))
+      .fetchSockets();
   } catch {
-    // Presence is decoration. Redis away, or a replica that did not answer
-    // in time, degrades to what THIS replica can see — never to a failed
-    // request, and no longer to "nobody online".
-    sockets = await io.local
-      .in(rooms)
-      .fetchSockets()
-      .catch(() => []);
+    return [];
   }
 
   return [
@@ -1903,10 +2905,48 @@ async function getOnlineUserIds(userIds: readonly string[]): Promise<string[]> {
  * one with "transport close" — a reason the clients treat as transient, so
  * they reconnect to another replica. `disconnectSockets(true)` would not do:
  * "io server disconnect" tells a client not to come back.
+ *
+ * Since U-01 most sockets are already gone by then, closed in slices over
+ * the drain (`closeRealtimeGradually`); this ends the slices and whatever
+ * they left, the late arrivals included.
  */
 function closeRealtimeConnections(): void {
   stopRevalidation();
+
+  // The sockets closed below would each start a wait nobody is left to
+  // finish; their beats age out and another process sweeps them.
+  presence?.stop();
+  stopGradualClose?.();
+  stopGradualClose = null;
   io?.engine.close();
+}
+
+let stopGradualClose: (() => void) | null = null;
+
+/**
+ * Closes this replica's sockets in slices over the shutdown's drain, 1/N a
+ * second (plano-escala U-01, shared/socket/gradual-close.ts), with
+ * `socket.conn.close()`: the clients read it as a dropped transport and
+ * reconnect to another replica, spread over the drain instead of all in the
+ * same second. Off with SOCKET_GRADUAL_DRAIN=false (all at once at the end
+ * of the drain, as before) and with no drain.
+ */
+function closeRealtimeGradually(windowMs: number): void {
+  if (!io || !env.SOCKET_GRADUAL_DRAIN || windowMs <= 0) return;
+
+  const namespace = io.of("/");
+
+  stopGradualClose?.();
+  stopGradualClose = startGradualClose({
+    sockets: () => [...namespace.sockets.values()],
+    close: (socket) => socket.conn.close(),
+    windowMs,
+  });
+
+  log.info(
+    { sockets: namespace.sockets.size, windowMs },
+    "closing the sockets in slices over the drain",
+  );
 }
 
 /**
@@ -1915,17 +2955,25 @@ function closeRealtimeConnections(): void {
  */
 async function shutdownSocketIO(): Promise<void> {
   stopRevalidation();
+  presence?.stop();
+  presence = null;
 
   try {
     await adapterPubClient?.quit();
     await adapterSubClient?.quit();
+    await emitterRedis?.quit();
     await handshakeRedis?.quit();
     await closeSocketTicketStore();
+
+    // The hints' pub/sub (the wake, F3-04): last, after everything that
+    // could still publish one.
+    await closePubSub();
   } catch {
     // Best-effort no shutdown — does not interfere with shutdown due to a quit error.
   } finally {
     adapterPubClient = null;
     adapterSubClient = null;
+    emitterRedis = null;
     handshakeRedis = null;
     handshakeLimiter = unlimitedHandshakes;
   }
@@ -1938,6 +2986,7 @@ export type {
   OccurrenceAuthorizationRealtimeEvent,
   OccurrenceDecisionDriverEvent,
   RouteRealtimeEvent,
+  RouteStopsLocatedEvent,
   SupportTicketRealtimeEvent,
   SupportTicketRealtimeType,
 };
@@ -1952,20 +3001,51 @@ function realtimeMetrics(): {
   local_connections: number;
   adapter: "redis" | "local" | "off";
   adapter_status: string | null;
+  emitter: boolean;
   dropped_frames_unreported: number;
+  handshakes_in_flight: number;
+  handshakes: HandshakeWindow;
+  socket_cap: number;
+  fd_limit: number | null;
 } {
+  const cap = currentSocketCap();
+
   return {
     local_connections: io?.engine.clientsCount ?? 0,
-    adapter: !io ? "off" : adapterPubClient ? "redis" : "local",
-    adapter_status: adapterPubClient?.status ?? null,
-    dropped_frames_unreported: droppedFramesSinceLastReport,
+    // A process without sockets crosses replicas through the emitter
+    // (U-07): its events still go through Redis, publish-only.
+    adapter: !io
+      ? "off"
+      : (adapterPubClient ?? emitterRedis)
+        ? "redis"
+        : "local",
+    adapter_status: (adapterPubClient ?? emitterRedis)?.status ?? null,
+    emitter: emitterRedis !== null,
+    dropped_frames_unreported: droppedFrames.unreported(),
+    // The admission (plano-escala U-01): since the last ops_sample row.
+    handshakes_in_flight: socketAdmission.inflight(),
+    handshakes: handshakeMetrics.snapshot(),
+    // The real ceiling and the descriptor limit behind it (F5-31); the
+    // socket-cap-high alert compares local_connections with socket_cap.
+    socket_cap: cap.cap,
+    fd_limit: cap.fdLimit,
   };
+}
+
+/**
+ * The minute's handshakes for the ops_sample row, then a fresh window:
+ * duration p50/p99 and the refusals by reason (plano-escala U-01).
+ */
+function rotateHandshakeMetrics(): HandshakeWindow {
+  return handshakeMetrics.rotate();
 }
 
 export {
   realtimeMetrics,
+  rotateHandshakeMetrics,
   initializeSocketIO,
   closeRealtimeConnections,
+  closeRealtimeGradually,
   shutdownSocketIO,
   sendNotificationToUser,
   sendNotificationsReadToUser,
@@ -1973,6 +3053,8 @@ export {
   sendAIVerificationEvent,
   sendSecurityEventToUser,
   sendSecurityEventToSession,
+  announceSessionRevocation,
+  adoptSessionVersion,
   sendSecurityEventToBusiness,
   sendEntitlementsChangedEvent,
   sendCatalogChangedEvent,
@@ -1984,6 +3066,7 @@ export {
   refreshDeliveryRooms,
   broadcastWhatsAppTemplateLaneChange,
   sendRouteEventToBusiness,
+  sendRouteStopsLocatedToBusiness,
   sendDeliveryEventToDriver,
   sendDriverPositionToBusiness,
   sendRouteEventToDriver,

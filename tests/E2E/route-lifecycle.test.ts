@@ -1,9 +1,14 @@
 import { beforeAll, afterAll, describe, expect, it } from "vitest";
 
+import type { Prisma } from "@prisma/client";
+
 import { RouteRepository } from "@/modules/route/repositories/route-repository";
 import { DeliveryRepository } from "@/modules/delivery/repositories/delivery-repository";
+import { VehicleRepository } from "@/modules/vehicle/repositories/vehicle-repository";
 import { DeliveryAlreadyOnRouteError } from "@/modules/route/usecases/errors/route-errors";
 import { createPrismaClient } from "@/shared/database/database-client";
+
+import { someoneWaitsOnALock } from "./support/lock-wait";
 
 /**
  * The route's writes, against a real Postgres.
@@ -21,6 +26,7 @@ import { createPrismaClient } from "@/shared/database/database-client";
 const prisma = createPrismaClient();
 const repository = new RouteRepository(prisma);
 const deliveries = new DeliveryRepository(prisma);
+const vehicles = new VehicleRepository(prisma);
 
 const CARRIER = "biz-lifecycle";
 const DRIVER = "drv-lifecycle";
@@ -374,6 +380,51 @@ describe("cancelling a route that already left", () => {
     expect(row.status).toBe("PENDING");
     expect(row.driverId).toBeNull();
     expect(row.vehicleId).toBeNull();
+
+    // And its timeline says why, in the same commit (K8); the proven one
+    // gets no line.
+    const route = await prisma.route.findUniqueOrThrow({
+      where: { id: routeId },
+    });
+    const lines = await prisma.deliveryEvent.findMany({
+      where: { routeId, type: "ROUTE_REMOVED" },
+    });
+
+    expect(lines.map((line) => [line.deliveryId, line.note])).toEqual([
+      [untouched, `Rota ${route.code} cancelada: Caminhão quebrou`],
+    ]);
+    expect(lines[0].businessId).toBe(CARRIER);
+  });
+
+  it("closes as Cancelada when its last open stop is called off and nothing was worked (K8)", async () => {
+    const first = await seedDelivery();
+    const second = await seedDelivery();
+
+    const routeId = await runningRoute([first, second]);
+
+    const one = await repository.settleStopForDelivery(first, CARRIER, {
+      from: ["PENDING", "ARRIVED"],
+      status: "CANCELLED",
+    });
+
+    expect(one?.closedRoute).toBeNull();
+
+    const last = await repository.settleStopForDelivery(second, CARRIER, {
+      from: ["PENDING", "ARRIVED"],
+      status: "CANCELLED",
+    });
+
+    expect(last?.closedRoute).toMatchObject({
+      status: "CANCELLED",
+      cancellation_reason: "Todas as paradas canceladas",
+      completed_at: null,
+    });
+
+    const row = await prisma.route.findUniqueOrThrow({
+      where: { id: routeId },
+    });
+
+    expect(row.status).toBe("CANCELLED");
   });
 
   it("frees the returned delivery for another route", async () => {
@@ -711,6 +762,168 @@ describe("“Em rota” written by the route and nothing else", () => {
 
     expect(await statusOf(vehicle)).toBe("BLOCKED");
   });
+
+  /**
+   * Taking the block back while the route is still out (decision 8.3): the
+   * status is the route's, derived in the write under the running route's
+   * lock. The two orders against the route closing at the same instant are
+   * driven by hand below — the pause between the two transactions is the
+   * whole race.
+   */
+  describe("unblocking a truck while its route is on the road", () => {
+    const unblock = (vehicleId: string, tx?: Prisma.TransactionClient) =>
+      vehicles.updateVehicle(
+        {
+          vehicleData: { status: "ACTIVE" },
+          vehicleId,
+          statusFromRunningRoute: { businessId: CARRIER },
+        },
+        tx,
+      );
+
+    async function blockedOnTheRoad(): Promise<{
+      vehicle: string;
+      routeId: string;
+    }> {
+      const vehicle = await seedVehicle();
+      const routeId = await runningRoute([await seedDelivery()], vehicle);
+
+      await prisma.vehicle.update({
+        where: { id: vehicle },
+        data: { status: "BLOCKED" },
+      });
+
+      return { vehicle, routeId };
+    }
+
+    const cancelling = (routeId: string, tx?: Prisma.TransactionClient) =>
+      repository.transitionRoute(
+        routeId,
+        CARRIER,
+        {
+          expectedStatus: "IN_PROGRESS",
+          status: "CANCELLED",
+          cancellation_reason: "Pane",
+        },
+        tx,
+      );
+
+    it("goes back to Em rota, and the route closing frees it", async () => {
+      const { vehicle, routeId } = await blockedOnTheRoad();
+
+      expect((await unblock(vehicle)).status).toBe("IN_ROUTE");
+
+      await cancelling(routeId);
+
+      expect(await statusOf(vehicle)).toBe("ACTIVE");
+    });
+
+    it("does the same through the contracted-fleet write", async () => {
+      const { vehicle } = await blockedOnTheRoad();
+
+      const { vehicle: written } = await vehicles.updateVehicleWithinLimit(
+        {
+          vehicleData: { status: "IN_ROUTE" },
+          vehicleId: vehicle,
+          businessId: CARRIER,
+          statusFromRunningRoute: { businessId: CARRIER },
+        },
+        { max: 0 },
+      );
+
+      expect(written?.status).toBe("IN_ROUTE");
+    });
+
+    it("writes Ativo once the route has ended", async () => {
+      const { vehicle, routeId } = await blockedOnTheRoad();
+
+      // The block survived the route (above); taking it back now is Ativo.
+      await cancelling(routeId);
+
+      expect((await unblock(vehicle)).status).toBe("ACTIVE");
+    });
+
+    it("never reads another company's running route", async () => {
+      const { vehicle } = await blockedOnTheRoad();
+
+      const written = await vehicles.updateVehicle({
+        vehicleData: { status: "ACTIVE" },
+        vehicleId: vehicle,
+        statusFromRunningRoute: { businessId: "biz-other" },
+      });
+
+      expect(written.status).toBe("ACTIVE");
+    });
+
+    it("waits for a route closing at that instant, then writes Ativo", async () => {
+      const { vehicle, routeId } = await blockedOnTheRoad();
+
+      let holding: () => void = () => undefined;
+      const closingHoldsTheRoute = new Promise<void>((resolve) => {
+        holding = resolve;
+      });
+
+      const closing = prisma.$transaction(
+        async (tx) => {
+          // The closing's write on the route row (and its vehicle sync,
+          // which leaves the BLOCKED truck alone)...
+          await cancelling(routeId, tx);
+
+          holding();
+
+          // ...held open until the unblocking waits on that row.
+          await someoneWaitsOnALock(prisma, { what: "route row" });
+        },
+        { maxWait: 10_000, timeout: 20_000 },
+      );
+
+      await closingHoldsTheRoute;
+
+      const unblocked = unblock(vehicle);
+
+      await closing;
+
+      // Re-read as committed, the route is no longer on the road: Ativo,
+      // never an "Em rota" nothing would ever correct.
+      expect((await unblocked).status).toBe("ACTIVE");
+      expect(await statusOf(vehicle)).toBe("ACTIVE");
+    }, 60_000);
+
+    it("holds a route closing at that instant until it commits, and the closing frees the truck", async () => {
+      const { vehicle, routeId } = await blockedOnTheRoad();
+
+      let holding: () => void = () => undefined;
+      const unblockingHoldsTheRoute = new Promise<void>((resolve) => {
+        holding = resolve;
+      });
+
+      const unblocking = prisma.$transaction(
+        async (tx) => {
+          // FOR SHARE on the running route, then IN_ROUTE written...
+          const written = await unblock(vehicle, tx);
+
+          holding();
+
+          // ...held open until the closing waits on that share lock.
+          await someoneWaitsOnALock(prisma, { what: "route row" });
+
+          return written;
+        },
+        { maxWait: 10_000, timeout: 20_000 },
+      );
+
+      await unblockingHoldsTheRoute;
+
+      const closing = cancelling(routeId);
+
+      expect((await unblocking).status).toBe("IN_ROUTE");
+
+      await closing;
+
+      // The closing ran after the commit, saw "Em rota" and gave it back.
+      expect(await statusOf(vehicle)).toBe("ACTIVE");
+    }, 60_000);
+  });
 });
 
 describe("what the driver's phone receives", () => {
@@ -949,4 +1162,78 @@ describe("the last two stops settled at the same instant", () => {
     );
     expect(truck.status).toBe("ACTIVE");
   }, 30_000);
+});
+
+/**
+ * The invariant the company-scoped anti-join stands on (plan F2-21).
+ *
+ * "Not on an open stop" now looks for the stop through the company's routes
+ * that have not ended (src/shared/route/open-stop-anti-join.ts), instead of
+ * hashing every open stop of the platform. That gives the same answer only
+ * while an open stop never outlives its route, and never sits on another
+ * company's route. If one did, the picker would offer a delivery the partial
+ * unique index then refuses, and the import's undo would delete a delivery
+ * from under a stop.
+ *
+ * Last in the file: every route above was created, run, settled, cancelled or
+ * closed by the real repository, and the check reads all of them.
+ */
+describe("an open stop lives only on an open route of its delivery's company", () => {
+  it("holds after every route this file ended", async () => {
+    // The one way to end a route the cases above do not take.
+    const user = await prisma.user.create({
+      data: {
+        name: "Despachante",
+        email: "despachante-ciclo@exemplo.com.br",
+        password: "nao-usado",
+        role: "BUSINESS_ADMIN",
+        businessId: CARRIER,
+      },
+    });
+    const worked = await seedDelivery();
+    const left = await seedDelivery();
+    const routeId = await runningRoute([worked, left]);
+
+    await repository.settleStopForDelivery(worked, CARRIER, {
+      from: ["PENDING", "ARRIVED"],
+      status: "COMPLETED",
+      completed_at: new Date(),
+    });
+    await repository.closeWithPending(routeId, CARRIER, {
+      reason: "Fim do turno",
+      actorId: user.id,
+      at: new Date(),
+    });
+
+    const strays = await prisma.$queryRaw<
+      Array<{ id: string; route: string; status: string }>
+    >`
+      SELECT s."id", r."id" AS "route", r."status"::text AS "status"
+      FROM "route_stop" s
+      JOIN "route" r ON r."id" = s."routeId"
+      JOIN "delivery" d ON d."id" = s."deliveryId"
+      WHERE s."status" IN ('PENDING', 'ARRIVED')
+        AND (r."status" NOT IN ('PLANNED', 'RELEASED', 'IN_PROGRESS')
+             OR r."businessId" <> d."businessId")
+    `;
+
+    expect(strays).toEqual([]);
+
+    // And the file did end routes that had stops open, each way: a check
+    // over routes that never ended would prove nothing.
+    const ended = await prisma.route.groupBy({
+      by: ["status"],
+      where: {
+        businessId: CARRIER,
+        status: { in: ["COMPLETED", "CANCELLED"] },
+        stops: { some: { status: "CANCELLED" } },
+      },
+      _count: true,
+    });
+
+    expect(ended.map((row) => row.status).sort()).toEqual([
+      "CANCELLED",
+      "COMPLETED",
+    ]);
+  });
 });

@@ -43,6 +43,7 @@ import { UserInvalidCredentialsError } from "@/modules/user/usecases/errors/user
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
 import { InMemoryUserTokensRepository } from "@/modules/user/repositories/in-memory/in-memory-user-tokens-repository";
 import { InMemoryDriverRepository } from "@/modules/driver/repositories/in-memory/in-memory-driver-repository";
+import { InMemoryDriverTrustedDeviceRepository } from "@/modules/user/repositories/in-memory/in-memory-driver-trusted-device-repository";
 
 const EMAIL = "vitima@exemplo.com.br";
 const PASSWORD = "a-senha-certa";
@@ -74,6 +75,7 @@ beforeEach(async () => {
     users as never,
     new InMemoryUserTokensRepository() as never,
     new InMemoryDriverRepository() as never,
+    new InMemoryDriverTrustedDeviceRepository(),
   );
 
   vi.spyOn(container, "resolve").mockReturnValue(useCase as never);
@@ -148,6 +150,58 @@ describe("an unknown e-mail", () => {
       reason: "unknown_email",
       userId: null,
       clientAddress: "203.0.113.9",
+    });
+  });
+});
+
+// Wave 2: a CPF login on a phone no login of the CPF trusts is refused before
+// any password is compared. The refusal is a failed login like the others —
+// one warn line, the CPF only as a keyed fingerprint (LGPD), never in clear.
+describe("a CPF on a phone nobody trusts", () => {
+  const CPF = "52998224725";
+
+  const byCpf = (payload: Record<string, unknown>) =>
+    app.inject({
+      method: "POST",
+      url: "/user/session",
+      headers: { "x-forwarded-for": "198.51.100.7, 203.0.113.9" },
+      payload: { cpf: CPF, password: "qualquer-senha", ...payload },
+    });
+
+  it("answers 403 AUTH_DEVICE_NOT_TRUSTED and logs device_not_trusted with the fingerprint only", async () => {
+    const response = await byCpf({ deviceId: "23be03c084165505" });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({
+      code: "AUTH_DEVICE_NOT_TRUSTED",
+      message:
+        "Este aparelho não está liberado para entrar com este CPF. Isso acontece no primeiro acesso em um celular ou quando a empresa desconecta o aparelho. Confira o CPF ou peça ao gestor um QR Code de acesso.",
+    });
+
+    const [failure] = failures();
+
+    expect(failure).toMatchObject({
+      level: 40,
+      reason: "device_not_trusted",
+      userId: null,
+      identifier: "cpf",
+      withDevice: true,
+      clientAddress: "203.0.113.9",
+    });
+    expect(failure.account).toMatch(/^[0-9a-f]{16}$/);
+    expect(raw).not.toContain(CPF);
+    expect(raw).not.toContain("qualquer-senha");
+  });
+
+  it("answers the same without a deviceId, and says so in the log", async () => {
+    const withDevice = await byCpf({ deviceId: "23be03c084165505" });
+    const without = await byCpf({});
+
+    expect(without.statusCode).toBe(403);
+    expect(without.json()).toEqual(withDevice.json());
+    expect(failures()[1]).toMatchObject({
+      reason: "device_not_trusted",
+      withDevice: false,
     });
   });
 });

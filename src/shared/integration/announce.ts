@@ -3,6 +3,7 @@ import type { Prisma } from "@prisma/client";
 import type { Route } from "@/modules/route/dtos/route-dto";
 import { dateOnlyKey } from "@/shared/time/business-day";
 import type { WebhookFanOutService } from "./webhook-fan-out-service";
+import { proofUrlFor } from "./proof-link";
 
 /**
  * The shapes a webhook payload takes.
@@ -24,6 +25,8 @@ import type { WebhookFanOutService } from "./webhook-fan-out-service";
 function deliveryEventPayload(
   delivery: {
     id: string;
+    /** The owner: signs proof_url once the delivery ended. */
+    businessId?: string | null;
     code?: string | null;
     invoice_key?: string | null;
     invoice_number?: string | null;
@@ -54,6 +57,17 @@ function deliveryEventPayload(
     uf: delivery.uf ?? null,
 
     occurred_at: occurredAt ? occurredAt.toISOString() : null,
+
+    // The bearer link to the receipt (plan of 02/11/2026, L7), on every
+    // event whose status AFTER it is an end (DELIVERED or FAILED): the
+    // proof, the delivery it proved, the failure. Null on the others, the
+    // key always there. Derived from the state, so no call site can forget
+    // it on one path and send it on another.
+    proof_url: proofUrlFor({
+      id: delivery.id,
+      businessId: delivery.businessId,
+      status: delivery.status,
+    }),
   };
 }
 
@@ -155,6 +169,19 @@ async function announceRouteClosed(
   tx?: Prisma.TransactionClient,
 ): Promise<void> {
   if (!settled?.closedRoute) return;
+
+  // A route whose every stop was called off closes as Cancelada (K8, D32):
+  // the ERP hears the same route.cancelled a cancellation by hand sends.
+  if (settled.closedRoute.status === "CANCELLED") {
+    await webhooks.announce(
+      "route.cancelled",
+      businessId,
+      routeEventPayload(settled.closedRoute),
+      tx,
+    );
+
+    return;
+  }
 
   await webhooks.announce(
     "route.completed",

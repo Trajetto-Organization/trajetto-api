@@ -3,6 +3,7 @@ import { hostname } from "node:os";
 import pino, { type DestinationStream, type Logger } from "pino";
 
 import { env } from "@/env";
+import { swarmIdentity, swarmLogBindings } from "@/shared/swarm-identity";
 
 /**
  * Environment variables whose values must never reach a log line: every
@@ -15,26 +16,49 @@ const SECRET_ENV_KEYS = [
   "PROOF_SIGNING_PFX_BASE64",
   "PROOF_SIGNING_PFX_PASSWORD",
   "REVERSE_GEOCODER_KEY",
+  "ADDRESS_SEARCH_KEY",
   // A tile URL can carry the provider's API key in its query string.
   "PROOF_MAP_TILE_URL",
+  // The app's base map (wave 5): signed-in clients receive these through
+  // GET /config/map, but a log line travels further than a session.
+  "MAP_TILE_URL",
+  "MAP_TILE_URL_DARK",
   // Connection strings carry the password.
   "DATABASE_URL",
+  "DATABASE_READ_URL",
+  "BATCH_DATABASE_URL",
+  // The readiness probe's pool in PgBouncer (plano-escala F4-37).
+  "READINESS_DATABASE_URL",
+  // The standby of readDatabase() (plano-escala F4-41).
+  "DATABASE_REPLICA_URL",
   "REDIS_URL",
+  // The pub/sub's own Redis (plano-escala F5-01).
+  "PUBSUB_REDIS_URL",
+  // PgBouncer's stats login (plano-escala F4-36): SHOW only, still a password.
+  "PGBOUNCER_STATS_URL",
   "JWT_SECRET",
   "JWT_SECRET_REFRESH_TOKEN",
   "META_WHATSAPP_ACCESS_TOKEN",
   "META_WHATSAPP_APP_SECRET",
   "META_WHATSAPP_WEBHOOK_VERIFY_TOKEN",
+  "EXPO_ACCESS_TOKEN",
   "RESEND_SECRET_KEY",
   "RESEND_WEBHOOK_SECRET",
   "R2_ACCESS_KEY_ID",
   "R2_SECRET_ACCESS_KEY",
+  // The trail archive's own token (plano-escala F2-11).
+  "ARCHIVE_R2_ACCESS_KEY_ID",
+  "ARCHIVE_R2_SECRET_ACCESS_KEY",
   "AI_LOCAL_TOKEN",
   // Whoever holds the check's URL can silence the alert.
   "HEALTHCHECK_PING_URL",
   "HEALTHCHECK_FAIL_URL",
   "MASTER_USER_INITIAL_PASSWORD",
   "DOCS_PASSWORD",
+  // Opens GET /health/rollout (U-11).
+  "ROLLOUT_STATUS_TOKEN",
+  // Opens /metrics on METRICS_PORT (plano-escala F5-29).
+  "METRICS_TOKEN",
   "TURNSTILE_SECRET_KEY",
   "RATE_LIMIT_FORWARDER_SECRET",
   "RATE_LIMIT_EDGE_SECRET",
@@ -54,6 +78,11 @@ const SECRET_FIELD_NAMES = [
   "refreshToken",
   "access_token",
   "accessToken",
+  // The driver's access QR code and its short code (plan of 02/11/2026,
+  // D3): each opens a session while it lives.
+  "qrToken",
+  "qrContent",
+  "accessCode",
 ] as const;
 
 /**
@@ -76,8 +105,14 @@ function buildLogger(destination?: DestinationStream): Logger {
       // pino's own bindings plus the environment (ENV-1): staging and
       // production run the same image, and a line has to say which one wrote
       // it. Setting `base` replaces the defaults, so pid and hostname are
-      // spelled out.
-      base: { pid: process.pid, hostname: hostname(), app_env: env.APP_ENV },
+      // spelled out. The Swarm's node, slot and service (F4-50) join them
+      // only when the Application sets them: without, a line is what it was.
+      base: {
+        pid: process.pid,
+        hostname: hostname(),
+        app_env: env.APP_ENV,
+        ...swarmLogBindings(swarmIdentity),
+      },
 
       // No serializer writes headers today; this is the floor under the next
       // one that does. A bearer token or a session cookie in a log is a

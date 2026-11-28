@@ -18,19 +18,22 @@ class TwoFactorVerificationController {
     request: FastifyRequest,
     reply: FastifyReply,
   ): Promise<Response> {
-    const { email, code, challenge } = twoFactorUserSchema.parse(request.body);
+    const { email, code, challenge, deviceId } = twoFactorUserSchema.parse(
+      request.body,
+    );
 
     const twoFactorVerificationUseCase = container.resolve(
       TwoFactorVerificationUseCase,
     );
 
     try {
-      const { token, refresh_token, role } =
+      const { token, refresh_token, role, mustChangePassword } =
         await twoFactorVerificationUseCase.execute(
           {
             email: email as string,
             twoFactorCode: code as string,
             challenge,
+            deviceId,
           },
           parseSessionClient(request.headers["x-trajetto-client"]),
         );
@@ -40,6 +43,8 @@ class TwoFactorVerificationController {
         token,
         refresh_token,
         role,
+        // Additive (wave 2): older clients ignore it.
+        mustChangePassword,
       });
     } catch (error) {
       if (error instanceof UserNotFoundPermissionOrProfileAccess) {

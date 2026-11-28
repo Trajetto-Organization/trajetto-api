@@ -19,8 +19,13 @@ import { dateOnlyKey } from "@/shared/time/business-day";
  * never a guess at how the driver and the database round a float. Items are
  * compared as a multiset: their order is not a fact the delivery keeps.
  *
+ * The address point (plan of 02/11/2026, E1) is compared only when it is
+ * MANUAL, the source a create writes for the coordinates it was given; a
+ * point the geocoder found later is not the caller's body.
+ *
  * The honest limits, both documented: the row can be edited on the panel
- * after it was created, and a shipper named by CNPJ can have its CNPJ edited.
+ * after it was created (an address edit, or a pin moved with "Fixar no
+ * mapa"), and a shipper named by CNPJ can have its CNPJ edited.
  * A retry of the ORIGINAL body then no longer matches, and answers 409 (with
  * the delivery's id) instead of pretending the edit did not happen.
  */
@@ -51,6 +56,10 @@ interface DeliveryDraft {
   complement?: string | null;
   neighborhood?: string | null;
 
+  /** The address point the body gave (plan of 02/11/2026, E1). */
+  latitude?: number | null;
+  longitude?: number | null;
+
   scheduled_date?: Date | null;
   notes?: string | null;
 
@@ -69,11 +78,21 @@ interface StoredItem {
   unit_value: DecimalLike | null;
 }
 
-interface StoredDelivery
-  extends Omit<DeliveryDraft, "shipperId" | "items" | "scheduled_date"> {
+interface StoredDelivery extends Omit<
+  DeliveryDraft,
+  "shipperId" | "items" | "scheduled_date"
+> {
   shipperId: string;
   scheduled_date: Date | null;
   items: StoredItem[];
+
+  /**
+   * Where the stored point came from: only a MANUAL one can be what the
+   * body sent. A GEOCODER point was found after the create, and comparing
+   * it would turn every retry of a body without coordinates into a 409
+   * once the geocoder ran. Absent reads as no point.
+   */
+  geo_source?: string | null;
 
   /** The key that created it; null when the panel's form did. */
   apiKeyId: string | null;
@@ -175,6 +194,20 @@ function itemKey(item: {
   ]);
 }
 
+/**
+ * The point as the create writes it: a whole pair, or none (half a pair is
+ * refused before the create and stored as none by it). Doubles round-trip
+ * through a double precision column exactly, so no scale is applied.
+ */
+function pointOf(
+  latitude: number | null | undefined,
+  longitude: number | null | undefined,
+): [number, number] | null {
+  return typeof latitude === "number" && typeof longitude === "number"
+    ? [latitude, longitude]
+    : null;
+}
+
 function fingerprint(
   fields: { [field in (typeof TEXT_FIELDS)[number]]?: string | null } & {
     kind?: string | null;
@@ -182,6 +215,7 @@ function fingerprint(
   shipperId: string | null,
   scheduledDate: Date | null | undefined,
   items: string[],
+  point: [number, number] | null,
 ): string {
   return JSON.stringify({
     shipperId,
@@ -193,6 +227,10 @@ function fingerprint(
     ),
     scheduled_date: scheduledDate ? dateOnlyKey(scheduledDate) : null,
     items: [...items].sort(),
+    // Plan E1: the coordinates are part of the document, so a corrected
+    // point under the same key is another body (409), not a silent replay
+    // of the old one.
+    point,
   });
 }
 
@@ -209,6 +247,7 @@ function draftFingerprint(draft: DeliveryDraft): string {
         unit_value: item.unit_value,
       }),
     ),
+    pointOf(draft.latitude, draft.longitude),
   );
 }
 
@@ -218,6 +257,9 @@ function storedFingerprint(stored: StoredDelivery): string {
     stored.shipperId,
     stored.scheduled_date,
     stored.items.map(itemKey),
+    stored.geo_source === "MANUAL"
+      ? pointOf(stored.latitude, stored.longitude)
+      : null,
   );
 }
 

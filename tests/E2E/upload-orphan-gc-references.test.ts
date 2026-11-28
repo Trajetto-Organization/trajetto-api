@@ -315,7 +315,8 @@ describe("a delete run over live rows", () => {
         prefix.startsWith("chatAttachments/")
           ? Promise.reject(new Error("ListObjectsV2: 503 SlowDown"))
           : real.listObjectKeys(prefix, startAfter, maxKeys),
-      tryDeleteFile: (objectKey: string) => real.tryDeleteFile(objectKey),
+      deleteFileOutcome: (objectKey: string) =>
+        real.deleteFileOutcome(objectKey),
     };
 
     clearLogged();
@@ -326,7 +327,12 @@ describe("a delete run over live rows", () => {
       uploadService: flaky,
     });
 
-    expect(summary).toMatchObject({ errors: 1, deleted: 3, failed: 0 });
+    expect(summary).toMatchObject({
+      errors: 1,
+      deleted: 3,
+      locked: 0,
+      failed: 0,
+    });
 
     // Nothing in the failed scope was touched, live or not.
     expect(exists(key.chatOrphan)).toBe(true);
@@ -345,5 +351,46 @@ describe("a delete run over live rows", () => {
         }),
       }),
     );
+  });
+
+  it("skips and counts an orphan a Bucket Lock holds, and the run still succeeds", async () => {
+    // plano-escala F1-23: a lock on deliveryPhotos/ (after the lawyer's
+    // opinion, say) refuses the delete. That is "locked", not "failed": the
+    // object stays, the count is in the summary and nothing throws.
+    const { runOrphanUploadGc } = await load();
+    const { UploadService } = await import("@/shared/services/upload-service");
+
+    const real = new UploadService();
+    const locked = {
+      listObjectKeys: (prefix: string, startAfter?: string, maxKeys?: number) =>
+        real.listObjectKeys(prefix, startAfter, maxKeys),
+      deleteFileOutcome: (objectKey: string) =>
+        objectKey.startsWith("deliveryPhotos/")
+          ? Promise.resolve("locked" as const)
+          : real.deleteFileOutcome(objectKey),
+    };
+
+    const summary = await runOrphanUploadGc({
+      mode: "delete",
+      now: NOW,
+      uploadService: locked,
+    });
+
+    expect(summary).toMatchObject({
+      orphaned: 4,
+      deleted: 3,
+      locked: 1,
+      failed: 0,
+      errors: 0,
+    });
+
+    // The locked orphan is still there; the others were collected.
+    expect(exists(key.deliveryOrphan)).toBe(true);
+    expect(exists(key.fuelOrphan)).toBe(false);
+    expect(exists(key.chatOrphan)).toBe(false);
+
+    for (const objectKey of referenced) {
+      expect(exists(objectKey), objectKey).toBe(true);
+    }
   });
 });

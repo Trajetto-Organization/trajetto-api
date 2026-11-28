@@ -76,7 +76,13 @@ async function sendAsNDJSON<T>({
   reply.header("Transfer-Encoding", "chunked");
 
   reply.header("Cache-Control", "no-cache");
-  reply.header("Connection", "keep-alive");
+
+  // No Connection header here: Node keeps an HTTP/1.1 chunked response
+  // alive by itself, and a header set by the route makes it skip its own
+  // keep-alive logic — the close on a connection's last response under
+  // HTTP_MAX_REQUESTS_PER_SOCKET included. A listing that was a
+  // connection's capped response said keep-alive, Traefik sent one more
+  // request on it, and Node answered that one 503 (plano-escala LOAD-06).
 
   const dataStream = new Readable({
     objectMode: true,

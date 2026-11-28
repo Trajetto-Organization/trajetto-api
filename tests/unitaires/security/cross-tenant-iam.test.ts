@@ -6,8 +6,7 @@ import { AppError } from "@/shared/errors/AppError";
 import { InMemoryUserRepository } from "@/modules/user/repositories/in-memory/in-memory-user-repository";
 import { InMemoryProfileAccessRepository } from "@/modules/profile-access/repositories/in-memory/in-memory-profile-access-repository";
 import { InMemoryPermissionRepository } from "@/modules/permission/repositories/in-memory/in-memory-permission-repository";
-import { InMemoryServiceOrderRepository } from "@/modules/service-order/repositories/in-memory/in-memory-service-order-repository";
-import { InMemoryAccountPayableRepository } from "@/modules/account-payable/repositories/in-memory/in-memory-account-payable-repository";
+import { InMemoryDriverRepository } from "@/modules/driver/repositories/in-memory/in-memory-driver-repository";
 
 import { DeleteUserUseCase } from "@/modules/user/usecases/delete-user/delete-user-usecase";
 import { DeleteProfileAccessUseCase } from "@/modules/profile-access/usecases/delete-profile-access/delete-profile-access-usecase";
@@ -138,8 +137,7 @@ describe("IAM routes without :businessId refuse another tenant's record", () => 
 
     const useCase = new DeleteUserUseCase(
       userRepository,
-      new InMemoryServiceOrderRepository(),
-      new InMemoryAccountPayableRepository(),
+      new InMemoryDriverRepository(),
       notificationStub,
     );
 

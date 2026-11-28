@@ -193,6 +193,78 @@ interface SearchServiceOrderByVehicleWithCursorProps {
   cursor?: string;
   vehicleId: string;
   businessId: string;
+  /**
+   * The typed term: id, description, responsible's name or the branch's
+   * corporate reason — what the driver's view shows, for every reader.
+   * Never the supplier, the total or a part's price or discount: the rows
+   * a term like "1850" brought back would tell a driver which order costs
+   * what his view hides.
+   */
+  search?: string;
+}
+
+/**
+ * One order as its detail reads it (wave 3): its columns, the names of its
+ * links and its parts. Always read inside one company. The use case decides
+ * what of it leaves (service-order-views.ts): a driver never gets the money.
+ * A relation is null only in the twin, when a test seeds no name for it.
+ */
+interface ServiceOrderDetail {
+  id: string;
+  date: Date | string;
+  completion_date: Date | string | null;
+  maintenance_type: "INTERNAL" | "EXTERNAL";
+  total_amount: Decimal | string | number;
+  description: string | null;
+  current_mileage_at_service: number | null;
+  maintenance_interval_km_at_service: number | null;
+  last_maintenance_mileage_at_service: number | null;
+  new_mileage_after_service: number | null;
+  latitude: number | null;
+  longitude: number | null;
+  created_from: RecordOrigin;
+  businessId: string;
+  vehicleId: string;
+  responsibleUserId: string;
+  branchId: string;
+  supplierId: string | null;
+  created_at: Date | string;
+  updated_at: Date | string;
+  vehicle: { id: string; license_plate: string; description: string } | null;
+  responsibleUser: { id: string; name: string } | null;
+  branch: { id: string; corporate_reason: string } | null;
+  supplier: { id: string; name: string } | null;
+  parts: Array<{
+    id: string;
+    quantity: number;
+    unit_price: Decimal | string | number;
+    discount_percentage: Decimal | string | number | null;
+    part: { description: string };
+  }>;
+}
+
+/**
+ * "Minhas OS" (wave 3): `assigned` = the orders the caller is responsible
+ * for; `vehicle` = the orders of the vehicles the driver may operate that
+ * are not already theirs, so the two sections never repeat an order.
+ */
+type DriverServiceOrderScope = "assigned" | "vehicle";
+
+interface SearchDriverServiceOrdersProps {
+  limit: number;
+  cursor?: string;
+  businessId: string;
+  /** The caller: the responsible in `assigned`, left out in `vehicle`. */
+  userId: string;
+  scope: DriverServiceOrderScope;
+  /** Read in `vehicle` only: the vehicles the driver may operate. */
+  vehicleIds: string[];
+}
+
+interface CursorPaginatedServiceOrderDetail {
+  data: ServiceOrderDetail[];
+  nextCursor: string | null;
+  hasMore: boolean;
 }
 
 export {
@@ -209,4 +281,8 @@ export {
   SearchServiceOrderWithCursorProps,
   CursorPaginatedServiceOrder,
   SearchServiceOrderByVehicleWithCursorProps,
+  ServiceOrderDetail,
+  DriverServiceOrderScope,
+  SearchDriverServiceOrdersProps,
+  CursorPaginatedServiceOrderDetail,
 };

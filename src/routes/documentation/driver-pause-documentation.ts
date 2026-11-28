@@ -36,7 +36,7 @@ const pauseView = z.object({
     .string()
     .nullable()
     .describe(
-      "A rota da jornada no instante do início (liberada ou em andamento; decisão 14.4). Pausas anteriores à regra podem não ter.",
+      "A rota da jornada no instante do início (iniciada, em andamento; decisão 14.4). Pausas anteriores à regra podem não ter, e as anteriores à mudança para a rota iniciada podem estar presas a uma rota só liberada.",
     ),
   start_submission_id: z.string(),
   end_submission_id: z.string().nullable(),
@@ -77,12 +77,29 @@ const currentPause = z.object({
   pause_allowed: z
     .boolean()
     .describe(
-      'Decisão 14.4: verdadeiro quando o motorista tem agora uma rota liberada ou em andamento do dia — só então o app mostra "Iniciar pausa". Encerrar uma pausa aberta é sempre possível.',
+      'Decisão 14.4 (revista em 12/11/2026): verdadeiro quando o motorista tem agora uma rota iniciada (em andamento) — só então o app libera "Iniciar pausa". Rota só liberada não conta. Encerrar uma pausa aberta é sempre possível.',
     ),
   journey_route_id: z
     .string()
     .nullable()
     .describe("A rota da jornada agora; nula fora de jornada."),
+  last_ended_at: isoDateTime
+    .nullable()
+    .describe(
+      "Quando terminou a última pausa encerrada do motorista, de qualquer dia; nulo quando ele nunca encerrou uma.",
+    ),
+  next_pause_allowed_at: isoDateTime
+    .nullable()
+    .describe(
+      "Quando uma nova pausa pode começar: `last_ended_at` mais 5 minutos (05/11/2026); nulo sem pausa encerrada.",
+    ),
+  next_pause_in_seconds: z
+    .number()
+    .int()
+    .min(0)
+    .describe(
+      "Segundos inteiros, arredondados para cima, de agora (relógio do servidor) até `next_pause_allowed_at`; 0 quando já passou ou sem pausa encerrada. O app conta a espera no próprio relógio a partir deste número, nunca do instante: o relógio do aparelho costuma estar errado.",
+    ),
 });
 
 const reportPause = z.object({
@@ -181,10 +198,16 @@ const driverDay = z.object({
       z.object({
         code: flagCode,
         message: z.string().describe("A explicação, em português."),
+        unreliable: z
+          .literal(true)
+          .optional()
+          .describe(
+            "A estimativa por trás do alerta não é confiável (decisão D54): vem em DRIVING_REST_SHORT quando a rota da jornada ficou esquecida aberta, porque a direção conta até agora. Ausente nos demais casos.",
+          ),
       }),
     )
     .describe(
-      "Alertas da Lei 13.103/2015 — só sinalizam, nada é bloqueado. MEAL_MISSING: jornada acima de 6 h sem pausa de refeição. MEAL_SHORT: a maior refeição teve menos de 1 h. DRIVING_REST_SHORT: mais de 6 h de direção estimada sem somar 30 min de descanso. INTERJORNADA_SHORT: menos de 11 h desde o fim da jornada anterior. PAUSE_NOT_ENDED: pausa aberta há mais de 12 h. PAUSE_TOO_LONG: pausa encerrada só depois de mais de 12 h (esquecida aberta); a duração fica fora dos cálculos.",
+      "Alertas da Lei 13.103/2015 — só sinalizam, nada é bloqueado. MEAL_MISSING: jornada acima de 6 h sem pausa de refeição. MEAL_SHORT: a maior refeição teve menos de 1 h. DRIVING_REST_SHORT: mais de 6 h de direção estimada sem somar 30 min de descanso. INTERJORNADA_SHORT: menos de 11 h desde o fim da jornada anterior. PAUSE_NOT_ENDED: pausa aberta há mais de 12 h. PAUSE_TOO_LONG: pausa encerrada só depois de mais de 12 h (esquecida aberta); a duração fica fora dos cálculos. ROUTE_LEFT_OPEN (plano de 02/11/2026, J4; decisão D26): a rota da jornada continua em andamento e começou antes de hoje no fuso da empresa ou há mais de 16 h — a mensagem diz há quantos dias e desde quando; a jornada e a direção desse dia contam até agora.",
     ),
 });
 
@@ -258,7 +281,11 @@ const driverPauseResponses = {
   pauseReport,
 
   startBadRequest: withCodes(
-    "VALIDATION_ERROR: corpo inválido (a lista em `issues`), inclusive sem `occurrence_type_id` nem `kind`. OCCURRENCE_TYPE_WRONG_CATEGORY: `occurrence_type_id` é de um tipo que não é de pausa.",
+    'VALIDATION_ERROR: corpo inválido (a lista em `issues`), inclusive sem `occurrence_type_id` nem `kind`. OCCURRENCE_TYPE_WRONG_CATEGORY: `occurrence_type_id` é de um tipo que não é de pausa. PAUSE_NOTE_REQUIRED: início novo do tipo padrão "Outra pausa" (`requires_note`) com `note` de menos de 3 letras, sem contar espaços, enviado agora (sem X-Client-Queued-At) por um app de `contract` 7 ou maior; nada foi gravado.',
+  ),
+  // The end never asks for the reason, so its 400 never lists it.
+  endBadRequest: withCodes(
+    "VALIDATION_ERROR: corpo inválido (a lista em `issues`), inclusive um `start` sem `occurrence_type_id` nem `kind`. OCCURRENCE_TYPE_WRONG_CATEGORY: `start.occurrence_type_id` é de um tipo que não é de pausa.",
   ),
   typeNotFound: withCodes(
     "OCCURRENCE_TYPE_NOT_FOUND: `occurrence_type_id` não é um tipo desta empresa (a mesma resposta para um de outra empresa).",
@@ -267,10 +294,30 @@ const driverPauseResponses = {
     "PAUSE_NOT_FOUND: nenhuma pausa com esse `start_submission_id` nesta empresa, e o fim não trouxe `start` para criá-la. OCCURRENCE_TYPE_NOT_FOUND: `start.occurrence_type_id` não é um tipo desta empresa.",
   ),
   startConflict: withCodes(
-    "PAUSE_ALREADY_OPEN: o motorista já tem outra pausa aberta (chave diferente); leia GET /driver-pause/current para saber qual. SUBMISSION_OWNER_MISMATCH: a chave já foi usada por outro motorista; gere outra. PAUSE_TOO_OLD: início novo tocado há mais de 7 dias; nada foi gravado e o item sai da fila. PAUSE_REQUIRES_ROUTE: no instante do toque o motorista não tinha rota liberada ou em andamento do dia (decisão 14.4); nada foi gravado.",
-  ),
+    "PAUSE_ALREADY_OPEN: o motorista já tem outra pausa aberta (chave diferente); leia GET /driver-pause/current para saber qual. SUBMISSION_OWNER_MISMATCH: a chave já foi usada por outro motorista; gere outra. PAUSE_TOO_OLD: início novo tocado há mais de 7 dias; nada foi gravado e o item sai da fila. PAUSE_REQUIRES_ROUTE: no instante do toque o motorista não tinha rota iniciada (em andamento; decisão 14.4, revista em 12/11/2026: rota só liberada não conta); nada foi gravado e o item sai da fila. PAUSE_COOLDOWN: início novo tocado menos de 5 minutos depois do fim da pausa anterior do motorista, enviado agora (sem X-Client-Queued-At) por um app de `contract` 5 ou maior; nada foi gravado, e o corpo traz `last_ended_at`, `next_pause_allowed_at` e `next_pause_in_seconds`.",
+  ).extend({
+    // Sent by the start controller with PAUSE_COOLDOWN only.
+    last_ended_at: isoDateTime
+      .optional()
+      .describe(
+        "PAUSE_COOLDOWN: quando terminou a pausa anterior do motorista.",
+      ),
+    next_pause_allowed_at: isoDateTime
+      .optional()
+      .describe(
+        "PAUSE_COOLDOWN: quando uma nova pausa pode começar (`last_ended_at` mais 5 minutos).",
+      ),
+    next_pause_in_seconds: z
+      .number()
+      .int()
+      .min(0)
+      .optional()
+      .describe(
+        "PAUSE_COOLDOWN: segundos inteiros, arredondados para cima, de agora (relógio do servidor) até `next_pause_allowed_at`; 0 quando já passou. O app conta a espera no próprio relógio a partir deste número.",
+      ),
+  }),
   endConflict: withCodes(
-    "PAUSE_ALREADY_ENDED: a pausa já foi encerrada por outro fim (chave diferente); nada muda. PAUSE_SUBMISSION_REUSED: esta chave de fim já encerrou outra pausa; gere outra. SUBMISSION_OWNER_MISMATCH: a pausa (ou a chave) é de outro motorista. PAUSE_TOO_OLD: a pausa teria de ser criada a partir de `start` com um toque de mais de 7 dias; nada foi gravado e o item sai da fila. PAUSE_REQUIRES_ROUTE: a pausa teria de ser criada a partir de `start`, e no toque do início não havia rota liberada ou em andamento do dia; nada foi gravado.",
+    "PAUSE_ALREADY_ENDED: a pausa já foi encerrada por outro fim (chave diferente); nada muda. PAUSE_SUBMISSION_REUSED: esta chave de fim já encerrou outra pausa; gere outra. SUBMISSION_OWNER_MISMATCH: a pausa (ou a chave) é de outro motorista. PAUSE_TOO_OLD: a pausa teria de ser criada a partir de `start` com um toque de mais de 7 dias; nada foi gravado e o item sai da fila. PAUSE_REQUIRES_ROUTE: a pausa teria de ser criada a partir de `start`, e no toque do início não havia rota iniciada (em andamento); nada foi gravado.",
   ),
   reportBadRequest: withCodes(
     "VALIDATION_ERROR: filtro ou data mal formados. PAUSE_REPORT_RANGE_INVALID: período invertido, maior que 31 dias ou com data fora de 2000 a 2099.",

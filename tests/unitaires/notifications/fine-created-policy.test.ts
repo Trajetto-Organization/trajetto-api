@@ -56,69 +56,75 @@ describe("fine.created in-app render", () => {
   });
 });
 
+/**
+ * Plan of 02/11/2026 (B1): trajetto_multa_registrada, eleven parameters in
+ * the approved order. What is missing goes as null, and the registry puts
+ * the variable's fallback there — never a blank Meta would refuse.
+ */
 describe("fine.created WhatsApp render", () => {
-  it("identifies a business actor to the admins reading it", () => {
-    const text = renderFineCreatedWhatsApp(payload());
+  /** The Intl currency carries a non-breaking space the registry flattens. */
+  const params = (data: FineCreatedPayload) =>
+    renderFineCreatedWhatsApp(data).parameters.map((value) =>
+      typeof value === "string" ? value.replace(/\s/g, " ") : value,
+    );
 
-    expect(text).toContain("Maria Gestora");
-    expect(text).toContain("maria@empresa.com");
-    expect(text).toContain("ABC1D23");
-    expect(text).toContain("fine-1");
+  it("names its template, with every field in the approved order", () => {
+    const rendered = renderFineCreatedWhatsApp({
+      ...payload(),
+      violationDescription: "Transitar em velocidade superior à máxima",
+      dueDate: "2026-09-10T12:00:00.000Z",
+      timeZone: "America/Sao_Paulo",
+    });
+
+    expect(rendered.template).toBe("trajetto_multa_registrada");
+    expect(
+      rendered.parameters.map((value) =>
+        typeof value === "string" ? value.replace(/\s/g, " ") : value,
+      ),
+    ).toEqual([
+      "ABC1D23",
+      "João Motorista",
+      "Filial Centro",
+      "745-50 – Transitar em velocidade superior à máxima",
+      "10/08/2026",
+      "Av. Brasil, 1000",
+      "5",
+      "R$ 293,47",
+      "10/09/2026",
+      "Radar móvel",
+      "Maria Gestora (maria@empresa.com)",
+    ]);
   });
 
-  /**
-   * A MASTER registering a fine for a client company is back office — their
-   * name would only confuse the company admins receiving the alert.
-   */
-  it("omits the actor when a MASTER registered the fine", () => {
+  it("names the platform, never the master, when a MASTER registered the fine", () => {
     const data = payload();
-    data.actor.role = "MASTER";
+    data.actor = { ...data.actor, role: "MASTER" };
 
-    const text = renderFineCreatedWhatsApp(data);
+    const values = params(data);
 
-    expect(text).not.toContain("Maria Gestora");
-    expect(text).not.toContain("maria@empresa.com");
-    expect(text).toContain("ABC1D23");
-  });
-
-  /**
-   * WhatsApp bolds from one `*` to the next. The points and observation
-   * lines opened one and never closed it, so every line after them came out
-   * bold (or, with an odd count, the asterisks showed as text).
-   */
-  it("closes the bold of every line it opens", () => {
-    const lines = renderFineCreatedWhatsApp(payload()).split("\n");
-
-    for (const line of lines) {
-      const stars = (line.match(/\*/g) ?? []).length;
-
-      expect(stars % 2, line).toBe(0);
-    }
-
-    expect(lines).toContain("Pontos na carteira: *5*");
-    expect(lines).toContain("Observação: *Radar móvel*");
+    expect(values[10]).toBe("Suporte Trajetto");
+    expect(JSON.stringify(values)).not.toContain("Maria Gestora");
+    expect(JSON.stringify(values)).not.toContain("maria@empresa.com");
   });
 
   it("prints zero points: an infraction without points is still a fact", () => {
-    const data = payload();
-    data.points = 0;
-
-    expect(renderFineCreatedWhatsApp(data)).toContain(
-      "Pontos na carteira: *0*",
-    );
+    expect(params({ ...payload(), points: 0 })[6]).toBe("0");
   });
 
-  it("drops optional lines instead of printing blanks", () => {
-    const data = payload();
-    data.location = null;
-    data.observation = null;
-    data.points = null;
+  it("leaves what is missing to the fallbacks instead of printing blanks", () => {
+    const values = params({
+      ...payload(),
+      points: null,
+      location: null,
+      observation: null,
+    });
 
-    const text = renderFineCreatedWhatsApp(data);
-
-    expect(text).not.toContain("Local:");
-    expect(text).not.toContain("Observação:");
-    expect(text).not.toContain("Pontos na carteira:");
+    expect(values[5]).toBeNull();
+    expect(values[6]).toBeNull();
+    expect(values[9]).toBeNull();
+    // An event published before the new fields: the code alone, no due day.
+    expect(values[3]).toBe("745-50");
+    expect(values[8]).toBeNull();
   });
 });
 
@@ -144,38 +150,35 @@ describe("fine.created activity render", () => {
  * evening of the 17th in Manaus went out as the 18th.
  */
 describe("fine.created violation date", () => {
-  const lineOf = (text: string) =>
-    text.split("\n").find((line) => line.startsWith("Data da infração:"));
+  const dayOf = (data: FineCreatedPayload) =>
+    renderFineCreatedWhatsApp(data).parameters[4];
 
   it("reads an instant on the company's day", () => {
     // 03:30 UTC on the 18th = 23:30 on the 17th in Manaus, 00:30 on the 18th
     // in São Paulo: wrong on a UTC server and on a São Paulo one.
-    const text = renderFineCreatedWhatsApp({
-      ...payload(),
-      violationDate: "2026-09-18T03:30:00.000Z",
-      timeZone: "America/Manaus",
-    });
-
-    expect(lineOf(text)).toBe("Data da infração: *17/09/2026*");
+    expect(
+      dayOf({
+        ...payload(),
+        violationDate: "2026-09-18T03:30:00.000Z",
+        timeZone: "America/Manaus",
+      }),
+    ).toBe("17/09/2026");
   });
 
   it("keeps a date-only value on the day it names", () => {
-    const text = renderFineCreatedWhatsApp({
-      ...payload(),
-      violationDate: "2026-09-17T00:00:00.000Z",
-      timeZone: "America/Manaus",
-    });
-
-    expect(lineOf(text)).toBe("Data da infração: *17/09/2026*");
+    expect(
+      dayOf({
+        ...payload(),
+        violationDate: "2026-09-17T00:00:00.000Z",
+        timeZone: "America/Manaus",
+      }),
+    ).toBe("17/09/2026");
   });
 
   it("falls back to the default zone for an event published without one", () => {
-    const text = renderFineCreatedWhatsApp({
-      ...payload(),
-      violationDate: "2026-09-18T02:30:00.000Z",
-    });
-
     // 23:30 on the 17th in São Paulo.
-    expect(lineOf(text)).toBe("Data da infração: *17/09/2026*");
+    expect(
+      dayOf({ ...payload(), violationDate: "2026-09-18T02:30:00.000Z" }),
+    ).toBe("17/09/2026");
   });
 });

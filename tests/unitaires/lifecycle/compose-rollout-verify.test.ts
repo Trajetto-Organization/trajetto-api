@@ -1,11 +1,12 @@
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { resolve } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { runBlock } from "./support/run-block";
 import {
   hasShell,
   repoFile,
@@ -13,6 +14,18 @@ import {
   sandbox,
   type Sandbox,
 } from "./support/shell-harness";
+import {
+  actionOf,
+  conditionOf,
+  jobOf,
+  readAction,
+  readWorkflow,
+  stepNames,
+  stepOf,
+  workflowOf,
+  type Action,
+  type Workflow,
+} from "./support/workflow-text";
 
 /**
  * The deploy step proves the deployment CONVERGED, not that Dokploy was asked.
@@ -76,7 +89,9 @@ function tagTask(
  * the rollout on their Nth call (the last step repeats): the script calls
  * each once per poll. A task's container is `c-<task>`, its image `i-<task>`,
  * and that image's RepoDigests are the file `image.<task>` (absent: the
- * container is not on this node).
+ * container is not on this node). The read of the stop grace and of
+ * STOP_GRACE_PERIOD_MS answers the file `grace` (absent: no grace set and no
+ * variable, `null|`).
  */
 const DOCKER = `
 step() {
@@ -88,6 +103,8 @@ last() { for arg in "$@"; do :; done; printf '%s' "$arg"; }
 case "$1 $2" in
   "service inspect")
     case "$*" in
+      *StopGracePeriod*)
+        if [ -f "$STUB_DIR/grace" ]; then cat "$STUB_DIR/grace"; else echo "null|"; fi ;;
       *--format*) step inspect ;;
       *) [ -f "$STUB_DIR/missing" ] && exit 1; echo "[]" ;;
     esac ;;
@@ -155,13 +172,15 @@ describe.skipIf(!sh)("the API rollout check (verify-rollout.sh)", () => {
   }
 
   // One per poll: the spec, its update state and replicas in one inspect.
+  // The stop grace is read apart, once the rollout converged.
   const inspections = () =>
     box
       .calls("docker")
       .filter(
         (call) =>
           call.startsWith("docker service inspect") &&
-          call.includes("--format"),
+          call.includes("--format") &&
+          !call.includes("StopGracePeriod"),
       ).length;
 
   it("waits through the update and succeeds once every replica runs the digest", () => {
@@ -342,6 +361,248 @@ describe.skipIf(!sh)("the API rollout check (verify-rollout.sh)", () => {
       expect(result.status).not.toBe(0);
       expect(result.stderr).toContain("não é o deste deploy");
       expect(inspections()).toBe(1);
+    });
+  });
+
+  /**
+   * The API derives every shutdown deadline from STOP_GRACE_PERIOD_MS
+   * (plano-escala F1-14). Set above the Stop Grace Period the service really
+   * has, every deploy SIGKILLs the old replicas halfway through their
+   * shutdown, and nothing says so: the rollout converges all the same. So
+   * the check reads both from the spec once the rollout converged
+   * (plano-escala F1-16): the grace, absent meaning Docker's 10 s, and the
+   * variable, absent meaning the API's own 10 000.
+   */
+  describe("the stop grace against STOP_GRACE_PERIOD_MS", () => {
+    const converged: Step[] = [
+      { inspect: `${spec(NEW)}|completed|2`, tasks: [task(NEW), task(NEW)] },
+    ];
+
+    it("passes with neither set: Docker's 10 s and the API's 10 s default", () => {
+      const result = rollout(converged);
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain(
+        "grace: 10000 ms (o padrão do Docker) cobre STOP_GRACE_PERIOD_MS=10000",
+      );
+    });
+
+    it("passes when the service's grace covers the variable", () => {
+      writeFileSync(
+        `${box.root}/grace`,
+        "40000000000|STOP_GRACE_PERIOD_MS=40000\n",
+      );
+
+      const result = rollout(converged);
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain(
+        "grace: 40000 ms (o Stop Grace Period do serviço) cobre STOP_GRACE_PERIOD_MS=40000",
+      );
+    });
+
+    it("fails, saying what to change, when the variable passes Docker's default grace", () => {
+      // The variable typed before the service got its 40 s.
+      writeFileSync(`${box.root}/grace`, "null|STOP_GRACE_PERIOD_MS=40000\n");
+
+      const result = rollout(converged);
+
+      expect(result.status).not.toBe(0);
+      expect(result.stdout).not.toContain("ok:");
+      expect(result.stderr).toContain(
+        `STOP_GRACE_PERIOD_MS=40000 passa de 10000 ms, o padrão do Docker`,
+      );
+      expect(result.stderr).toContain("Stop Grace Period");
+    });
+
+    it("counts the grace in whole seconds, as the daemon does", () => {
+      // 40.5 s reaches the container as a 40 s stop timeout.
+      writeFileSync(
+        `${box.root}/grace`,
+        "40500000000|STOP_GRACE_PERIOD_MS=40500\n",
+      );
+
+      const result = rollout(converged);
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("passa de 40000 ms");
+    });
+
+    it("reads the last of a repeated variable, as the container does", () => {
+      writeFileSync(
+        `${box.root}/grace`,
+        "40000000000|STOP_GRACE_PERIOD_MS=90000\nSTOP_GRACE_PERIOD_MS=40000\n",
+      );
+
+      expect(rollout(converged).status).toBe(0);
+    });
+
+    it("fails on a variable that is not a whole number, without printing it", () => {
+      writeFileSync(
+        `${box.root}/grace`,
+        "40000000000|STOP_GRACE_PERIOD_MS=40s\n",
+      );
+
+      const result = rollout(converged);
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("não é um número inteiro");
+      expect(result.stderr).not.toContain("40s");
+    });
+
+    it("asks docker for that one variable, never the whole Environment", () => {
+      rollout(converged);
+
+      const read = box
+        .calls("docker")
+        .find((call) => call.includes("StopGracePeriod"));
+
+      expect(read).toBeDefined();
+      expect(read).toContain('"STOP_GRACE_PERIOD_MS"');
+      expect(read).not.toMatch(
+        /\{\{json \.Spec\.TaskTemplate\.ContainerSpec\.Env\}\}/,
+      );
+    });
+  });
+
+  /**
+   * plano-escala X-07: every service the deploy ships is checked on its
+   * own (the roles run the API's image under their own App Name), and the
+   * grace each one really has is printed. ROLLOUT_REQUIRE_GRACE=true, set
+   * in the host's forced command, holds the API's image and the
+   * PgBouncer's to the plan's 40 s; the web and the backup are only
+   * printed.
+   */
+  describe("the grace of every service (X-07)", () => {
+    const converged: Step[] = [
+      { inspect: `${spec(NEW)}|completed|2`, tasks: [task(NEW), task(NEW)] },
+    ];
+
+    /** A converged service of another repository of the organisation. */
+    function other(image: string, env: Record<string, string> = {}) {
+      const repo = `ghcr.io/trajetto-organization/${image}`;
+
+      return rollout(
+        [
+          {
+            inspect: `${repo}:stable@${NEW}|completed|1`,
+            tasks: [
+              `t${++taskIds}|${repo}:stable@${NEW}|Running 5 seconds ago`,
+            ],
+          },
+        ],
+        [`${image}-staging`, `${repo}@${NEW}`],
+        env,
+      );
+    }
+
+    it("prints the grace in the line that says the service converged", () => {
+      writeFileSync(
+        `${box.root}/grace`,
+        "40000000000|STOP_GRACE_PERIOD_MS=40000\n",
+      );
+
+      const result = rollout(converged);
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain(
+        `ok: ${SERVICE} roda ${NEW} em 2 réplica(s) (update: completed) grace=40s`,
+      );
+    });
+
+    it("checks a role's service with the API's image, its variable included", () => {
+      writeFileSync(`${box.root}/grace`, "null|STOP_GRACE_PERIOD_MS=40000\n");
+
+      const result = rollout(converged, ["trajetto-worker-staging", IMAGE]);
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("passa de 10000 ms");
+    });
+
+    it.each([
+      "trajetto-pgbouncer",
+      "trajetto-worker",
+      "trajetto-scheduler",
+      "trajetto-worker-external",
+      "trajetto-realtime",
+      "trajetto-ingest",
+    ])("accepts the image %s", (image) => {
+      writeFileSync(`${box.root}/grace`, "90000000000|\n");
+
+      const result = other(image);
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain("grace=90s");
+    });
+
+    it("refuses an image of the organisation it does not know", () => {
+      const result = rollout(converged, [
+        SERVICE,
+        `ghcr.io/trajetto-organization/trajetto-evil@${NEW}`,
+      ]);
+
+      expect(result.status).toBe(2);
+      expect(box.calls("docker")).toEqual([]);
+    });
+
+    it("only prints the web's grace, even when it cannot be read", () => {
+      writeFileSync(`${box.root}/grace`, "garbage\n");
+
+      const result = other("trajetto-ui", { ROLLOUT_REQUIRE_GRACE: "true" });
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain("grace=ilegível");
+    });
+
+    describe("with ROLLOUT_REQUIRE_GRACE=true", () => {
+      const required = { ROLLOUT_REQUIRE_GRACE: "true" };
+
+      it("fails the API on Docker's 10 s default, saying what to set", () => {
+        const result = rollout(converged, undefined, required);
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          "é 10s (o padrão do Docker), abaixo dos 40s que ROLLOUT_REQUIRE_GRACE=true exige",
+        );
+        expect(result.stderr).toContain("40000000000 ns");
+      });
+
+      it("passes the API at 40 s", () => {
+        writeFileSync(
+          `${box.root}/grace`,
+          "40000000000|STOP_GRACE_PERIOD_MS=40000\n",
+        );
+
+        const result = rollout(converged, undefined, required);
+
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toContain("grace=40s");
+      });
+
+      it("fails the PgBouncer under 40 s", () => {
+        writeFileSync(`${box.root}/grace`, "30000000000|\n");
+
+        const result = other("trajetto-pgbouncer", required);
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("é 30s");
+      });
+
+      it("never fails the web or the backup for their grace", () => {
+        for (const image of ["trajetto-ui", "trajetto-backup"]) {
+          rmSync(`${box.root}/ps.n`, { force: true });
+          rmSync(`${box.root}/inspect.n`, { force: true });
+
+          const result = other(image, required);
+
+          expect(result.status, `${image}: ${result.stderr}`).toBe(0);
+          expect(result.stdout).toContain("grace=10s");
+        }
+      });
+
+      it("keeps the old behaviour without it: the API on 10 s passes", () => {
+        expect(rollout(converged).status).toBe(0);
+      });
     });
   });
 
@@ -586,67 +847,158 @@ describe.skipIf(!existsSync(WAIT))(
   },
 );
 
-/** Steps of a job, by name, in order. */
-function stepsOf(
-  workflow: string,
-  job: string,
-): Array<{ name: string; text: string }> {
-  const start = workflow.indexOf(`\n  ${job}:\n`);
+/**
+ * Where the deploys live since 10/11/2026: one composite action per
+ * repository (.github/actions/deploy), the same code for staging and
+ * production, called by the job that carries the environment — `Deploy`
+ * (deploy-staging) in staging.yml and `Deploy` (promote-production) in
+ * production.yml. The proof of the rollout is in the action; who calls it,
+ * with which digest and commit, is in the workflows.
+ */
+const apiAction = readAction("deploy");
+const apiStaging = readWorkflow("staging.yml");
+const apiProduction = readWorkflow("production.yml");
 
-  if (start < 0) return [];
+/** The `with:` block of the step of `job` that calls the deploy action. */
+function caller(workflow: Workflow, job: string, step: string): string {
+  const text = stepOf(jobOf(workflow, job), step).text;
 
-  const rest = workflow.slice(start + 1);
-  const end = rest.slice(1).search(/\n {2}[\w-]+:\n/);
-  const text = end < 0 ? rest : rest.slice(0, end + 1);
+  expect(text, `${workflow.file} ${job}`).toContain(
+    "uses: ./.github/actions/deploy",
+  );
 
-  return text
-    .split(/\n {6}- name: /)
-    .slice(1)
-    .map((chunk) => ({ name: chunk.split("\n")[0], text: chunk }));
+  return text;
 }
 
-function jobText(workflow: string, job: string): string {
-  const start = workflow.indexOf(`\n  ${job}:\n`);
-  const rest = workflow.slice(start + 1);
-  const end = rest.slice(1).search(/\n {2}[\w-]+:\n/);
+describe("the API deploy waits for convergence", () => {
+  const SSH = "Wait for the rollout to converge";
+  const HTTP = "Wait for the API to serve this build";
+  const OFF = "Report the rollout as unverified";
+  const names = stepNames(apiAction);
+  const text = (name: string) => stepOf(apiAction, name).text;
 
-  return end < 0 ? rest : rest.slice(0, end + 1);
-}
+  // plano-escala X-07: the roles' services too, one call each, in the
+  // deploy's order: the workers before the API's tag moves (review of wave
+  // 12: checked after the API's deploy, a worker that never came up let the
+  // API ship), the edge roles after their deploy, through deploy-roles.sh
+  // verify.
+  it("checks each role's service over SSH in the deploy's order", () => {
+    const workers = "Wait for the worker roles to converge";
+    const ssh = text(workers);
 
-const apiDeploy = read(ROOT, ".github", "workflows", "deploy.yml");
-
-describe("the API deploy jobs wait for convergence", () => {
-  it.each([
-    [
-      "promote-production",
-      "Deploy to production (Dokploy)",
-      "${{ steps.stable.outputs.digest }}",
-    ],
-    [
-      "deploy-staging",
-      "Deploy to staging (Dokploy)",
-      "${{ needs.build-and-push.outputs.api_digest }}",
-    ],
-  ])("%s checks the running digest after Dokploy", (job, deploy, digest) => {
-    const steps = stepsOf(apiDeploy, job);
-    const names = steps.map((step) => step.name);
-    const wait =
-      steps.find((step) => step.name === "Wait for the rollout to converge")
-        ?.text ?? "";
-
-    // After the API's own deploy.
-    expect(names.indexOf(deploy)).toBeGreaterThan(-1);
-    expect(names.indexOf("Wait for the rollout to converge")).toBeGreaterThan(
-      names.indexOf(deploy),
+    expect(ssh).toContain("deploy-roles.sh verify before-api");
+    expect(names.indexOf(workers)).toBeGreaterThan(
+      names.indexOf("Deploy the worker roles (Dokploy)"),
     );
-    expect(wait).toContain(`DIGEST: ${digest}`);
-    expect(wait).toContain("SSH_KEY: ${{ secrets.DEPLOY_VERIFY_SSH_KEY }}");
-    expect(wait).toContain(
+    expect(names.indexOf(workers)).toBeLessThan(
+      names.indexOf("Move the API tag to this build"),
+    );
+    expect(ssh).toContain("STATE_FILE: ${{ runner.temp }}/deploy-roles.state");
+
+    const edge = "Wait for the edge roles to converge";
+
+    expect(names.indexOf(edge)).toBeGreaterThan(
+      names.indexOf("Deploy the edge roles (Dokploy)"),
+    );
+    expect(conditionOf(stepOf(apiAction, edge))).toBe(
+      "steps.head.outputs.current == 'true' && steps.verify.outputs.mode == 'ssh'",
+    );
+    expect(text(edge)).toContain("deploy-roles.sh verify after-api");
+
+    for (const role of [
+      "worker",
+      "scheduler",
+      "worker-external",
+      "ingest",
+      "realtime",
+    ]) {
+      const variable = `SWARM_${role.toUpperCase().replace("-", "_")}_SERVICE`;
+      const step = ["ingest", "realtime"].includes(role) ? text(edge) : ssh;
+
+      expect(step, role).toContain(
+        `${variable}: \${{ inputs.swarm-${role}-service }}`,
+      );
+
+      for (const [workflow, job, caller_] of [
+        [apiStaging, "deploy-staging", "Deploy to staging"],
+        [apiProduction, "promote-production", "Deploy to production"],
+      ] as const) {
+        expect(caller(workflow, job, caller_), `${job} ${role}`).toContain(
+          `swarm-${role}-service: \${{ vars.${variable} }}`,
+        );
+      }
+    }
+  });
+
+  it("checks the running digest over SSH after the API's own deploy", () => {
+    expect(names.indexOf("Deploy the API (Dokploy)")).toBeGreaterThan(-1);
+    expect(names.indexOf(SSH)).toBeGreaterThan(
+      names.indexOf("Deploy the API (Dokploy)"),
+    );
+    expect(text(SSH)).toContain("DIGEST: ${{ inputs.api-digest }}");
+    expect(text(SSH)).toContain("SSH_KEY: ${{ inputs.deploy-verify-ssh-key }}");
+    expect(text(SSH)).toContain(
       '"$SERVICE ghcr.io/trajetto-organization/trajetto-api@${DIGEST}"',
     );
-    // Which check runs is ROLLOUT_VERIFY's call (see below).
-    expect(wait).toMatch(/if: .*vars\.ROLLOUT_VERIFY/);
-    expect(names).toContain("Say the rollout was not verified");
+    expect(names).toContain(OFF);
+  });
+
+  // The digest the check waits for is the one this deploy shipped, and the
+  // key is the environment's: both come from the job that carries it.
+  it.each([
+    [
+      apiStaging,
+      "deploy-staging",
+      "Deploy to staging",
+      "needs.build.outputs.api_digest",
+    ],
+    [
+      apiProduction,
+      "promote-production",
+      "Deploy to production",
+      "needs.evidence.outputs.api_digest",
+    ],
+  ])(
+    "%#: the caller hands it the digest it deploys and the key",
+    (workflow, job, step, digest) => {
+      const call = caller(workflow, job, step);
+
+      expect(call).toContain(`api-digest: \${{ ${digest} }}`);
+      expect(call).toContain(
+        "deploy-verify-ssh-key: ${{ secrets.DEPLOY_VERIFY_SSH_KEY }}",
+      );
+      expect(call).toContain("rollout-verify: ${{ vars.ROLLOUT_VERIFY }}");
+      expect(call).toContain("api-public-url: ${{ vars.API_PUBLIC_URL }}");
+    },
+  );
+
+  it("moves the environment's tag to the same digest it then waits for", () => {
+    const move = text("Move the API tag to this build");
+
+    expect(names.indexOf("Move the API tag to this build")).toBeLessThan(
+      names.indexOf("Deploy the API (Dokploy)"),
+    );
+    expect(move).toContain("API_DIGEST: ${{ inputs.api-digest }}");
+    expect(move).toContain(
+      '"ghcr.io/trajetto-organization/trajetto-api@${API_DIGEST}"',
+    );
+  });
+
+  it("waits, without SSH, for the public liveness to answer the expected commit", () => {
+    expect(names.indexOf(HTTP)).toBeGreaterThan(
+      names.indexOf("Deploy the API (Dokploy)"),
+    );
+    expect(text(HTTP)).toContain("API_URL: ${{ inputs.api-public-url }}");
+    expect(text(HTTP)).toContain("EXPECTED_SHA: ${{ inputs.expected-commit }}");
+    expect(text(HTTP)).toContain("node .github/scripts/wait-for-version.mjs");
+    expect(caller(apiStaging, "deploy-staging", "Deploy to staging")).toContain(
+      "expected-commit: ${{ github.sha }}",
+    );
+    // The tag without its prefix: `sha-<7>` is all a rollback knows, and the
+    // script takes a prefix of the commit.
+    expect(
+      caller(apiProduction, "promote-production", "Deploy to production"),
+    ).toContain("expected-commit: ${{ needs.evidence.outputs.expected }}");
   });
 
   /**
@@ -656,92 +1008,183 @@ describe("the API deploy jobs wait for convergence", () => {
    * ran with ROLLOUT_VERIFY=off because SSH was the only one; now the public
    * check is its default, and production keeps SSH as its own. Whatever the
    * variable says, exactly one check runs — an unknown value falls back to
-   * the default, never to none — and only `off` skips them, logged.
+   * the default, never to none — and only `off` skips them, logged. The
+   * pick runs for real; each check's `if` is read against its answer.
    */
-  it.each([
-    [
-      "deploy-staging",
-      "Deploy to staging (Dokploy)",
-      "Wait for the API to serve this build",
-      "http",
-      "EXPECTED_SHA: ${{ github.sha }}",
-    ],
-    [
-      "promote-production",
-      "Deploy to production (Dokploy)",
-      "Wait for the API to serve the promoted build",
-      "ssh",
-      'EXPECTED_SHA="${IMAGE_TAG#*-}" node .github/scripts/wait-for-version.mjs',
-    ],
-  ])(
-    "%s runs exactly one rollout check unless ROLLOUT_VERIFY=off",
-    (job, deploy, httpName, byDefault, expected) => {
-      const steps = stepsOf(apiDeploy, job);
-      const names = steps.map((step) => step.name);
-      const text = (name: string) =>
-        steps.find((step) => step.name === name)?.text ?? "";
-      const condition = (name: string) =>
-        text(name).match(/\n\s+if: (.+)\n/)?.[1] ?? "";
-      /** The `if` with ROLLOUT_VERIFY set to `value` (a chain of &&). */
-      const runs = (name: string, value: string) => {
-        const expression = condition(name);
+  describe.skipIf(!hasShell("bash"))("exactly one rollout check", () => {
+    let box: Sandbox;
 
-        expect(expression, name).not.toContain("||");
+    beforeEach(() => {
+      box = sandbox();
+    });
 
-        return [
-          ...expression.matchAll(/vars\.ROLLOUT_VERIFY (==|!=) '([^']*)'/g),
-        ].every(([, operator, literal]) =>
-          operator === "==" ? value === literal : value !== literal,
+    afterEach(() => box.dispose());
+
+    /** The `if` of a check, given the mode the pick wrote. */
+    const runs = (name: string, mode: string) => {
+      const expression = conditionOf(stepOf(apiAction, name));
+      const clauses = expression.split(" && ");
+
+      expect(expression, name).not.toContain("||");
+      expect(clauses[0], name).toBe("steps.head.outputs.current == 'true'");
+
+      return clauses.slice(1).every((clause) => {
+        const match = /^steps\.verify\.outputs\.mode (==|!=) '([^']*)'$/.exec(
+          clause,
         );
-      };
-      const ssh = "Wait for the rollout to converge";
-      const said = "Say the rollout was not verified";
 
-      expect(names.indexOf(httpName)).toBeGreaterThan(names.indexOf(deploy));
-      expect(text(httpName)).toContain("API_URL: ${{ vars.API_PUBLIC_URL }}");
-      expect(text(httpName)).toContain(
-        "node .github/scripts/wait-for-version.mjs",
-      );
-      expect(text(httpName)).toContain(expected);
+        expect(match, `${name}: ${clause}`).not.toBeNull();
 
-      for (const value of ["", "http", "ssh", "on", "true"]) {
-        expect(
-          [runs(httpName, value), runs(ssh, value), runs(said, value)],
-          `ROLLOUT_VERIFY='${value}'`,
-        ).toEqual(
-          value === "http" || (value !== "ssh" && byDefault === "http")
-            ? [true, false, false]
-            : [false, true, false],
+        return match?.[1] === "==" ? mode === match[2] : mode !== match?.[2];
+      });
+    };
+
+    // The pick below runs the script with ROLLOUT_VERIFY and DEFAULT set by
+    // hand; what links them to the environment's variable is this chain:
+    // vars.ROLLOUT_VERIFY → the caller's `with:` → the action's input → the
+    // step's `env:`. A swapped or wrong input there (DEFAULT reading
+    // rollout-verify) would change which check production runs, green.
+    it("hands the environment's ROLLOUT_VERIFY and the job's default to the pick", () => {
+      const pick = stepOf(apiAction, "Pick the rollout check").text;
+
+      expect(pick).toContain("ROLLOUT_VERIFY: ${{ inputs.rollout-verify }}");
+      expect(pick).toContain("DEFAULT: ${{ inputs.verify-default }}");
+      for (const [workflow, job, step] of [
+        [apiStaging, "deploy-staging", "Deploy to staging"],
+        [apiProduction, "promote-production", "Deploy to production"],
+      ] as const) {
+        expect(caller(workflow, job, step), job).toContain(
+          "rollout-verify: ${{ vars.ROLLOUT_VERIFY }}",
         );
       }
+    });
 
-      expect([
-        runs(httpName, "off"),
-        runs(ssh, "off"),
-        runs(said, "off"),
-      ]).toEqual([false, false, true]);
-    },
-  );
+    it.each([
+      [apiStaging, "deploy-staging", "Deploy to staging", "http"],
+      [apiProduction, "promote-production", "Deploy to production", "ssh"],
+    ])(
+      "%#: %s, %s by default, runs exactly one unless ROLLOUT_VERIFY=off",
+      (workflow, job, step, byDefault) => {
+        expect(caller(workflow, job, step)).toContain(
+          `verify-default: ${byDefault}`,
+        );
 
-  it("promotes by the digest it then waits for", () => {
-    const promote = stepsOf(apiDeploy, "promote-production").find(
-      (step) => step.name === "Promote image to stable",
-    )?.text;
+        const pick = (value: string) =>
+          runBlock(box, stepOf(apiAction, "Pick the rollout check").run, {
+            ROLLOUT_VERIFY: value,
+            DEFAULT: byDefault,
+          }).outputs.mode;
 
-    expect(promote).toContain("id: stable");
-    expect(promote).toContain('echo "digest=${digest}" >> "$GITHUB_OUTPUT"');
-    expect(promote).toContain(
-      '"ghcr.io/trajetto-organization/trajetto-api@${digest}"',
+        for (const value of ["", "http", "ssh", "on", "true"]) {
+          const mode = pick(value);
+
+          expect(
+            [runs(HTTP, mode), runs(SSH, mode), runs(OFF, mode)],
+            `ROLLOUT_VERIFY='${value}'`,
+          ).toEqual(
+            value === "http" || (value !== "ssh" && byDefault === "http")
+              ? [true, false, false]
+              : [false, true, false],
+          );
+        }
+
+        const off = pick("off");
+
+        expect([runs(HTTP, off), runs(SSH, off), runs(OFF, off)]).toEqual([
+          false,
+          false,
+          true,
+        ]);
+      },
     );
   });
 });
 
-describe.skipIf(
-  !existsSync(resolve(WEB, ".github", "workflows", "deploy.yml")),
-)("the web deploy jobs wait for convergence", () => {
-  const webDeploy = existsSync(WEB)
-    ? read(WEB, ".github", "workflows", "deploy.yml")
-    : "";
+/**
+ * The web's deploy, since 10/11/2026: trajetto-ui/.github/actions/deploy,
+ * called by the same two jobs. A web still on the single deploy.yml (before
+ * that day) is checked further down, in that file; a web on neither layout
+ * fails here, instead of these checks going quiet.
+ */
+const WEB_ACTION = resolve(WEB, ".github", "actions", "deploy", "action.yml");
+const WEB_LEGACY = resolve(WEB, ".github", "workflows", "deploy.yml");
+const webWorkflow = (name: string) =>
+  workflowOf(name, read(WEB, ".github", "workflows", name));
+const web = existsSync(WEB_ACTION)
+  ? {
+      action: actionOf("deploy", WEB_ACTION, read(WEB_ACTION)),
+      staging: webWorkflow("staging.yml"),
+      production: webWorkflow("production.yml"),
+    }
+  : undefined;
+
+it("knows the web's layout, when the web is there", () => {
+  if (!existsSync(resolve(WEB, "package.json"))) return;
+
+  expect(
+    existsSync(WEB_ACTION) || existsSync(WEB_LEGACY),
+    "trajetto-ui sem .github/actions/deploy nem .github/workflows/deploy.yml",
+  ).toBe(true);
+});
+
+describe.skipIf(!web)("the web deploy waits for convergence", () => {
+  const action = web?.action as Action;
+  const WAIT = "Wait for the site to serve this build";
+
+  it("reads /build-id.json right after Dokploy, for the commit it was handed", () => {
+    const names = stepNames(action);
+    const wait = stepOf(action, WAIT).text;
+
+    expect(names.indexOf(WAIT)).toBe(
+      names.indexOf("Deploy the site (Dokploy)") + 1,
+    );
+    expect(wait).toContain("EXPECTED_SHA: ${{ inputs.expected-sha }}");
+    expect(wait).toContain("node .github/scripts/wait-for-build.mjs");
+    expect(conditionOf(stepOf(action, WAIT))).toBe(
+      "steps.dokploy.outputs.enabled == 'true' && inputs.rollout-verify != 'off'",
+    );
+    expect(
+      conditionOf(stepOf(action, "Report the rollout as unverified")),
+    ).toBe("inputs.rollout-verify == 'off'");
+  });
+
+  it.each([
+    ["staging", "deploy-staging", "Deploy to staging", "github.sha"],
+    [
+      "production",
+      "promote-production",
+      "Deploy to production",
+      "needs.evidence.outputs.sha",
+    ],
+  ])(
+    "%s: the caller hands it the commit of the image it deploys",
+    (environment, job, step, sha) => {
+      const workflow =
+        environment === "staging" ? web!.staging : web!.production;
+      const call = caller(workflow, job, step);
+
+      expect(call).toContain(`expected-sha: \${{ ${sha} }}`);
+      expect(call).toContain("rollout-verify: ${{ vars.ROLLOUT_VERIFY }}");
+    },
+  );
+});
+
+/**
+ * A web still on the single deploy.yml: its `staging` until its first push
+ * with the new layout, which the API's CI reads in the meantime. The same
+ * guarantees as for the new layout, read in that file, so neither layout
+ * leaves the API without checking the web: both deploy jobs read
+ * /build-id.json right after Dokploy unless ROLLOUT_VERIFY=off, neither
+ * overlaps itself, only the branch head moves `staging`, and the build
+ * publishes no mutable `staging` tag. The names are that file's own.
+ */
+const webLegacy =
+  !web && existsSync(WEB_LEGACY)
+    ? workflowOf("deploy.yml", read(WEB_LEGACY))
+    : undefined;
+
+describe.skipIf(!webLegacy)("the web deploy, still on deploy.yml", () => {
+  const deploy = webLegacy as Workflow;
 
   it.each([
     [
@@ -756,15 +1199,56 @@ describe.skipIf(
       "Wait for the site to serve this build",
       "${{ github.sha }}",
     ],
-  ])("%s reads /build-id.json after Dokploy", (job, deploy, waitName, sha) => {
-    const steps = stepsOf(webDeploy, job);
-    const names = steps.map((step) => step.name);
-    const wait = steps.find((step) => step.name === waitName)?.text ?? "";
+  ])(
+    "%s reads /build-id.json right after Dokploy",
+    (job, dokploy, wait, sha) => {
+      const each = jobOf(deploy, job);
+      const names = stepNames(each);
+      const step = stepOf(each, wait);
 
-    expect(names.indexOf(waitName)).toBe(names.indexOf(deploy) + 1);
-    expect(wait).toContain(`EXPECTED_SHA: ${sha}`);
-    expect(wait).toContain("node .github/scripts/wait-for-build.mjs");
-    expect(wait).toMatch(/if: .*vars\.ROLLOUT_VERIFY != 'off'/);
+      expect(names.indexOf(wait)).toBe(names.indexOf(dokploy) + 1);
+      expect(step.text).toContain(`EXPECTED_SHA: ${sha}`);
+      expect(step.text).toContain("node .github/scripts/wait-for-build.mjs");
+      expect(conditionOf(step)).toMatch(/ && vars\.ROLLOUT_VERIFY != 'off'$/);
+    },
+  );
+
+  it("deploy-staging and promote-production never overlap themselves", () => {
+    for (const job of ["deploy-staging", "promote-production"]) {
+      expect(jobOf(deploy, job).text, job).toMatch(
+        new RegExp(
+          `\\n {4}concurrency:\\n {6}group: ${job}\\n {6}cancel-in-progress: false\\n`,
+        ),
+      );
+    }
+  });
+
+  it("moves `staging` only when this run is still the branch head", () => {
+    const { steps } = jobOf(deploy, "deploy-staging");
+    const head = steps.findIndex((step) =>
+      /^Is this run still .+ head\?$/.test(step.name),
+    );
+
+    expect(head).toBeGreaterThan(-1);
+    expect(steps[head].text).toContain('git ls-remote origin "$GITHUB_REF"');
+    expect(head).toBeLessThan(
+      steps.findIndex((step) => step.name === "Move staging to this build"),
+    );
+    for (const step of steps.slice(head + 1)) {
+      expect(step.text, step.name).toMatch(
+        /\n\s+if: steps\.head\.outputs\.current == 'true'/,
+      );
+    }
+  });
+
+  it("publishes no mutable `staging` tag at build time, and moves it by digest", () => {
+    const build = jobOf(deploy, "build").text;
+
+    expect(build.startsWith("  build:")).toBe(true);
+    expect(build).not.toContain("type=raw,value=staging");
+    expect(jobOf(deploy, "deploy-staging").text).toContain(
+      '"ghcr.io/trajetto-organization/trajetto-ui@${DIGEST}"',
+    );
   });
 });
 
@@ -775,23 +1259,28 @@ describe.skipIf(
  * missing from its snapshot — possibly the other run's).
  */
 describe("one deploy at a time, and staging only from the branch head", () => {
-  const workflows: Array<[string, string]> = [
-    ["trajetto-api", apiDeploy],
-    ...(existsSync(resolve(WEB, ".github", "workflows", "deploy.yml"))
+  const HEAD = "Check run is branch head";
+  const repositories: Array<[string, Workflow, Workflow]> = [
+    ["trajetto-api", apiStaging, apiProduction],
+    ...(web
       ? [
-          ["trajetto-ui", read(WEB, ".github", "workflows", "deploy.yml")] as [
+          ["trajetto-ui", web.staging, web.production] as [
             string,
-            string,
+            Workflow,
+            Workflow,
           ],
         ]
       : []),
   ];
 
-  it.each(workflows)(
+  it.each(repositories)(
     "%s: deploy-staging and promote-production never overlap themselves",
-    (_, workflow) => {
-      for (const job of ["deploy-staging", "promote-production"]) {
-        expect(jobText(workflow, job), job).toMatch(
+    (_, staging, production) => {
+      for (const [workflow, job] of [
+        [staging, "deploy-staging"],
+        [production, "promote-production"],
+      ] as const) {
+        expect(jobOf(workflow, job).text, job).toMatch(
           new RegExp(
             `\\n {4}concurrency:\\n {6}group: ${job}\\n {6}cancel-in-progress: false\\n`,
           ),
@@ -800,40 +1289,78 @@ describe("one deploy at a time, and staging only from the branch head", () => {
     },
   );
 
-  // The branch that deploys staging is `staging` in the API (it was `main`
-  // before the staging branch existed); the step's name says which one.
-  it.each(workflows)(
-    "%s: moves `staging` only when this run is still the branch head",
-    (_, workflow) => {
-      const steps = stepsOf(workflow, "deploy-staging");
-      const names = steps.map((step) => step.name);
-      const head = names.findIndex((name) =>
-        /^Is this run still .+ head\?$/.test(name),
+  /** Every step after the head check runs only on its answer. */
+  function gatedAfterHead(steps: Array<{ name: string; text: string }>) {
+    const head = steps.findIndex((step) => step.name === HEAD);
+
+    expect(head).toBeGreaterThan(-1);
+    expect(steps[head].text).toContain("id: head");
+    expect(steps[head].text).toContain('git ls-remote origin "$GITHUB_REF"');
+
+    for (const step of steps.slice(head + 1)) {
+      expect(step.text, step.name).toMatch(
+        /\n\s+if: steps\.head\.outputs\.current == 'true'/,
       );
+    }
 
-      expect(head).toBeGreaterThan(-1);
-      expect(steps[head].text).toContain('git ls-remote origin "$GITHUB_REF"');
-      expect(head).toBeLessThan(names.indexOf("Move staging to this build"));
+    return steps.map((step) => step.name);
+  }
 
-      for (const step of steps.slice(head + 1)) {
-        expect(step.text, step.name).toMatch(
-          /if: steps\.head\.outputs\.current == 'true'/,
-        );
-      }
+  // The API's check is in the deploy action, asked for by staging only:
+  // production deploys what was approved.
+  it("trajetto-api: moves the tags only when this run is still the branch head", () => {
+    const names = gatedAfterHead(apiAction.steps);
+
+    for (const move of [
+      "Move the release image tag to this build",
+      "Move the AI tag to this build",
+      "Move the API tag to this build",
+    ]) {
+      expect(names.indexOf(HEAD), move).toBeLessThan(names.indexOf(move));
+    }
+    expect(caller(apiStaging, "deploy-staging", "Deploy to staging")).toContain(
+      'require-branch-head: "true"',
+    );
+    expect(
+      caller(apiProduction, "promote-production", "Deploy to production"),
+    ).toContain('require-branch-head: "false"');
+  });
+
+  it.skipIf(!web)(
+    "trajetto-ui: moves `staging` only when this run is still the branch head",
+    () => {
+      const names = gatedAfterHead(jobOf(web!.staging, "deploy-staging").steps);
+
+      expect(names.indexOf(HEAD)).toBeLessThan(
+        names.indexOf("Move the site tag to this build"),
+      );
     },
   );
 
-  it("the web publishes no mutable `staging` tag at build time", () => {
-    if (workflows.length < 2) return;
+  it.skipIf(!web)(
+    "trajetto-ui: publishes no mutable `staging` tag at build time, and moves both by digest",
+    () => {
+      // The web's single build job publishes only candidate-<7>; the old name
+      // `build-staging` no longer exists, and a missing job made this vacuous.
+      const build = jobOf(web!.staging, "build").text;
 
-    // The web's single build job (it only publishes main-<sha>). The old name
-    // `build-staging` no longer exists, and a missing job made this vacuous.
-    const build = jobText(workflows[1][1], "build");
+      expect(build.startsWith("  build:")).toBe(true);
+      expect(build).toContain("type=sha,prefix=candidate-");
+      expect(build).not.toContain("type=raw,value=staging");
+      expect(jobOf(web!.staging, "deploy-staging").text).toContain(
+        '"ghcr.io/trajetto-organization/trajetto-ui@${DIGEST}"',
+      );
 
-    expect(build.startsWith("  build:")).toBe(true);
-    expect(build).not.toContain("type=raw,value=staging");
-    expect(jobText(workflows[1][1], "deploy-staging")).toContain(
-      '"ghcr.io/trajetto-organization/trajetto-ui@${DIGEST}"',
-    );
-  });
+      const promote = stepOf(
+        jobOf(web!.production, "promote-production"),
+        "Move the site tag to this build",
+      ).text;
+
+      expect(promote).toContain("DIGEST: ${{ needs.evidence.outputs.digest }}");
+      expect(promote).toContain(
+        '"ghcr.io/trajetto-organization/trajetto-ui@${DIGEST}"',
+      );
+      expect(promote).toContain("trajetto-ui:stable");
+    },
+  );
 });

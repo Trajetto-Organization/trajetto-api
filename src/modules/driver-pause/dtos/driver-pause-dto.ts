@@ -121,6 +121,9 @@ interface PauseTypeInfo {
   /** The legal nature; null outside PAUSE. */
   pause_kind: DriverPauseKind | null;
   is_active: boolean;
+
+  /** The seeded default's key ("pause_other"...); null for a company type. */
+  system_key: string | null;
 }
 
 /** A pause as the report reads it. */

@@ -65,18 +65,25 @@ const ALLOWED: Entry[] = [
       "dateOnlyFromKey/dateOnlyKey: a date-only column (@db.Date) IS the UTC day of its value.",
   },
   {
-    file: "src/jobs/cron/driver-position-partitions-job.ts",
+    file: "src/shared/services/provider-quota/provider-quota-repository.ts",
     pattern: "utc-day-key",
     count: 1,
     reason:
-      "Partition names follow the partitions' own UTC day bounds, not a company's day.",
+      "A provider's quota day (provider_quota_day.day) is the provider's own: LocationIQ resets the plan at UTC midnight, the same day for every company.",
   },
   {
-    file: "src/jobs/cron/driver-position-partitions-job.ts",
-    pattern: "utc-midnight",
+    file: "src/jobs/cron/purge-ops-series-job.ts",
+    pattern: "utc-day-key",
     count: 1,
     reason:
-      "A partition covers one UTC day; its bounds are UTC midnights by design.",
+      "The cutoff of provider_quota_day compares with that UTC quota day, never a company's day.",
+  },
+  {
+    file: "src/shared/delivery/geocoding/geocoding-keys.ts",
+    pattern: "utc-day-key",
+    count: 1,
+    reason:
+      "The day in the geocoder's keys is the provider's daily quota (LocationIQ resets it at UTC midnight), shared by every company: the job's budget and the address search's day, the platform's and each company's share of that same day, not a day of its own.",
   },
   {
     file: "src/shared/notifications/notification-pipeline-service.ts",

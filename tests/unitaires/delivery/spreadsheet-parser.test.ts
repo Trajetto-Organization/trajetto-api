@@ -354,3 +354,52 @@ describe("the optional item on the row", () => {
     expect(sheet(GOOD).rows[0].item).toBeNull();
   });
 });
+
+describe("the e-mail cell", () => {
+  it("reads one or more addresses separated by ';' or ',', as written", () => {
+    const result = parseDeliverySpreadsheet([
+      [...HEADER, "E-mail"],
+      [...GOOD, " compras@padaria.com.br ;Financeiro@Padaria.com.br; "],
+      [...GOOD, "compras@padaria.com.br, financeiro@padaria.com.br"],
+    ]);
+
+    expect(result.errors).toEqual([]);
+    expect(result.rows[0]).toMatchObject({
+      recipient_email: "compras@padaria.com.br;Financeiro@Padaria.com.br",
+      recipient_email_notice: null,
+    });
+    // The help of the template's column says both (spreadsheet-template.ts).
+    expect(result.rows[1]).toMatchObject({
+      recipient_email: "compras@padaria.com.br;financeiro@padaria.com.br",
+      recipient_email_notice: null,
+    });
+  });
+
+  it("never refuses the row over it: the bad part is left out and noted", () => {
+    // A missing customer notice, not a missing delivery.
+    const result = parseDeliverySpreadsheet([
+      [...HEADER, "E-mail"],
+      [...GOOD, "compras@padaria;compras@padaria.com.br"],
+      [...GOOD, "não tem"],
+    ]);
+
+    expect(result.errors).toEqual([]);
+    expect(result.rows.map((row) => row.recipient_email)).toEqual([
+      "compras@padaria.com.br",
+      null,
+    ]);
+    expect(result.rows[0].recipient_email_notice).toBe(
+      'O e-mail "compras@padaria" do destinatário não é válido e não será usado nos avisos ao cliente.',
+    );
+    expect(result.rows[1].recipient_email_notice).toBe(
+      'O e-mail "não tem" do destinatário não é válido e não será usado nos avisos ao cliente.',
+    );
+  });
+
+  it("stores nothing for an empty cell, and says nothing", () => {
+    expect(sheet(GOOD).rows[0]).toMatchObject({
+      recipient_email: null,
+      recipient_email_notice: null,
+    });
+  });
+});

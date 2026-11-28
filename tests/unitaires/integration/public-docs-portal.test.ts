@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { APP_BOOT_TIMEOUT_MS } from "../../support/app-boot";
+import { directives } from "../../support/csp";
 
 /**
  * The public portal as a browser receives it: the page AND the policy that
@@ -27,21 +28,6 @@ beforeAll(async () => {
 afterAll(async () => {
   await app?.close();
 });
-
-/** `script-src 'self' https://x` → { "script-src": ["'self'", "https://x"] } */
-function directives(header: string): Record<string, string[]> {
-  return Object.fromEntries(
-    header
-      .split(";")
-      .map((part) => part.trim())
-      .filter(Boolean)
-      .map((part) => {
-        const [name, ...values] = part.split(/\s+/);
-
-        return [name.toLowerCase(), values];
-      }),
-  );
-}
 
 async function portal() {
   const response = await app.inject({
@@ -181,9 +167,8 @@ describe("the console's configuration", () => {
   });
 
   it("points at the guides when the renderer cannot load", async () => {
-    const { renderPublicDocsPage } = await import(
-      "@/shared/integration/public-docs"
-    );
+    const { renderPublicDocsPage } =
+      await import("@/shared/integration/public-docs");
 
     const html = renderPublicDocsPage("/integration/docs/openapi.json", {
       portalUrl: "https://www.exemplo.com.br/docs",
@@ -195,9 +180,8 @@ describe("the console's configuration", () => {
   });
 
   it("keeps a staging console out of search results, and production's in", async () => {
-    const { renderPublicDocsPage } = await import(
-      "@/shared/integration/public-docs"
-    );
+    const { renderPublicDocsPage } =
+      await import("@/shared/integration/public-docs");
 
     const url = "/integration/docs/openapi.json";
 

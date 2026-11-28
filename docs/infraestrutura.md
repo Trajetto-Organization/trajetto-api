@@ -134,10 +134,10 @@ Expo, Resend, R2) atualiza este arquivo no mesmo dia, com:
 2. uma linha com a data na [seção 12](#12-histórico-de-mudanças);
 3. o token novo, ou o apagado, na [seção 11](#11-inventário-de-tokens-e-credenciais).
 
-"No mesmo dia" vale para o texto, não para o push. O `deploy.yml` da API não
-ignora mudanças em `docs/`: um commit só de documentação sem `[skip ci]` roda
-o pipeline inteiro (cerca de 1 hora de runner, da cota da
-[seção 7.2](#72-visibilidade-e-a-cota-do-actions)) e reimplanta o staging.
+"No mesmo dia" vale para o texto, não para o push. Desde 10/11/2026 um push
+só de documentação na API roda só o secret scan e o `Docs` (o Prettier e os
+unitários sem cobertura, uns 12 min da cota da
+[seção 7.2](#72-visibilidade-e-a-cota-do-actions)), sem build nem deploy.
 Para subir só o doc, ponha `[skip ci]` na mensagem do commit: o GitHub não
 roda workflow nenhum para ele, e desde 30/10/2026 isso é seguro nos três
 repositórios. Um commit que só muda `*.md` ou `docs/` vai para a produção com
@@ -207,8 +207,8 @@ firewall; [seção 4.3](#43-firewall)). Desenho detalhado:
 ### 2.2 O caminho de um deploy
 
 ```
-push em staging ──▶ GitHub Actions (deploy.yml)
-                     ├─ validação completa
+push em staging ──▶ GitHub Actions (staging.yml)
+                     ├─ validação completa (o E2E em 3 jobs paralelos) e o Gate
                      ├─ build ÚNICO ──▶ GHCR: sha-<7> (imutável) + tag staging
                      ├─ API do Dokploy (https://dokploy.intrajetto.com, pela Cloudflare)
                      │    se as migrations mudaram: deploy da trajetto-api-migrate
@@ -217,9 +217,9 @@ push em staging ──▶ GitHub Actions (deploy.yml)
                      │    (com o token read:packages, seção 5.7)
                      └─ conferência: /health/liveness (API) ou /build-id.json (web)
 
-PR staging → main ──▶ a mesma validação + "o staging rodou este commit?"
+PR staging → main ──▶ pr.yml: "o staging rodou este commit?" (staged-<7> e o Gate), sem validar de novo
 
-merge em main ──▶ aprovação no environment production
+merge em main ──▶ production.yml: Staging evidence ─▶ aprovação no environment production
                   ├─ migrations, se mudaram (trajetto-api-migrate de produção)
                   ├─ tag stable movida para o MESMO digest (sem rebuild)
                   ├─ API do Dokploy: deploy das Applications de produção
@@ -298,21 +298,21 @@ A IA (`trajetto-ai`) não tem hostname: só a API a alcança, pela rede interna.
 
 ### 3.1 As contas
 
-| Conta                                            | Para quê                                                        | Quem administra                                                                                                                        | 2FA                          |
-| ------------------------------------------------ | --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------- |
-| Contabo                                          | a VPS, o firewall, o console VNC, o Auto Backup da VM           | a conta foi criada por outra pessoa; o dono tem acesso total ao painel                                                                 | **A confirmar com o dono**   |
-| Cloudflare                                       | DNS, TLS, segurança, Access, Turnstile, Web Analytics, R2       | o dono                                                                                                                                 | **A confirmar com o dono**   |
-| Dokploy (`dokploy.intrajetto.com`)               | Applications, Databases, variáveis, domínios, backups           | dois usuários: a conta dona (criada na instalação) e a conta admin pessoal do dono (seção 5.10)                                        | pendente nas duas (seção 14) |
-| GitHub, organização `Trajetto-Organization`      | código, Actions, GHCR, secrets                                  | **A confirmar com o dono:** quem são os owners da organização                                                                          | **A confirmar com o dono**   |
-| Expo, organização `trajetto`                     | EAS Build e Update, credenciais do app                          | o dono; o CI usa o robot `github-actions`                                                                                              | **A confirmar com o dono**   |
-| Firebase, projeto `trajetto`                     | push do Android (FCM)                                           | o dono                                                                                                                                 | **A confirmar com o dono**   |
-| Resend                                           | e-mail transacional                                             | o dono                                                                                                                                 | **A confirmar com o dono**   |
-| healthchecks.io                                  | o heartbeat da API (seção 10)                                   | o dono                                                                                                                                 | **A confirmar com o dono**   |
-| MapTiler                                         | tiles do mapa (web e comprovante)                               | o dono                                                                                                                                 | **A confirmar com o dono**   |
-| LocationIQ                                       | geocodificação reversa                                          | o dono                                                                                                                                 | **A confirmar com o dono**   |
-| Meta (Business Manager)                          | WhatsApp; hoje bloqueado por política da Meta e não configurado | o dono                                                                                                                                 | **A confirmar com o dono**   |
-| Google Play Console                              | publicação do app                                               | ainda não configurado                                                                                                                  | —                            |
-| Registrador do domínio `intrajetto.com`: GoDaddy | os nameservers que apontam para a Cloudflare                    | o dono, pela conta Google da Trajetto (informado em 30/10/2026). **A confirmar com o dono:** o titular do registro (pessoa ou empresa) | **A confirmar com o dono**   |
+| Conta                                            | Para quê                                                                               | Quem administra                                                                                                                        | 2FA                          |
+| ------------------------------------------------ | -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------- |
+| Contabo                                          | a VPS, o firewall, o console VNC, o Auto Backup da VM                                  | a conta foi criada por outra pessoa; o dono tem acesso total ao painel                                                                 | **A confirmar com o dono**   |
+| Cloudflare                                       | DNS, TLS, segurança, Access, Turnstile, Web Analytics, R2                              | o dono                                                                                                                                 | **A confirmar com o dono**   |
+| Dokploy (`dokploy.intrajetto.com`)               | Applications, Databases, variáveis, domínios, backups                                  | dois usuários: a conta dona (criada na instalação) e a conta admin pessoal do dono (seção 5.10)                                        | pendente nas duas (seção 14) |
+| GitHub, organização `Trajetto-Organization`      | código, Actions, GHCR, secrets                                                         | **A confirmar com o dono:** quem são os owners da organização                                                                          | **A confirmar com o dono**   |
+| Expo, organização `trajetto`                     | EAS Build e Update, credenciais do app                                                 | o dono; o CI usa o robot `github-actions`                                                                                              | **A confirmar com o dono**   |
+| Firebase, projeto `trajetto`                     | push do Android (FCM)                                                                  | o dono                                                                                                                                 | **A confirmar com o dono**   |
+| Resend                                           | e-mail transacional                                                                    | o dono                                                                                                                                 | **A confirmar com o dono**   |
+| healthchecks.io                                  | o heartbeat da API (seção 10)                                                          | o dono                                                                                                                                 | **A confirmar com o dono**   |
+| MapTiler                                         | tiles do mapa (web e comprovante)                                                      | o dono                                                                                                                                 | **A confirmar com o dono**   |
+| LocationIQ                                       | geocodificação: endereço do comprovante, ponto das entregas e busca do "Fixar no mapa" | o dono                                                                                                                                 | **A confirmar com o dono**   |
+| Meta (Business Manager)                          | WhatsApp; hoje bloqueado por política da Meta e não configurado                        | o dono                                                                                                                                 | **A confirmar com o dono**   |
+| Google Play Console                              | publicação do app                                                                      | ainda não configurado                                                                                                                  | —                            |
+| Registrador do domínio `intrajetto.com`: GoDaddy | os nameservers que apontam para a Cloudflare                                           | o dono, pela conta Google da Trajetto (informado em 30/10/2026). **A confirmar com o dono:** o titular do registro (pessoa ou empresa) | **A confirmar com o dono**   |
 
 As contas dos provedores (Cloudflare, GitHub, Expo, Firebase, Resend,
 healthchecks.io, MapTiler, LocationIQ, Meta, GoDaddy e, quando existir, a
@@ -406,8 +406,11 @@ o Auto Backup da região US-central teve problemas de desempenho (cópias
 atrasadas e restauração temporariamente indisponível).
 **A confirmar com o dono:** se ele continua ligado, a retenção e o custo.
 
-O orçamento de memória dos serviços está em
-[`deploy.md` → Recursos da VPS e logs](./deploy.md#23-recursos-da-vps-e-logs).
+O orçamento de memória, CPU e disco dos serviços está em
+[`deploy.md` → Recursos da VPS e logs](./deploy.md#23-recursos-da-vps-e-logs);
+o inventário das Applications, na
+[seção 5.12](#512-inventário-das-applications-por-environment), e as
+medições da máquina, na [seção 4.7](#47-a-máquina-medida-f0-09).
 
 ### 4.2 SSH e console de emergência
 
@@ -612,6 +615,25 @@ produção ([`deploy.md` → Postgres e Redis](./deploy.md#10-postgres-e-redis))
 confira `docker service ls` (todos os serviços com as réplicas de pé) e a
 [seção 13.7](#137-conferir-a-borda-depois-de-mexer-na-cloudflare).
 
+### 4.7 A máquina medida (F0-09)
+
+O orçamento da VPS ([`deploy.md` → 23](./deploy.md#23-recursos-da-vps-e-logs))
+parte de números ESTIMADOS até estas medições (plano de escala F0-09).
+Repita cada uma em 2 dias úteis: um dia atípico engana.
+
+| Medida                                          | Como                                                                              | Valor                      | O que decide                                                                                  |
+| ----------------------------------------------- | --------------------------------------------------------------------------------- | -------------------------- | --------------------------------------------------------------------------------------------- |
+| CPU roubada (_steal_)                           | `vmstat 1 600` às 10h e às 15h BRT, a coluna `st`                                 | **A confirmar com o dono** | acima de 5%, a produção precisa de CPU dedicada (VDS), não de mais réplicas                   |
+| RAM visível e usada no pico                     | `free -m` no pico                                                                 | **A confirmar com o dono** | a RAM visível (~11.980 MiB ESTIMADO) e a reserva do host (1.280 MiB) das réguas R1 e R2       |
+| Uso de cada contêiner no pico                   | `docker stats --no-stream` no pico                                                | **A confirmar com o dono** | os tetos de cada Application ([seção 5.12](#512-inventário-das-applications-por-environment)) |
+| RSS de pico em 7 dias da web e da IA (produção) | Beszel, o gráfico de cada contêiner                                               | **A confirmar com o dono** | o teto da web: 640 MiB com o pico abaixo de 500, 512 MiB abaixo de 380                        |
+| Latência Brasil → VPS                           | `mtr` ou `ping` para `api.intrajetto.com` de uma rede móvel em São Paulo          | **A confirmar com o dono** | se reprovar o SLO, volta a pergunta da região dos servidores                                  |
+| Swap                                            | `swapon --show`                                                                   | **A confirmar com o dono** | tem de voltar vazio (F0-11; [`deploy.md` → 23](./deploy.md#sem-swap-o-earlyoom-no-lugar))     |
+| earlyoom                                        | `systemctl is-active earlyoom` e `journalctl -u earlyoom -n 20` (a lista evitada) | **A confirmar com o dono** | `active`, evitando o `postgres`, o `dockerd`, o `containerd`, o `traefik` e o Dokploy         |
+
+Anote aqui o valor e a data de cada uma, sem nenhum IP nem nome de máquina
+(seção 1).
+
 ---
 
 ## 5. Dokploy
@@ -684,11 +706,28 @@ pipeline. Passo a passo de cada serviço:
 e, para a web,
 [`trajetto-ui/docs/deploy.md` → 6](https://github.com/Trajetto-Organization/trajetto-ui/blob/staging/docs/deploy.md#6-criar-a-application-trajetto-ui-de-staging).
 
-**A confirmar com o dono:** o Redis de staging foi criado sem o comando
-personalizado (`--requirepass` com `--save ""`, `--appendonly no`,
-`--maxmemory 256mb` e `--maxmemory-policy allkeys-lru`) e sem limite de
-memória (observado em 27/10). O de produção foi instruído com os dois.
-Decidir se o de staging é corrigido.
+O Redis de staging foi criado sem teto (observado em 27/10) e corrigido em
+26/11/2026: _Memory Limit_ `167772160` (160 MiB), _Custom command_ vazio e
+os 7 _Args_ `redis-server`, `--requirepass`, `<senha do Database>`,
+`--maxmemory`, `64mb`, `--maxmemory-policy`, `allkeys-lru`
+([`deploy.md` → 7.5](./deploy.md#75-redis-database)); o `CONFIG GET`
+confirmou `allkeys-lru` e `64mb`, e o alerta do `ops-heartbeat` (item
+F1-11 do plano de escala: `Redis sem teto de memória` ou
+`com maxmemory-policy noeviction`) ficou verde. A senha agora mora também
+nos _Args_: trocar a senha do Database é trocar esse argumento junto. O de
+produção, que até 26/11/2026 estava no padrão do Dokploy (sem teto),
+recebeu em 27/11/2026, antes da primeira promoção do plano de escala, o
+_Custom command_ vazio, os mesmos 7 _Args_ com `256mb` e o _Memory Limit_
+`536870912` (512 MiB). O `CONFIG GET` confirmou `268435456` e
+`allkeys-lru`.
+
+Os dois Redis avisam na partida `Memory overcommit must be enabled`. É o
+`vm.overcommit_memory` do kernel da VPS, não do contêiner. Sem ele, o
+snapshot em disco (o `BGSAVE` do padrão) pode falhar com pouca memória, e
+o Redis só guarda chaves descartáveis
+([ADR 0002](./adr/0002-redis-descartavel.md)). Pendente: pôr
+`vm.overcommit_memory = 1` em `/etc/sysctl.conf` do host, como root, junto
+com o endurecimento do SSH.
 
 ### 5.3 Por que Application e nunca Compose
 
@@ -715,13 +754,17 @@ O que se perdeu na troca (health check no balanceador, rede interna isolada,
 
 Cada serviço tem um _Name_ (o rótulo no painel) e um _App Name_ (o nome do
 serviço no Swarm e o nome de rede pelo qual os outros o encontram). Na
-montagem, o Dokploy gerou os App Names com um sufixo aleatório, e o App Name
-não pode ser editado depois de criado. Por isso:
+montagem, o Dokploy gerou os App Names com um sufixo aleatório de 6
+caracteres (o `trajetto-worker` da staging, criado em 26/11/2026, ficou
+`trajetto-worker-staging-<sufixo>`), e o App Name não pode ser editado
+depois de criado. Por isso:
 
 - os nomes reais são únicos no servidor inteiro, e staging e produção nunca
   colidem na `dokploy-network`;
 - os nomes `trajetto-*-staging` e `trajetto-*-production` que aparecem no
-  `deploy.md` são marcadores: troque pelo App Name que o painel mostra;
+  `deploy.md` são marcadores: troque pelo App Name que o painel mostra,
+  inclusive nas variáveis `SWARM_*_SERVICE` do GitHub (copie da aba
+  _General_ da Application);
 - o App Name aparece no topo da página do serviço (nos Databases, em
   _General → Internal Host_). No host, `docker service ls` lista todos;
 - o App Name da web de produção ficou no formato `trajetto-trajettoui-<sufixo>`,
@@ -827,33 +870,35 @@ ambiente de cada uma estão em [`variaveis-de-ambiente.md`](./variaveis-de-ambie
 
 **Application `trajetto-api`**:
 
-| Variável(is)                                                                                                                         | De onde vem o valor                                                                                                                                                                                                                                  |
-| ------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `APP_ENV`                                                                                                                            | `staging` ou `production`                                                                                                                                                                                                                            |
-| `NODE_OPTIONS`, `LOG_LEVEL`                                                                                                          | fixos: `--max-old-space-size=768` e `info`                                                                                                                                                                                                           |
-| `DATABASE_URL`                                                                                                                       | senha do Database PostgreSQL + o App Name dele, porta 5432, banco e usuário `trajetto` (modelo em `deploy.md` 7.7)                                                                                                                                   |
-| `RUN_MIGRATIONS_ON_BOOT`                                                                                                             | `false`, enquanto um build anterior a 31/10/2026 (`main-<sha>`, ou `sha-<7>` de antes da separação) puder ser alvo de rollback: esses builds a leem com padrão `true` e voltariam a migrar no boot. As imagens novas a ignoram, então basta **Save** |
-| `MIGRATION_DATABASE_URL`                                                                                                             | nenhum build a lê com `RUN_MIGRATIONS_ON_BOOT=false` (as imagens novas nunca; as anteriores, só ao migrar no boot), e a URL sem tetos foi para a `trajetto-api-migrate`; pode sair                                                                   |
-| `ALLOW_EMPTY_DATABASE_BOOTSTRAP`                                                                                                     | `false`, sempre: quem prepara um banco vazio é a `trajetto-api-migrate`                                                                                                                                                                              |
-| `REDIS_URL`                                                                                                                          | senha do Database Redis + o App Name dele, porta 6379                                                                                                                                                                                                |
-| `HTTP_REQUEST`                                                                                                                       | a origem pública da **web** do ambiente; é a única origem que o CORS da API aceita                                                                                                                                                                   |
-| `API_HTTP_REQUEST`                                                                                                                   | a origem pública da **própria API** (logo dos e-mails, servidor da documentação)                                                                                                                                                                     |
-| `JWT_SECRET`, `JWT_SECRET_REFRESH_TOKEN`                                                                                             | gerados por nós ([seção 11.3](#113-segredos-gerados-por-nós))                                                                                                                                                                                        |
-| `MASTER_USER_EMAIL`, `MASTER_USER_INITIAL_PASSWORD`                                                                                  | e-mail da equipe; senha gerada                                                                                                                                                                                                                       |
-| `RATE_LIMIT_TRUSTED_PROXY`                                                                                                           | `cloudflare`                                                                                                                                                                                                                                         |
-| `RATE_LIMIT_FORWARDER_SECRET`                                                                                                        | gerado; **o mesmo valor** da web do mesmo ambiente                                                                                                                                                                                                   |
-| `TURNSTILE_SECRET_KEY`                                                                                                               | o widget do ambiente (seção 6.9); **o mesmo valor** da web                                                                                                                                                                                           |
-| `UPLOAD_STORAGE_TYPE`, `UPLOAD_ORPHAN_GC`                                                                                            | `r2` e `dry-run`                                                                                                                                                                                                                                     |
-| `R2_ACCOUNT_ID`, `R2_BUCKET_NAME`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`                                                        | Cloudflare → R2: o id da conta (o mesmo nos dois ambientes), o bucket do ambiente e o token só desse bucket                                                                                                                                          |
-| `AI_PROVIDER`, `AI_LOCAL_URL`, `AI_LOCAL_TOKEN`                                                                                      | `local`; `http://<App Name da IA>:8080`; **o mesmo valor** do `AI_TOKEN` da IA                                                                                                                                                                       |
-| `RESEND_SECRET_KEY`, `RESEND_FROM_EMAIL`, `RESEND_WEBHOOK_SECRET`                                                                    | Resend: chave de API, remetente do domínio verificado, segredo do webhook ([seção 9](#9-e-mail-resend))                                                                                                                                              |
-| `HEALTHCHECK_PING_URL`                                                                                                               | healthchecks.io, o check do ambiente (seção 10.1)                                                                                                                                                                                                    |
-| `PROOF_MAP_TILE_URL`, `PROOF_MAP_TILE_ATTRIBUTION`                                                                                   | MapTiler (a URL leva a chave; a mesma chave da web)                                                                                                                                                                                                  |
-| `REVERSE_GEOCODER_URL`, `REVERSE_GEOCODER_KEY`, `REVERSE_GEOCODER_KEY_PARAM`                                                         | LocationIQ                                                                                                                                                                                                                                           |
-| `PROOF_SIGNING_PFX_BASE64`, `PROOF_SIGNING_PFX_PASSWORD`, `PROOF_SIGNER_LOCATION`, `PROOF_SIGNER_CONTACT`, `PROOF_ISSUER_LEGAL_NAME` | certificado A1 do comprovante: de teste no staging; `PROOF_SIGNING_*` vazias em produção até existir o e-CNPJ                                                                                                                                        |
-| `DOCS_USER`, `DOCS_PASSWORD`                                                                                                         | gerados; os mesmos ficam no environment `production` da web, para o gate de rotas                                                                                                                                                                    |
-| `WEBHOOK_SECRETS_KEY`                                                                                                                | gerado (32 bytes); perder é irrecuperável                                                                                                                                                                                                            |
-| `META_WHATSAPP_*`                                                                                                                    | não configuradas em nenhum ambiente (a Meta bloqueou a conta)                                                                                                                                                                                        |
+| Variável(is)                                                                                                                                                                   | De onde vem o valor                                                                                                                                                                                                                                                                                                                           |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `APP_ENV`                                                                                                                                                                      | `staging` ou `production`                                                                                                                                                                                                                                                                                                                     |
+| `NODE_OPTIONS`, `LOG_LEVEL`                                                                                                                                                    | fixos: `--max-old-space-size=768` e `info`                                                                                                                                                                                                                                                                                                    |
+| `DATABASE_URL`                                                                                                                                                                 | senha do Database PostgreSQL + o App Name dele, porta 5432, banco e usuário `trajetto` (modelo em `deploy.md` 7.7)                                                                                                                                                                                                                            |
+| `RUN_MIGRATIONS_ON_BOOT`                                                                                                                                                       | `false`, enquanto um build anterior a 31/10/2026 (`main-<sha>`, ou `sha-<7>` de antes da separação) puder ser alvo de rollback: esses builds a leem com padrão `true` e voltariam a migrar no boot. As imagens novas a ignoram, então basta **Save**                                                                                          |
+| `MIGRATION_DATABASE_URL`                                                                                                                                                       | nenhum build a lê com `RUN_MIGRATIONS_ON_BOOT=false` (as imagens novas nunca; as anteriores, só ao migrar no boot), e a URL sem tetos foi para a `trajetto-api-migrate`; pode sair                                                                                                                                                            |
+| `ALLOW_EMPTY_DATABASE_BOOTSTRAP`                                                                                                                                               | `false`, sempre: quem prepara um banco vazio é a `trajetto-api-migrate`                                                                                                                                                                                                                                                                       |
+| `REDIS_URL`                                                                                                                                                                    | senha do Database Redis + o App Name dele, porta 6379                                                                                                                                                                                                                                                                                         |
+| `HTTP_REQUEST`                                                                                                                                                                 | a origem pública da **web** do ambiente; é a única origem que o CORS da API aceita                                                                                                                                                                                                                                                            |
+| `API_HTTP_REQUEST`                                                                                                                                                             | a origem pública da **própria API** (logo dos e-mails, servidor da documentação)                                                                                                                                                                                                                                                              |
+| `JWT_SECRET`, `JWT_SECRET_REFRESH_TOKEN`                                                                                                                                       | gerados por nós ([seção 11.3](#113-segredos-gerados-por-nós))                                                                                                                                                                                                                                                                                 |
+| `MASTER_USER_EMAIL`, `MASTER_USER_INITIAL_PASSWORD`                                                                                                                            | e-mail da equipe; senha gerada                                                                                                                                                                                                                                                                                                                |
+| `RATE_LIMIT_TRUSTED_PROXY`                                                                                                                                                     | `cloudflare`                                                                                                                                                                                                                                                                                                                                  |
+| `RATE_LIMIT_FORWARDER_SECRET`                                                                                                                                                  | gerado; **o mesmo valor** da web do mesmo ambiente                                                                                                                                                                                                                                                                                            |
+| `TURNSTILE_SECRET_KEY`                                                                                                                                                         | o widget do ambiente (seção 6.9); **o mesmo valor** da web                                                                                                                                                                                                                                                                                    |
+| `UPLOAD_STORAGE_TYPE`, `UPLOAD_ORPHAN_GC`                                                                                                                                      | `r2` e `dry-run`                                                                                                                                                                                                                                                                                                                              |
+| `R2_ACCOUNT_ID`, `R2_BUCKET_NAME`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`                                                                                                  | Cloudflare → R2: o id da conta (o mesmo nos dois ambientes), o bucket do ambiente e o token só desse bucket                                                                                                                                                                                                                                   |
+| `AI_PROVIDER`, `AI_LOCAL_URL`, `AI_LOCAL_TOKEN`                                                                                                                                | `local`; `http://<App Name da IA>:8080`; **o mesmo valor** do `AI_TOKEN` da IA                                                                                                                                                                                                                                                                |
+| `RESEND_SECRET_KEY`, `RESEND_FROM_EMAIL`, `RESEND_WEBHOOK_SECRET`                                                                                                              | Resend: chave de API, remetente do domínio verificado, segredo do webhook ([seção 9](#9-e-mail-resend))                                                                                                                                                                                                                                       |
+| `HEALTHCHECK_PING_URL`                                                                                                                                                         | healthchecks.io, o check do ambiente (seção 10.1)                                                                                                                                                                                                                                                                                             |
+| `PROOF_MAP_TILE_URL`, `PROOF_MAP_TILE_ATTRIBUTION`                                                                                                                             | MapTiler (a URL leva a chave; a mesma chave da web)                                                                                                                                                                                                                                                                                           |
+| `MAP_TILE_URL`, `MAP_TILE_ATTRIBUTION`, `MAP_TILE_URL_DARK`, `MAP_TILE_ATTRIBUTION_DARK`                                                                                       | o dono define no Dokploy com os mesmos valores do web (MapTiler): o mapa de fundo do app, entregue por `GET /config/map` (onda 5)                                                                                                                                                                                                             |
+| `REVERSE_GEOCODER_URL`, `REVERSE_GEOCODER_KEY`, `REVERSE_GEOCODER_KEY_PARAM`                                                                                                   | LocationIQ                                                                                                                                                                                                                                                                                                                                    |
+| `ADDRESS_SEARCH_URL`, `ADDRESS_SEARCH_PROTOCOL` (e, se quiser outros valores que os padrões 1000 e 150, `ADDRESS_SEARCH_DAILY_BUDGET` e `ADDRESS_SEARCH_BUSINESS_DAILY_LIMIT`) | LocationIQ: `https://api.locationiq.com/v1` e `locationiq-autocomplete` (o autocomplete não fica no host regional da `REVERSE_GEOCODER_URL`). A chave é a mesma `REVERSE_GEOCODER_KEY`, a menos que se defina `ADDRESS_SEARCH_KEY` com um token da mesma conta. Vazias, a busca do "Fixar no mapa" fica desligada e o clique no mapa continua |
+| `PROOF_SIGNING_PFX_BASE64`, `PROOF_SIGNING_PFX_PASSWORD`, `PROOF_SIGNER_LOCATION`, `PROOF_SIGNER_CONTACT`, `PROOF_ISSUER_LEGAL_NAME`                                           | certificado A1 do comprovante: de teste no staging; `PROOF_SIGNING_*` vazias em produção até existir o e-CNPJ                                                                                                                                                                                                                                 |
+| `DOCS_USER`, `DOCS_PASSWORD`                                                                                                                                                   | gerados; os mesmos ficam no environment `production` da web, para o gate de rotas                                                                                                                                                                                                                                                             |
+| `WEBHOOK_SECRETS_KEY`                                                                                                                                                          | gerado (32 bytes); perder é irrecuperável                                                                                                                                                                                                                                                                                                     |
+| `META_WHATSAPP_*`                                                                                                                                                              | não configuradas em nenhum ambiente (a Meta bloqueou a conta)                                                                                                                                                                                                                                                                                 |
 
 **Application `trajetto-ai`**: `AI_TOKEN` (gerado; igual ao `AI_LOCAL_TOKEN`
 da API), `OCR_THREADS=2` (igual ao limite de CPU) e `AI_MAX_QUEUE=2`.
@@ -865,8 +910,13 @@ web), `HTTP_REQUEST` e `PUBLIC_API_URL` (a URL pública da API do ambiente),
 `MAP_TILE_ATTRIBUTION` e `MAP_TILE_URL_DARK` (MapTiler),
 `CSP_STORAGE_ORIGINS` (a origem do bucket do ambiente,
 `https://<bucket>.<ACCOUNT_ID>.r2.cloudflarestorage.com`) e
-`NODE_OPTIONS=--max-old-space-size=512`. `BACKGROUND_TRACKING` não está
-definida.
+`NODE_OPTIONS=--max-old-space-size=512`. `BACKGROUND_TRACKING` ainda não
+está definida: ela entra como `true` no `trajetto-ui` de staging **junto com o
+APK novo** com o segundo plano ligado (decisão D16; ação do dono no
+`planejamento.md`, §7.5), para a torre parar de avisar que só vê quem está com
+o app aberto. Na produção fica `false` enquanto o app de produção for o AAB do
+Play Store sem a declaração aprovada (D17). A regra completa está em
+[`trajetto-mobile/docs/deploy.md` → Localização em segundo plano](https://github.com/Trajetto-Organization/trajetto-mobile/blob/staging/docs/deploy.md#localiza%C3%A7%C3%A3o-em-segundo-plano).
 
 **Convenções**:
 
@@ -998,12 +1048,78 @@ reiniciou o painel e a configuração do Traefik; as aplicações não caíram.
 ### 5.11 Lacunas conhecidas
 
 Sem health check no balanceador do Traefik, rede `dokploy-network` compartilhada
-por tudo, IA sem `read_only`, Databases sem _placement_ e o _Stop Grace Period_
-que depende da versão. Detalhe e contornos em
+por tudo, IA sem `read_only`, Databases sem _placement_ até os labels e as
+constraints da onda 17 ([runbooks/swarm-multi-no.md](./runbooks/swarm-multi-no.md))
+e o _Stop Grace Period_ que depende da versão. Detalhe e contornos em
 [`deploy.md` → 5](./deploy.md#5-applications-em-vez-de-compose-o-que-mudou-e-o-que-ficou-de-fora).
 **A confirmar com o dono:** se o campo _Stop Grace Period_ existe no Dokploy
-v0.30.10 instalado (sem ele, o desligamento ordenado da API, de até 35 s, é
-cortado em 10 s).
+v0.30.10 instalado. Sem ele, o serviço fica com os 10 s do Docker, e o
+desligamento ordenado da API cabe neles enquanto `STOP_GRACE_PERIOD_MS` não
+estiver definida (desde 15/11/2026); `40000` só depois de o `inspect`
+mostrar os 40 s.
+
+### 5.12 Inventário das Applications por environment
+
+Cada Application e Database da VPS, com a imagem, o papel e o teto e as
+réplicas que o plano de escala dá à fase de hoje (**A**, ondas 0 a 11) e à
+próxima (**B**, ondas 12 e 13, em que a staging ganha o worker). Os tetos
+vão em MiB; no painel, em bytes (1 MiB = `1048576`) e nano-CPU (1 CPU =
+`1000000000`). A tabela de todas as fases, com os bytes, e o passo a
+passo de cada Application de papel estão em
+[`deploy.md` → Tetos por Application e por fase](./deploy.md#tetos-por-application-e-por-fase)
+e [Criar a Application de um papel](./deploy.md#criar-a-application-de-um-papel).
+Uma Application de papel só existe depois de o dono criá-la: até lá, a
+linha diz "a criar", e o código dela fica inerte.
+
+Na staging, a coluna B é a do painel desde 26/11/2026: o worker criado, a
+api no papel `api`, a imagem `trajetto-postgres` e o Redis com os _Args_.
+O PITR da imagem foi ligado na mesma noite. Os números e o porquê estão em
+[`deploy.md` → Tetos por Application e por fase](./deploy.md#tetos-por-application-e-por-fase).
+
+**A confirmar com o dono:** que o painel tem estes valores (os tetos da
+staging do F0-07, as 2 réplicas da produção do F0-02, o _Stop Grace Period_
+de 40 s do F0-01 e a migrate com 384 MiB); o último estado lido no painel
+está na [seção 5.2](#52-environments-projetos-e-serviços). Ao criar uma
+Application ou mudar um teto, atualize a linha dela no mesmo dia.
+
+**Produção**
+
+| Application                  | Imagem                                                           | Papel             | _Domain_ / _Path_                        | Hoje (A)                                         | B (onda 12)            | Estado                              |
+| ---------------------------- | ---------------------------------------------------------------- | ----------------- | ---------------------------------------- | ------------------------------------------------ | ---------------------- | ----------------------------------- |
+| Database `trajetto-postgres` | `trajetto-postgres@sha256` (onda 3; antes, `postgres:16-alpine`) | —                 | —                                        | 2048 (sem teto até a troca da imagem), CPU livre | igual                  | existe                              |
+| Database `trajetto-redis`    | `redis:7-alpine`                                                 | —                 | —                                        | 512, `maxmemory 256mb`                           | igual                  | existe                              |
+| `trajetto-ai`                | `trajetto-ai:stable`                                             | —                 | —                                        | 1 × 1024, 2 CPU                                  | igual                  | existe                              |
+| `trajetto-api`               | `trajetto-api:stable`                                            | `all`             | `api.intrajetto.com`, `/`                | 2 × 1024, CPU livre, heap 768                    | 2 × 1024, heap 576     | existe                              |
+| `trajetto-api-migrate`       | `trajetto-api-migrate:stable`                                    | release           | —                                        | 384, transitório                                 | igual                  | existe                              |
+| `trajetto-offsite`           | `rclone@sha256`                                                  | —                 | —                                        | 64                                               | igual                  | **A confirmar com o dono** (onda 3) |
+| `trajetto-ui`                | `trajetto-ui:stable`                                             | —                 | `www.intrajetto.com`                     | 2 × 768 (640 se o RSS de pico < 500)             | 2 × 640                | existe                              |
+| `trajetto-worker`            | `trajetto-api:stable-worker`                                     | `worker`          | —                                        | —                                                | — (nasce na onda 14)   | a criar                             |
+| `trajetto-pgbouncer`         | `trajetto-pgbouncer:stable`                                      | —                 | —                                        | —                                                | — (nasce na onda 17)   | a criar                             |
+| `trajetto-scheduler`         | `trajetto-api:stable-scheduler`                                  | `scheduler`       | —                                        | —                                                | — (no prod-1, onda 22) | a criar                             |
+| `trajetto-worker-external`   | `trajetto-api:stable-worker-external`                            | `worker-external` | —                                        | —                                                | — (no prod-1, onda 22) | a criar                             |
+| `trajetto-realtime`          | `trajetto-api:stable-realtime`                                   | `realtime`        | `api.intrajetto.com`, `/socket.io`       | —                                                | — (no prod-1, onda 22) | a criar                             |
+| `trajetto-ingest`            | `trajetto-api:stable-ingest`                                     | `ingest`          | `api.intrajetto.com`, `/route/positions` | —                                                | — (pelo gatilho)       | a criar                             |
+
+**Staging**
+
+| Application                  | Imagem                                                           | Papel             | _Domain_ / _Path_                                | Hoje (A)                       | B (onda 12)                            | Estado              |
+| ---------------------------- | ---------------------------------------------------------------- | ----------------- | ------------------------------------------------ | ------------------------------ | -------------------------------------- | ------------------- |
+| Database `trajetto-postgres` | `trajetto-postgres@sha256` (onda 3; antes, `postgres:16-alpine`) | —                 | —                                                | 576, 0,5 CPU                   | 576, CPU livre                         | existe              |
+| Database `trajetto-redis`    | `redis:7-alpine`                                                 | —                 | —                                                | 160, 0,1 CPU, `maxmemory 64mb` | igual                                  | existe              |
+| `trajetto-ai`, sempre ligada | `trajetto-ai:staging`                                            | —                 | —                                                | 768, 1 CPU                     | 1024, 2 CPU                            | existe              |
+| `trajetto-api`               | `trajetto-api:staging`                                           | `all`; `api` em B | `api-staging.intrajetto.com`, `/`                | 576, 0,5 CPU, heap 400         | 1024, CPU livre, heap 576, papel `api` | existe              |
+| `trajetto-api-migrate`       | `trajetto-api-migrate:staging`                                   | release           | —                                                | 384, transitório               | igual                                  | existe              |
+| `trajetto-ui`                | `trajetto-ui:staging`                                            | —                 | `staging.intrajetto.com`                         | 320, 0,25 CPU                  | 768, CPU livre, heap 512               | existe              |
+| `trajetto-worker`            | `trajetto-api:staging-worker`                                    | `worker`          | —                                                | —                              | 768, 1 CPU, heap 256                   | existe (26/11/2026) |
+| `trajetto-pgbouncer`         | `trajetto-pgbouncer:staging`                                     | —                 | —                                                | —                              | — (no 2º VPS, onda 17)                 | a criar             |
+| `trajetto-scheduler`         | `trajetto-api:staging-scheduler`                                 | `scheduler`       | —                                                | —                              | — (no 2º VPS, onda 18)                 | a criar             |
+| `trajetto-worker-external`   | `trajetto-api:staging-worker-external`                           | `worker-external` | —                                                | —                              | — (no 2º VPS, onda 18)                 | a criar             |
+| `trajetto-realtime`          | `trajetto-api:staging-realtime`                                  | `realtime`        | `api-staging.intrajetto.com`, `/socket.io`       | —                              | — (no 2º VPS, onda 18)                 | a criar             |
+| `trajetto-ingest`            | `trajetto-api:staging-ingest`                                    | `ingest`          | `api-staging.intrajetto.com`, `/route/positions` | —                              | — (no 2º VPS, onda 18)                 | a criar             |
+
+Os papéis usam a mesma imagem da API, cada um com a sua tag, e não gastam
+disco a mais. A soma de cada fase, contra a RAM da VPS, está em
+[`deploy.md` → 23](./deploy.md#23-recursos-da-vps-e-logs).
 
 ---
 
@@ -1476,12 +1592,14 @@ Rotação: [seção 13.3](#133-rotacionar-um-segredo).
 
 **Buckets** (menu da conta → _R2_):
 
-| Bucket                     | Para quê                                                                             | Acesso                                    |
-| -------------------------- | ------------------------------------------------------------------------------------ | ----------------------------------------- |
-| `trajetto-staging-storage` | fotos, assinaturas, anexos e avatares do staging                                     | privado; só URL assinada de curta duração |
-| `trajetto-prod-storage`    | o mesmo, de produção                                                                 | privado; só URL assinada                  |
-| `trajetto-backups`         | dumps do Postgres; prefixo `trajetto-staging/` (e, previsto, `trajetto-production/`) | privado; só o Dokploy escreve             |
-| `trajetto-backups-prod`    | bucket próprio para os dumps de produção (recomendado)                               | **A confirmar com o dono:** se foi criado |
+| Bucket                     | Para quê                                                                                                            | Acesso                                                                                                                                                                                                                                                                   |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `trajetto-staging-storage` | fotos, assinaturas, anexos e avatares do staging                                                                    | privado; só URL assinada de curta duração; _Object lifecycle rules_ do `infra/r2/lifecycle.json` (comprovantes, fotos e anexos do chat na _Infrequent Access_ aos 60 dias, nada expira), aplicadas por `infra/r2/apply-lifecycle.sh uploads` (plano de escala F5-28)     |
+| `trajetto-prod-storage`    | o mesmo, de produção                                                                                                | privado; só URL assinada; as mesmas regras de lifecycle                                                                                                                                                                                                                  |
+| `trajetto-backups`         | dumps do Postgres; prefixo `trajetto-staging/` (e, previsto, `trajetto-production/`)                                | privado; só o Dokploy escreve                                                                                                                                                                                                                                            |
+| `trajetto-backups-prod`    | bucket próprio para os dumps de produção (recomendado)                                                              | **A confirmar com o dono:** se foi criado                                                                                                                                                                                                                                |
+| `trajetto-archive-staging` | o arquivo da trilha de GPS do staging (`trail/`, plano de escala F2-11) e, com o F5-16, o do histórico (`archive/`) | privado; **a criar** depois da onda 8; _Object lifecycle rules_ do `infra/r2/archive-lifecycle.json`, por `infra/r2/apply-lifecycle.sh archive`: `trail/` apaga aos 180 dias (`TRAIL_ARCHIVE_RETENTION_DAYS`); `archive/` só ganha Expiration depois do parecer jurídico |
+| `trajetto-archive-prod`    | o mesmo, de produção                                                                                                | privado; **a criar** depois da promoção da onda 8; as mesmas regras                                                                                                                                                                                                      |
 
 Os buckets de fotos foram criados em 24/10/2026. Nenhum bucket tem domínio
 próprio: o `assets.intrajetto.com` chegou a ser ligado ao bucket de produção e
@@ -1489,6 +1607,14 @@ foi removido até 25/10, porque o bucket precisa ser privado. O endereço S3
 `https://<bucket>.<ACCOUNT_ID>.r2.cloudflarestorage.com` é automático e não é
 domínio próprio. **A confirmar com o dono:** que a URL pública `r2.dev` está
 desligada nos buckets.
+
+**O bucket do PITR da staging** (`trajetto-pitr-staging`, desde 26/11/2026)
+tem uma regra de _Bucket Lock_ só: `archive/trajetto/1`, 14 dias. As provas de
+27/11 ([`infra/r2/bucket-locks.md`](../infra/r2/bucket-locks.md#o-que-as-provas-deram-na-staging-27112026))
+mostraram duas coisas que o painel não diz. O **Delete** de um objeto travado
+mostra o aviso verde de sucesso, e o objeto fica. E a regra de `backup/` não
+serve com o pgBackRest: o backup falha ao regravar o manifesto. Por isso ela
+saiu, e não vai para a produção.
 
 **CORS** (cada bucket de fotos → _Settings → CORS Policy_): _AllowedOrigins_ =
 a origem da web do ambiente (`https://staging.intrajetto.com` ou
@@ -1500,11 +1626,13 @@ o upload do navegador falha sem aparecer em log nenhum.
 **Tokens** (_R2 → Manage API Tokens_; um por bucket, _Object Read & Write_ só
 naquele bucket):
 
-| Token                                                       | Bucket                     | Onde fica                                                      |
-| ----------------------------------------------------------- | -------------------------- | -------------------------------------------------------------- |
-| `trajetto-upload-token`                                     | `trajetto-prod-storage`    | `R2_ACCESS_KEY_ID` e `R2_SECRET_ACCESS_KEY` da API de produção |
-| token de staging (sugerido `trajetto-staging-upload-token`) | `trajetto-staging-storage` | as mesmas variáveis da API de staging                          |
-| token do bucket de backup                                   | `trajetto-backups`         | só no _S3 Destination_ do Dokploy                              |
+| Token                                                                   | Bucket                     | Onde fica                                                                               |
+| ----------------------------------------------------------------------- | -------------------------- | --------------------------------------------------------------------------------------- |
+| `trajetto-upload-token`                                                 | `trajetto-prod-storage`    | `R2_ACCESS_KEY_ID` e `R2_SECRET_ACCESS_KEY` da API de produção                          |
+| token de staging (sugerido `trajetto-staging-upload-token`)             | `trajetto-staging-storage` | as mesmas variáveis da API de staging                                                   |
+| token do bucket de backup                                               | `trajetto-backups`         | só no _S3 Destination_ do Dokploy                                                       |
+| token do arquivo de staging (sugerido `trajetto-staging-archive-token`) | `trajetto-archive-staging` | `ARCHIVE_R2_ACCESS_KEY_ID` e `ARCHIVE_R2_SECRET_ACCESS_KEY` da API de staging (a criar) |
+| token do arquivo de produção (sugerido `trajetto-archive-token`)        | `trajetto-archive-prod`    | as mesmas variáveis da API de produção (a criar)                                        |
 
 **A confirmar com o dono:** o nome real do token de staging; se existe token
 e destino próprios para o backup de produção; e para que serve o
@@ -1558,14 +1686,27 @@ dá 2.000 minutos de runner Linux por mês para repositórios privados (os
 "US$ 12 incluídos", a US$ 0,006 por minuto). Há quatro _budgets_ em US$ 0 com
 _Usage blocked_ (entre eles Actions, Packages e Codespaces), e o armazenamento de
 Actions e Packages incluído é de 0,5 GB (0 GB usado em 29/10). A cota renova no
-dia 1º de cada mês. Cada push custa por volta de 1 hora de runner por
-repositório: os 2.000 minutos dão cerca de 33 horas, uns 30 pushes por mês
-somando os três repositórios. Onde ver: organização → _Settings → Billing and
-licensing_ → _Usage_ (os minutos gastos) e _Budgets and alerts_ (os
-budgets).
+dia 1º de cada mês. Até 09/11/2026 cada push de código custava por volta de
+1 hora de runner por repositório (na API, uns 75 min cobrados); os 2.000
+minutos davam uns 30 pushes por mês somando os três. Desde 10/11/2026 a API
+gasta uns 61 min cobrados num push de código na `staging` (uns 25 de
+relógio), uns 12 num push só de documentação e uns 2 num PR para `main`
+([`deploy.md` → Tempos e minutos](./deploy.md#tempos-e-minutos)): no ritmo
+de novembro, uns 1.750 min por mês só da API, ainda acima do que sobra da
+cota com a web e o app. Onde ver: organização → _Settings → Billing and
+licensing_ → _Usage_ (os minutos gastos, por repositório) e _Budgets and
+alerts_ (os budgets).
 
 Quando a cota acaba, os runs não começam, com a mensagem "recent account
-payments have failed or your spending limit needs to be increased".
+payments have failed or your spending limit needs to be increased". No run,
+isso aparece como **failed sem nenhum job vermelho**, com os jobs seguintes
+que nem aparecem; a mensagem está em _Summary → Annotations_. De dentro do
+Actions não há como avisar antes (sem cota, nem um job de alerta começa): o
+único aviso é o e-mail dos budgets. Por isso a recomendação de cadastrar
+uma forma de pagamento com um budget limitado (US$ 10–15 por mês, uns
+1.700–2.500 minutos) e alertas em 75, 90 e 100 %, com bloqueio no limite.
+Quando houver minutos de novo, _Re-run failed jobs_ refaz só os jobs que
+não rodaram.
 
 **O que aconteceu entre 26 e 29/10/2026**: a cota acabou. Em 29/10, para
 continuar subindo o staging e a produção, o dono deixou os repositórios
@@ -1643,7 +1784,7 @@ o environment (nível do environment).
 | `API_PUBLIC_URL`                 | variable, `staging` e `production` | a conferência do rollout pela `/health/liveness` pública                                                                      | `https://api-staging.intrajetto.com` / `https://api.intrajetto.com` |
 | `ROLLOUT_VERIFY`                 | variable                           | como o pipeline prova o rollout; em uso: `http`                                                                               | —                                                                   |
 | `IMAGE_SCAN_ENFORCE`             | variable, repositório              | `true`: um CRITICAL corrigível no Trivy falha o build (só um achado: falha no download do banco ou erro do Trivy viram aviso) | —                                                                   |
-| `CLIENT_REPOS_READ_TOKEN`        | secret, repositório                | o contrato de rotas do `ci.yml` lê a web e o app                                                                              | GitHub, token fine-grained (seção 11.1)                             |
+| `CLIENT_REPOS_READ_TOKEN`        | secret, repositório                | o contrato de rotas do `validate.yml` lê a web e o app                                                                        | GitHub, token fine-grained (seção 11.1)                             |
 
 `SWARM_API_SERVICE`, `DEPLOY_SSH_HOST`, `DEPLOY_SSH_USER`,
 `DEPLOY_SSH_KNOWN_HOSTS` e `DEPLOY_VERIFY_SSH_KEY` só são usados com
@@ -1737,20 +1878,35 @@ janela ([seção 13.6](#136-abrir-e-fechar-um-repositório-para-usar-o-actions-g
 
 ### 7.7 Dependabot e varredura de segredos
 
-| Repositório       | Ecossistemas                                               | Quando                                            | PRs contra                                   |
-| ----------------- | ---------------------------------------------------------- | ------------------------------------------------- | -------------------------------------------- |
-| `trajetto-api`    | npm, github-actions e docker; pip da IA e compose de carga | segunda, 06:00 (São Paulo); pip e compose mensais | `staging`                                    |
-| `trajetto-ui`     | npm, github-actions e docker                               | segunda, 06:00 (São Paulo)                        | `staging`                                    |
-| `trajetto-mobile` | npm e github-actions                                       | segunda, 06:00 (São Paulo)                        | `main` (sem `target-branch`; ver pendências) |
+| Repositório       | Ecossistemas                                               | Quando                           | PRs contra |
+| ----------------- | ---------------------------------------------------------- | -------------------------------- | ---------- |
+| `trajetto-api`    | npm, github-actions e docker; pip da IA e compose de carga | dia 1º do mês, 06:00 (São Paulo) | `staging`  |
+| `trajetto-ui`     | npm, github-actions e docker                               | dia 1º do mês, 06:00 (São Paulo) | `staging`  |
+| `trajetto-mobile` | npm e github-actions                                       | dia 1º do mês, 06:00 (São Paulo) | `staging`  |
 
-Ligados fora dos arquivos, nas configurações do repositório ou da organização:
-_Dependabot alerts_, _security updates_, _CodeQL default setup_ e a política
-de actions fixadas por SHA. **A confirmar com o dono:** o que está ligado.
+O `dependabot.yml` só vale a partir da branch padrão (`main`): uma mudança
+feita na `staging` passa a valer na promoção seguinte, e o Dependabot roda na
+hora em que ela chega. A configuração de 04/11/2026 (mensal, cooldown de 7
+dias e de 30 para major, sem rebase automático, as majors num PR só que é
+lista de tarefas, e o `target-branch: staging` que faltava no app) existe
+por causa da cota do Actions ([seção 7.2](#72-visibilidade-e-a-cota-do-actions)):
+cada atualização de branch do Dependabot roda o CI, e no ritmo semanal de
+antes elas sozinhas gastavam boa parte dos 2.000 minutos do mês.
 
-Desde 30/10/2026, os _Dependabot alerts_ e os _security updates_ são o vigia
-contínuo das dependências: o `audit-ci` do CI só bloqueia um push que muda
-dependência e, nos outros, só relata
-([`deploy.md` → 21](./deploy.md#21-cadeia-de-suprimentos-e-segredos)). O
+Nas configurações do repositório ou da organização: _Dependabot alerts_
+ligados, _security updates_ **desligados**, _CodeQL default setup_ e a
+política de actions fixadas por SHA ligados. **A confirmar com o dono:** que
+está assim nos três.
+
+Desde 04/11/2026, os _Dependabot alerts_ são o vigia contínuo das
+dependências: o `audit-ci` do CI só bloqueia um push que muda dependência e,
+nos outros, só relata
+([`deploy.md` → 21](./deploy.md#21-cadeia-de-suprimentos-e-segredos)). Os
+_security updates_ ficam desligados porque o GitHub só os abre contra a
+`main`, sem aplicar o `target-branch`: ali um PR não tem build de staging
+para promover e, na API, o _Staging evidence_ do `pr.yml` esperaria um
+build de staging que não vem (até 45 min de runner). Um alerta é corrigido numa branch de
+trabalho a partir da `staging`, como qualquer mudança. O
 Dependabot também não move o que está fixado dentro dos workflows: o
 `node-version` (a mesma versão da base do `Dockerfile`) e os digests do
 Postgres, do Redis e do BuildKit sobem à mão, nos três repositórios de uma
@@ -1758,7 +1914,11 @@ vez ([`deploy.md` → Versões fixas](./deploy.md#versões-fixas)).
 
 **Varredura de segredos**: o gitleaks roda em todo push, em todo o histórico
 de todas as branches, nos três repositórios (job `secrets`). A baseline fica
-em `.gitleaksignore`. Um alerta é tratado como vazamento: revogar primeiro,
+em `.gitleaksignore`, pela impressão digital completa, com o commit. Um valor
+público por design que a regra genérica confunde com chave leva, na própria
+linha que dispara, o comentário de liberação inline do gitleaks, e o teste
+`secrets-hygiene` de cada repositório lista cada um, com a linha inteira. Um
+alerta é tratado como vazamento: revogar primeiro,
 depois limpar ([`deploy.md` → 21](./deploy.md#21-cadeia-de-suprimentos-e-segredos)).
 
 ### 7.8 Workflows agendados
@@ -1805,12 +1965,21 @@ Onde: expo.dev → projeto → _Environment variables_ (ou `eas env:create`).
 | --------------------------------- | -------------------------------------- | ------------------------------------------ |
 | `EXPO_PUBLIC_API_URL`             | `https://api-staging.intrajetto.com`   | `https://api.intrajetto.com`               |
 | `EXPO_PUBLIC_WEB_APPLICATION_URL` | `https://staging.intrajetto.com/login` | `https://www.intrajetto.com/login`         |
-| `EXPO_PUBLIC_BACKGROUND_TRACKING` | `false`                                | `false`                                    |
+| `EXPO_PUBLIC_BACKGROUND_TRACKING` | ausente (ligado, D16)                  | `false` (AAB do Play, D17)                 |
 | `APP_ENV`                         | `preview`                              | `production`                               |
 | `GOOGLE_SERVICES_JSON`            | arquivo, visibilidade _Secret_         | o mesmo arquivo                            |
 
 **A confirmar com o dono:** que as variáveis do ambiente `production` já
 foram cadastradas (na montagem só o `preview` foi feito).
+
+`EXPO_PUBLIC_BACKGROUND_TRACKING` virou só o desligamento (decisão D16): o
+app segue a rota com a tela desligada por padrão, e apenas o valor `false` tira
+a permissão de localização em segundo plano do manifesto. No `preview` (o APK
+de staging, instalado por fora do Play) ela fica **ausente**; se ainda estiver
+cadastrada como `false`, o valor antigo, apague antes do build nativo. No
+`production` ela continua `false` enquanto o perfil `production` gerar o AAB do
+Play Store e a declaração de localização em segundo plano não for aprovada
+(D17). A troca vale só para binário novo (o manifesto muda; OTA não leva).
 
 **Credenciais** (expo.dev → projeto → _Credentials_ → Android, ou
 `eas credentials`):
@@ -1844,7 +2013,7 @@ um token pessoal.
   `EXPO_UPDATE_PRIVATE_KEY`. Pode exigir plano pago e muda o runtime de forma
   permanente
   ([`trajetto-mobile/docs/deploy.md` → OTA assinada](https://github.com/Trajetto-Organization/trajetto-mobile/blob/staging/docs/deploy.md#ota-assinada-code-signing)).
-- **Build manual** (_Actions → Release (EAS) → Run workflow_): oferece
+- **Build manual** (_Actions → Native build → Run workflow_, o `native-build.yml`): oferece
   `development`, `staging` e `production` desde o commit `213d6b0` (29/10).
   O `preview` saiu da lista porque é só a base do `staging`.
 - **Rollback de OTA**: `ota-rollback.yml`, que republica um grupo anterior.
@@ -1940,7 +2109,20 @@ Auto Backup da Contabo o cobre. **A confirmar com o dono:** se há outra cópia.
 
 Política: uma cópia por dia, 30 dias, RPO de até 24 h, sem PITR. As cópias não
 são cifradas por nós (o R2 cifra em repouso). O RTO medido em 15/09/2026 foi de
-10,5 s para 94 MB. A política de privacidade e os termos prometem exatamente
+10,5 s para 94 MB.
+
+Na staging, além do dump, o PITR com pgBackRest está ligado desde
+26/11/2026 ([`deploy.md` → 27](./deploy.md#27-pitr-com-pgbackrest)):
+
+- **O histórico** vai a cada minuto para o bucket `trajetto-pitr-staging`.
+- **Os backups** são um diferencial por dia e um completo no sábado, pelos
+  _Schedules_ do servidor.
+- **O ensaio de restauração** roda todo dia 1º. O primeiro, em 27/11/2026,
+  restaurou em 496 s, sem perda.
+
+A produção continua só com o dump até o F1b.
+
+A política de privacidade e os termos prometem exatamente
 "diárias, guardadas por 30 dias": um teste da web compara esse texto com a
 seção de backup do `deploy.md`, então a agenda e a retenção não mudam sem
 mudar os dois.
@@ -1963,6 +2145,22 @@ mudar os dois.
 - heartbeat de backup (um backup que simplesmente deixou de rodar não avisa);
 - um ensaio de restauração com uma cópia real do Dokploy;
 - backup dos objetos do R2.
+
+### 10.4 Onde rodam os monitores
+
+Um monitor que roda na mesma VPS que vigia não avisa quando ela cai, e,
+nela, divide a RAM com a produção: o Uptime Kuma e o hub do Beszel somam
+~192 MiB (ESTIMADO) e tiram a folga das fases B e C do orçamento
+([`deploy.md` → 23](./deploy.md#23-recursos-da-vps-e-logs)). Antes do
+`trajetto-worker` da staging (onda 12), os dois saem do host, ou a fase
+segue pela régua do uso medido (R2).
+
+| Monitor                                  | O que vigia                                                                           | Onde roda                                                                      |
+| ---------------------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| healthchecks.io (_dead man's switch_)    | o ping de cada minuto do `ops-heartbeat` e o `/fail` com os motivos                   | fora da VPS (serviço externo); o check de produção: **A confirmar com o dono** |
+| Uptime Kuma (`uptime.intrajetto.com`)    | **A confirmar com o dono**; o plano pede a readiness da API e o health da web (F0-08) | **A confirmar com o dono**; o alvo é fora da VPS                               |
+| Beszel: o hub (`monitor.intrajetto.com`) | os gráficos e os alertas; o plano pede o disco a 85% pelo Telegram (F0-08)            | **A confirmar com o dono**; o alvo é fora da VPS                               |
+| Beszel: o agente                         | CPU, RAM, disco e contêineres do host                                                 | na VPS (conta na reserva de 1.280 MiB do host)                                 |
 
 ---
 
@@ -1988,25 +2186,25 @@ Uma linha por credencial. Nenhum valor. "Notas locais" são os arquivos
 
 ### 11.2 Credenciais de provedores
 
-| Credencial                                            | Onde é criada                                             | Permissões                                                                  | Onde fica                                                                                                 | Quem usa                            | Validade e rotação                                                                 |
-| ----------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | ----------------------------------- | ---------------------------------------------------------------------------------- |
-| Token R2 de fotos, produção (`trajetto-upload-token`) | Cloudflare → _R2 → Manage API Tokens_                     | _Object Read & Write_ só em `trajetto-prod-storage`                         | `R2_ACCESS_KEY_ID` e `R2_SECRET_ACCESS_KEY` da API de produção                                            | a API                               | recriar e trocar as duas variáveis                                                 |
-| Token R2 de fotos, staging                            | idem                                                      | só em `trajetto-staging-storage`                                            | as mesmas variáveis da API de staging                                                                     | a API                               | idem                                                                               |
-| Token R2 de backup                                    | idem                                                      | só no bucket de backup                                                      | só no _S3 Destination_ do Dokploy                                                                         | o Dokploy                           | idem; **A confirmar com o dono:** se a produção tem token próprio                  |
-| `CLOUDFLARE_R2_API_TOKEN`                             | **A confirmar com o dono**                                | **A confirmar com o dono**                                                  | notas locais                                                                                              | **A confirmar com o dono**          | —                                                                                  |
-| Turnstile: _Secret Key_ de cada widget                | Cloudflare → _Turnstile_ → widget                         | valida o token do formulário                                                | `TURNSTILE_SECRET_KEY` na web e na API do ambiente                                                        | web e API                           | _Rotate secret key_ no widget e trocar nos dois lados                              |
-| Turnstile: _Site Key_                                 | idem                                                      | pública                                                                     | `TURNSTILE_SITE_KEY` da web                                                                               | o navegador                         | muda só se o widget for recriado                                                   |
-| Resend: chave de API (uma por ambiente)               | Resend → _API Keys_                                       | _Sending access_ restrito ao domínio (sugerido)                             | `RESEND_SECRET_KEY` da API                                                                                | a API                               | criar outra, trocar e revogar a antiga                                             |
-| Resend: segredo do webhook (um por ambiente)          | Resend → _Webhooks_ → endpoint                            | assina os eventos                                                           | `RESEND_WEBHOOK_SECRET` da API                                                                            | a API                               | recriar o endpoint                                                                 |
-| `RESEND_SECRET_KEY_DOKPLOY_LOGS`                      | Resend                                                    | **A confirmar com o dono**                                                  | notas locais (e, talvez, as _Notifications_ do Dokploy)                                                   | **A confirmar com o dono**          | —                                                                                  |
-| URLs do healthchecks.io (uma por ambiente)            | healthchecks.io → o check                                 | quem tem a URL pinga ou silencia o alerta                                   | `HEALTHCHECK_PING_URL` da API                                                                             | a API                               | recriar o check e trocar                                                           |
-| Chave do MapTiler                                     | MapTiler → _API keys_ (o plano gratuito tem uma chave só) | pública no navegador, restrita por _Allowed HTTP Origins_ (staging e `www`) | dentro de `MAP_TILE_URL*` da web e de `PROOF_MAP_TILE_URL` da API                                         | o navegador e a API (com `Referer`) | **A confirmar com o dono:** se a origem de produção já está nas origens permitidas |
-| Tokens do LocationIQ                                  | my.locationiq.com → _Access Tokens_                       | geocodificação; sem restrição de _Referrer_ (chamada do servidor)           | `REVERSE_GEOCODER_KEY` da API                                                                             | a API                               | recomendado um token separado para produção                                        |
-| JSON de admin do Firebase (FCM V1)                    | Firebase → contas de serviço                              | administrador do projeto Firebase                                           | EAS (_Credentials_) e gerenciador de senhas                                                               | a Expo, para entregar o push        | gerar outra chave, trocar no EAS e apagar a antiga                                 |
-| `GOOGLE_SERVICES_JSON`                                | Firebase → app Android                                    | configuração do app                                                         | EAS, arquivo _Secret_                                                                                     | o build                             | só muda se o app do Firebase mudar                                                 |
-| Keystore Android                                      | EAS                                                       | assina o app                                                                | EAS                                                                                                       | o build                             | não se troca (Play App Signing, quando houver)                                     |
-| Certificado A1 de teste (ICP-Brasil)                  | gerado por nós, autoassinado                              | assina o comprovante de staging                                             | `PROOF_SIGNING_*` da API de staging; arquivos em `trajetto-certificates`, fora do Git, na máquina do dono | a API de staging                    | vence em 1 ano; produção não tem A1 ainda                                          |
-| Meta WhatsApp                                         | —                                                         | —                                                                           | —                                                                                                         | —                                   | não configurado (conta bloqueada pela Meta)                                        |
+| Credencial                                            | Onde é criada                                             | Permissões                                                                                                                         | Onde fica                                                                                                              | Quem usa                                                                                                                                                                            | Validade e rotação                                                                                                                                                   |
+| ----------------------------------------------------- | --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Token R2 de fotos, produção (`trajetto-upload-token`) | Cloudflare → _R2 → Manage API Tokens_                     | _Object Read & Write_ só em `trajetto-prod-storage`                                                                                | `R2_ACCESS_KEY_ID` e `R2_SECRET_ACCESS_KEY` da API de produção                                                         | a API                                                                                                                                                                               | recriar e trocar as duas variáveis                                                                                                                                   |
+| Token R2 de fotos, staging                            | idem                                                      | só em `trajetto-staging-storage`                                                                                                   | as mesmas variáveis da API de staging                                                                                  | a API                                                                                                                                                                               | idem                                                                                                                                                                 |
+| Token R2 de backup                                    | idem                                                      | só no bucket de backup                                                                                                             | só no _S3 Destination_ do Dokploy                                                                                      | o Dokploy                                                                                                                                                                           | idem; **A confirmar com o dono:** se a produção tem token próprio                                                                                                    |
+| `CLOUDFLARE_R2_API_TOKEN`                             | **A confirmar com o dono**                                | **A confirmar com o dono**                                                                                                         | notas locais                                                                                                           | **A confirmar com o dono**                                                                                                                                                          | —                                                                                                                                                                    |
+| Turnstile: _Secret Key_ de cada widget                | Cloudflare → _Turnstile_ → widget                         | valida o token do formulário                                                                                                       | `TURNSTILE_SECRET_KEY` na web e na API do ambiente                                                                     | web e API                                                                                                                                                                           | _Rotate secret key_ no widget e trocar nos dois lados                                                                                                                |
+| Turnstile: _Site Key_                                 | idem                                                      | pública                                                                                                                            | `TURNSTILE_SITE_KEY` da web                                                                                            | o navegador                                                                                                                                                                         | muda só se o widget for recriado                                                                                                                                     |
+| Resend: chave de API (uma por ambiente)               | Resend → _API Keys_                                       | _Sending access_ restrito ao domínio (sugerido)                                                                                    | `RESEND_SECRET_KEY` da API                                                                                             | a API                                                                                                                                                                               | criar outra, trocar e revogar a antiga                                                                                                                               |
+| Resend: segredo do webhook (um por ambiente)          | Resend → _Webhooks_ → endpoint                            | assina os eventos                                                                                                                  | `RESEND_WEBHOOK_SECRET` da API                                                                                         | a API                                                                                                                                                                               | recriar o endpoint                                                                                                                                                   |
+| `RESEND_SECRET_KEY_DOKPLOY_LOGS`                      | Resend                                                    | **A confirmar com o dono**                                                                                                         | notas locais (e, talvez, as _Notifications_ do Dokploy)                                                                | **A confirmar com o dono**                                                                                                                                                          | —                                                                                                                                                                    |
+| URLs do healthchecks.io (uma por ambiente)            | healthchecks.io → o check                                 | quem tem a URL pinga ou silencia o alerta                                                                                          | `HEALTHCHECK_PING_URL` da API                                                                                          | a API                                                                                                                                                                               | recriar o check e trocar                                                                                                                                             |
+| Chave do MapTiler                                     | MapTiler → _API keys_ (o plano gratuito tem uma chave só) | pública no navegador e no app, restrita por _Allowed HTTP Origins_ (staging e `www`)                                               | dentro de `MAP_TILE_URL*` da web e da API (esta entrega ao app por `GET /config/map`) e de `PROOF_MAP_TILE_URL` da API | o navegador, o WebView do app (a página do mapa carrega sob a origem da web do build, `EXPO_PUBLIC_WEB_APPLICATION_URL`, e os tiles levam o `Referer` dela) e a API (com `Referer`) | **A confirmar com o dono:** se a origem de produção já está nas origens permitidas, e se os tiles carregam no WebView do app com essa restrição (testar no aparelho) |
+| Tokens do LocationIQ                                  | my.locationiq.com → _Access Tokens_                       | geocodificação e busca de endereço (o token precisa do _Autocomplete_ liberado); sem restrição de _Referrer_ (chamada do servidor) | `REVERSE_GEOCODER_KEY` da API                                                                                          | a API                                                                                                                                                                               | recomendado um token separado para produção                                                                                                                          |
+| JSON de admin do Firebase (FCM V1)                    | Firebase → contas de serviço                              | administrador do projeto Firebase                                                                                                  | EAS (_Credentials_) e gerenciador de senhas                                                                            | a Expo, para entregar o push                                                                                                                                                        | gerar outra chave, trocar no EAS e apagar a antiga                                                                                                                   |
+| `GOOGLE_SERVICES_JSON`                                | Firebase → app Android                                    | configuração do app                                                                                                                | EAS, arquivo _Secret_                                                                                                  | o build                                                                                                                                                                             | só muda se o app do Firebase mudar                                                                                                                                   |
+| Keystore Android                                      | EAS                                                       | assina o app                                                                                                                       | EAS                                                                                                                    | o build                                                                                                                                                                             | não se troca (Play App Signing, quando houver)                                                                                                                       |
+| Certificado A1 de teste (ICP-Brasil)                  | gerado por nós, autoassinado                              | assina o comprovante de staging                                                                                                    | `PROOF_SIGNING_*` da API de staging; arquivos em `trajetto-certificates`, fora do Git, na máquina do dono              | a API de staging                                                                                                                                                                    | vence em 1 ano; produção não tem A1 ainda                                                                                                                            |
+| Meta WhatsApp                                         | —                                                         | —                                                                                                                                  | —                                                                                                                      | —                                                                                                                                                                                   | não configurado (conta bloqueada pela Meta)                                                                                                                          |
 
 ### 11.3 Segredos gerados por nós
 
@@ -2057,6 +2255,8 @@ Horários em UTC (São Paulo = UTC−3). Do mais antigo para o mais novo.
 | 28/10/2026      | pull da API falha 6/6 por IPv6; exposição da origem medida; `API_PUBLIC_URL` criada no environment `staging` (conferência `http`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | 29/10/2026      | entre 27/10 à noite e 02:14, firewall `default` aplicado à VPS; 02:51–03:00, regras só da Cloudflare; ~03:15, commits `577fc5a` e `d413cb1` da API enviados com o nome automático e o IPv6 da VPS (no texto e numa mensagem de commit; tratados como públicos depois das janelas abaixo, seção 1); ~12:45 e ~14:11, repositórios públicos temporariamente, depois privados (terceira janela da API e da web para os merges de produção); ~13:23, preferência por IPv4 no host; produção no ar (API `01526b0`, web `a1c5242`/v1.1.0), com a correção das URLs do banco e os certificados de `www` e `api` emitidos com o registro já com proxy; domínio da web de produção trocado do apex para `www`; Redirect Rule do apex; HSTS na borda; ~17:03, Email Obfuscation desligado; Web Analytics mantido (CSP e política); build manual do app sem `preview` (`213d6b0`); agendamento noturno das suítes da web removido no commit `7f83d8c` (vale quando chegar à `main`); ~21:50, Smart Tiered Cache; ~21:58, Early Hints; 22:23–22:26, token temporário criado, usado e apagado no mesmo dia; ~22:33, JSD desligado e políticas de bots de IA refeitas; ~22:42 (web) e ~22:48 (API), quarta janela pública, ainda aberta às 23:44 (fechamento a confirmar); ~23:45, pacotes do GHCR conferidos privados; ~23:50, teste do desafio HTTP-01 nos cinco hosts: 404 sem redirect                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | 30/10/2026      | `APP_ENV=production` na Application da API de produção (o console de integração passa a ser indexável; o staging segue com `noindex`); produção promovida pelo dono, com o `robots.txt` e o `/sitemap.xml` da API (`2d3e547`, `0208102`: em produção, só `/integration/docs`) e, na web, `/login`, `/forgot` e os guias de `/docs` no sitemap; a `trajetto-api` respondia como pública na API do GitHub às ~15:05 (fechamento a confirmar); o dono informa o registrador (GoDaddy), a titularidade das contas na conta Google da Trajetto e o que roda em `uptime` (Uptime Kuma) e `monitor` (Beszel); o `yarn dev` da API passa a gerar o client do Prisma antes de esperar o banco; o dev client do app passa a ser gerado por quem tem _Developer_ na Expo e baixado pelos _Viewers_; auditoria de instabilidade do CI (testes e código da API): com `NODE_ENV=test` o e-mail fica numa caixa em memória (sem Ethereal), nenhum teste conecta fora da máquina (trava do `setupTests.ts`), o `yarn test:e2e` roda em duas fases (réplicas por último, uma por vez) e o pipeline de notificações aproveita o ciclo em andamento em vez de perder o despertar; CI da API sem vermelho que não seja do código: `timeout-minutes` em todo job, `bash -eo pipefail` em todo workflow, Node `22.21.1` em todo job, Postgres, Redis e BuildKit por digest, o `audit-ci` bloqueando só push que muda dependência, o GHCR lido pelo `ghcr.sh` (separa "não existe" de "não respondeu"), o banco do Trivy com cache, os pesos PP-OCRv5 da IA versionados no repositório (o build não fala mais com o ModelScope), cache dos engines do Prisma, retentativas do Dokploy e da conferência pela liveness visíveis, e commit só de documentação promovido com o build do ancestral que o staging rodou (`[skip ci]` só para documentação passa a ser seguro) |
+| 26/11/2026      | staging: o `trajetto-worker` criado (768 MiB, 1 CPU: com 448 MiB e 0,25 CPU o boot não fechava a memória e os logins no banco estouravam o prazo), a `trajetto-api` no papel `api` (1 GiB, heap 576), a imagem `trajetto-postgres` sem PITR (_CPU Limit_ vazio, decisão do dono) e o Redis com os _Args_ (`64mb`, `allkeys-lru`); dois **Deploy** seguidos no worker deixaram duas tasks no mesmo slot, resolvido com Stop e um Deploy ([`deploy.md` → 17](./deploy.md#duas-tasks-do-worker-no-mesmo-slot))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| 27/11/2026      | staging: o PITR ligado em 26–27/11 (bucket `trajetto-pitr-staging` com a trava de 14 dias em `archive/trajetto/1`, stanza, arquivamento, primeiro full às 23:19 UTC de 26/11, os três _Schedules_ do servidor, ensaio com RTO de 496 s e sem perda, `PITR_EXPECTED=true` na api e no worker; [`deploy.md` → 27](./deploy.md#27-pitr-com-pgbackrest))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 
 ---
 
@@ -2504,8 +2704,8 @@ derruba o sistema, depois o que abre uma brecha, depois o resto.
       for a intenção (o orçamento de memória e o rolling update dependem
       disso). [Seção 2.3](#23-staging-e-produção).
 - [ ] **_Stop Grace Period_** existe no Dokploy v0.30.10 (sem ele, o
-      desligamento da API é cortado em 10 s).
-      [Seção 5.11](#511-lacunas-conhecidas).
+      serviço fica com 10 s, e `STOP_GRACE_PERIOD_MS` não pode passar de
+      `10000`). [Seção 5.11](#511-lacunas-conhecidas).
 - [ ] **`HTTP_REQUEST` da web** nos dois ambientes é a URL pública da API, e
       **`NODE_ENV`** não está no _Environment_ de nenhuma Application.
       [Seção 5.6](#56-variáveis-por-application).
@@ -2595,11 +2795,30 @@ derruba o sistema, depois o que abre uma brecha, depois o resto.
       host. [Seção 4.5](#45-outras-configurações-do-host).
 - [ ] **Auto Backup da Contabo**: se continua ligado, a retenção e o custo.
       [Seção 4.1](#41-a-máquina).
-- [ ] **Redis de staging**: decidir se recebe o comando personalizado e o
-      limite de memória.
+- [x] **Redis de staging**: teto e `allkeys-lru` pelos _Args_ do Database
+      em 26/11/2026; falta conferir o de produção.
       [Seção 5.2](#52-environments-projetos-e-serviços).
 - [ ] **Tela do domínio do painel** na v0.30.10.
       [Seção 5.1](#51-o-painel).
+- [ ] **Medições da máquina** (F0-09): _steal_, RAM, `docker stats` e RSS
+      no pico, latência Brasil → VPS, swap e earlyoom, em 2 dias úteis.
+      [Seção 4.7](#47-a-máquina-medida-f0-09).
+- [ ] **Inventário das Applications** conferido no painel (tetos,
+      réplicas, grace e a `trajetto-offsite`), e se a v0.30.10 tem as
+      variáveis compartilhadas do environment, que o guia dos papéis usa
+      ([`deploy.md` → Criar a Application de um papel](./deploy.md#criar-a-application-de-um-papel),
+      passo 3). [Seção 5.12](#512-inventário-das-applications-por-environment).
+- [ ] **Plano do LocationIQ.** O grátis (5.000 por dia, 2 por segundo, 60 por
+      minuto, a conta inteira) é dividido entre a localização automática das
+      entregas (2.000 por dia), a busca do "Fixar no mapa" (1.000 por dia, 150
+      por empresa) e o endereço do comprovante (sem orçamento). Dá para a
+      staging e o piloto. Passar para um pago quando entrarem transportadoras
+      além do piloto, ou quando o log da API mostrar `DAILY_LIMIT_PLATFORM` ou
+      `address search rate-limited` com frequência. Os tetos do dia são
+      variáveis; a vaga por segundo e por minuto são constantes de
+      `src/shared/delivery/geocoding/geocoding-gate.ts` e sobem numa release.
+      Conferir também, em my.locationiq.com, que o token libera o
+      Autocomplete. [Arquitetura](./arquitetura.md#busca-de-endereço-fixar-no-mapa).
 
 ### 14.4 Cloudflare
 
@@ -2631,8 +2850,10 @@ derruba o sistema, depois o que abre uma brecha, depois o resto.
       Auto Backup da Contabo. [Seção 10.2](#102-backups).
 - [ ] Monitores de uptime externos (o que o Uptime Kuma já vigia e onde ele
       roda; o que o Beszel vigia e se alerta), alerta de validade dos
-      certificados da origem e heartbeat de backup.
-      [Seções 10.1](#101-o-que-existe) e [10.3](#103-o-que-falta).
+      certificados da origem e heartbeat de backup. O Kuma e o hub do
+      Beszel fora da VPS antes do `trajetto-worker` da staging.
+      [Seções 10.1](#101-o-que-existe), [10.3](#103-o-que-falta) e
+      [10.4](#104-onde-rodam-os-monitores).
 - [ ] Proteção dos objetos do R2: Bucket Lock nos prefixos de prova e cópia
       periódica. [Seção 6.10](#610-r2).
 - [ ] O nome real do token R2 de staging, e se a produção tem token e
@@ -2643,16 +2864,16 @@ derruba o sistema, depois o que abre uma brecha, depois o resto.
 - [ ] Environments, Rulesets e o bypass do GitHub Actions nos três
       repositórios, e o _Prevent self-review_.
       [Seções 7.3](#73-environments) e [7.5](#75-proteção-das-branches).
-- [ ] Dependabot do app sem `target-branch`: os PRs vão para `main`, o que
-      contraria a regra de que `main` só recebe PR de `staging`. Pôr
-      `target-branch: staging`, como na API e na web.
+- [ ] Os 11 PRs antigos do Dependabot do app contra `main`: o
+      `target-branch: staging` entrou na staging do app em 04/11/2026 e vale
+      quando chegar à `main`. Depois disso, feche os que sobrarem, anotando a
+      lista antes (fechar à mão pode fazer o Dependabot pular aquela versão).
       [Seção 7.7](#77-dependabot-e-varredura-de-segredos).
 - [ ] Apagar os secrets obsoletos. [Seção 7.4](#74-secrets-e-variables).
-- [ ] O que está ligado fora dos arquivos: _Dependabot alerts_, _security
-      updates_, _CodeQL default setup_ e a política de actions fixadas por
-      SHA. Desde 30/10/2026 os _alerts_ e os _security updates_ são o vigia
-      das dependências (o `audit-ci` só bloqueia push que muda dependência):
-      confirme que estão ligados nos três.
+- [ ] O que está ligado fora dos arquivos, nos três repositórios:
+      _Dependabot alerts_ ligado, _security updates_ desligado (decisão de
+      04/11/2026), _CodeQL default setup_ e a política de actions fixadas por
+      SHA ligados. Confirme.
       [Seção 7.7](#77-dependabot-e-varredura-de-segredos).
 - [ ] O valor de `IMAGE_SCAN_ENFORCE` na `trajetto-api` (ligado em 27/10
       para as primeiras correções; ligado, só um achado do Trivy reprova).
@@ -2689,8 +2910,5 @@ derruba o sistema, depois o que abre uma brecha, depois o resto.
   ainda não foi criado".
 - `trajetto-api/infra/traefik/README.md`: diz que o apex e o HSTS dele ficam
   no Traefik da web; hoje o redirect é a Redirect Rule da Cloudflare.
-- A seção "Os três repositórios juntos" dos três `deploy.md` ainda diz que o
-  host da API de produção está "a definir" e que a API tem 2 réplicas (seção
-  2.3); ela precisa mudar nos três ao mesmo tempo.
 - `README.md` e `variaveis-de-ambiente.md` da API ainda tratam o host de
   produção como previsto.

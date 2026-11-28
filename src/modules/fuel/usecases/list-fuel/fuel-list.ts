@@ -1,4 +1,4 @@
-import type { Prisma } from "@prisma/client";
+import type { FuelAlert, Prisma } from "@prisma/client";
 import { Decimal } from "@prisma/client/runtime/client";
 
 import { buildSearchOr } from "@/shared/pagination/search-or";
@@ -62,6 +62,16 @@ const FUEL_FACETS = ["branchId", "vehicleId", "fuelTypeId"] as const;
 
 type FuelFacet = (typeof FUEL_FACETS)[number];
 
+/**
+ * The alerts a refuelling can carry (the FuelAlert enum, 20261105130000):
+ * the `alerts` facet, a closed set the web labels. A record with several
+ * counts under each; the filter keeps a record with ANY of the selected.
+ */
+const FUEL_ALERTS = ["RECENT_REFUEL"] as const satisfies readonly FuelAlert[];
+
+/** Every facet's query param: the catalog ones and `alerts`. */
+type FuelFilterFacet = FuelFacet | "alerts";
+
 interface FuelListFilters {
   businessId: string;
   /** Present for driver tokens: only their own refuelings (decision 4.4). */
@@ -70,10 +80,18 @@ interface FuelListFilters {
   branchIds?: string[];
   vehicleIds?: string[];
   fuelTypeIds?: string[];
+  /** Records having any of these alerts (05/11/2026). */
+  alerts?: FuelAlert[];
 }
 
+/** What the facets read of the filters. */
+type FuelFacetFilters = Pick<
+  FuelListFilters,
+  "branchIds" | "vehicleIds" | "fuelTypeIds" | "alerts"
+>;
+
 function selectedOf(
-  filters: Pick<FuelListFilters, "branchIds" | "vehicleIds" | "fuelTypeIds">,
+  filters: FuelFacetFilters,
   facet: FuelFacet,
 ): string[] | undefined {
   const values =
@@ -84,6 +102,21 @@ function selectedOf(
         : filters.fuelTypeIds;
 
   return values && values.length > 0 ? values : undefined;
+}
+
+/** The alerts the filter selects, or undefined when it selects none. */
+function selectedAlerts(filters: FuelFacetFilters): FuelAlert[] | undefined {
+  return filters.alerts && filters.alerts.length > 0
+    ? filters.alerts
+    : undefined;
+}
+
+/** Whether a record's alerts pass the selection: any of the selected. */
+function hasSelectedAlert(
+  alerts: ReadonlyArray<FuelAlert>,
+  selected: ReadonlyArray<FuelAlert> | undefined,
+): boolean {
+  return !selected || alerts.some((alert) => selected.includes(alert));
 }
 
 /**
@@ -134,10 +167,13 @@ function fuelListWhere(
     const branchIds = selectedOf(filters, "branchId");
     const vehicleIds = selectedOf(filters, "vehicleId");
     const fuelTypeIds = selectedOf(filters, "fuelTypeId");
+    const alerts = selectedAlerts(filters);
 
     if (branchIds) and.push({ branchId: { in: branchIds } });
     if (vehicleIds) and.push({ vehicleId: { in: vehicleIds } });
     if (fuelTypeIds) and.push({ fuelTypeId: { in: fuelTypeIds } });
+    // `&&` on the array: a record with any of the selected alerts.
+    if (alerts) and.push({ alerts: { hasSome: alerts } });
   }
 
   const term = filters.search?.trim() ?? "";
@@ -158,6 +194,8 @@ interface FuelListGroup {
   vehicleId: string;
   fuelTypeId: string;
   odometer_verified: boolean;
+  /** The records' alerts, grouped as the array they store ([] for none). */
+  alerts: FuelAlert[];
   count: number;
   /** Sums as decimal strings: money is not added in floating point. */
   liters: string;
@@ -173,7 +211,12 @@ interface FuelListSearchMeta {
   totalLiters: number;
   totalAmount: number;
   verifiedOdometer: number;
-  facets: Record<FuelFacet, FacetCount[]>;
+  /**
+   * The catalog facets (labelled, busiest first) and `alerts`: every
+   * FUEL_ALERTS value with its count, unlabelled, like the checklist's
+   * condition (the web names a closed set).
+   */
+  facets: Record<FuelFilterFacet, FacetCount[]>;
 }
 
 /**
@@ -186,22 +229,46 @@ const FUEL_FACET_OPTION_LIMIT = 100;
 
 function keptBy(
   group: FuelListGroup,
-  filters: Pick<FuelListFilters, "branchIds" | "vehicleIds" | "fuelTypeIds">,
-  except?: FuelFacet,
+  filters: FuelFacetFilters,
+  except?: FuelFilterFacet,
 ): boolean {
-  return FUEL_FACETS.every((facet) => {
-    if (facet === except) return true;
+  const alertsKept =
+    except === "alerts" ||
+    hasSelectedAlert(group.alerts, selectedAlerts(filters));
 
-    const selected = selectedOf(filters, facet);
+  return (
+    alertsKept &&
+    FUEL_FACETS.every((facet) => {
+      if (facet === except) return true;
 
-    return !selected || selected.includes(group[facet]);
-  });
+      const selected = selectedOf(filters, facet);
+
+      return !selected || selected.includes(group[facet]);
+    })
+  );
+}
+
+/**
+ * The `alerts` facet under the disjunctive rule: per alert, the records
+ * carrying it with every other filter applied. All of FUEL_ALERTS, zeros
+ * included, in their order: a closed set the web labels.
+ */
+function alertCounts(
+  groups: FuelListGroup[],
+  filters: FuelFacetFilters,
+): FacetCount[] {
+  const others = groups.filter((group) => keptBy(group, filters, "alerts"));
+
+  return FUEL_ALERTS.map((alert) => ({
+    value: alert,
+    count: sumCounts(others.filter((group) => group.alerts.includes(alert))),
+  }));
 }
 
 /** A facet's counts under the disjunctive rule, selected options included. */
 function facetCounts(
   groups: FuelListGroup[],
-  filters: Pick<FuelListFilters, "branchIds" | "vehicleIds" | "fuelTypeIds">,
+  filters: FuelFacetFilters,
   facet: FuelFacet,
 ): Map<string, number> {
   const counts = new Map<string, number>();
@@ -225,7 +292,7 @@ function facetCounts(
  */
 function offeredValues(
   groups: FuelListGroup[],
-  filters: Pick<FuelListFilters, "branchIds" | "vehicleIds" | "fuelTypeIds">,
+  filters: FuelFacetFilters,
   facet: FuelFacet,
 ): string[] {
   const selected = selectedOf(filters, facet) ?? [];
@@ -256,7 +323,7 @@ function offeredValues(
 function summarizeFuelList(
   groups: FuelListGroup[],
   labels: FuelListLabels,
-  filters: Pick<FuelListFilters, "branchIds" | "vehicleIds" | "fuelTypeIds">,
+  filters: FuelFacetFilters,
 ): { total: number; searchMeta: FuelListSearchMeta } {
   const kept = groups.filter((group) => keptBy(group, filters));
 
@@ -297,6 +364,7 @@ function summarizeFuelList(
         branchId: facetOptions("branchId"),
         vehicleId: facetOptions("vehicleId"),
         fuelTypeId: facetOptions("fuelTypeId"),
+        alerts: alertCounts(groups, filters),
       },
     },
   };
@@ -308,7 +376,7 @@ function summarizeFuelList(
  */
 function labelIdsOf(
   groups: FuelListGroup[],
-  filters: Pick<FuelListFilters, "branchIds" | "vehicleIds" | "fuelTypeIds">,
+  filters: FuelFacetFilters,
 ): Record<FuelFacet, string[]> {
   return {
     branchId: offeredValues(groups, filters, "branchId"),
@@ -318,6 +386,7 @@ function labelIdsOf(
 }
 
 export {
+  FUEL_ALERTS,
   FUEL_FACETS,
   FUEL_FACET_OPTION_LIMIT,
   FUEL_SORT,
@@ -325,10 +394,14 @@ export {
   FUEL_SORT_KEYS,
   fuelListWhere,
   fuelSearchWhere,
+  hasSelectedAlert,
   labelIdsOf,
+  selectedAlerts,
   selectedOf,
   summarizeFuelList,
   type FuelFacet,
+  type FuelFacetFilters,
+  type FuelFilterFacet,
   type FuelListFilters,
   type FuelListGroup,
   type FuelListLabels,

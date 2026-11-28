@@ -13,7 +13,7 @@ import {
 
 /**
  * .github/scripts/staged-build.sh: which staging build a merge into main
- * promotes — asked by the PR check (`staging-image`) and by the promote.
+ * promotes — asked by the `Staging evidence` of pr.yml and of the promote.
  *
  * Staging builds and deploys the head of every push, and writes
  * `staged-<7>` on the digest it deployed. A commit pushed with [skip ci] has

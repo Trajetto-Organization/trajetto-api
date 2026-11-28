@@ -1,6 +1,6 @@
 import { Prisma } from "@prisma/client";
 
-import database from "@/../infra/database";
+import database, { readDatabase } from "@/../infra/database";
 import { IVehicleRepository } from "./IVehicle-repository";
 
 import {
@@ -10,6 +10,7 @@ import {
   ListVehicleByBusinessIdProps,
   UpdateVehicle,
   GetVehicleByIdAndBusinessProps,
+  VehicleDetail,
   SearchVehicleWithCursorProps,
   CursorPaginatedVehicle,
   VehicleUsageCounts,
@@ -21,7 +22,10 @@ import { buildSearchOr } from "@/shared/pagination/search-or";
 import { resolveOrderBy } from "@/shared/pagination/list-query";
 import { insensitiveEquals } from "@/shared/utils/like-pattern";
 
-import { driverOperableVehicleWhere } from "@/shared/vehicle/driver-vehicle-access";
+import {
+  driverOperableVehicleWhere,
+  driverReadableVehicleWhere,
+} from "@/shared/vehicle/driver-vehicle-access";
 import type { OpenRouteCounts } from "@/shared/vehicle/vehicle-status-change";
 
 import {
@@ -53,8 +57,75 @@ const VEHICLE_CHOICE_SELECT = {
   vehicleType: { select: { description: true, required_cnh_category: true } },
 } satisfies Prisma.VehicleSelect;
 
+/**
+ * The branch as the vehicle's readers name it: `name` is the label every
+ * branch picker shows (the corporate reason), added beside the column the
+ * list already sent (F4: the service order prefills the branch by it).
+ */
+function withBranchName<
+  T extends { branch: { corporate_reason: string } | null },
+>(
+  row: T,
+): Omit<T, "branch"> & {
+  branch: { corporate_reason: string; name: string } | null;
+} {
+  return {
+    ...row,
+    branch: row.branch
+      ? {
+          corporate_reason: row.branch.corporate_reason,
+          name: row.branch.corporate_reason,
+        }
+      : null,
+  };
+}
+
+/**
+ * The status of a truck taken out of BLOCKED while its route may still be on
+ * the road (decision 8.3): IN_ROUTE while a route of this company runs with
+ * it, ACTIVE once none does.
+ *
+ * FOR SHARE on that route row, inside the caller's transaction. A route
+ * closing at this instant holds its row (the UPDATE of its status), so this
+ * waits, re-reads the row as committed — no longer IN_PROGRESS — and answers
+ * ACTIVE; the closing's own vehicle sync had nothing to do (the truck was
+ * still BLOCKED). A route still running cannot close until this commits, and
+ * its sync then moves the IN_ROUTE written here back to ACTIVE. Both orders
+ * end right; neither leaves an "Em rota" with no route out.
+ */
+async function routeDerivedStatus(
+  tx: Prisma.TransactionClient,
+  vehicleId: string,
+  businessId: string,
+): Promise<"IN_ROUTE" | "ACTIVE"> {
+  const running = await tx.$queryRaw<Array<{ id: string }>>`
+    SELECT "id" FROM "route"
+     WHERE "vehicleId" = ${vehicleId}
+       AND "businessId" = ${businessId}
+       AND "status" = 'IN_PROGRESS'
+     LIMIT 1
+       FOR SHARE`;
+
+  return running.length > 0 ? "IN_ROUTE" : "ACTIVE";
+}
+
 class VehicleRepository implements IVehicleRepository {
   constructor(private prisma = database) {}
+
+  /**
+   * The heavy reads' bulkhead (plano-escala F3-17), for the export: a pool of
+   * its own, 3 connections and 10 s a statement, so a burst of them waits
+   * among itself instead of taking the connections every other request needs.
+   * A repository built on another client (a test's) reads on that client. A
+   * getter, so a module that mocks infra/database without it only needs it
+   * when one of these reads runs.
+   * With DATABASE_REPLICA_URL, readDatabase() sends them to the standby
+   * while the replica guard vouches for it: lists only (plano-escala F4-42,
+   * tests/unitaires/database/read-routing-guard.test.ts).
+   */
+  private get read(): typeof this.prisma {
+    return this.prisma === database ? readDatabase() : this.prisma;
+  }
 
   async createVehicle(vehicleData: CreateVehicleProps): Promise<Vehicle> {
     const vehicleCreated = await this.prisma.vehicle.create({
@@ -83,6 +154,8 @@ class VehicleRepository implements IVehicleRepository {
           fuelType: { select: { description: true } },
           driver: { select: { name: true, cnh: true } },
           branch: { select: { corporate_reason: true } },
+          // F1: the edit shows who answers for the vehicle by name.
+          responsibleUser: { select: { name: true } },
         },
         orderBy: resolveOrderBy(VEHICLE_SORT, { sort, order }),
       }),
@@ -99,7 +172,7 @@ class VehicleRepository implements IVehicleRepository {
     const branchCounts = await this.countVehiclesByBranch(filters);
 
     return {
-      data: vehicleData,
+      data: vehicleData.map(withBranchName),
       statusCounts: tallyStatuses(statusGroups),
       branchCounts,
     };
@@ -143,11 +216,34 @@ class VehicleRepository implements IVehicleRepository {
   }
 
   async updateVehicle(
-    { vehicleData, vehicleId }: UpdateVehicle,
+    { vehicleData, vehicleId, statusFromRunningRoute }: UpdateVehicle,
     tx?: Prisma.TransactionClient,
   ): Promise<Vehicle> {
+    // The derived status and the write commit together, or the lock that
+    // makes the read honest is gone before the write lands.
+    if (statusFromRunningRoute && !tx) {
+      return this.prisma.$transaction((client) =>
+        this.updateVehicle(
+          { vehicleData, vehicleId, statusFromRunningRoute },
+          client,
+        ),
+      );
+    }
+
+    const data =
+      statusFromRunningRoute && tx
+        ? {
+            ...vehicleData,
+            status: await routeDerivedStatus(
+              tx,
+              vehicleId,
+              statusFromRunningRoute.businessId,
+            ),
+          }
+        : vehicleData;
+
     const filteredData = Object.fromEntries(
-      Object.entries(vehicleData).filter(([_, value]) => value !== undefined),
+      Object.entries(data).filter(([_, value]) => value !== undefined),
     );
 
     const updateVehicle = await (tx ?? this.prisma).vehicle.update({
@@ -161,15 +257,23 @@ class VehicleRepository implements IVehicleRepository {
   }
 
   /**
-   * The reactivation twin of createVehicleWithinLimit: the same FOR NO KEY
-   * UPDATE on the company row serialises every write that may take a
-   * contracted slot, so the count below is not a stale read.
+   * The update twin of createVehicleWithinLimit: the same FOR NO KEY UPDATE
+   * on the company row serialises every write that may take a contracted
+   * slot, so the count below is not a stale read.
+   *
+   * Whether the vehicle already holds a slot is read HERE, under the lock,
+   * from the row as it is (plan M8). The caller's read is older: an
+   * unblocking (BLOCKED → ACTIVE, slot to slot) read the truck as BLOCKED,
+   * somebody inactivated it and a new truck took the freed slot, and the
+   * unblocking wrote ACTIVE over INACTIVE without counting — N+1 trucks on
+   * a plan of N.
    */
   async updateVehicleWithinLimit(
     {
       vehicleData,
       vehicleId,
       businessId,
+      statusFromRunningRoute,
     }: UpdateVehicle & { businessId: string },
     limit: { max: number },
   ): Promise<{ vehicle: Vehicle | null; activeCount: number }> {
@@ -180,6 +284,28 @@ class VehicleRepository implements IVehicleRepository {
         FOR NO KEY UPDATE
       `;
 
+      // Before the vehicle's own lock below, in the order a route ending
+      // takes them (the route row, then the vehicle): the other order could
+      // deadlock against that ending.
+      const data = statusFromRunningRoute
+        ? {
+            ...vehicleData,
+            status: await routeDerivedStatus(
+              tx,
+              vehicleId,
+              statusFromRunningRoute.businessId,
+            ),
+          }
+        : vehicleData;
+
+      // Locked as well: an inactivation (which takes no company lock) either
+      // lands before this read or waits for this write.
+      const [current] = await tx.$queryRaw<Array<{ status: string }>>`
+        SELECT "status"::text AS "status" FROM "vehicle"
+        WHERE "id" = ${vehicleId} AND "businessId" = ${businessId}
+        FOR UPDATE
+      `;
+
       const activeCount = await tx.vehicle.count({
         where: {
           businessId,
@@ -188,11 +314,18 @@ class VehicleRepository implements IVehicleRepository {
         },
       });
 
-      if (limit.max > 0 && activeCount >= limit.max) {
+      // Already in a slot, it keeps it: unblocking a truck of a fleet that
+      // is above a lowered limit is not a new registration.
+      const holdsSlot = current !== undefined && current.status !== "INACTIVE";
+
+      if (!holdsSlot && limit.max > 0 && activeCount >= limit.max) {
         return { vehicle: null, activeCount };
       }
 
-      const vehicle = await this.updateVehicle({ vehicleData, vehicleId }, tx);
+      const vehicle = await this.updateVehicle(
+        { vehicleData: data, vehicleId },
+        tx,
+      );
 
       return { vehicle, activeCount };
     });
@@ -282,15 +415,22 @@ class VehicleRepository implements IVehicleRepository {
   async getVehicleByIdAndBusiness({
     businessId,
     vehicleId,
-  }: GetVehicleByIdAndBusinessProps): Promise<Vehicle | null> {
+  }: GetVehicleByIdAndBusinessProps): Promise<VehicleDetail | null> {
     const getVehicleByIdAndBusiness = await this.prisma.vehicle.findUnique({
       where: {
         businessId,
         id: vehicleId,
       },
+      // F1/F4: the names the edit and the service order prefill read.
+      include: {
+        responsibleUser: { select: { name: true } },
+        branch: { select: { corporate_reason: true } },
+      },
     });
 
-    return getVehicleByIdAndBusiness;
+    return getVehicleByIdAndBusiness
+      ? withBranchName(getVehicleByIdAndBusiness)
+      : null;
   }
 
   async findVehiclesByFuelTypeId(fuelTypeId: string): Promise<Vehicle[]> {
@@ -322,7 +462,7 @@ class VehicleRepository implements IVehicleRepository {
           driver: { name: string; cpf: string } | null;
           branch: { corporate_reason: string } | null;
         }
-      > = await this.prisma.vehicle.findMany({
+      > = await this.read.vehicle.findMany({
         where: exportBatchWhere(whereCondition, after),
         include: {
           vehicleType: { select: { description: true } },
@@ -377,7 +517,7 @@ class VehicleRepository implements IVehicleRepository {
   }
 
   async countVehiclesForExport(filters: VehicleListFilters): Promise<number> {
-    return this.prisma.vehicle.count({ where: vehicleListWhere(filters) });
+    return this.read.vehicle.count({ where: vehicleListWhere(filters) });
   }
 
   async searchVehicleWithCursor({
@@ -429,6 +569,10 @@ class VehicleRepository implements IVehicleRepository {
               vehicleType: {
                 select: { description: true, required_cnh_category: true },
               },
+              // The driver's "Meus veículos" card prints the fuel: without
+              // it every card read "Combustível: N/A" (audit of 11/2026).
+              // The dispatcher's choice fields stay without it (DLV-COMBO-1).
+              fuelType: { select: { description: true } },
             },
           });
 
@@ -454,6 +598,45 @@ class VehicleRepository implements IVehicleRepository {
         id: vehicleId,
         businessId,
         ...driverOperableVehicleWhere(driverId),
+      },
+    });
+
+    return found > 0;
+  }
+
+  async findDriverOperableVehicleIds({
+    driverId,
+    businessId,
+  }: {
+    driverId: string;
+    businessId: string;
+  }): Promise<string[]> {
+    // driverOperableVehicleWhere, the where of the single-vehicle check: the
+    // list and the check can never disagree. A driver operates a handful.
+    const rows = await this.prisma.vehicle.findMany({
+      where: { businessId, ...driverOperableVehicleWhere(driverId) },
+      select: { id: true },
+    });
+
+    return rows.map((row) => row.id);
+  }
+
+  async canDriverReadVehicle({
+    vehicleId,
+    driverId,
+    businessId,
+    now,
+  }: {
+    vehicleId: string;
+    driverId: string;
+    businessId: string;
+    now: Date;
+  }): Promise<boolean> {
+    const found = await this.prisma.vehicle.count({
+      where: {
+        id: vehicleId,
+        businessId,
+        ...driverReadableVehicleWhere(driverId, now),
       },
     });
 

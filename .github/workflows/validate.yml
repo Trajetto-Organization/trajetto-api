@@ -1,0 +1,802 @@
+name: Validate
+
+# The API's whole validation, in one place (docs/deploy.md): called by
+# ci.yml (work branches) and staging.yml (every push to staging), with what
+# the `Changes` job of the caller decided.
+#
+#   code ─▶ Validate  (dependency audit, lint, type-check, unit tests with
+#                      the coverage floor; the route contract against the
+#                      web and the app of the same branch, or their staging)
+#        ─▶ E2E (i/n) (the E2E suite in parallel jobs, each on its own
+#                      Postgres and Redis; the last one is the replica phase,
+#                      and the first one also runs the infra phase, against
+#                      a real PgBouncer and a real standby)
+#        ─▶ AI OCR    (the trajetto-ai pytest inside its image, skipped when
+#                      an image of the same infra/ai-ocr already passed it)
+#        ─▶ Postgres image (the trajetto-postgres image's own tests and its
+#                      proof against an S3 server; only for an infra/postgres
+#                      that has no published image yet, changes.sh)
+#        ─▶ PgBouncer image (the trajetto-pgbouncer image's own tests; only
+#                      for an infra/pgbouncer that has no published image
+#                      yet, changes.sh)
+#   docs ─▶ Docs      (Prettier and the unit tests without coverage: some of
+#                      them read the documentation, and the siblings)
+#        ─▶ Result    (after all of them: the verdict of this call)
+#
+# Every job is in parallel, then Result judges them. The manual run of
+# ci.yml adds the AI local contract (`ai_local`).
+#
+# What a caller acts on is the `passed` output below, never
+# `needs.<caller>.result`: some job here is always skipped (Docs on a push
+# of code; Validate, the E2E and AI OCR on a push of documentation), a job
+# skipped inside a reusable workflow leaks into the caller
+# (actions/runner#2205; github.com/orgs/community/discussions/189172), and
+# what that makes of the caller's result is not a contract. Inside this file
+# each job's result is plain, so Result reads them here, as trajetto-mobile's
+# validate.yml has each job record that it got to its end; the E2E matrix
+# rules that out here (a matrix job's output is whichever leg wrote last).
+on:
+  workflow_call:
+    inputs:
+      docs:
+        description: "Só documentação mudou: roda o Docs no lugar do resto"
+        type: boolean
+        default: false
+      e2e:
+        description: "Roda o E2E (a staging sempre; uma branch de trabalho só no Run workflow)"
+        type: boolean
+        default: true
+      force_ai:
+        description: "Roda o pytest da IA mesmo com imagem para a mesma fonte (force_ai_build)"
+        type: boolean
+        default: false
+      postgres:
+        description: "Roda o job Postgres image (o changes.sh diz false quando infra/postgres já tem imagem publicada)"
+        type: boolean
+        default: true
+      pgbouncer:
+        description: "Roda o job PgBouncer image (o changes.sh diz false quando infra/pgbouncer já tem imagem publicada)"
+        type: boolean
+        default: true
+      audit_base:
+        description: "O commit com que o audit de dependências compara (Changes)"
+        type: string
+        default: ""
+      ai_local:
+        description: "Roda também o contrato da API contra o contêiner real da IA (tests/ai-local; só o Run workflow do ci.yml)"
+        type: boolean
+        default: false
+    secrets:
+      CLIENT_REPOS_READ_TOKEN:
+        required: false
+    outputs:
+      passed:
+        description: "true quando todo job que esta chamada pediu terminou verde (o job Result); vazio nos outros casos"
+        value: ${{ jobs.result.outputs.passed }}
+
+permissions:
+  contents: read
+
+# `bash -eo pipefail` for every `run:` (GitHub's default for a step with no
+# `shell:` is `bash -e`, without pipefail): a failure inside a pipe — `git
+# ls-remote | cut` — fails the step instead of handing an empty value on.
+defaults:
+  run:
+    shell: bash
+
+# The test environment of every job here, the manual AI contract included.
+env:
+  NODE_ENV: test
+  DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
+  REDIS_URL: redis://localhost:6379
+  HTTP_REQUEST: http://localhost:3000
+  API_HTTP_REQUEST: http://localhost:3333
+  JWT_SECRET: test-jwt-secret-key-for-github-actions-only
+  JWT_SECRET_REFRESH_TOKEN: test-jwt-refresh-secret-key-for-github-actions-only
+  META_WHATSAPP_TEMPLATE_NAME: trajetto_notification
+  META_WHATSAPP_API_VERSION: v23.0
+  UPLOAD_STORAGE_TYPE: local
+  UPLOAD_LOCAL_PATH: ./tmp
+  MASTER_USER_EMAIL: test-master@example.com
+  MASTER_USER_INITIAL_PASSWORD: test-master-password-ci-only
+
+jobs:
+  validate:
+    name: Validate
+    if: ${{ !inputs.docs }}
+    runs-on: ubuntu-24.04
+    # Measured 6-10 min on the 2-vCPU runner with one test process; the unit
+    # suite with coverage took 7 min with two on a 2-vCPU replica
+    # (docs/deploy.md, "Tempos e minutos").
+    timeout-minutes: 30
+
+    # One unit file needs a real Redis: tests/unitaires/socket/
+    # adapter-channel-isolation.test.ts proves that two Socket.IO adapters on
+    # one Redis are kept apart by the channel prefix, not by the database
+    # number. Nothing else in the unit suite touches it (no Postgres here).
+    # By digest, the same in the three repositories: a tag moves with no
+    # commit of ours. Dependabot does not read workflow files; bump by hand,
+    # all at once (docs/deploy.md, "Versões fixas").
+    services:
+      redis:
+        image: redis:7-alpine@sha256:8da19c7399dca900c6822a1cf30f9d2285585e2c4b457ff4095b0f4500054d3f # redis:7-alpine (7.4.12)
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+    steps:
+      # Full history: tests/unitaires/contract/retired-routes.test.ts compares
+      # the routes against origin/main at the fork point — exactly the
+      # question before production: does this build drop a route the
+      # production build still serves? A shallow clone skips that test. The
+      # dependency audit compares with an older commit too.
+      - name: Check out the full history
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+
+      # The web and the app beside the API, on the branch of the same name
+      # or their staging: the route contract and the documentation's links
+      # read them (.github/actions/siblings, the same in `Docs`).
+      - name: Check out the web and the app next to this repository
+        uses: ./.github/actions/siblings
+        with:
+          token: ${{ secrets.CLIENT_REPOS_READ_TOKEN }}
+
+      - name: Set up dependencies
+        uses: ./.github/actions/setup
+
+      # A CRITICAL advisory in a production dependency stops the pipeline
+      # before an image exists (INFRA-16) — when the range changes the
+      # dependencies (or audit-ci.jsonc). Otherwise the audit still runs and
+      # reports, without blocking: the advisory database changes daily with
+      # no commit of ours, and Dependabot is the watch (audit-gate.sh). The
+      # range starts at the base `Changes` picked: on staging, the last build
+      # staging served, so a run that was cancelled or failed never lets a
+      # dependency change through unaudited. The reasoned, dated exceptions
+      # live in audit-ci.jsonc.
+      - name: Audit production dependencies
+        env:
+          AUDIT_BASE: ${{ inputs.audit_base }}
+        run: bash .github/scripts/audit-gate.sh
+
+      # The cheapest check: the formatting.
+      - name: Check formatting
+        run: yarn lint:check
+
+      # tsc holds about 2.3 GB live for this project, and Node's default
+      # heap on a 7-8 GB runner (a private repository's) is about 2 GB: the
+      # check died there with "JavaScript heap out of memory", measured in a
+      # 7 GB Linux container on 30/10/2026. A fixed 4 GB no longer depends on
+      # the runner's size.
+      - name: Type-check
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+        run: yarn typecheck
+
+      - name: Create tmp directory
+        run: mkdir -p src/tmp
+
+      # With coverage, measured, published AND gated: test:coverage carries
+      # the floor (package.json; decision 13.1, docs/testes.md "Cobertura"),
+      # and a build under it never becomes an image (the Gate).
+      - name: Unit tests
+        run: yarn test:coverage --reporter=basic --coverage.reporter=text-summary --coverage.reporter=json-summary --coverage.reporter=html
+
+      - name: Upload coverage
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-${{ github.sha }}
+          path: coverage
+          retention-days: 14
+
+  # The E2E suite in parallel jobs (run-e2e.mjs, E2E_SHARD): each one has
+  # its own Postgres and Redis, migrates the E2E template once and clones it
+  # per file (prisma/vitest-environment-prisma/template.ts), with two test
+  # processes. Jobs 1 to n−1 split the shared phase with vitest's --shard;
+  # job n runs the replica phase whole, one file at a time. Job 1 then runs
+  # the infra phase (tests/E2E/infra, plano-escala F4-38) on a stack of its
+  # own: this commit's PgBouncer in front of a primary, and a streaming
+  # standby of it.
+  # tests/unitaires/quality/e2e-shards.test.ts checks that this matrix runs
+  # every file exactly once, and e2e-infra-isolation.test.ts the infra
+  # phase. A failing job does not stop the others: one run shows every
+  # failure.
+  e2e:
+    name: E2E (${{ matrix.shard }}/${{ strategy.job-total }})
+    if: ${{ !inputs.docs && inputs.e2e }}
+    runs-on: ubuntu-24.04
+    # Measured on a 2-vCPU replica (docs/deploy.md, "Tempos"): about twice
+    # the slowest job.
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+
+    # By digest, as everywhere (the smoke test of the Build job and
+    # trajetto-ui/trajetto-mobile use the same ones).
+    services:
+      postgres:
+        image: postgres:16-alpine@sha256:f2f98726820d0342055351c6e9d36e705f5bfffb3dd53ff556325114b08afb6d # postgres:16-alpine (16.16)
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: test_db
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+      redis:
+        image: redis:7-alpine@sha256:8da19c7399dca900c6822a1cf30f9d2285585e2c4b457ff4095b0f4500054d3f # redis:7-alpine (7.4.12)
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      # The template migrates: the schema engine is checked before it.
+      - name: Set up dependencies
+        uses: ./.github/actions/setup
+        with:
+          schema-engine: "true"
+
+      - name: Wait for services
+        run: |
+          timeout 60 bash -c 'until pg_isready -h localhost -p 5432 -U postgres; do sleep 1; done'
+          timeout 60 bash -c 'until nc -z localhost 6379; do sleep 1; done'
+
+      # tests/E2E/health-metrics.test.ts needs the test Postgres OFF the
+      # default max_connections (100): a panel hard-coding 100 would pass
+      # against a default server. A service container takes no command (no
+      # `-c max_connections=...`), so the setting goes in with ALTER SYSTEM
+      # and a restart of that container. 200 also leaves headroom for the
+      # E2E files running in parallel, each with its own pool.
+      #
+      # The same restart preloads pg_stat_statements, with the query id on,
+      # as the new Postgres image will (plano-escala F1-05):
+      # tests/E2E/pg-stat-statements-state.test.ts requires the state
+      # "ready" on the migrated database.
+      - name: Configure the test Postgres (max_connections, pg_stat_statements)
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          docker exec "$POSTGRES_CONTAINER" psql -U postgres \
+            -c "ALTER SYSTEM SET max_connections = 200" \
+            -c "ALTER SYSTEM SET shared_preload_libraries = 'pg_stat_statements'" \
+            -c "ALTER SYSTEM SET compute_query_id = 'on'"
+          docker restart "$POSTGRES_CONTAINER"
+          timeout 60 bash -c 'until pg_isready -h localhost -p 5432 -U postgres; do sleep 1; done'
+          configured="$(docker exec "$POSTGRES_CONTAINER" psql -U postgres -tAc "SHOW max_connections")"
+          echo "max_connections=$configured"
+          test "$configured" = 200
+          preload="$(docker exec "$POSTGRES_CONTAINER" psql -U postgres -tAc "SHOW shared_preload_libraries")"
+          echo "shared_preload_libraries=$preload"
+          test "$preload" = pg_stat_statements
+
+      - name: Create tmp directory
+        run: mkdir -p src/tmp
+
+      # The Windows batching rule (docs/testes.md) does not apply here. The
+      # counts and the duration of each phase go to the job summary, so the
+      # balance of the jobs can be read off a run.
+      - name: Run E2E tests
+        id: e2e
+        env:
+          E2E_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
+        run: |
+          log="${RUNNER_TEMP}/e2e.log"
+          status=0
+          yarn test:e2e --run --reporter=basic 2>&1 | tee "$log" || status=$?
+          {
+            echo "E2E ${E2E_SHARD}:"
+            echo '```'
+            sed 's/\x1b\[[0-9;]*m//g' "$log" | grep -E '^(== E2E, fase| *(Test Files|Tests|Duration) )' || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+      # The infra phase, in job 1 only, after its slice, and even when the
+      # slice failed (as the replica phase runs after a red shared phase):
+      # one run shows every failure. tests/E2E/infra/run.sh starts the
+      # stack (a primary migrated as a release leaves it, a streaming
+      # standby of it, and the PgBouncer built here from this commit's
+      # infra/pgbouncer), runs the phase and removes the stack
+      # (docs/testes.md, "A fase infra"). With the caches the PgBouncer
+      # jobs write, the build is little more than the runtime stage.
+      - name: Set up Docker Buildx (infra phase)
+        if: ${{ !cancelled() && matrix.shard == 1 && steps.e2e.outcome != 'skipped' }}
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+        with:
+          driver-opts: image=moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
+
+      - name: Build the PgBouncer image for the infra phase
+        if: ${{ !cancelled() && matrix.shard == 1 && steps.e2e.outcome != 'skipped' }}
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5.4.0
+        with:
+          context: ./infra/pgbouncer
+          push: false
+          load: true
+          tags: trajetto-pgbouncer:e2e-infra
+          cache-from: |
+            type=gha,scope=pgbouncer
+            type=gha,scope=pgbouncer-test
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+
+      - name: Run the E2E infra phase (PgBouncer and standby)
+        if: ${{ !cancelled() && matrix.shard == 1 && steps.e2e.outcome != 'skipped' }}
+        env:
+          E2E_INFRA_PGBOUNCER_IMAGE: trajetto-pgbouncer:e2e-infra
+        run: |
+          log="${RUNNER_TEMP}/e2e-infra.log"
+          status=0
+          yarn test:e2e:infra --run --reporter=basic 2>&1 | tee "$log" || status=$?
+          {
+            echo "E2E, fase infra:"
+            echo '```'
+            sed 's/\x1b\[[0-9;]*m//g' "$log" | grep -E '^(e2e-infra: | *(Test Files|Tests|Duration) )' || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+  # The trajetto-ai service (infra/ai-ocr, ADR 0010): its pytest suite runs
+  # INSIDE the image it ships in — the `test` stage builds the same base
+  # (hashed wheels, the models versioned in infra/ai-ocr/models and checked
+  # by SHA-256, offline) and runs as the runtime user.
+  #
+  # The image's whole build input is infra/ai-ocr, and git names that
+  # directory's content with one hash. The Build job of staging tags every AI
+  # image `src-<that hash>`, and builds it only after this job passed: an
+  # image for the same hash means this very suite already passed on these
+  # very files, and the job ends there. GHCR not answering is not "no
+  # image": it says so and tests. force_ai_build tests anyway.
+  #
+  # Through Buildx with the GitHub cache (scope `ai-test`, which the Build
+  # job reads too): a source that already passed finds every layer, the
+  # pytest one included, and takes seconds.
+  ai-ocr:
+    name: AI OCR
+    if: ${{ !inputs.docs }}
+    runs-on: ubuntu-24.04
+    # Measured ~1.2 min; a build with no cache downloads the wheels again.
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      # GHCR is only this lookup's, which can do without it: a login that
+      # keeps failing (ghcr.sh retries it) is GHCR not answering, and the
+      # job tests, instead of failing here before the fallback is reached.
+      - name: Log in to GitHub Container Registry
+        id: ghcr
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if bash .github/scripts/ghcr.sh login; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Look up the AI image for this source
+        id: ai-source
+        env:
+          FORCE: ${{ inputs.force_ai }}
+          LOGGED_IN: ${{ steps.ghcr.outputs.ok }}
+        run: |
+          tree=$(git rev-parse HEAD:infra/ai-ocr)
+          if [ "$FORCE" = "true" ]; then
+            echo "test=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::force_ai_build: o pytest da IA roda mesmo com imagem para infra/ai-ocr ${tree::12}."
+            exit 0
+          fi
+          if [ "$LOGGED_IN" != "true" ]; then
+            echo "test=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::Sem login no GHCR, não deu para procurar trajetto-ai:src-${tree::12}: o pytest da IA roda."
+            exit 0
+          fi
+          status=0
+          digest=$(bash .github/scripts/ghcr.sh digest "ghcr.io/trajetto-organization/trajetto-ai:src-${tree}") || status=$?
+          if [ "$status" -ne 0 ]; then
+            echo "test=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::O GHCR não respondeu sobre trajetto-ai:src-${tree::12}: o pytest da IA roda."
+          elif [ -n "$digest" ]; then
+            echo "test=false" >> "$GITHUB_OUTPUT"
+            echo "trajetto-ai: infra/ai-ocr igual ao de src-${tree::12} (${digest}), que já passou no pytest; nada a testar." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "test=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # BuildKit pinned by digest (the action's default is the moving
+      # `buildx-stable-1` tag of Docker Hub). Bumped by hand, like the
+      # services' digests.
+      - name: Set up Docker Buildx
+        if: steps.ai-source.outputs.test == 'true'
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+        with:
+          driver-opts: image=moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
+
+      # No output: the result stays in the builder, and the cache export is
+      # an optimisation that never fails the job (ignore-error). The build
+      # reaches only Docker Hub (the pinned base) and PyPI (hashed wheels).
+      - name: Build the image and run its tests
+        if: steps.ai-source.outputs.test == 'true'
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5.4.0
+        with:
+          context: ./infra/ai-ocr
+          target: test
+          push: false
+          cache-from: type=gha,scope=ai-test
+          cache-to: type=gha,mode=max,scope=ai-test,ignore-error=true
+
+  # The trajetto-postgres image (infra/postgres, plano-escala F1-01/F1-03):
+  # the Database of staging and production, swapped by the owner by digest.
+  # Two proofs, both on the bytes the Build job will publish:
+  # - its `test` stage, offline: the wrapper's parameters read back with
+  #   SHOW, a PITR round trip and the archive queue cap on a posix
+  #   repository, the backup and drill scripts for real;
+  # - infra/postgres/test/s3-proof.sh: the image built here, by its local
+  #   digest, against MinIO pinned by digest, with TLS, path-style URLs and
+  #   the region `auto`, as R2 is spoken to: stanza-create, archive, check,
+  #   full and diff (trajetto-backup), archive-get, and the drill to an
+  #   instant with a read-only key.
+  #
+  # Like the AI: the whole build input is infra/postgres, git names it with
+  # one hash, and the Build of staging publishes `src-<hash>` only after this
+  # job passed. changes.sh does the lookup first, so a push that leaves
+  # infra/postgres alone does not even start this job (`postgres` false);
+  # the lookup below is the job's own second look, for a run that started
+  # anyway (GHCR silent in Changes, a work branch, Run workflow).
+  postgres-image:
+    name: Postgres image
+    if: ${{ !inputs.docs && inputs.postgres }}
+    runs-on: ubuntu-24.04
+    # Estimated 4-8 min: pgBackRest compiles in ~15 s, the test stage takes
+    # ~40 s and the S3 proof ~1 min on a 2-vCPU machine; a cold cache
+    # downloads the base and the build tools again.
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Log in to GitHub Container Registry
+        id: ghcr
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if bash .github/scripts/ghcr.sh login; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Look up the Postgres image for this source
+        id: postgres-source
+        env:
+          LOGGED_IN: ${{ steps.ghcr.outputs.ok }}
+        run: |
+          tree=$(git rev-parse HEAD:infra/postgres)
+          if [ "$LOGGED_IN" != "true" ]; then
+            echo "test=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::Sem login no GHCR, não deu para procurar trajetto-postgres:src-${tree::12}: a imagem é testada."
+            exit 0
+          fi
+          status=0
+          digest=$(bash .github/scripts/ghcr.sh digest "ghcr.io/trajetto-organization/trajetto-postgres:src-${tree}") || status=$?
+          if [ "$status" -ne 0 ]; then
+            echo "test=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::O GHCR não respondeu sobre trajetto-postgres:src-${tree::12}: a imagem é testada."
+          elif [ -n "$digest" ]; then
+            echo "test=false" >> "$GITHUB_OUTPUT"
+            echo "trajetto-postgres: infra/postgres igual ao de src-${tree::12} (${digest}), que já passou; nada a testar." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "test=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Docker Buildx
+        if: steps.postgres-source.outputs.test == 'true'
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+        with:
+          driver-opts: image=moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
+
+      # No output: the result stays in the builder. Offline after the
+      # download of pgBackRest's source (checked by SHA-256).
+      - name: Build the image and run its tests
+        if: steps.postgres-source.outputs.test == 'true'
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5.4.0
+        with:
+          context: ./infra/postgres
+          target: test
+          push: false
+          cache-from: type=gha,scope=postgres-test
+          cache-to: type=gha,mode=max,scope=postgres-test,ignore-error=true
+
+      # The image itself (the last stage), into the runner's Docker for the
+      # S3 proof: every layer is the test build's, from the cache.
+      - name: Build the image for the S3 proof
+        if: steps.postgres-source.outputs.test == 'true'
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5.4.0
+        with:
+          context: ./infra/postgres
+          push: false
+          load: true
+          tags: trajetto-postgres:proof
+          cache-from: type=gha,scope=postgres-test
+
+      - name: Prove the image against S3 (MinIO)
+        if: steps.postgres-source.outputs.test == 'true'
+        env:
+          # MinIO stopped publishing images upstream; this is MinIO built
+          # from source by the Pigsty project, pinned by digest. A throwaway
+          # server for this job only, on a network of its own.
+          MINIO_IMAGE: pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372
+        run: |
+          log="${RUNNER_TEMP}/s3-proof.log"
+          status=0
+          bash infra/postgres/test/s3-proof.sh trajetto-postgres:proof 2>&1 | tee "$log" || status=$?
+          {
+            echo "trajetto-postgres: prova S3 (MinIO):"
+            echo '```'
+            grep -E '^(ok - |  \{|trajetto-postgres:)' "$log" || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+  # The trajetto-pgbouncer image (infra/pgbouncer, plano-escala F4-34/F4-35):
+  # the PgBouncer in front of the Database, which the deploys roll out only
+  # when its digest changes. Its `test` stage starts the real PgBouncer
+  # from the entrypoint the image ships, offline and as its own user, and
+  # reads every value back through the console (SHOW CONFIG, SHOW
+  # DATABASES); every branch of the entrypoint is the unit suite's
+  # (pgbouncer-image.test.ts). The Build of staging reads this job's cache
+  # back, so the image it publishes is built from the layers tested here.
+  #
+  # Like the Database's: the whole build input is infra/pgbouncer, git
+  # names it with one hash, and the Build of staging publishes
+  # `src-<hash>` only after this job passed. changes.sh does the lookup
+  # first (`pgbouncer` false: the job does not even start); the lookup
+  # below is the job's own second look.
+  pgbouncer-image:
+    name: PgBouncer image
+    if: ${{ !inputs.docs && inputs.pgbouncer }}
+    runs-on: ubuntu-24.04
+    # Measured 29 s with nothing cached on a workstation (the base, the
+    # build tools, the source download and the compile; the test stage
+    # itself takes ~1.5 s); a cold cache on a 2-vCPU runner fits well
+    # inside this.
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Log in to GitHub Container Registry
+        id: ghcr
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if bash .github/scripts/ghcr.sh login; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Look up the PgBouncer image for this source
+        id: pgbouncer-source
+        env:
+          LOGGED_IN: ${{ steps.ghcr.outputs.ok }}
+        run: |
+          tree=$(git rev-parse HEAD:infra/pgbouncer)
+          if [ "$LOGGED_IN" != "true" ]; then
+            echo "test=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::Sem login no GHCR, não deu para procurar trajetto-pgbouncer:src-${tree::12}: a imagem é testada."
+            exit 0
+          fi
+          status=0
+          digest=$(bash .github/scripts/ghcr.sh digest "ghcr.io/trajetto-organization/trajetto-pgbouncer:src-${tree}") || status=$?
+          if [ "$status" -ne 0 ]; then
+            echo "test=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::O GHCR não respondeu sobre trajetto-pgbouncer:src-${tree::12}: a imagem é testada."
+          elif [ -n "$digest" ]; then
+            echo "test=false" >> "$GITHUB_OUTPUT"
+            echo "trajetto-pgbouncer: infra/pgbouncer igual ao de src-${tree::12} (${digest}), que já passou; nada a testar." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "test=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Docker Buildx
+        if: steps.pgbouncer-source.outputs.test == 'true'
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+        with:
+          driver-opts: image=moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
+
+      # No output: the result stays in the builder. Offline after the
+      # download of PgBouncer's source (checked by SHA-256): the compile and
+      # the test run with no network.
+      - name: Build the image and run its tests
+        if: steps.pgbouncer-source.outputs.test == 'true'
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5.4.0
+        with:
+          context: ./infra/pgbouncer
+          target: test
+          push: false
+          cache-from: type=gha,scope=pgbouncer-test
+          cache-to: type=gha,mode=max,scope=pgbouncer-test,ignore-error=true
+
+  # A push that changes only documentation: no type-check, no E2E, no
+  # image. Prettier still runs (`lint:check` covers *.md and docs/), and so
+  # does the unit suite, without coverage, because some of its tests read
+  # the documentation (the deploy guide, the architecture, the agent
+  # guides) and the siblings it links to: a red one lands on the commit
+  # that broke it, not on the next push of code.
+  docs:
+    name: Docs
+    if: ${{ inputs.docs }}
+    runs-on: ubuntu-24.04
+    # Estimated 6-8 min from the 2-vCPU replica (the unit suite without
+    # coverage, two test processes).
+    timeout-minutes: 20
+
+    # adapter-channel-isolation.test.ts, as in Validate.
+    services:
+      redis:
+        image: redis:7-alpine@sha256:8da19c7399dca900c6822a1cf30f9d2285585e2c4b457ff4095b0f4500054d3f # redis:7-alpine (7.4.12)
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+    steps:
+      # Full history, as in Validate: retired-routes compares with origin/main.
+      - name: Check out the full history
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+
+      # The same siblings as Validate: architecture-docs.test.ts resolves the
+      # links and ADRs a guide cites in them, and skips itself without them.
+      - name: Check out the web and the app next to this repository
+        uses: ./.github/actions/siblings
+        with:
+          token: ${{ secrets.CLIENT_REPOS_READ_TOKEN }}
+
+      - name: Set up dependencies
+        uses: ./.github/actions/setup
+
+      # The formatting of the documentation too: a guide off Prettier's
+      # format would otherwise turn the next push of code red.
+      - name: Check formatting
+        run: yarn lint:check
+
+      - name: Create tmp directory
+        run: mkdir -p src/tmp
+
+      - name: Unit tests
+        run: yarn test --reporter=basic
+
+  # Opt-in: the API's reader and rules against the real container (needs
+  # Docker and ~1 GiB, so only on the manual run of ci.yml). tests/ai-local.
+  # Here, under the same test environment as the other jobs (`env` above).
+  ai-local-e2e:
+    name: AI local contract (manual)
+    if: ${{ !inputs.docs && inputs.ai_local }}
+    runs-on: ubuntu-24.04
+    # Builds the AI image (no cache) and reads the fixtures through it.
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Set up dependencies
+        uses: ./.github/actions/setup
+
+      - name: Run the contract against the container
+        env:
+          AI_LOCAL_E2E: "1"
+        run: npx vitest run tests/ai-local
+
+  # The verdict of this call, the `passed` output the caller's Gate reads
+  # (the header). Every job above, each held to what the inputs asked of
+  # it: green when it was asked for, skipped when it was not, so a job that
+  # ran where it should not, or never ran where it should, is a red here
+  # too. A job added above is added to `needs` (ci-stability.test.ts). A
+  # validation cancelled by a newer push cancels this one with it.
+  result:
+    name: Result
+    needs:
+      [
+        validate,
+        e2e,
+        ai-ocr,
+        postgres-image,
+        pgbouncer-image,
+        docs,
+        ai-local-e2e,
+      ]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      passed: ${{ steps.check.outputs.passed }}
+
+    steps:
+      - name: Check results
+        id: check
+        env:
+          DOCS: ${{ inputs.docs }}
+          WANT_E2E: ${{ inputs.e2e }}
+          WANT_AI_LOCAL: ${{ inputs.ai_local }}
+          WANT_POSTGRES: ${{ inputs.postgres }}
+          WANT_PGBOUNCER: ${{ inputs.pgbouncer }}
+          VALIDATE: ${{ needs.validate.result }}
+          E2E: ${{ needs.e2e.result }}
+          AI_OCR: ${{ needs.ai-ocr.result }}
+          POSTGRES_JOB: ${{ needs.postgres-image.result }}
+          PGBOUNCER_JOB: ${{ needs.pgbouncer-image.result }}
+          DOCS_JOB: ${{ needs.docs.result }}
+          AI_LOCAL: ${{ needs.ai-local-e2e.result }}
+        run: |
+          failed=""
+          expect() {
+            [ "$2" = "$3" ] || failed="${failed} $1 (${2:-sem resultado})"
+          }
+          # success when the inputs asked for the job, skipped otherwise.
+          asked() {
+            if [ "$1" = "true" ]; then echo success; else echo skipped; fi
+          }
+          if [ "$DOCS" = "true" ]; then
+            expect Docs "$DOCS_JOB" success
+            expect Validate "$VALIDATE" skipped
+            expect E2E "$E2E" skipped
+            expect "AI OCR" "$AI_OCR" skipped
+            expect "Postgres image" "$POSTGRES_JOB" skipped
+            expect "PgBouncer image" "$PGBOUNCER_JOB" skipped
+            expect "AI local contract" "$AI_LOCAL" skipped
+          else
+            expect Validate "$VALIDATE" success
+            expect E2E "$E2E" "$(asked "$WANT_E2E")"
+            expect "AI OCR" "$AI_OCR" success
+            expect "Postgres image" "$POSTGRES_JOB" "$(asked "$WANT_POSTGRES")"
+            expect "PgBouncer image" "$PGBOUNCER_JOB" "$(asked "$WANT_PGBOUNCER")"
+            expect "AI local contract" "$AI_LOCAL" "$(asked "$WANT_AI_LOCAL")"
+            expect Docs "$DOCS_JOB" skipped
+          fi
+          if [ -n "$failed" ]; then
+            echo "::error title=Result::A validação não passou:${failed}."
+            exit 1
+          fi
+          echo "passed=true" >> "$GITHUB_OUTPUT"

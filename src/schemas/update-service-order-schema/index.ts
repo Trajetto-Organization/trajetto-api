@@ -11,6 +11,7 @@ import {
   hasConsecutiveSpaces,
   hasSpaceAtEdges,
 } from "@/shared/utils/zod-schema-helpers";
+import { fieldError } from "@/shared/validation/field-error";
 
 const updateServiceOrderSchema = z
   .object({
@@ -72,9 +73,7 @@ const updateServiceOrderSchema = z
     ),
     maintenance_type: z
       .enum(["INTERNAL", "EXTERNAL"], {
-        errorMap: () => ({
-          message: "Tipo de manutenção inválido. Deve ser INTERNAL ou EXTERNAL",
-        }),
+        error: "Tipo de manutenção inválido. Deve ser INTERNAL ou EXTERNAL",
       })
       .optional(),
     total_amount: z
@@ -93,11 +92,12 @@ const updateServiceOrderSchema = z
         return val;
       },
       z
-        .number({
-          required_error: "A quilometragem atual do veículo é obrigatória.",
-          invalid_type_error:
-            "A quilometragem atual deve ser um número válido.",
-        })
+        .number(
+          fieldError({
+            required: "A quilometragem atual do veículo é obrigatória.",
+            invalid: "A quilometragem atual deve ser um número válido.",
+          }),
+        )
         .nonnegative("A quilometragem atual deve ser um valor não negativo.")
         .min(0.1, "A quilometragem atual deve ser maior que zero.")
         .max(9999999, "A quilometragem atual não pode exceder 9.999.999 km.")
@@ -114,11 +114,12 @@ const updateServiceOrderSchema = z
         return val;
       },
       z
-        .number({
-          required_error: "O intervalo de revisão em km é obrigatório.",
-          invalid_type_error:
-            "O intervalo de revisão em km deve ser um número válido.",
-        })
+        .number(
+          fieldError({
+            required: "O intervalo de revisão em km é obrigatório.",
+            invalid: "O intervalo de revisão em km deve ser um número válido.",
+          }),
+        )
         .min(0.1, "O intervalo de revisão em km deve ser maior que zero.")
         .positive("O intervalo de revisão em km deve ser um valor positivo.")
         .max(
@@ -138,11 +139,13 @@ const updateServiceOrderSchema = z
         return val;
       },
       z
-        .number({
-          required_error: "A quilometragem da última revisão é obrigatória.",
-          invalid_type_error:
-            "A quilometragem da última revisão deve ser um número válido.",
-        })
+        .number(
+          fieldError({
+            required: "A quilometragem da última revisão é obrigatória.",
+            invalid:
+              "A quilometragem da última revisão deve ser um número válido.",
+          }),
+        )
         .nonnegative(
           "A quilometragem da última revisão deve ser um valor não negativo.",
         )
@@ -164,9 +167,11 @@ const updateServiceOrderSchema = z
         return val;
       },
       z
-        .number({
-          invalid_type_error: "A nova quilometragem deve ser um número válido.",
-        })
+        .number(
+          fieldError({
+            invalid: "A nova quilometragem deve ser um número válido.",
+          }),
+        )
         .nonnegative("A nova quilometragem deve ser um valor não negativo.")
         .min(0.1, "A nova quilometragem deve ser maior que zero.")
         .max(9999999, "A nova quilometragem não pode exceder 9.999.999 km.")
@@ -197,9 +202,9 @@ const updateServiceOrderSchema = z
         return val;
       },
       z
-        .number({
-          invalid_type_error: "A latitude deve ser um número válido.",
-        })
+        .number(
+          fieldError({ invalid: "A latitude deve ser um número válido." }),
+        )
         .min(-90, "A latitude deve estar entre -90 e 90.")
         .max(90, "A latitude deve estar entre -90 e 90.")
         .optional()
@@ -218,9 +223,9 @@ const updateServiceOrderSchema = z
         return val;
       },
       z
-        .number({
-          invalid_type_error: "A longitude deve ser um número válido.",
-        })
+        .number(
+          fieldError({ invalid: "A longitude deve ser um número válido." }),
+        )
         .min(-180, "A longitude deve estar entre -180 e 180.")
         .max(180, "A longitude deve estar entre -180 e 180.")
         .optional()

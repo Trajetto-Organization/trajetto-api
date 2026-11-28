@@ -5,9 +5,14 @@ import {
   driverMonitoringSchema,
   driverTrailParamSchema,
   driverTrailQuerySchema,
+  liveRoutesSchema,
   recordDriverPositionsSchema,
   routeMonitoringSchema,
 } from "@/schemas/driver-position-schema";
+import {
+  POSITIONS_FLUSH_AFTER_MAX_MS,
+  POSITIONS_FLUSH_AFTER_MIN_MS,
+} from "@/shared/health/pressure-level";
 
 /**
  * The operation's live surfaces: the phone's positions, the control tower,
@@ -80,7 +85,38 @@ const towerActiveRoute = z.object({
     resolved: z.number().describe("Paradas entregues ou com insucesso."),
     total: z.number().describe("Paradas da rota, sem as canceladas."),
   }),
+
+  stale: z
+    .boolean()
+    .describe(
+      'Rota esquecida aberta (decisão D26, plano de 02/11/2026 H3): começou antes de hoje no fuso da empresa ou há mais de 16 h. O selo diz "Aberta desde dd/mm · conclua ou cancele".',
+    ),
+  openSince: isoDateTime
+    .nullable()
+    .describe(
+      "A saída de uma rota esquecida aberta (para o selo); null numa rota de hoje.",
+    ),
 });
+
+const towerInherited = z
+  .object({
+    routes: z
+      .number()
+      .describe(
+        "Rotas esquecidas abertas em andamento com ao menos uma parada ainda aberta.",
+      ),
+    deliveries: z
+      .number()
+      .describe(
+        "Paradas ainda abertas nessas rotas: documentos que o funil conta como Em rota hoje, herdados de dias anteriores.",
+      ),
+    since: isoDateTime
+      .nullable()
+      .describe("A saída mais antiga entre elas; null quando não há nenhuma."),
+  })
+  .describe(
+    'O que o funil herdou de rotas esquecidas abertas (H3), para a nota "inclui N de rotas abertas desde dd/mm".',
+  );
 
 const towerEvent = z.object({
   id: z.string(),
@@ -109,6 +145,27 @@ const towerEvent = z.object({
   failure: z
     .boolean()
     .describe("Ocorrência impeditiva aplicada ou mudança para Insucesso."),
+
+  // Plan of 02/11/2026 (E5): the geofence record, with the names the
+  // delivery detail uses, for the feed's "Fora do raio" flag.
+  geofence_outcome: z
+    .enum(["INSIDE", "OUTSIDE", "NOT_EVALUATED"])
+    .nullable()
+    .describe(
+      'Geocerca da chegada, do comprovante ou da ocorrência (Configurações da empresa): INSIDE, OUTSIDE (o selo "Fora do raio") ou NOT_EVALUATED (sem precisão, posição antiga ou endereço sem coordenada). Null numa movimentação de rota e num registro de antes da geocerca.',
+    ),
+  distance_m: z
+    .number()
+    .nullable()
+    .describe(
+      "Distância em metros entre a posição e o ponto do endereço; null quando não avaliada.",
+    ),
+  accuracy_m: z
+    .number()
+    .nullable()
+    .describe(
+      "Precisão da posição em metros, como o aparelho informou; null quando o aparelho não a mandou.",
+    ),
 
   occurredAt: isoDateTime,
 });
@@ -169,6 +226,15 @@ const monitoredRoute = z.object({
 
   progress: routeProgress,
   stops: z.array(monitoredStop),
+
+  stale: z
+    .boolean()
+    .describe(
+      "Rota em andamento esquecida aberta (decisão D26, H3): a mesma regra e a mesma data da torre.",
+    ),
+  openSince: isoDateTime
+    .nullable()
+    .describe("A saída de uma rota esquecida aberta; null nas demais."),
 });
 
 const driverDayRow = z.object({
@@ -187,11 +253,62 @@ const driverDayRow = z.object({
     .describe("Insucessos no dia, pelo fato que causou a falha."),
 });
 
+/** One row of GET /route/live (wave 4): what the manager's phone lists. */
+const liveRoute = z.object({
+  id: z.string(),
+  code: z.number().describe("O número da rota na empresa."),
+  name: z.string().nullable(),
+  status: z
+    .enum(["IN_PROGRESS", "RELEASED"])
+    .describe(
+      "Em andamento (de qualquer dia) ou liberada para hoje e ainda não iniciada.",
+    ),
+  scheduled_date: z.string().describe("O dia da rota (AAAA-MM-DD)."),
+  started_at: isoDateTime.nullable(),
+  stale: z
+    .boolean()
+    .describe(
+      "Rota esquecida aberta (decisão D26): a mesma regra e o mesmo selo da torre.",
+    ),
+
+  driverId: z.string(),
+  driver_name: z.string().nullable(),
+  vehicle_plate: z.string().nullable(),
+
+  stops_total: z.number().describe("Paradas da rota, sem as canceladas."),
+  stops_resolved: z
+    .number()
+    .describe('Paradas entregues ou com insucesso: o "8" de "8 de 12".'),
+
+  pending_authorizations: z
+    .number()
+    .describe(
+      "Pedidos de autorização vivos desta rota (a mesma conta da fila de GET /delivery/occurrence-authorizations).",
+    ),
+
+  position: z
+    .object({
+      lat: z.number(),
+      lng: z.number(),
+      recorded_at: isoDateTime,
+    })
+    .nullable()
+    .describe(
+      "O último ponto do motorista, se gravado nas últimas 12 h (a janela do mapa da torre); null sem ponto nessa janela.",
+    ),
+  last_signal_at: isoDateTime
+    .nullable()
+    .describe(
+      "O último ponto do telefone, por mais antigo que seja; null = nunca reportou.",
+    ),
+});
+
 /**
  * Every refusal carries a machine-readable `code` alongside the message (and
  * the header `x-error-code`): PERMISSION_DENIED, MODULE_NOT_ENABLED,
  * TENANT_INACTIVE, DRIVER_CANNOT_VIEW_PANELS, BUSINESS_NOT_IDENTIFIED,
- * DRIVER_NOT_FOUND, INVALID_DAY, VALIDATION_ERROR, RATE_LIMITED.
+ * DRIVER_NOT_FOUND, INVALID_DAY, INVALID_CURSOR, VALIDATION_ERROR,
+ * RATE_LIMITED.
  */
 const towerError = z.object({
   code: z.string(),
@@ -206,6 +323,23 @@ const controlTowerSchemas = {
   driverTrailQuery: driverTrailQuerySchema,
   routeMonitoring: routeMonitoringSchema,
   driverMonitoring: driverMonitoringSchema,
+  liveRoutes: liveRoutesSchema,
+};
+
+/**
+ * The company's snapshot (plano-escala F4-11), told the same way on the
+ * three routes it serves: the tower, the operation summary and the first
+ * page of /route/live.
+ */
+const towerSnapshotDoc = {
+  description:
+    "Foto da empresa (plano de escala F4-11): a resposta sai de uma cópia por empresa, a mesma para todos dela, lida no máximo uma vez a cada `TOWER_SNAPSHOT_TTL_MS` (padrão 10 s) em cada réplica, e por isso pode ser de até 10 s antes. A permissão, o módulo e a empresa são conferidos antes, em toda requisição: a cópia nunca deixa entrar quem não entraria. Vem com `ETag`, `Age` (segundos desde a leitura) e `Cache-Control: private, no-cache`; com `If-None-Match` igual ao ETag atual, 304 sem corpo. O cabeçalho `x-trajetto-refresh: 1` pede uma leitura nova, feita só se a cópia tiver 2 s ou mais. Com `TOWER_SNAPSHOT_TTL_MS=0`, cada requisição lê sozinha, como antes, sem `ETag` nem 304.",
+
+  notModified: z
+    .null()
+    .describe(
+      "Not Modified: o `If-None-Match` traz o ETag atual da foto da empresa. Sem corpo; `ETag`, `Age` e `Cache-Control` vêm como no 200.",
+    ),
 };
 
 const controlTowerResponses = {
@@ -219,6 +353,18 @@ const controlTowerResponses = {
         .boolean()
         .describe(
           "Falso quando nenhuma rota do motorista está em andamento. O app PARA de rastrear ao ver isto — continuar seria gastar a bateria de alguém num mapa que ninguém está olhando.",
+        ),
+
+      // Optional in the schema: the previous replica of a rolling deploy
+      // does not send it, and the app treats its absence as 60 s.
+      nextFlushAfterMs: z
+        .number()
+        .int()
+        .min(POSITIONS_FLUSH_AFTER_MIN_MS)
+        .max(POSITIONS_FLUSH_AFTER_MAX_MS)
+        .optional()
+        .describe(
+          "Quanto o app deve esperar, em milissegundos, antes do próximo envio de posições, pela carga da réplica que respondeu: 60000 normalmente (POSITIONS_FLUSH_AFTER_MS), 120000 com a réplica ocupada, 300000 com ela no limite. O app espera o maior entre este valor e o próprio intervalo, até 5 minutos, e guarda os pontos no aparelho enquanto isso. Ausente numa versão anterior da API: vale o intervalo do app.",
         ),
     }),
   }),
@@ -238,6 +384,7 @@ const controlTowerResponses = {
         .describe(
           "Rotas em andamento, com ou sem posição — a que não tem ponto no mapa aparece aqui.",
         ),
+      inherited: towerInherited,
 
       funnel: z.array(
         z.object({
@@ -308,7 +455,28 @@ const controlTowerResponses = {
 
   routeMonitoring: z.object({
     data: z.object({
-      day: z.string(),
+      day: z
+        .string()
+        .describe(
+          "O dia pedido em `day` ou, sem ele, o dia de hoje da empresa (AAAA-MM-DD), também com `period`: uma hora de outro dia vem com a data.",
+        ),
+      // Declared, or the response serializer strips it and a new screen
+      // reads an old API's answer (plan of 09/11/2026).
+      period: z
+        .object({
+          from: z
+            .string()
+            .describe(
+              "Primeiro dia do período (AAAA-MM-DD), no fuso da empresa.",
+            ),
+          to: z
+            .string()
+            .describe("Último dia do período (AAAA-MM-DD), incluído."),
+        })
+        .nullable()
+        .describe(
+          "Os dias do quadro quando `period` foi enviado (com as rotas ainda em andamento se incluir hoje); null para um dia só (`day`, ou nada).",
+        ),
       timeZone: z
         .string()
         .describe("O fuso da empresa: as horas do quadro são mostradas nele."),
@@ -337,6 +505,40 @@ const controlTowerResponses = {
     }),
   }),
 
+  liveRoutes: z.object({
+    data: z
+      .array(liveRoute)
+      .describe(
+        "Em andamento primeiro, depois as liberadas; cada grupo pelo número da rota.",
+      ),
+    meta: z.object({
+      day: z
+        .string()
+        .describe(
+          "O dia da empresa (AAAA-MM-DD) das rotas liberadas listadas.",
+        ),
+      timeZone: z.string().describe("O fuso da empresa."),
+      generatedAt: isoDateTime.describe(
+        'O relógio do servidor na leitura: o "há N min" conta a partir dele.',
+      ),
+      silentAfterMs: z
+        .number()
+        .describe(
+          'Depois de quanto tempo sem ponto a rota em andamento está "Sem sinal" (o limite da torre, 10 min).',
+        ),
+      limit: z.number().describe("O teto de linhas por resposta (500)."),
+      truncated: z
+        .boolean()
+        .describe(
+          "Há mais rotas do que o teto: a próxima página começa em `nextCursor`.",
+        ),
+      nextCursor: z
+        .string()
+        .nullable()
+        .describe("O cursor da próxima página; null na última."),
+    }),
+  }),
+
   error: towerError,
 
   /** A 404 naming its codes; the tower reads the session user first. */
@@ -349,4 +551,4 @@ const controlTowerResponses = {
   }),
 };
 
-export { controlTowerResponses, controlTowerSchemas };
+export { controlTowerResponses, controlTowerSchemas, towerSnapshotDoc };

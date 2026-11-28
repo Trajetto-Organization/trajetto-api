@@ -76,6 +76,18 @@ const ROUTES = [
     updated_at: at(0),
     code: 4,
   },
+  // Released for the day and never started: no journey (12/11/2026). No
+  // started_at, so the report never reads it either.
+  {
+    id: id("r0", 5),
+    businessId: COMPANY,
+    driverId: D1,
+    status: "RELEASED",
+    started_at: null,
+    completed_at: null,
+    updated_at: at(250),
+    code: 5,
+  },
   {
     id: id("rx", 1),
     businessId: OTHER,
@@ -475,6 +487,33 @@ describe.each(both())("the pause repository (%s)", (_name, repo) => {
     }
   });
 
+  it("reads a pause type with its seeded key, the one the generic pause's reason is decided by", async () => {
+    const other = await repo.findPauseType(
+      COMPANY,
+      typeId(COMPANY, "pause_other"),
+    );
+
+    expect(other).toEqual({
+      id: typeId(COMPANY, "pause_other"),
+      name: "Outra pausa",
+      category: "PAUSE",
+      pause_kind: "OTHER",
+      is_active: true,
+      system_key: "pause_other",
+    });
+    // The legacy `kind` alone lands on the same row.
+    expect(await repo.defaultPauseType(COMPANY, "OTHER")).toEqual(other);
+    expect(await repo.defaultPauseType(COMPANY, "MEAL")).toMatchObject({
+      id: typeId(COMPANY, "pause_meal"),
+      system_key: "pause_meal",
+    });
+
+    // Another company's type is not seen.
+    expect(
+      await repo.findPauseType(COMPANY, typeId(OTHER, "pause_other")),
+    ).toBeNull();
+  });
+
   it("closes an open pause once, and refuses an end key another pause holds", async () => {
     const open = await repo.createPause({
       kind: "MEAL",
@@ -555,23 +594,39 @@ describe.each(both())("the pause repository (%s)", (_name, repo) => {
     ).toBe("not-open");
   });
 
-  it("finds the route that was on the street at an instant", async () => {
-    expect(await repo.findRouteRunningAt(COMPANY, D1, at(60))).toBe(
-      id("r0", 1),
-    );
-    expect(await repo.findRouteRunningAt(COMPANY, D1, at(120))).toBe(
-      id("r0", 1),
-    );
-    expect(await repo.findRouteRunningAt(COMPANY, D1, at(200))).toBe(
-      id("r0", 2),
-    );
-    expect(await repo.findRouteRunningAt(COMPANY, D1, at(250))).toBeNull();
-    expect(await repo.findRouteRunningAt(COMPANY, D1, at(400))).toBe(
-      id("r0", 3),
-    );
-    expect(await repo.findRouteRunningAt(COMPANY, D1, at(-10))).toBeNull();
-    expect(await repo.findRouteRunningAt(COMPANY, DX, at(10))).toBeNull();
-    expect(await repo.findRouteRunningAt(OTHER, DX, at(10))).toBe(id("rx", 1));
+  it("finds the journey route at a tap: started by then (2 minutes of slack) and not finished", async () => {
+    const journey = (businessId: string, driverId: string, tap: Date) =>
+      repo.findJourneyRouteAt(businessId, driverId, tap);
+    const second = 1_000;
+    const atMs = (minutes: number, ms: number) =>
+      new Date(at(minutes).getTime() + ms);
+
+    // Completed at 120: a tap up to that instant is its journey.
+    expect(await journey(COMPANY, D1, at(60))).toBe(id("r0", 1));
+    expect(await journey(COMPANY, D1, at(120))).toBe(id("r0", 1));
+    expect(await journey(COMPANY, D1, atMs(120, 1))).toBeNull();
+
+    // Cancelled at 240 (updated_at): a tap after it is no journey; the
+    // released route r5 of the same day, never started, is none either.
+    expect(await journey(COMPANY, D1, at(200))).toBe(id("r0", 2));
+    expect(await journey(COMPANY, D1, at(240))).toBe(id("r0", 2));
+    expect(await journey(COMPANY, D1, at(250))).toBeNull();
+    expect(await journey(COMPANY, D1, at(290))).toBeNull();
+
+    // In progress since 300: the slack takes a tap up to 2 minutes before.
+    expect(await journey(COMPANY, D1, at(298))).toBe(id("r0", 3));
+    expect(await journey(COMPANY, D1, atMs(298, -1))).toBeNull();
+    expect(await journey(COMPANY, D1, at(400))).toBe(id("r0", 3));
+    expect(await journey(COMPANY, D1, at(10 * 24 * 60))).toBe(id("r0", 3));
+
+    // Before the first start, beyond the slack.
+    expect(await journey(COMPANY, D1, at(-1))).toBe(id("r0", 1));
+    expect(await journey(COMPANY, D1, atMs(-2, -second))).toBeNull();
+
+    // Never another company's, nor another driver's.
+    expect(await journey(COMPANY, DX, at(10))).toBeNull();
+    expect(await journey(OTHER, D1, at(400))).toBeNull();
+    expect(await journey(OTHER, DX, at(10))).toBe(id("rx", 1));
   });
 
   it("lists one driver's pauses in a range, oldest first with the id as tiebreaker", async () => {
@@ -644,5 +699,36 @@ describe.each(both())("the pause repository (%s)", (_name, repo) => {
       { id: D1, name: "Motorista 1" },
       { id: D6, name: "Motorista 6" },
     ]);
+  });
+
+  // Last on purpose: it opens a pause for D1, whom the reads above count.
+  it("finds the driver's latest ended pause before an instant, by company and driver", async () => {
+    const last = async (businessId: string, driverId: string, before: Date) =>
+      (await repo.findLastEndedPause({ businessId, driverId, before }))?.id ??
+      null;
+
+    // The seeded tie on started_at: the bigger id, as the order says.
+    expect(await last(COMPANY, D1, at(100))).toBe(id("p0", 2));
+    // Only a pause that started before the instant.
+    expect(await last(COMPANY, D1, at(30))).toBe(id("p0", 3));
+    expect(await last(COMPANY, D1, at(-5000))).toBeNull();
+
+    // Never another company's, nor another driver's.
+    expect(await last(OTHER, D1, at(100))).toBeNull();
+    expect(await last(COMPANY, DX, at(100))).toBeNull();
+    expect(await last(OTHER, DX, at(100))).toBe(id("px", 1));
+
+    // An open pause started later is skipped: the last ENDED one answers.
+    const open = await repo.createPause({
+      kind: "REST",
+      started_at: at(-4000),
+      start_submission_id: id("e1", 1),
+      driverId: D1,
+      businessId: COMPANY,
+    });
+
+    expect(open.status).toBe("created");
+    expect(await last(COMPANY, D1, at(-3000))).toBe(id("p0", 3));
+    expect(await last(COMPANY, D1, at(100))).toBe(id("p0", 2));
   });
 });

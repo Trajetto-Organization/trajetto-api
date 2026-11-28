@@ -43,7 +43,17 @@ import { acceptDevicePrecheck } from "@/shared/ai-precheck/device-precheck";
 import { Fuel, CreateFuelProps } from "../../dtos/fuel-dto";
 
 import { UploadService } from "@/shared/services/upload-service";
-import { assertRefuelingNotInTheFuture, businessTimeZone } from "../fuel-rules";
+import {
+  asksAboutRecentRefuel,
+  assertRefuelingNotInTheFuture,
+  businessTimeZone,
+  clockTime,
+  confirmedRecentReason,
+  findRecentRefuel,
+} from "../fuel-rules";
+import { FuelRecentRefuelError } from "../errors/fuel-recent-refuel-error";
+import type { ClientVersion } from "@/shared/http/client-version";
+import { recordDate } from "@/shared/vehicle/odometer-timeline";
 
 import { pickedDateFromInput } from "@/shared/vehicle/record-dates";
 
@@ -55,7 +65,48 @@ import {
   unreferencedKeys,
 } from "@/shared/services/presigned-ownership";
 
+import type { IRouteRepository } from "@/modules/route/repositories/IRoute-repository";
+import {
+  routeLinkRefusal,
+  routeProvesCustody,
+} from "@/shared/vehicle/route-link";
+import {
+  activeBranchLookups,
+  announceRecordBranchGap,
+  driverRecordBranchRequired,
+  resolveActiveRecordBranchId,
+  resolveRecordBranchId,
+} from "@/shared/vehicle/record-branch";
+import {
+  appSubmissionKeyRefusal,
+  resolveRecordOrigin,
+} from "@/shared/vehicle/record-origin";
+import { announceVehicleChanged } from "@/shared/vehicle/vehicle-realtime";
+
 const log = logger.child({ component: "fuel" });
+
+/** The route a refuelling names, once it holds; null when it names none. */
+type LinkedRoute = Awaited<ReturnType<IRouteRepository["findRouteById"]>>;
+
+/**
+ * How the request reached the API, from its headers (the controller reads
+ * them). Absent for a caller that says nothing: the web, the build in
+ * drivers' hands, a test.
+ */
+interface FuelSubmission {
+  /**
+   * The app build (x-trajetto-client-version), null when it does not say:
+   * from contract 5 on, an unconfirmed second refuelling within 30 minutes
+   * is refused instead of only flagged.
+   */
+  client?: ClientVersion | null;
+
+  /**
+   * Sent by the app's offline queue (X-Client-Queued-At present): the
+   * driver tapped it earlier and cannot be asked any more.
+   */
+  queued?: boolean;
+}
 
 @injectable()
 class CreateFuelUseCase {
@@ -78,6 +129,10 @@ class CreateFuelUseCase {
     private outbox: OutboxService,
     @inject("UploadService")
     private uploadService: UploadService,
+    // Plan of 02/11/2026 (C5/F3): the route a refuelling names. Optional so
+    // callers built before it keep working; the container always provides it.
+    @inject("RouteRepository")
+    private route?: Pick<IRouteRepository, "findRouteById">,
   ) {}
 
   /**
@@ -117,6 +172,30 @@ class CreateFuelUseCase {
     return existingFuel;
   }
 
+  /**
+   * The route a refuelling names (C5/F3): refused unless it is this
+   * driver's, with this vehicle (shared/vehicle/route-link.ts). The route
+   * when one was named and holds — which also answers the driver's custody
+   * of the vehicle, after the route ended too — and null when none was.
+   */
+  private async assertRouteLink(
+    routeId: string | null | undefined,
+    businessId: string,
+    driverId: string | null | undefined,
+    vehicleId: string,
+  ): Promise<LinkedRoute> {
+    if (!routeId) return null;
+
+    if (!this.route) throw new Error("RouteRepository was not injected");
+
+    const route = await this.route.findRouteById(routeId, businessId);
+    const refusal = routeLinkRefusal(route, { driverId, vehicleId });
+
+    if (refusal) throw refusal;
+
+    return route;
+  }
+
   async execute(
     input: CreateFuelProps,
     userId: string,
@@ -124,10 +203,25 @@ class CreateFuelUseCase {
     // The odometer photo, already in storage. Mandatory on create — the
     // controller refuses the request without it.
     presignedPhoto?: { key: string },
+
+    // Which build sent it and whether its offline queue did (headers).
+    submission: FuelSubmission = {},
   ): Promise<Fuel> {
     // The phone's check of the odometer photo (decision 14.2) is not a field
-    // of the row as sent: it lands in its own column, if at all.
-    const { device_precheck: devicePrecheck, ...fuelData } = input;
+    // of the row as sent: it lands in its own column, if at all. Nor is the
+    // answer to "another refuelling less than 30 minutes ago": only the
+    // confirmed reason goes on, to the repository (fuel-rules.ts).
+    const {
+      device_precheck: devicePrecheck,
+      confirm_recent: confirmRecent,
+      recent_reason: recentReason,
+      ...fuelData
+    } = input;
+
+    const recentRefuelReason = confirmedRecentReason({
+      confirm_recent: confirmRecent,
+      recent_reason: recentReason,
+    });
 
     const findUser = await this.user.findUserById(userId);
 
@@ -167,6 +261,23 @@ class CreateFuelUseCase {
       if (existingFuel) return existingFuel;
     }
 
+    // A driver's refuelling is the app's whatever the body says, and the
+    // app's rules come with it: the key here, the GPS point further down
+    // (shared/vehicle/record-origin.ts). After the replay above, so a resend
+    // of a recorded refuelling is still answered with it.
+    fuelData.created_from = resolveRecordOrigin(
+      findUser,
+      fuelData.created_from,
+      fuelData.client_submission_id,
+    );
+
+    const keyRefusal = appSubmissionKeyRefusal(
+      fuelData.created_from,
+      fuelData.client_submission_id,
+    );
+
+    if (keyRefusal) throw keyRefusal;
+
     assertRefuelingNotInTheFuture(fuelData.refueling_date, findBusiness);
 
     // A bare day becomes the instant it starts in the company's zone: as a
@@ -187,10 +298,33 @@ class CreateFuelUseCase {
       throw new VehicleNotBelongBusinessError();
     }
 
+    // C5/F3: a refuelling made from the route belongs to it — the route must
+    // be this driver's, with this vehicle. Never its status here: one queued
+    // offline may land after the route ended (custody is asked below). A driver's own records are
+    // theirs whatever the body says (forced below); a manager names the
+    // driver in the form.
+    const linkedRoute = await this.assertRouteLink(
+      fuelData.routeId,
+      fuelData.businessId,
+      findUser.driverId ?? fuelData.driverId,
+      findVehicle.id,
+    );
+
     // A driver fuels only a vehicle they may operate: the responsible one,
     // or the one of their released or running route (FLEET-ASSIGN-1,
     // decision 8.2; the rule lives in shared/vehicle/driver-vehicle-access).
-    if (findUser.role === "BUSINESS_USER" && findUser.driverId) {
+    // The route the refuelling names — theirs, with this vehicle — is that
+    // proof too, after it ended, for a refuelling dated while it had the
+    // truck (routeProvesCustody): an old or cancelled route opens nothing.
+    const routeProof =
+      linkedRoute !== null &&
+      routeProvesCustody(
+        linkedRoute,
+        new Date(fuelData.refueling_date),
+        businessTimeZone(findBusiness),
+      );
+
+    if (findUser.role === "BUSINESS_USER" && findUser.driverId && !routeProof) {
       const allowed = await this.vehicle.canDriverOperateVehicle({
         vehicleId: findVehicle.id,
         driverId: findUser.driverId,
@@ -202,19 +336,32 @@ class CreateFuelUseCase {
       }
     }
 
+    // The driver's own record, when the caller is one: what the dispatcher
+    // is told names them.
+    let filedByDriver: { name: string | null } | null = null;
+
     // Auto-populate branchId, driverId, and fuelTypeId for driver users
     if (findUser.driverId) {
       const driverUser = await this.driver.findDriverById(findUser.driverId);
       if (driverUser) {
         fuelData.driverId = findUser.driverId;
+        filedByDriver = { name: driverUser.name ?? null };
 
         // Force fuelTypeId to match vehicle's fuel type (drivers cannot change it)
         fuelData.fuelTypeId = findVehicle.fuelTypeId;
 
-        // Force branchId - drivers cannot select branch manually
-        // Priority: Vehicle.branchId → Driver.branchId
+        // Drivers never pick the branch, and theirs goes under an ACTIVE one
+        // only: vehicle → driver → the company's single active branch,
+        // skipping what is switched off (shared/vehicle/record-branch, wave
+        // 3.7). A blank or closed branch must not strand the driver.
         fuelData.branchId =
-          findVehicle.branchId || driverUser.branchId || undefined;
+          (await resolveActiveRecordBranchId(
+            {
+              vehicleBranchId: findVehicle.branchId,
+              driverBranchId: driverUser.branchId,
+            },
+            activeBranchLookups(this.branch, fuelData.businessId),
+          )) ?? undefined;
       }
     }
 
@@ -263,6 +410,23 @@ class CreateFuelUseCase {
       throw new FuelTypeNotBelongBusinessError();
     }
 
+    // A manager who left the branch blank gets the same resolution, with
+    // the driver they named (validated above, so of this company).
+    if (!fuelData.branchId && !findUser.driverId) {
+      const namedDriver = fuelData.driverId
+        ? await this.driver.findDriverById(fuelData.driverId)
+        : null;
+
+      fuelData.branchId =
+        (await resolveRecordBranchId(
+          {
+            vehicleBranchId: findVehicle.branchId,
+            driverBranchId: namedDriver?.branchId,
+          },
+          () => this.branch.findSoleActiveBranchId(fuelData.businessId),
+        )) ?? undefined;
+    }
+
     // Validate branch exists and belongs to business (if branchId is provided)
     if (fuelData.branchId) {
       const findBranch = await this.branch.findBranchById(fuelData.branchId);
@@ -283,7 +447,27 @@ class CreateFuelUseCase {
       }
     }
 
+    // Only when even the company's branches name none (no active branch, or
+    // several): the route release warns the dispatcher before this
+    // (ROUTE_BRANCH_REQUIRED), and a refuelling on a route after the release
+    // is told to the dispatcher now, once per route (wave 3.7).
     if (!fuelData.branchId) {
+      if (filedByDriver) {
+        if (linkedRoute) {
+          await announceRecordBranchGap(this.outbox, {
+            route: linkedRoute,
+            businessId: fuelData.businessId,
+            actorId: userId,
+            record: "FUEL",
+            phase: null,
+            driverName: filedByDriver.name,
+            vehiclePlate: findVehicle.license_plate,
+          });
+        }
+
+        throw driverRecordBranchRequired("FUEL");
+      }
+
       throw new AppError(
         "A filial é obrigatória para registrar o abastecimento.",
         400,
@@ -299,7 +483,8 @@ class CreateFuelUseCase {
       );
     }
 
-    // 🆕 GEOLOCATION LOGIC: Validate and process location data
+    // 🆕 GEOLOCATION LOGIC: Validate and process location data, by the
+    // origin decided above (a driver's is always MOBILE_APP).
     if (fuelData.created_from === "MOBILE_APP") {
       // Mobile: Location is REQUIRED
       if (fuelData.latitude == null || fuelData.longitude == null) {
@@ -361,6 +546,37 @@ class CreateFuelUseCase {
       }
     }
 
+    // A second refuelling of the vehicle within 30 minutes of another is
+    // asked about, never forbidden (fuel-rules.ts asksAboutRecentRefuel): a
+    // driver on a build that asks, sending it now and unconfirmed, gets 409
+    // FUEL_RECENT_REFUEL with the other one. After every other check, so
+    // the answer is the one thing left to fix; before the photo is touched,
+    // so the app resends the same body, key and photo with the reason. Only
+    // that case reads here: everyone else is recorded, and the alert is
+    // decided inside the repository's transaction, race-safe.
+    const asksRecentRefuel = asksAboutRecentRefuel({
+      callerIsDriver:
+        findUser.role === "BUSINESS_USER" && Boolean(findUser.driverId),
+      clientContract: submission.client?.contract,
+      queued: submission.queued === true,
+      confirmed: recentRefuelReason !== null,
+    });
+
+    if (asksRecentRefuel) {
+      const timeZone = businessTimeZone(findBusiness);
+      const at = recordDate(fuelData.refueling_date);
+      const recent = findRecentRefuel(
+        await this.fuel.findRefuelsNear(
+          fuelData.businessId,
+          findVehicle.id,
+          at,
+        ),
+        { at, timeZone },
+      );
+
+      if (recent) throw new FuelRecentRefuelError(recent, timeZone);
+    }
+
     let uploadedPhotoPath: string | null = null;
     let databaseCommitted = false;
 
@@ -404,10 +620,11 @@ class CreateFuelUseCase {
         fuelDataWithPhoto.location_edited_at = new Date();
       }
 
-      // Record creation, the monotonic mileage update and the outbox event
-      // are one serializable transaction; the pipeline turns the event into
-      // the activity trail entry after the commit. A concurrent retry
-      // returns the original record without publishing anything.
+      // Record creation, the monotonic mileage update, the alerts and the
+      // outbox event are one serializable transaction; the pipeline turns
+      // the event into the activity trail entry after the commit. A
+      // concurrent retry returns the original record without publishing
+      // anything.
       const { fuel: fuelCreated, created } =
         await this.fuel.createFuelWithMileage(
           fuelDataWithPhoto,
@@ -425,10 +642,25 @@ class CreateFuelUseCase {
                 vehiclePlate: findVehicle.license_plate,
                 vehicleDescription: findVehicle.description,
                 origin: fuelData.created_from,
+                // The trail says it too, on the company's clock.
+                ...(fuel.alerts?.includes("RECENT_REFUEL") &&
+                  fuel.recent_refuel_previous_at && {
+                    recentRefuelAt: clockTime(
+                      fuel.recent_refuel_previous_at,
+                      businessTimeZone(findBusiness),
+                    ),
+                    ...(fuel.recent_refuel_reason && {
+                      recentRefuelReason: fuel.recent_refuel_reason,
+                    }),
+                  }),
               },
             }),
-          // The company's day decides which readings are "after" a web date.
-          { timeZone: businessTimeZone(findBusiness) },
+          {
+            // The company's day decides which readings are "after" a web
+            // date, and which dates are only a day (no window for them).
+            timeZone: businessTimeZone(findBusiness),
+            recentRefuelReason,
+          },
         );
 
       if (!created) {
@@ -464,6 +696,10 @@ class CreateFuelUseCase {
         return fuelCreated;
       }
       databaseCommitted = true;
+
+      // Committed: the odometer may have moved, and the vehicle lists show
+      // it ("Quilometragem Atual"). A replay above wrote nothing new.
+      announceVehicleChanged(fuelData.businessId);
 
       // Request AI verification for odometer photo (fire-and-forget)
       // Skip if business has AI disabled (limit === 0)

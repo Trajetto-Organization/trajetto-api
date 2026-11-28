@@ -1,10 +1,10 @@
-import database from "@/../infra/database";
+import database, { readDatabase } from "@/../infra/database";
 
 import { Decimal } from "@prisma/client/runtime/client";
 import { Prisma } from "@prisma/client";
 import type {
+  FuelCreation,
   FuelMileageUpdate,
-  FuelPlacement,
   IFuelRepository,
 } from "./IFuel-repository";
 import { VehicleMileageInvalidError } from "@/modules/vehicle/usecases/errors/vehicle-mileage-invalid-error";
@@ -18,7 +18,16 @@ import {
 import { resolveTimeZone } from "@/shared/time/business-day";
 import { isSerializationFailure } from "@/shared/errors/prisma-error-meta";
 import { FuelNotFoundError } from "../usecases/errors/fuel-not-found-error";
-import { placeReading } from "../usecases/fuel-rules";
+import {
+  RECENT_REFUEL_CANDIDATE_LIMIT,
+  findRecentRefuel,
+  placeReading,
+  recentRefuelAlert,
+  recentRefuelWindow,
+  recheckedRecentRefuel,
+  type RecentRefuelColumns,
+  type RefuelNearby,
+} from "../usecases/fuel-rules";
 
 import {
   Fuel,
@@ -29,6 +38,7 @@ import {
   GetFuelByIdAndBusinessProps,
   SearchFuelByVehicleWithCursorProps,
   CursorPaginatedFuel,
+  RouteFuelSummary,
 } from "../dtos/fuel-dto";
 
 import { resolveOrderBy } from "@/shared/pagination/list-query";
@@ -46,10 +56,18 @@ import {
   exportBatchWhere,
   type ExportKey,
 } from "@/shared/pagination/export-keyset";
+import {
+  ROUTE_LINK_SELECT,
+  listedRoute,
+  type RouteLinkRow,
+} from "@/shared/vehicle/route-columns";
 
 /** What a list row carries of its relations (the export reads the same). */
 const FUEL_LIST_INCLUDE = {
   branch: { select: { corporate_reason: true } },
+  // Contract C3: the route it was made on, in the same query (a join, not
+  // one more round trip); listedRoute keeps only the company's own.
+  route: ROUTE_LINK_SELECT,
   vehicle: {
     select: {
       description: true,
@@ -61,6 +79,22 @@ const FUEL_LIST_INCLUDE = {
   driver: { select: { name: true, cnh: true } },
   fuelType: { select: { description: true } },
 } as const;
+
+/** The joined route row out, the listed one in (contract C3). */
+function withListedRoute<
+  Row extends {
+    businessId: string;
+    routeId: string | null;
+    route: RouteLinkRow | null;
+  },
+>({
+  route,
+  ...row
+}: Row): Omit<Row, "route"> & {
+  route: ReturnType<typeof listedRoute>;
+} {
+  return { ...row, route: listedRoute(row, route) };
+}
 
 interface ReadingWrite extends OdometerTimelineQuery {
   mileage: number;
@@ -90,6 +124,8 @@ async function placeOnVehicle(
     odometer: vehicle.current_mileage,
     maintenanceFloor: vehicle.last_maintenance_mileage,
     previousMileage,
+    at: query.at,
+    timeZone: query.timeZone,
   });
 
   if (!placement.fits) throw new VehicleMileageInvalidError();
@@ -108,8 +144,55 @@ async function placeOnVehicle(
   if (moved.count !== 1) throw new VehicleMileageInvalidError();
 }
 
+/**
+ * The vehicle's refuellings within the window around `at` (recentRefuelWindow),
+ * inside the company, by the (vehicleId, refueling_date) index. Inside the
+ * serializable transaction this read is what makes two refuellings sent at
+ * once see each other: each one's range read conflicts with the other's
+ * insert, one of them is retried, and the retry finds the first.
+ */
+async function refuelsNear(
+  client: Prisma.TransactionClient,
+  businessId: string,
+  vehicleId: string,
+  at: Date,
+): Promise<RefuelNearby[]> {
+  const { after, before } = recentRefuelWindow(at);
+
+  return client.fuel.findMany({
+    where: {
+      businessId,
+      vehicleId,
+      refueling_date: { gt: after, lt: before },
+    },
+    select: {
+      id: true,
+      refueling_date: true,
+      liters_amount: true,
+      current_mileage: true,
+    },
+    orderBy: [{ refueling_date: "asc" }, { id: "asc" }],
+    take: RECENT_REFUEL_CANDIDATE_LIMIT,
+  });
+}
+
 class FuelRepository implements IFuelRepository {
   constructor(private prisma = database) {}
+
+  /**
+   * The heavy reads' bulkhead (plano-escala F3-17), for the export: a pool of
+   * its own, 3 connections and 10 s a statement, so a burst of them waits
+   * among itself instead of taking the connections every other request needs.
+   * A repository built on another client (a test's) reads on that client. A
+   * getter, so a module that mocks infra/database without it only needs it
+   * when one of these reads runs.
+   * With DATABASE_REPLICA_URL, readDatabase() sends them to the standby
+   * while the replica guard vouches for it: lists only (plano-escala F4-42,
+   * tests/unitaires/database/read-routing-guard.test.ts).
+   */
+  private get read(): typeof this.prisma {
+    return this.prisma === database ? readDatabase() : this.prisma;
+  }
 
   async createFuel(fuelData: CreateFuelProps): Promise<Fuel> {
     // Calculate total amount if not provided
@@ -154,7 +237,7 @@ class FuelRepository implements IFuelRepository {
   async createFuelWithMileage(
     fuelData: CreateFuelProps,
     afterCreate?: (tx: Prisma.TransactionClient, fuel: Fuel) => Promise<void>,
-    placement?: FuelPlacement,
+    creation?: FuelCreation,
   ): Promise<{ fuel: Fuel; created: boolean }> {
     const executeTransaction = async () =>
       this.prisma.$transaction(
@@ -172,17 +255,35 @@ class FuelRepository implements IFuelRepository {
             }
           }
 
+          const at = recordDate(fuelData.refueling_date);
+          const timeZone = resolveTimeZone(creation?.timeZone);
+
           // Placed by its date before any odometer move (placeReading): the
           // forward rule used to run first, so a past refueling typed above
           // the later ones moved the odometer and froze the vehicle.
           await placeOnVehicle(transaction, {
             businessId: fuelData.businessId,
             vehicleId: fuelData.vehicleId,
-            at: recordDate(fuelData.refueling_date),
-            timeZone: resolveTimeZone(placement?.timeZone),
+            at,
+            timeZone,
             mileage: fuelData.current_mileage,
             previousMileage: null,
           });
+
+          // Another refuelling of the vehicle within 30 minutes, either side:
+          // flagged for the office, whoever sends this one (fuel-rules.ts).
+          const alert = recentRefuelAlert(
+            findRecentRefuel(
+              await refuelsNear(
+                transaction,
+                fuelData.businessId,
+                fuelData.vehicleId,
+                at,
+              ),
+              { at, timeZone },
+            ),
+            creation?.recentRefuelReason ?? null,
+          );
 
           const litersAmount = new Decimal(fuelData.liters_amount.toString());
           const pricePerLiter = new Decimal(
@@ -199,6 +300,7 @@ class FuelRepository implements IFuelRepository {
               odometer_photo: fuelData.odometer_photo as string,
               branchId: fuelData.branchId!,
               driverId: fuelData.driverId!,
+              ...alert,
             },
           });
 
@@ -237,6 +339,14 @@ class FuelRepository implements IFuelRepository {
     throw new Error("Could not complete fuel transaction");
   }
 
+  async findRefuelsNear(
+    businessId: string,
+    vehicleId: string,
+    at: Date,
+  ): Promise<RefuelNearby[]> {
+    return refuelsNear(this.prisma, businessId, vehicleId, at);
+  }
+
   async listFuels({
     page,
     pageSize,
@@ -255,8 +365,16 @@ class FuelRepository implements IFuelRepository {
         orderBy: resolveOrderBy(FUEL_SORT, { sort, order }),
         include: FUEL_LIST_INCLUDE,
       }),
+      // `alerts` is an array column with few distinct values (none, or
+      // RECENT_REFUEL), so the groups barely grow.
       this.prisma.fuel.groupBy({
-        by: ["branchId", "vehicleId", "fuelTypeId", "odometer_verified"],
+        by: [
+          "branchId",
+          "vehicleId",
+          "fuelTypeId",
+          "odometer_verified",
+          "alerts",
+        ],
         where: fuelListWhere(filters, { withFacets: false }),
         _count: { _all: true },
         _sum: { liters_amount: true, total_amount: true },
@@ -268,6 +386,7 @@ class FuelRepository implements IFuelRepository {
       vehicleId: group.vehicleId,
       fuelTypeId: group.fuelTypeId,
       odometer_verified: group.odometer_verified,
+      alerts: group.alerts ?? [],
       count: group._count._all,
       liters: (group._sum.liters_amount ?? new Decimal(0)).toString(),
       amount: (group._sum.total_amount ?? new Decimal(0)).toString(),
@@ -300,7 +419,7 @@ class FuelRepository implements IFuelRepository {
       : [];
 
     return {
-      data,
+      data: data.map(withListedRoute),
       groups,
       labels: {
         branchId: Object.fromEntries(
@@ -360,13 +479,21 @@ class FuelRepository implements IFuelRepository {
     mileageUpdate?: FuelMileageUpdate,
   ): Promise<Fuel> {
     return this.serializable(async (transaction) => {
+      // Set when the edit moves the date or the vehicle.
+      let recentRefuel: RecentRefuelColumns | null = null;
+
       if (mileageUpdate) {
         const { businessId, vehicleId } = mileageUpdate;
         const excludeFuelId = mileageUpdate.fuelId ?? fuelId;
 
         const stored = await transaction.fuel.findFirst({
           where: { id: fuelId, businessId },
-          select: { vehicleId: true, current_mileage: true },
+          select: {
+            vehicleId: true,
+            current_mileage: true,
+            refueling_date: true,
+            alerts: true,
+          },
         });
 
         if (!stored) throw new FuelNotFoundError();
@@ -395,6 +522,30 @@ class FuelRepository implements IFuelRepository {
             leaving: stored.current_mileage,
             excludeFuelId,
           });
+        }
+
+        // A new date or vehicle measures the window again, the record
+        // itself left out; the driver's reason stays (fuel-rules.ts).
+        if (
+          !sameVehicle ||
+          stored.refueling_date.getTime() !== mileageUpdate.at.getTime()
+        ) {
+          recentRefuel = recheckedRecentRefuel(
+            stored.alerts,
+            findRecentRefuel(
+              await refuelsNear(
+                transaction,
+                businessId,
+                vehicleId,
+                mileageUpdate.at,
+              ),
+              {
+                id: fuelId,
+                at: mileageUpdate.at,
+                timeZone: resolveTimeZone(mileageUpdate.timeZone),
+              },
+            ),
+          );
         }
       }
 
@@ -427,7 +578,7 @@ class FuelRepository implements IFuelRepository {
 
       return transaction.fuel.update({
         where: { id: fuelId },
-        data: filteredData,
+        data: { ...filteredData, ...recentRefuel },
       });
     });
   }
@@ -606,7 +757,7 @@ class FuelRepository implements IFuelRepository {
     // Keyset batches in creation order (export-keyset.ts): a large export
     // never pays for a growing OFFSET, nor for a sub-selected cursor.
     while (true) {
-      const fuels: any = await this.prisma.fuel.findMany({
+      const fuels: any = await this.read.fuel.findMany({
         where: exportBatchWhere(whereCondition, after),
         include: {
           branch: {
@@ -664,6 +815,10 @@ class FuelRepository implements IFuelRepository {
           location_edited_by: fuel.location_edited_by,
           location_edited_at: fuel.location_edited_at,
           created_from: fuel.created_from,
+          // 05/11/2026: the alerts and what raised RECENT_REFUEL.
+          alerts: fuel.alerts,
+          recentRefuelPreviousAt: fuel.recent_refuel_previous_at,
+          recentRefuelReason: fuel.recent_refuel_reason,
           created_at: fuel.created_at,
           updated_at: fuel.updated_at,
         };
@@ -753,19 +908,53 @@ class FuelRepository implements IFuelRepository {
             description: true,
           },
         },
+        // Contract C3, as in the list.
+        route: ROUTE_LINK_SELECT,
       },
     });
 
     const hasMore = items.length > limit;
 
-    const data = hasMore ? items.slice(0, limit) : items;
+    const data = (hasMore ? items.slice(0, limit) : items).map(withListedRoute);
     const nextCursor = hasMore ? (data[data.length - 1]?.id ?? null) : null;
 
     return { data, nextCursor, hasMore };
   }
 
+  async listRouteFuels(
+    businessId: string,
+    routeId: string,
+  ): Promise<RouteFuelSummary[]> {
+    // By fuel_routeId_idx, always inside the tenant (F3).
+    const rows = await this.prisma.fuel.findMany({
+      where: { businessId, routeId },
+      orderBy: [{ refueling_date: "asc" }, { id: "asc" }],
+      select: {
+        id: true,
+        refueling_date: true,
+        liters_amount: true,
+        price_per_liter: true,
+        total_amount: true,
+        current_mileage: true,
+        vehicleId: true,
+        driverId: true,
+        odometer_ai_status: true,
+        alerts: true,
+        recent_refuel_reason: true,
+        recent_refuel_previous_at: true,
+      },
+    });
+
+    return rows.map((row) => ({
+      ...row,
+      liters_amount: Number(row.liters_amount),
+      price_per_liter: Number(row.price_per_liter),
+      total_amount: Number(row.total_amount),
+    }));
+  }
+
   async countFuelForExport(filters: FuelListFilters): Promise<number> {
-    return this.prisma.fuel.count({
+    return this.read.fuel.count({
       where: fuelListWhere(filters, { withFacets: true }),
     });
   }

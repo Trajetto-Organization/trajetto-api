@@ -16,6 +16,9 @@ import { CreateStatusChangeReasonUseCase } from "@/modules/status-change-reason/
 import { UpdateStatusChangeReasonUseCase } from "@/modules/status-change-reason/usecases/update-status-change-reason/update-status-change-reason-usecase";
 import { DeleteStatusChangeReasonUseCase } from "@/modules/status-change-reason/usecases/delete-status-change-reason/delete-status-change-reason-usecase";
 
+import { createStatusChangeReasonSchema } from "@/schemas/create-status-change-reason-schema";
+import { updateStatusChangeReasonSchema } from "@/schemas/update-status-change-reason-schema";
+
 /**
  * Two catalogues of the operation (TEST-UC-1): shippers and status change
  * reasons. Both belong to the dispatcher (never the driver), are per company
@@ -255,6 +258,33 @@ describe("shippers", () => {
     expect(shippers.shippers).toHaveLength(0);
   });
 
+  it("answers a delivery written after the count with the same 409, not a 500 (K16)", async () => {
+    // The count said zero; a delivery committed before the DELETE, and the
+    // foreign key (RESTRICT) refused it with P2003.
+    const created = await create().execute(shipperOf(), DISPATCHER);
+    shippers.deliveryCounts.set(created.id as string, 1);
+
+    const count = shippers.countDeliveriesByShipperId.bind(shippers);
+    let reads = 0;
+
+    shippers.countDeliveriesByShipperId = async (id) =>
+      (reads += 1) === 1 ? 0 : count(id);
+
+    await expect(
+      remove().execute({
+        userId: DISPATCHER,
+        businessId: CARRIER,
+        shipperId: created.id as string,
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: "SHIPPER_HAS_DELIVERIES",
+      message: expect.stringContaining("1 entrega(s)"),
+    });
+
+    expect(shippers.shippers).toHaveLength(1);
+  });
+
   it("refuses a driver on edit and delete (403)", async () => {
     const created = await create().execute(shipperOf(), DISPATCHER);
 
@@ -323,6 +353,51 @@ describe("status change reasons", () => {
       statusCode: 409,
       code: "STATUS_CHANGE_REASON_NAME_TAKEN",
     });
+  });
+
+  // Batch of 14/11/2026: the lookup was exact, so "Cliente reagendou" and
+  // "cliente reagendou" sat side by side in the same picker.
+  it("refuses the same name in another case, on create and on rename (409)", async () => {
+    await create().execute(reasonOf() as never, DISPATCHER);
+    const other = await create().execute(
+      reasonOf({ name: "Endereço errado" }) as never,
+      DISPATCHER,
+    );
+
+    await expect(
+      create().execute(
+        reasonOf({ name: "CLIENTE REAGENDOU" }) as never,
+        DISPATCHER,
+      ),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: "STATUS_CHANGE_REASON_NAME_TAKEN",
+    });
+
+    await expect(
+      update().execute(
+        { name: "cliente reagendou" } as never,
+        other.id as string,
+        CARRIER,
+        DISPATCHER,
+      ),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: "STATUS_CHANGE_REASON_NAME_TAKEN",
+    });
+  });
+
+  it("lets a rename change only the case of its own name", async () => {
+    const created = await create().execute(reasonOf() as never, DISPATCHER);
+
+    await expect(
+      update().execute(
+        { name: "Cliente Reagendou" } as never,
+        created.id as string,
+        CARRIER,
+        DISPATCHER,
+      ),
+    ).resolves.toMatchObject({ name: "Cliente Reagendou" });
   });
 
   it("refuses a driver (403) and an unknown company (404)", async () => {
@@ -423,6 +498,27 @@ describe("status change reasons", () => {
     expect(reasons.statusChangeReasons).toHaveLength(0);
   });
 
+  it("answers an override citing it after the count with the same 409, not a 500 (K16)", async () => {
+    const created = await create().execute(reasonOf() as never, DISPATCHER);
+    reasons.eventCountByReasonId.set(created.id as string, 1);
+
+    const count = reasons.countEventsByReasonId.bind(reasons);
+    let reads = 0;
+
+    reasons.countEventsByReasonId = async (id) =>
+      (reads += 1) === 1 ? 0 : count(id);
+
+    await expect(
+      remove().execute(created.id as string, CARRIER, DISPATCHER),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: "STATUS_CHANGE_REASON_IN_USE",
+      message: expect.stringContaining("explica 1 mudança"),
+    });
+
+    expect(reasons.statusChangeReasons).toHaveLength(1);
+  });
+
   it("refuses a driver on edit and delete (403)", async () => {
     const created = await create().execute(reasonOf() as never, DISPATCHER);
 
@@ -440,5 +536,31 @@ describe("status change reasons", () => {
     ).rejects.toMatchObject({
       statusCode: 403,
     });
+  });
+});
+
+describe("the reason's name in the body", () => {
+  // Batch of 14/11/2026: the spaces around it are trimmed, not refused, so
+  // " cliente ausente" reaches the lookup as the same name and answers 409.
+  it("is trimmed on create and on edit", () => {
+    expect(
+      createStatusChangeReasonSchema.parse({ name: "  Cliente ausente " }).name,
+    ).toBe("Cliente ausente");
+    expect(
+      updateStatusChangeReasonSchema.parse({ name: " Cliente ausente" }).name,
+    ).toBe("Cliente ausente");
+  });
+
+  it("still refuses a name of spaces only, saying so, and doubled spaces", () => {
+    const blank = createStatusChangeReasonSchema.safeParse({ name: "    " });
+
+    expect(blank.success).toBe(false);
+    expect(blank.error?.issues[0].message).toBe(
+      "O nome do motivo não pode conter apenas espaços.",
+    );
+    expect(
+      createStatusChangeReasonSchema.safeParse({ name: "Cliente  ausente" })
+        .success,
+    ).toBe(false);
   });
 });

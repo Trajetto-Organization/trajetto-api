@@ -13,6 +13,7 @@ import {
   type StoredDelivery,
 } from "@/modules/integration/usecases/create-delivery/replay-fingerprint";
 import { readIntegrationIdempotencyKey } from "@/modules/integration/usecases/create-delivery/integration-idempotency-key";
+import { pickReusablePoint } from "@/shared/delivery/geocoding/address-point-reuse";
 
 /**
  * The pure rules of POST /integration/v1/deliveries (decision 5.10): what
@@ -143,6 +144,77 @@ describe("a retry of the same body", () => {
 
     expect(
       isSameSubmission({ ...draftOf(body), shipperId: null }, stored),
+    ).toBe(false);
+  });
+});
+
+/**
+ * Plan of 02/11/2026, E1: the address point is part of the body. Only a
+ * MANUAL point can be what a body sent; the geocoder fills the same columns
+ * later, and a retry of a body without coordinates must still be a replay.
+ */
+describe("a retry of a body with an address point", () => {
+  const point = { latitude: -23.5505, longitude: -46.6333 };
+
+  it("matches the MANUAL point it wrote", () => {
+    expect(
+      isSameSubmission(draftOf({ ...body, ...point }), {
+        ...stored,
+        ...point,
+        geo_source: "MANUAL",
+      }),
+    ).toBe(true);
+  });
+
+  it("does not match another point, or none, under the same key", () => {
+    const pinned = { ...stored, ...point, geo_source: "MANUAL" };
+
+    expect(
+      isSameSubmission(
+        draftOf({ ...body, latitude: -22.9068, longitude: -43.1729 }),
+        pinned,
+      ),
+    ).toBe(false);
+    expect(isSameSubmission(draftOf(body), pinned)).toBe(false);
+    expect(isSameSubmission(draftOf({ ...body, ...point }), stored)).toBe(
+      false,
+    );
+  });
+
+  it("still matches a body without one after the geocoder found the address", () => {
+    expect(
+      isSameSubmission(draftOf(body), {
+        ...stored,
+        ...point,
+        geo_source: "GEOCODER",
+      }),
+    ).toBe(true);
+  });
+
+  it("still matches a body without one whose create took another delivery's pin at the same door", () => {
+    // 14/11/2026 (decision D-23): the create copies the point another
+    // delivery of the company has at the address, always as GEOCODER. A
+    // MANUAL copy would make the ERP's resend of the same order a 409.
+    const taken = pickReusablePoint(
+      [
+        {
+          ...point,
+          geo_source: "MANUAL",
+          geo_precision: null,
+          geo_updated_at: new Date("2026-11-10T10:00:00.000Z"),
+          root: "018f0000-0000-7000-8000-00000000d00a",
+        },
+      ],
+      new Date("2026-11-14T15:00:00.000Z"),
+    );
+
+    expect(isSameSubmission(draftOf(body), { ...stored, ...taken })).toBe(true);
+    expect(
+      isSameSubmission(draftOf(body), {
+        ...stored,
+        ...taken,
+        geo_source: "MANUAL",
+      }),
     ).toBe(false);
   });
 });
@@ -444,5 +516,46 @@ describe("a refused body", () => {
     expect(issuesOf(undefined)).toEqual([
       "corpo: envie um objeto JSON com os campos da entrega.",
     ]);
+  });
+
+  // The published sentences of a wrong type, from the first release. zod 3
+  // let this parse's map speak before a field's own type sentence ("A
+  // latitude deve ser um número."); zod 4 asks the field first.
+  it("says a wrong type as published, over the field's own sentence", () => {
+    expect(issuesOf({ ...body, shipper_id: 123 })).toEqual([
+      "shipper_id: esperado texto, recebido número.",
+    ]);
+    expect(issuesOf({ ...body, latitude: "x", longitude: -46.6 })).toEqual([
+      "latitude: esperado número, recebido texto.",
+    ]);
+    expect(issuesOf({ ...body, scheduled_date: true })).toEqual([
+      "scheduled_date: esperado texto, recebido verdadeiro ou falso.",
+    ]);
+    expect(issuesOf({ ...body, kind: 5 })).toEqual([
+      "kind: esperado 'DELIVERY' | 'SERVICE_ORDER', recebido número.",
+    ]);
+    // A text off the list keeps the field's own sentence, as in zod 3.
+    expect(issuesOf({ ...body, kind: "PICKUP" })).toEqual([
+      "kind: Tipo inválido. Use DELIVERY (entrega) ou SERVICE_ORDER (ordem de serviço).",
+    ]);
+    // 1e999 in the JSON is Infinity, which zod 4 refuses as a wrong type.
+    expect(
+      issuesOf({
+        ...body,
+        items: [{ description: "Farinha", quantity: JSON.parse("1e999") }],
+      }),
+    ).toEqual(["items.0.quantity: esperado número finito, recebido Infinity."]);
+  });
+
+  it("keeps the value sent out of the error it throws (the handler logs it)", () => {
+    try {
+      parseIntegrationDeliveryBody({ ...body, shipper_id: 123 });
+    } catch (error) {
+      expect((error as ZodError).issues[0]).not.toHaveProperty("input");
+
+      return;
+    }
+
+    throw new Error("o corpo deveria ter sido recusado");
   });
 });

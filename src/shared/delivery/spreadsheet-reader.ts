@@ -2,6 +2,7 @@ import ExcelJS from "exceljs";
 
 import { AppError } from "@/shared/errors/AppError";
 
+import { readFirstSheetRows } from "./xlsx-row-reader";
 import {
   SpreadsheetTooLargeError,
   assertZipInflatesWithin,
@@ -52,6 +53,21 @@ function assertRowCount(rows: number): void {
  * `.csv` their customer's ERP exports.
  */
 type CellMatrix = unknown[][];
+
+/**
+ * Where a read hands its rows, in order, as it reads them: the reading
+ * thread sends them on a slice at a time instead of holding the matrix
+ * (spreadsheet-read-worker.ts).
+ */
+interface RowSink {
+  row(values: unknown[]): void;
+
+  /**
+   * Forget every row handed so far: the read starts over with exceljs's
+   * whole load (xlsx-row-reader.ts says when). Called once, before its rows.
+   */
+  restart(): void;
+}
 
 /**
  * CSV as Excel actually writes it.
@@ -182,9 +198,11 @@ function inspectXlsx(buffer: Buffer): void {
   if (tally.rows > MAX_SPREADSHEET_ROWS * 2) assertRowCount(tally.rows);
 }
 
-async function parseXlsx(buffer: Buffer): Promise<CellMatrix> {
-  inspectXlsx(buffer);
-
+/**
+ * The whole load, as the importer always read: every sheet built in memory,
+ * then the first one's rows. What the row-at-a-time reader leaves to it.
+ */
+async function loadWholeXlsx(buffer: Buffer, sink: RowSink): Promise<void> {
   const workbook = new ExcelJS.Workbook();
 
   await workbook.xlsx.load(buffer as unknown as ArrayBuffer);
@@ -194,20 +212,49 @@ async function parseXlsx(buffer: Buffer): Promise<CellMatrix> {
   // is how an import silently loads a lookup table.
   const sheet = workbook.worksheets[0];
 
-  if (!sheet) return [];
+  if (!sheet) return;
 
   assertRowCount(sheet.actualRowCount);
-
-  const rows: CellMatrix = [];
 
   sheet.eachRow({ includeEmpty: false }, (row) => {
     const values = row.values as unknown[];
 
     // exceljs indexes columns from 1 and puts a hole at 0.
-    rows.push(values.slice(1));
+    sink.row(values.slice(1));
   });
+}
 
-  return rows;
+/**
+ * An .xlsx, row by row (xlsx-row-reader.ts): the same rows as the whole
+ * load at a fraction of its memory. When that reader hands the file over —
+ * merged cells, hyperlinks, a shape it does not follow, or a file it could
+ * not open — the rows handed so far are dropped and the whole load decides,
+ * accepting or refusing the file exactly as before.
+ */
+async function parseXlsx(buffer: Buffer, sink: RowSink): Promise<void> {
+  inspectXlsx(buffer);
+
+  let handed = 0;
+
+  try {
+    await readFirstSheetRows(buffer, MAX_XLSX_INFLATED_BYTES, (values) => {
+      handed += 1;
+
+      // The exact count of rows with values, as actualRowCount gives it.
+      assertRowCount(handed);
+
+      sink.row(values);
+    });
+
+    return;
+  } catch (error) {
+    // A refusal of the reader's own (too many rows) stands.
+    if (error instanceof AppError) throw error;
+  }
+
+  sink.restart();
+
+  await loadWholeXlsx(buffer, sink);
 }
 
 /**
@@ -217,10 +264,11 @@ async function parseXlsx(buffer: Buffer): Promise<CellMatrix> {
  * cleverer and would guess wrong on the day somebody uploads a CSV named
  * `.xlsx`, which is exactly the file that needs the clearest error.
  */
-async function readSpreadsheet(
+async function readSpreadsheetRows(
   filename: string,
   base64: string,
-): Promise<CellMatrix> {
+  sink: RowSink,
+): Promise<void> {
   const buffer = Buffer.from(base64, "base64");
 
   if (/\.csv$/i.test(filename)) {
@@ -228,10 +276,31 @@ async function readSpreadsheet(
 
     assertRowCount(rows.length);
 
-    return rows;
+    for (const row of rows) sink.row(row);
+
+    return;
   }
 
-  return parseXlsx(buffer);
+  await parseXlsx(buffer, sink);
+}
+
+/** The whole matrix at once: `readSpreadsheetRows` into an array. */
+async function readSpreadsheet(
+  filename: string,
+  base64: string,
+): Promise<CellMatrix> {
+  const rows: CellMatrix = [];
+
+  await readSpreadsheetRows(filename, base64, {
+    row: (values) => {
+      rows.push(values);
+    },
+    restart: () => {
+      rows.length = 0;
+    },
+  });
+
+  return rows;
 }
 
 /**
@@ -269,7 +338,9 @@ export {
   MAX_SPREADSHEET_CELLS,
   MAX_SPREADSHEET_ROWS,
   inspectSpreadsheet,
+  loadWholeXlsx,
   parseCsv,
   readSpreadsheet,
+  readSpreadsheetRows,
 };
-export type { CellMatrix };
+export type { CellMatrix, RowSink };

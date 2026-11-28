@@ -1,4 +1,5 @@
 import database from "@/../infra/database";
+import { env } from "@/env";
 
 import { Prisma, WebhookDeliveryStatus } from "@prisma/client";
 
@@ -9,15 +10,16 @@ import {
   REPLAY_WINDOW_EXPIRED_REASON,
   RESPONSE_READ_LIMIT_BYTES,
   WEBHOOK_MAX_ATTEMPTS,
+  WEBHOOK_CLAIM_LOCK,
+  WEBHOOK_CLAIM_MAX_ENDPOINTS,
+  WEBHOOK_CLAIM_MAX_WALKS,
   WEBHOOK_CLAIM_WINDOW,
-  WEBHOOK_CONCURRENCY,
   WEBHOOK_DRAIN_BUDGET_MS,
   WEBHOOK_LEASE_SECONDS,
   WEBHOOK_PER_ENDPOINT_BATCH,
-  WEBHOOK_PER_ENDPOINT_CONCURRENCY,
   WEBHOOK_TIMEOUT_MS,
   assertWebhookLeaseInvariant,
-  inFairPool,
+  destinationHostOf,
   isOutsideReplayWindow,
   isWebhookPermanent,
   isWebhookSuccess,
@@ -35,7 +37,7 @@ import {
 import { signWebhookPayload } from "./webhook-signature";
 import { openHeaders, openSecret } from "./secret-box";
 import { readBoundedBody } from "./bounded-body";
-import { endpointWantsTopic } from "./webhook-catalogue";
+import { PING_TOPIC, endpointWantsTopic } from "./webhook-catalogue";
 import {
   UNREACHABLE_REASON,
   UNRESOLVED_REASON,
@@ -45,10 +47,30 @@ import {
 } from "./webhook-destination";
 
 import { withRetryJitter } from "@/shared/notifications/pipeline-rules";
+import { recipientGoneError } from "@/shared/notifications/delivery-diagnostics";
+import { hasModuleSwitchedOff } from "@/shared/entitlements/entitlement-service";
+import { claimFloors } from "@/shared/database/claim-floors";
 import { workerHeartbeat } from "@/shared/health/worker-heartbeat";
 import { logger } from "@/shared/logging/logger";
 import { providerMetrics } from "@/shared/health/provider-metrics";
-import { getRequestContext } from "@/shared/http/request-context";
+import {
+  getRequestContext,
+  withoutRequestContext,
+} from "@/shared/http/request-context";
+import { consumesQueue } from "@/shared/lifecycle/process-role";
+import { assertWithVariable } from "@/shared/lifecycle/queue-config";
+import { ContinuousPool } from "@/shared/queue/continuous-pool";
+import {
+  columnOf,
+  fairClaimSql,
+  fairWalkOf,
+  walkFairLap,
+} from "@/shared/queue/fair-claim";
+import {
+  EXHAUSTED_CLOSE_INTERVAL_MS,
+  closeExhaustedInBatches,
+  exhaustedCloseSql,
+} from "@/shared/queue/exhausted-close";
 
 import { v7 as uuidV7 } from "uuid";
 
@@ -99,7 +121,242 @@ function networkFailureReason(error: unknown): string {
  */
 const BATCH_SIZE = 20;
 
-assertWebhookLeaseInvariant(BATCH_SIZE);
+/**
+ * The webhooks' claim (claim() says why it is shaped so), with the
+ * partitioned queue's claim floor (queue-claim-floor.ts, plano-escala
+ * F5-13) on every level that reads the table, so each prunes the days that
+ * hold nothing in flight. Exported for the plan tests, which measure this
+ * very statement.
+ *
+ * `busyEndpoints` are the endpoints at this process's per-endpoint cap
+ * (the continuous pool's busy keys, F3-07): their rows are left in the
+ * table, where no lease runs, instead of claimed to wait in the pool. A
+ * filter on the rows the index range already returns: the plan is the same.
+ */
+function webhookClaimSql(
+  floor: Prisma.Sql,
+  limit: number = BATCH_SIZE,
+  busyEndpoints: readonly string[] = [],
+): Prisma.Sql {
+  const notBusy =
+    busyEndpoints.length > 0
+      ? Prisma.sql` AND NOT ("endpointId" = ANY(${[...busyEndpoints]}::text[]))`
+      : Prisma.empty;
+
+  return Prisma.sql`
+      UPDATE "webhook_delivery" SET
+        "status" = 'PROCESSING',
+        "leaseExpiresAt" = now() + make_interval(secs => ${WEBHOOK_LEASE_SECONDS}),
+        "availableAt" = now() + make_interval(secs => ${WEBHOOK_LEASE_SECONDS}),
+        "attempts" = "attempts" + 1
+      WHERE "id" IN (
+        SELECT "id" FROM "webhook_delivery"
+        WHERE "id" IN (
+          -- The oldest due rows, at most WEBHOOK_PER_ENDPOINT_BATCH of any one
+          -- endpoint: one slow or flooded customer cannot fill the batch.
+          --
+          -- Ties on "availableAt" broken by "id": the rows of one transaction
+          -- share its now(), and uuid v7 ids grow in creation order — without
+          -- it, which events of a transaction went first was up to the plan.
+          SELECT "id" FROM (
+            SELECT "id", "availableAt",
+                   row_number() OVER (
+                     PARTITION BY "endpointId" ORDER BY "availableAt", "id"
+                   ) AS "position"
+            FROM (
+              SELECT "id", "endpointId", "availableAt"
+              FROM "webhook_delivery"
+              -- A range on the index key, so the scan stops at now(): rows
+              -- held for a switched-off endpoint (availableAt up to 30 days
+              -- ahead) and rows in backoff are never visited. A PROCESSING
+              -- row carries its lease end there, so one in flight is out of
+              -- the range and one whose lease ran out is back in it. The
+              -- lease check stays for rows an older release claimed without
+              -- moving availableAt.
+              WHERE "availableAt" <= now()
+                AND ("status" = 'PENDING'
+                  OR ("status" = 'PROCESSING' AND "leaseExpiresAt" < now()
+                      AND "attempts" < ${WEBHOOK_MAX_ATTEMPTS}))${floor}${notBusy}
+              ORDER BY "availableAt", "id"
+              LIMIT ${WEBHOOK_CLAIM_WINDOW}
+            ) AS "head"
+          ) AS "ranked"
+          WHERE "position" <= ${WEBHOOK_PER_ENDPOINT_BATCH}
+          ORDER BY "availableAt", "id"
+          LIMIT ${limit}
+        )
+          -- Checked again under the lock: another replica may have taken it.
+          AND (("status" = 'PENDING' AND "availableAt" <= now())
+            OR ("status" = 'PROCESSING' AND "leaseExpiresAt" < now()
+                AND "attempts" < ${WEBHOOK_MAX_ATTEMPTS}))${floor}
+        FOR UPDATE SKIP LOCKED
+      )${floor}
+      RETURNING "id", "endpointId", "topic", "payload", "attempts", "created_at"
+    `;
+}
+
+/**
+ * The webhooks' claim under the global cap per endpoint (plano-escala
+ * F3-13), in two levels: the endpoints with due rows, walked from this
+ * process's rotating cursor by a skip scan of
+ * webhook_delivery_endpoint_due_idx ("endpointId", "availableAt", "id"),
+ * and, of each, its due rows in order: at most `perEndpoint` (what this
+ * process may send to one endpoint at once, so a claimed row never waits
+ * in its pool holding the cap from the other dispatchers) and never past
+ * what `endpointCap` leaves after the endpoint's rows in flight:
+ * PROCESSING under a live lease, whichever process holds them, counted
+ * once per claim off webhook_delivery_processing_lease_idx. The
+ * per-process cap of before could not see the other dispatchers, so a
+ * second worker doubled what a customer's ERP received at once.
+ *
+ * Each endpoint's rows are held as the walk reads them, skipping the ones
+ * another transaction holds, so a share is never spent on a row the claim
+ * cannot take. Nothing fills past the shares (the fair claim's fill is
+ * off): the shares are the cap. The count holds only while one claim runs
+ * at a time, so
+ * the caller takes WEBHOOK_CLAIM_LOCK in the same transaction, before this
+ * statement, whose snapshot then sees every claim committed before it.
+ * `busyEndpoints` are this process's endpoints at their per-process cap
+ * (F3-07), left out as in webhookClaimSql.
+ *
+ * With `hostCap` (F3-14), the same over each destination host: an
+ * endpoint of a host at its cap gets no share, and the rows found for
+ * endpoints of one host are cut, in the claim's order, at what the host
+ * has left (the fair claim's group cap).
+ *
+ * The walk comes back even when nothing is claimed (the fair claim's
+ * reportsWalk): with no fill behind the shares, a walk of
+ * WEBHOOK_CLAIM_MAX_ENDPOINTS endpoints with nothing to take must move the
+ * cursor and let the claim walk on (`lapEnd`, `wrapped`; claimCapped), or
+ * every claim would visit the same endpoints and never reach the ones
+ * after them. Exported for the plan tests, which measure this very
+ * statement.
+ */
+function webhookCappedClaimSql(input: {
+  cursor: string;
+  /** Where the claim's lap ends (fair-claim.ts, walkFairLap). */
+  lapEnd?: string;
+  /** The lap already went past the last endpoint. */
+  wrapped?: boolean;
+  limit: number;
+  endpointCap: number;
+  perEndpoint: number;
+  /** Calls in flight to one destination host (F3-14); 0: no host cap. */
+  hostCap?: number;
+  busyEndpoints?: readonly string[];
+  floor: Prisma.Sql;
+  rowFloor: Prisma.Sql;
+}): Prisma.Sql {
+  const busy = input.busyEndpoints ?? [];
+  const hostCap = input.hostCap ?? 0;
+  const rowsPerEndpoint = Math.min(
+    WEBHOOK_PER_ENDPOINT_BATCH,
+    input.perEndpoint,
+  );
+
+  // The host cap (plano-escala F3-14): the rows in flight summed by the
+  // destination host of their endpoint, once per claim. An endpoint with
+  // no host (written by an older image, not yet filled) has no host cap.
+  const hostInFlight =
+    hostCap > 0
+      ? Prisma.sql`,
+      "host_in_flight" ("host", "busy") AS MATERIALIZED (
+        SELECT "e"."destination_host", sum("f"."busy")::int
+        FROM "in_flight" AS "f"
+        JOIN "webhook_endpoint" AS "e" ON "e"."id" = "f"."endpointId"
+        WHERE "e"."destination_host" IS NOT NULL
+        GROUP BY "e"."destination_host"
+      )`
+      : Prisma.empty;
+
+  const hostOf = (endpoint: Prisma.Sql) =>
+    Prisma.sql`(SELECT "e"."destination_host" FROM "webhook_endpoint" AS "e" WHERE "e"."id" = ${endpoint})`;
+
+  const hostRoom = (host: Prisma.Sql) =>
+    Prisma.sql`${hostCap}::int - coalesce((SELECT "h"."busy" FROM "host_in_flight" AS "h" WHERE "h"."host" = ${host}), 0)`;
+
+  // A host already at its cap gives its endpoints no share, so the walk
+  // goes on to the other hosts' instead of finding rows it would then drop.
+  // The exact cut, between endpoints of one host in the same claim, is the
+  // group cap's.
+  const hostShare = (endpoint: Prisma.Sql) =>
+    hostCap > 0
+      ? Prisma.sql`, coalesce((SELECT ${hostRoom(Prisma.raw(`"e"."destination_host"`))} FROM "webhook_endpoint" AS "e" WHERE "e"."id" = ${endpoint} AND "e"."destination_host" IS NOT NULL), ${rowsPerEndpoint}::int)`
+      : Prisma.empty;
+
+  const notBusy = (alias: string | null) =>
+    busy.length > 0
+      ? Prisma.sql` AND NOT (${columnOf(alias, "endpointId")} = ANY(${[...busy]}::text[]))`
+      : Prisma.empty;
+
+  return fairClaimSql(
+    {
+      table: "webhook_delivery",
+      tenant: "endpointId",
+      dueAt: "availableAt",
+      thenBy: ["id"],
+      indexed: (alias) =>
+        Prisma.sql`${columnOf(alias, "status")} IN ('PENDING', 'PROCESSING')`,
+      // The rule of webhookClaimSql: a range that stops at now(), and the
+      // lease check for rows an older release claimed without moving
+      // availableAt.
+      due: (alias) =>
+        Prisma.sql`${columnOf(alias, "availableAt")} <= now() AND (${columnOf(alias, "status")} = 'PENDING' OR (${columnOf(alias, "status")} = 'PROCESSING' AND ${columnOf(alias, "leaseExpiresAt")} < now() AND ${columnOf(alias, "attempts")} < ${WEBHOOK_MAX_ATTEMPTS}::int))${notBusy(alias)}`,
+      with: Prisma.sql`"in_flight" ("endpointId", "busy") AS MATERIALIZED (
+        SELECT "endpointId", count(*)::int FROM "webhook_delivery"
+        WHERE "status" = 'PROCESSING' AND "leaseExpiresAt" > now()${input.floor}
+        GROUP BY "endpointId"
+      )${hostInFlight}`,
+      share: (endpoint) =>
+        Prisma.sql`LEAST(${rowsPerEndpoint}::int, ${input.endpointCap}::int - coalesce((SELECT "in_flight"."busy" FROM "in_flight" WHERE "in_flight"."endpointId" = ${endpoint}), 0)${hostShare(endpoint)})`,
+      fill: false,
+      reportsWalk: true,
+      groupCap:
+        hostCap > 0
+          ? { of: hostOf, room: (host) => hostRoom(host) }
+          : undefined,
+      set: Prisma.sql`
+        "status" = 'PROCESSING',
+        "leaseExpiresAt" = now() + make_interval(secs => ${WEBHOOK_LEASE_SECONDS}),
+        "availableAt" = now() + make_interval(secs => ${WEBHOOK_LEASE_SECONDS}),
+        "attempts" = "attempts" + 1`,
+      returning: `"id", "endpointId", "topic", "payload", "attempts", "created_at"`,
+    },
+    {
+      cursor: input.cursor,
+      lapEnd: input.lapEnd,
+      wrapped: input.wrapped,
+      limit: input.limit,
+      rowsPerTenant: rowsPerEndpoint,
+      maxTenants: WEBHOOK_CLAIM_MAX_ENDPOINTS,
+      floor: input.floor,
+      rowFloor: input.rowFloor,
+    },
+  );
+}
+
+/**
+ * Calls in flight per process (plano-escala F3-05): WEBHOOK_CONCURRENCY,
+ * whose default is the 5 of before (webhook-dispatch-rules.ts), and at most
+ * WEBHOOK_PER_ENDPOINT_CONCURRENCY of them to one endpoint (F3-07; 2, the
+ * constant of before).
+ */
+const WEBHOOK_CONCURRENCY = env.WEBHOOK_CONCURRENCY;
+const WEBHOOK_PER_ENDPOINT_CONCURRENCY = env.WEBHOOK_PER_ENDPOINT_CONCURRENCY;
+
+// With the environment's values: a concurrency too low for a claim would
+// let the lease run out under calls still in flight, and the customer's
+// system would receive those events twice. The boot stops instead.
+assertWithVariable("WEBHOOK_CONCURRENCY", WEBHOOK_CONCURRENCY, () =>
+  assertWebhookLeaseInvariant(
+    BATCH_SIZE,
+    WEBHOOK_CONCURRENCY,
+    WEBHOOK_TIMEOUT_MS,
+    WEBHOOK_LEASE_SECONDS,
+    WEBHOOK_PER_ENDPOINT_BATCH,
+    WEBHOOK_PER_ENDPOINT_CONCURRENCY,
+  ),
+);
 
 interface ClaimedWebhook {
   id: string;
@@ -185,6 +442,96 @@ const CREDENTIALS_UNREADABLE_REASON =
   "de novo. Se persistir, gere um novo segredo e salve os cabeçalhos outra vez.";
 
 /**
+ * The bytes every webhook posts: `{ id, sequence, topic, created_at, data }`,
+ * fixed once so a retry and a manual resend send the same body.
+ *
+ * The sequence is drawn inside the caller's transaction, after its write:
+ * two writes to the same delivery or route are serialised by that row's
+ * lock, so their numbers follow the order of the facts. Increasing, with gaps
+ * (a rolled-back transaction burns its number) — never a count.
+ */
+async function envelopeBody(
+  client: Prisma.TransactionClient,
+  eventId: string,
+  topic: string,
+  payload: Record<string, unknown>,
+): Promise<string> {
+  const [{ sequence }] = await client.$queryRaw<Array<{ sequence: bigint }>>`
+    SELECT nextval('webhook_event_seq') AS "sequence"
+  `;
+
+  return envelopeOf(eventId, Number(sequence), topic, payload);
+}
+
+function envelopeOf(
+  eventId: string,
+  sequence: number,
+  topic: string,
+  payload: Record<string, unknown>,
+): string {
+  return JSON.stringify({
+    id: eventId,
+    sequence,
+    topic,
+    created_at: new Date().toISOString(),
+    data: payload,
+  });
+}
+
+/**
+ * Queues a test event for ONE endpoint of the company: signed, sequenced and
+ * recorded exactly like an event, so the receiver checks what it will check
+ * on every real one and the monitor shows what it answered. Null when the
+ * endpoint is not this company's.
+ */
+async function queueWebhookPing(
+  endpointId: string,
+  businessId: string,
+  client: Prisma.TransactionClient = database,
+): Promise<{ id: string; eventId: string } | null> {
+  const endpoint = await client.webhookEndpoint.findFirst({
+    where: { id: endpointId, businessId },
+    select: { id: true, secret: true },
+  });
+
+  if (!endpoint) return null;
+
+  const eventId = uuidV7();
+
+  const body = await envelopeBody(client, eventId, PING_TOPIC, {
+    endpoint_id: endpoint.id,
+    message:
+      "Teste enviado pelo painel do Trajetto. Confira a assinatura e responda com qualquer 2xx.",
+  });
+
+  const row = await client.webhookDelivery.create({
+    data: {
+      endpointId: endpoint.id,
+      businessId,
+      topic: PING_TOPIC,
+      sourceEventId: eventId,
+      payload: JSON.parse(body) as Prisma.InputJsonValue,
+      signed_body: body,
+      signature: fanOutSignature(endpoint.secret, body),
+    },
+    select: { id: true },
+  });
+
+  log.info(
+    {
+      correlationId: getRequestContext()?.requestId ?? null,
+      sourceEventId: eventId,
+      topic: PING_TOPIC,
+      businessId,
+      endpoints: 1,
+    },
+    "webhook ping queued",
+  );
+
+  return { id: row.id, eventId };
+}
+
+/**
  * Turns one domain event into one row per interested endpoint.
  *
  * The BYTES are fixed here, once, with the event id in them: a retry three
@@ -207,10 +554,14 @@ async function fanOutWebhookEvent(
   // breaker, `disabled_at`) is different — it used to drop every event while
   // it was open, and seven hours of an outage were lost for good. Those rows
   // are written now, held (see below), and go out once the endpoint is saved.
+  // A company whose purge was scheduled (plano-escala F3-25) announces
+  // nothing more: its data is on its way out, and its ERP was told the
+  // company is gone, not each delivery a cron still touches.
   const endpoints = await client.webhookEndpoint.findMany({
     where: {
       businessId: event.businessId,
       is_active: true,
+      business: { purge_state: null },
     },
   });
 
@@ -284,22 +635,9 @@ async function fanOutWebhookEvent(
 
   // The order a receiver can rebuild. Delivery is concurrent and retried, so
   // arrival order means nothing: a `delivery.in_transit` retried after a 503
-  // lands after the `delivery.delivered` that followed it. Drawn inside the
-  // caller's transaction, after its write: two writes to the same delivery or
-  // route are serialised by that row's lock, so their numbers follow the
-  // order of the facts. Increasing, with gaps (a rolled-back transaction
-  // burns its number) — never a count.
-  const [{ sequence }] = await client.$queryRaw<Array<{ sequence: bigint }>>`
-    SELECT nextval('webhook_event_seq') AS "sequence"
-  `;
-
-  const body = JSON.stringify({
-    id: eventId,
-    sequence: Number(sequence),
-    topic: event.topic,
-    created_at: new Date().toISOString(),
-    data: event.payload,
-  });
+  // lands after the `delivery.delivered` that followed it — hence the
+  // envelope's `sequence` (see envelopeBody).
+  const body = await envelopeBody(client, eventId, event.topic, event.payload);
 
   const rows = interested.map((endpoint) => {
     const signature = fanOutSignature(endpoint.secret, body);
@@ -346,6 +684,106 @@ async function fanOutWebhookEvent(
       endpoints: rows.length,
     },
     "webhook event fanned out",
+  );
+
+  return rows.length;
+}
+
+/**
+ * Many events of one company in one go (plano-escala F2-06): a route that
+ * leaves with fifty stops says `delivery.in_transit` fifty times.
+ *
+ * One at a time that was three statements per event (the endpoints, the
+ * sequence, the rows) — 150 for one departure, inside its transaction, and
+ * 50 even for a company with no endpoint at all. Here: the endpoints once
+ * (and nothing more when nobody listens), every sequence number in one
+ * statement, every row in one insert. Each event keeps its own id, sequence
+ * and signed body, exactly as `fanOutWebhookEvent` would have written it.
+ *
+ * An endpoint that wants one of the topics and is switched off (the
+ * breaker) needs the FOR SHARE read of the single path, so the batch hands
+ * the events to it one by one: rare, and correct.
+ */
+async function fanOutWebhookEvents(
+  events: FanOutEvent[],
+  tx?: Prisma.TransactionClient,
+): Promise<number> {
+  if (events.length === 0) return 0;
+
+  if (events.length === 1) return fanOutWebhookEvent(events[0], tx);
+
+  const businessId = events[0].businessId;
+
+  if (events.some((event) => event.businessId !== businessId)) {
+    throw new Error("fanOutWebhookEvents: one company per batch");
+  }
+
+  const client = tx ?? database;
+
+  // As fanOutWebhookEvent: nothing for a company whose purge is scheduled.
+  const endpoints = await client.webhookEndpoint.findMany({
+    where: { businessId, is_active: true, business: { purge_state: null } },
+  });
+
+  const wanting = (topic: string) =>
+    endpoints.filter((endpoint) => endpointWantsTopic(endpoint.topics, topic));
+
+  if (events.every((event) => wanting(event.topic).length === 0)) return 0;
+
+  if (
+    events.some((event) =>
+      wanting(event.topic).some((endpoint) => endpoint.disabled_at !== null),
+    )
+  ) {
+    let total = 0;
+
+    for (const event of events) total += await fanOutWebhookEvent(event, tx);
+
+    return total;
+  }
+
+  // In the caller's transaction, after its write, like envelopeBody: the
+  // numbers follow the order of the facts, and the events in the order
+  // given.
+  const drawn = await client.$queryRaw<Array<{ sequence: bigint }>>`
+    SELECT nextval('webhook_event_seq') AS "sequence"
+    FROM generate_series(1, ${events.length}::int)
+  `;
+  const sequences = drawn
+    .map((row) => Number(row.sequence))
+    .sort((a, b) => a - b);
+
+  const rows = events.flatMap((event, index) => {
+    const eventId = event.sourceEventId ?? uuidV7();
+    const body = envelopeOf(
+      eventId,
+      sequences[index],
+      event.topic,
+      event.payload,
+    );
+
+    return wanting(event.topic).map((endpoint) => ({
+      endpointId: endpoint.id,
+      businessId,
+      topic: event.topic,
+      sourceEventId: eventId,
+      payload: JSON.parse(body) as Prisma.InputJsonValue,
+      signed_body: body,
+      signature: fanOutSignature(endpoint.secret, body),
+    }));
+  });
+
+  await client.webhookDelivery.createMany({ data: rows });
+
+  log.info(
+    {
+      correlationId: getRequestContext()?.requestId ?? null,
+      topics: [...new Set(events.map((event) => event.topic))],
+      events: events.length,
+      businessId,
+      endpoints: rows.length,
+    },
+    "webhook events fanned out",
   );
 
   return rows.length;
@@ -458,10 +896,13 @@ async function releaseHeldRowIfEndpointBack(
 ): Promise<void> {
   const endpoint = await database.webhookEndpoint.findUnique({
     where: { id: endpointId },
-    select: { is_active: true, disabled_at: true },
+    select: { is_active: true, disabled_at: true, businessId: true },
   });
 
   if (!endpoint?.is_active || endpoint.disabled_at !== null) return;
+
+  // Held because Entregas was off (plan M3): back only with the module.
+  if (await hasModuleSwitchedOff(endpoint.businessId, "DELIVERIES")) return;
 
   await database.webhookDelivery.updateMany({
     where: {
@@ -474,26 +915,102 @@ async function releaseHeldRowIfEndpointBack(
 }
 
 /**
+ * Sends what the company's endpoints held while Entregas was switched off
+ * (plan M3): called after the switch back on has committed — the module's
+ * "I fixed it", as a save is the endpoint's.
+ *
+ * Only endpoints that may be delivered to: one the customer paused or our
+ * breaker switched off keeps holding, for its own save to release. Safe to
+ * run again — a released row is no longer held — so the switch saved on a
+ * second time is the retry of a release that failed.
+ */
+async function releaseHeldWebhookDeliveriesOfBusiness(
+  businessId: string,
+): Promise<number> {
+  const endpoints = await database.webhookEndpoint.findMany({
+    where: { businessId, is_active: true, disabled_at: null },
+    select: { id: true },
+    orderBy: { id: "asc" },
+  });
+
+  let released = 0;
+
+  for (const endpoint of endpoints) {
+    released += await releaseParkedWebhookDeliveries(endpoint.id);
+  }
+
+  return released;
+}
+
+/**
  * How often a replica looks for work.
  *
- * Five seconds, same as the notification pipeline. A webhook is not a chat
- * message — nobody is watching for it — but an integration that learns about a
- * delivery a minute late is an integration whose customer calls to ask why
- * their ERP is behind.
+ * Five seconds by default (WEBHOOK_SWEEP_INTERVAL_MS, plano-escala F3-01;
+ * the worker preset sets 2 s). A webhook is not a chat message — nobody is
+ * watching for it — but an integration that learns about a delivery a
+ * minute late is an integration whose customer calls to ask why their ERP
+ * is behind.
  */
-const SWEEP_INTERVAL_MS = 5_000;
+const SWEEP_INTERVAL_MS = env.WEBHOOK_SWEEP_INTERVAL_MS;
 
 class WebhookDispatchService {
   private static instance: WebhookDispatchService | null = null;
 
   private timer: NodeJS.Timeout | null = null;
+
+  /** The minute's close of the exhausted rows (closeExhausted, F3-08). */
+  private exhaustedTimer: NodeJS.Timeout | null = null;
+  private closingExhausted: Promise<number> | null = null;
   private running = false;
 
   // Ends a sweep that is still draining when the process is shutting down.
   private stopping = false;
 
+  /**
+   * The dispatcher as a continuous pool (plano-escala F3-07): a claim of up
+   * to 20 when nothing claimed waits for a slot, WEBHOOK_CONCURRENCY calls
+   * in flight and WEBHOOK_PER_ENDPOINT_CONCURRENCY to one endpoint, and the
+   * next claim as soon as a slot frees. The barrier of before sent a batch
+   * and claimed the next one only when its slowest call ended, so a
+   * receiver answering in nine seconds set the pace for every other
+   * customer's webhooks. A slow endpoint now holds its own calls and its
+   * own queued rows; the claims that follow leave it out (skipsBusyKeys)
+   * and keep the other endpoints' rows moving. One cycle claims for
+   * WEBHOOK_DRAIN_BUDGET_MS at most, then ends: the sweep or the wake that
+   * asked meanwhile starts the next one.
+   */
+  private readonly pool = new ContinuousPool<ClaimedWebhook>({
+    slots: () => WEBHOOK_CONCURRENCY,
+    prefetch: BATCH_SIZE,
+    maxPerClaim: BATCH_SIZE,
+    perKey: {
+      limit: WEBHOOK_PER_ENDPOINT_CONCURRENCY,
+      keyOf: (row) => row.endpointId,
+    },
+    skipsBusyKeys: true,
+    claim: (limit, busyEndpoints) => this.claim(limit, busyEndpoints),
+    run: (row) =>
+      this.deliver(row).catch((error) => {
+        // The row keeps its lease and is reclaimed when it expires.
+        log.error(
+          { err: error, deliveryId: row.id, endpointId: row.endpointId },
+          "webhook delivery failed; the lease will recover it",
+        );
+      }),
+    // Once the process is going away, a row not yet started is handed back
+    // rather than sent: the drain waits for the calls in flight, not for
+    // the rest of what was claimed.
+    giveBack: (row) => this.release(row),
+    stopping: () => this.stopping,
+    budgetMs: WEBHOOK_DRAIN_BUDGET_MS,
+    onClaim: () => workerHeartbeat.progress("webhook-dispatch"),
+  });
+
   // Success records still retrying after the batch moved on; shutdown waits.
   private readonly pendingRecords = new Set<Promise<void>>();
+
+  /** Where this process's next capped claim starts (F3-13). */
+  private endpointCursor = "";
 
   private dispatcher: Dispatcher;
   private fetchImpl: typeof undiciFetch;
@@ -537,6 +1054,25 @@ class WebhookDispatchService {
       });
     }, SWEEP_INTERVAL_MS);
 
+    // The exhausted rows, closed off the claim's path (plano-escala F3-08):
+    // once now, then every minute. The same minute fills the destination
+    // host of the endpoints an older image saved without one (F3-14).
+    const sweepExhausted = () => {
+      this.closeExhausted().catch((error) => {
+        log.error({ err: error }, "exhausted webhooks close failed");
+      });
+
+      this.fillDestinationHosts().catch((error) => {
+        log.error({ err: error }, "webhook destination hosts fill failed");
+      });
+    };
+
+    this.exhaustedTimer = setInterval(
+      sweepExhausted,
+      EXHAUSTED_CLOSE_INTERVAL_MS,
+    );
+    sweepExhausted();
+
     // Drain whatever accumulated while the API was down, instead of making the
     // first sweep wait a full interval.
     void this.processBatch().catch((error) => {
@@ -546,20 +1082,167 @@ class WebhookDispatchService {
     log.info("webhook dispatch worker started");
   }
 
-  async shutdown(): Promise<void> {
+  /**
+   * Closes FAILED, with the reason, the rows whose last allowed attempt died
+   * with their process: PROCESSING, lease run out, no attempt left (see
+   * shared/queue/exhausted-close.ts). Every minute and at start; public so a
+   * test can run it. A run that finds one in progress joins it.
+   */
+  closeExhausted(): Promise<number> {
+    this.closingExhausted ??= (async () => {
+      const floor = await claimFloors.predicate("webhooks");
+      const closed = await closeExhaustedInBatches(() =>
+        database.$executeRaw(
+          exhaustedCloseSql({
+            table: "webhook_delivery",
+            maxAttempts: WEBHOOK_MAX_ATTEMPTS,
+            floor,
+          }),
+        ),
+      );
+
+      if (closed > 0) {
+        log.warn(
+          { closed },
+          "webhook deliveries closed: their last allowed attempt died with the process",
+        );
+      }
+
+      return closed;
+    })().finally(() => {
+      this.closingExhausted = null;
+    });
+
+    return this.closingExhausted;
+  }
+
+  /**
+   * Writes the destination host of the endpoints that have none
+   * (plano-escala F3-14): the ones the image of before saved during the
+   * rolling deploy, which the cap per host would otherwise never count.
+   * Up to 100 a minute, by id, only while the URL is still the one read
+   * and the host still empty; a URL that does not parse stays empty (no
+   * host cap; the send refuses it). Raw SQL so the endpoint's updated_at,
+   * which the screen shows, does not move. Public so a test can run it.
+   * A host that is set but stale (the image of before changed the URL) is
+   * the send's to correct: alignDestinationHost.
+   */
+  async fillDestinationHosts(): Promise<number> {
+    const missing = await database.webhookEndpoint.findMany({
+      where: { destination_host: null },
+      select: { id: true, url: true },
+      take: 100,
+    });
+
+    let filled = 0;
+
+    for (const endpoint of missing) {
+      const host = destinationHostOf(endpoint.url);
+
+      if (host === null) continue;
+
+      filled += await database.$executeRaw`
+        UPDATE "webhook_endpoint" SET "destination_host" = ${host}
+        WHERE "id" = ${endpoint.id}
+          AND "url" = ${endpoint.url}
+          AND "destination_host" IS NULL
+      `;
+    }
+
+    return filled;
+  }
+
+  /**
+   * Puts the endpoint's destination host back in step with its URL when
+   * they differ (plano-escala F3-14). The image of before, during a
+   * rolling deploy or a rollback that can last days, changes the URL
+   * without touching the column it does not know, and the minute's fill
+   * only writes the hosts that are empty: the endpoint's calls were
+   * counted against the old host's room, starving that host's other
+   * endpoints, and never against the new host's cap. Checked on every
+   * send, before the call, so the call and the ones after it are counted
+   * against the host they go to. Raw SQL guarded by the URL read, so
+   * updated_at does not move and a newer edit is never undone; a failure
+   * only logs: the host cap paces the calls, it guards nothing.
+   */
+  private async alignDestinationHost(endpoint: {
+    id: string;
+    url: string;
+    destination_host: string | null;
+  }): Promise<void> {
+    const host = destinationHostOf(endpoint.url);
+
+    if (endpoint.destination_host === host) return;
+
+    try {
+      await database.$executeRaw`
+        UPDATE "webhook_endpoint" SET "destination_host" = ${host}
+        WHERE "id" = ${endpoint.id}
+          AND "url" = ${endpoint.url}
+          AND "destination_host" IS DISTINCT FROM ${host}
+      `;
+    } catch (error) {
+      log.warn(
+        { err: error, endpointId: endpoint.id },
+        "webhook destination host could not be brought in step with the URL",
+      );
+    }
+  }
+
+  /**
+   * Dispatches now instead of waiting for the sweep (plano-escala F3-04):
+   * after a fan-out committed rows here, or when another process's hint
+   * says it did. Only on a dispatcher that was started (initialize) and
+   * claims the webhooks queue; a wake during a batch runs one more batch
+   * after it, never one per wake.
+   */
+  wake(): void {
+    if (this.stopping || !this.timer || !consumesQueue(env, "webhooks")) {
+      return;
+    }
+
+    // A cycle running claims for it as soon as a slot is free; past its
+    // budget, the next cycle does (processBatch's end).
+    if (this.running) {
+      this.pool.rescan();
+      return;
+    }
+
+    withoutRequestContext(() => {
+      this.processBatch().catch((error) => {
+        log.error({ err: error }, "webhook dispatch wake failed");
+      });
+    });
+  }
+
+  /**
+   * `deadlineMs` is the shutdown plan's (shared/lifecycle/shutdown-plan.ts):
+   * it can only shorten the dispatcher's own wait below. Under a short stop
+   * grace a send cut off here goes out again when its lease expires: the
+   * receivers deduplicate by the event id, as the documentation asks.
+   */
+  async shutdown(options: { deadlineMs?: number } = {}): Promise<void> {
     this.stopping = true;
 
     if (this.timer) clearInterval(this.timer);
+    if (this.exhaustedTimer) clearInterval(this.exhaustedTimer);
 
     this.timer = null;
+    this.exhaustedTimer = null;
+
+    // What the pool claimed and did not start goes back now (see
+    // `release`), not after the call it waits behind.
+    this.pool.nudge();
 
     // Let the sends in flight finish and be recorded. Returning at once cut
     // every deploy between the customer's answer and our record of it, and
-    // each of those went out again when the lease expired. Rows of the batch
+    // each of those went out again when the lease expired. Rows claimed
     // that had not started are handed back instead of sent (see `release`),
     // so one call timeout bounds the wait; the deadline is the backstop, and
     // fits ADR 0004's watchdog with the workers stopping in parallel.
-    const deadline = Date.now() + WEBHOOK_TIMEOUT_MS + 2_000;
+    const deadline =
+      Date.now() +
+      Math.min(WEBHOOK_TIMEOUT_MS + 2_000, options.deadlineMs ?? Infinity);
 
     while (
       (this.running || this.pendingRecords.size > 0) &&
@@ -571,10 +1254,17 @@ class WebhookDispatchService {
     log.info("webhook dispatch worker stopped");
   }
 
+  /**
+   * One cycle of the pool; resolves with the rows it claimed. A call that
+   * finds a cycle running asks it to look at the queue again and returns
+   * 0: one cycle at a time in this process. Other replicas claim their own
+   * rows — the lock is in the database, not here.
+   */
   async processBatch(): Promise<number> {
-    // One batch at a time in this process. Other replicas claim their own
-    // rows — the lock is in the database, not here.
-    if (this.running) return 0;
+    if (this.running) {
+      this.pool.rescan();
+      return 0;
+    }
 
     this.running = true;
 
@@ -582,131 +1272,101 @@ class WebhookDispatchService {
     // visible on /health/metrics (OBS-10).
     workerHeartbeat.beginCycle("webhook-dispatch");
 
-    const started = Date.now();
-    let total = 0;
-
     try {
-      // Keep claiming while there is work, within a budget: a backlog drains
-      // at the speed the receivers answer, not twenty rows per sweep.
-      while (!this.stopping) {
-        const claimed = await this.claim();
-
-        workerHeartbeat.progress("webhook-dispatch");
-
-        if (claimed.length === 0) break;
-
-        await inFairPool(
-          claimed,
-          {
-            concurrency: WEBHOOK_CONCURRENCY,
-            perKey: WEBHOOK_PER_ENDPOINT_CONCURRENCY,
-            keyOf: (row) => row.endpointId,
-          },
-          (row) =>
-            // Once the process is going away, a row not yet started is
-            // handed back rather than sent: the drain waits for the calls in
-            // flight, not for the rest of the batch.
-            (this.stopping ? this.release(row) : this.deliver(row)).catch(
-              (error) => {
-                // The row keeps its lease and is reclaimed when it expires.
-                log.error(
-                  {
-                    err: error,
-                    deliveryId: row.id,
-                    endpointId: row.endpointId,
-                  },
-                  "webhook delivery failed; the lease will recover it",
-                );
-              },
-            ),
-        );
-
-        total += claimed.length;
-
-        if (Date.now() - started >= WEBHOOK_DRAIN_BUDGET_MS) break;
-      }
-
-      return total;
+      return await this.pool.drain();
     } finally {
       this.running = false;
       workerHeartbeat.endCycle("webhook-dispatch");
+
+      // A wake or a sweep the cycle did not get to answer (it came after
+      // its last look, or past its budget): the next cycle does.
+      if (this.pool.rescanPending && !this.stopping) {
+        setImmediate(() => this.wake());
+      }
     }
   }
 
-  private async claim(): Promise<ClaimedWebhook[]> {
-    // A row whose last attempt died with the process and has no attempt left
-    // is closed here, with the reason, instead of being claimed again — see
-    // WEBHOOK_MAX_ATTEMPTS.
-    await database.$executeRaw`
-      UPDATE "webhook_delivery" SET
-        "status" = 'FAILED',
-        "leaseExpiresAt" = NULL,
-        "lastError" = 'O processo foi interrompido durante a última tentativa permitida.'
-      WHERE "status" = 'PROCESSING'
-        AND "availableAt" <= now()
-        AND "leaseExpiresAt" < now()
-        AND "attempts" >= ${WEBHOOK_MAX_ATTEMPTS}
-    `;
+  private async claim(
+    limit: number = BATCH_SIZE,
+    busyEndpoints: ReadonlySet<string> = new Set(),
+  ): Promise<ClaimedWebhook[]> {
+    const floor = await claimFloors.predicate("webhooks");
 
+    // A row whose last attempt died with the process and has no attempt left
+    // is left out (attempts < WEBHOOK_MAX_ATTEMPTS) and closed by the
+    // minute's sweep (closeExhausted, plano-escala F3-08), not before every
+    // claim, where the UPDATE read every due row to find the few in flight.
     const claimStartedAtMs = Date.now();
 
     // The lease end goes into availableAt too (same expression, same
     // statement, so the two are equal): a row in flight leaves the claim's
     // range until its lease runs out, and the scan never visits it.
-    const claimed = await database.$queryRaw<ClaimedWebhook[]>`
-      UPDATE "webhook_delivery" SET
-        "status" = 'PROCESSING',
-        "leaseExpiresAt" = now() + make_interval(secs => ${WEBHOOK_LEASE_SECONDS}),
-        "availableAt" = now() + make_interval(secs => ${WEBHOOK_LEASE_SECONDS}),
-        "attempts" = "attempts" + 1
-      WHERE "id" IN (
-        SELECT "id" FROM "webhook_delivery"
-        WHERE "id" IN (
-          -- The oldest due rows, at most WEBHOOK_PER_ENDPOINT_BATCH of any one
-          -- endpoint: one slow or flooded customer cannot fill the batch.
-          --
-          -- Ties on "availableAt" broken by "id": the rows of one transaction
-          -- share its now(), and uuid v7 ids grow in creation order — without
-          -- it, which events of a transaction went first was up to the plan.
-          SELECT "id" FROM (
-            SELECT "id", "availableAt",
-                   row_number() OVER (
-                     PARTITION BY "endpointId" ORDER BY "availableAt", "id"
-                   ) AS "position"
-            FROM (
-              SELECT "id", "endpointId", "availableAt"
-              FROM "webhook_delivery"
-              -- A range on the index key, so the scan stops at now(): rows
-              -- held for a switched-off endpoint (availableAt up to 30 days
-              -- ahead) and rows in backoff are never visited. A PROCESSING
-              -- row carries its lease end there, so one in flight is out of
-              -- the range and one whose lease ran out is back in it. The
-              -- lease check stays for rows an older release claimed without
-              -- moving availableAt.
-              WHERE "availableAt" <= now()
-                AND ("status" = 'PENDING'
-                  OR ("status" = 'PROCESSING' AND "leaseExpiresAt" < now()
-                      AND "attempts" < ${WEBHOOK_MAX_ATTEMPTS}))
-              ORDER BY "availableAt", "id"
-              LIMIT ${WEBHOOK_CLAIM_WINDOW}
-            ) AS "head"
-          ) AS "ranked"
-          WHERE "position" <= ${WEBHOOK_PER_ENDPOINT_BATCH}
-          ORDER BY "availableAt", "id"
-          LIMIT ${BATCH_SIZE}
-        )
-          -- Checked again under the lock: another replica may have taken it.
-          AND (("status" = 'PENDING' AND "availableAt" <= now())
-            OR ("status" = 'PROCESSING' AND "leaseExpiresAt" < now()
-                AND "attempts" < ${WEBHOOK_MAX_ATTEMPTS}))
-        FOR UPDATE SKIP LOCKED
-      )
-      RETURNING "id", "endpointId", "topic", "payload", "attempts", "created_at"
-    `;
+    const claimed =
+      env.WEBHOOK_ENDPOINT_GLOBAL_CONCURRENCY > 0
+        ? await this.claimCapped(limit, busyEndpoints, floor)
+        : await database.$queryRaw<ClaimedWebhook[]>(
+            webhookClaimSql(floor, limit, [...busyEndpoints]),
+          );
 
     for (const row of claimed) row.claimStartedAtMs = claimStartedAtMs;
 
     return claimed;
+  }
+
+  /**
+   * The claim under the global cap per endpoint (webhookCappedClaimSql):
+   * the lock and the claim in one transaction, so the lock is held only
+   * for the claim and the claim's snapshot, taken after the lock, sees the
+   * rows every claim before it took. No interactive transaction: the two
+   * statements go together and nothing holds the connection in between.
+   *
+   * A walk that visited its WEBHOOK_CLAIM_MAX_ENDPOINTS endpoints without
+   * anything to take is followed by another from where it stopped, each
+   * one such transaction, until something is claimed or the lap closes
+   * (walkFairLap, at most WEBHOOK_CLAIM_MAX_WALKS). The cursor moves with
+   * every walk, empty or not: the claim of before stopped at 64 endpoints
+   * and kept the cursor when it took nothing, so 64 endpoints in a row
+   * with nothing claimable (parked for a paused endpoint for up to 30
+   * days, in backoff, in flight, at the cap of their host) held every
+   * other customer's webhooks behind them.
+   */
+  private async claimCapped(
+    limit: number,
+    busyEndpoints: ReadonlySet<string>,
+    floor: Prisma.Sql,
+  ): Promise<ClaimedWebhook[]> {
+    const rowFloor = await claimFloors.predicate("webhooks", "row");
+
+    const lap = await walkFairLap<ClaimedWebhook>({
+      cursor: this.endpointCursor,
+      maxWalks: WEBHOOK_CLAIM_MAX_WALKS,
+      onCursor: (cursor) => {
+        this.endpointCursor = cursor;
+      },
+      walk: async ({ cursor, lapEnd, wrapped }) => {
+        const [, result] = await database.$transaction([
+          database.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${WEBHOOK_CLAIM_LOCK}, 0))`,
+          database.$queryRaw<ClaimedWebhook[]>(
+            webhookCappedClaimSql({
+              cursor,
+              lapEnd,
+              wrapped,
+              limit,
+              endpointCap: env.WEBHOOK_ENDPOINT_GLOBAL_CONCURRENCY,
+              perEndpoint: WEBHOOK_PER_ENDPOINT_CONCURRENCY,
+              hostCap: env.WEBHOOK_HOST_GLOBAL_CONCURRENCY,
+              busyEndpoints: [...busyEndpoints],
+              floor,
+              rowFloor,
+            }),
+          ),
+        ]);
+
+        return fairWalkOf(result);
+      },
+    });
+
+    return lap.rows;
   }
 
   private async deliver(row: ClaimedWebhook): Promise<void> {
@@ -714,8 +1374,16 @@ class WebhookDispatchService {
       where: { id: row.endpointId },
     });
 
+    // Deleting an endpoint takes its rows in the same transaction
+    // (queue-row-cleanup.ts); one written while the deletion ran closes
+    // here, without a call, as recipient_gone (plano-escala F5-05, D54).
     if (!endpoint) {
-      await this.markFailed(row, null, "Endpoint no longer exists");
+      await this.markFailed(
+        row,
+        null,
+        recipientGoneError("Endpoint no longer exists"),
+        { countFailure: false },
+      );
       return;
     }
 
@@ -737,10 +1405,25 @@ class WebhookDispatchService {
     // had just stopped trusting, or at ten seconds a row to one our breaker
     // had just given up on. No DNS, no fetch, no failure counted: the row is
     // held for the endpoint's return, within the replay window.
-    if (!endpoint.is_active || endpoint.disabled_at !== null) {
+    //
+    // The same hold while the MASTER has Entregas switched off for the
+    // company (plan M3, D51): the public API already answered 403
+    // MODULE_NOT_ENABLED, yet the dispatcher kept draining the queue to the
+    // customer's ERP. Read here, on every send, so a switch reaches every
+    // replica at once; the switch back on releases the rows
+    // (`releaseHeldWebhookDeliveriesOfBusiness`).
+    if (
+      !endpoint.is_active ||
+      endpoint.disabled_at !== null ||
+      (await hasModuleSwitchedOff(endpoint.businessId, "DELIVERIES"))
+    ) {
       await this.park(row);
       return;
     }
+
+    // The host this call is counted against (F3-14), in step with the URL
+    // before the call goes out.
+    await this.alignDestinationHost(endpoint);
 
     const stored = await database.webhookDelivery.findUnique({
       where: { id: row.id },
@@ -1306,9 +1989,14 @@ class WebhookDispatchService {
 const webhookDispatchService = WebhookDispatchService.getInstance();
 
 export {
+  webhookCappedClaimSql,
+  webhookClaimSql,
   WebhookDispatchService,
   fanOutWebhookEvent,
+  fanOutWebhookEvents,
+  queueWebhookPing,
   releaseHeldRowIfEndpointBack,
+  releaseHeldWebhookDeliveriesOfBusiness,
   releaseParkedWebhookDeliveries,
   webhookDispatchService,
 };

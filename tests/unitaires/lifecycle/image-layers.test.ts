@@ -19,7 +19,8 @@ import { hasShell, sandbox, type Sandbox } from "./support/shell-harness";
  * RUN after it: the commit each image now carries must not rebuild a layer.
  *
  * Text-based, like the other Dockerfile checks: the build itself runs in CI
- * (`docker build --target test infra/ai-ocr`, build-and-push).
+ * (`--target test` of infra/ai-ocr in the AI OCR job, the runtime stage in
+ * the Build job).
  */
 const ROOT = process.cwd();
 const read = (path: string) =>
@@ -53,6 +54,8 @@ function stage(dockerfile: string, name: string): string[] {
 
 const ai = read("infra/ai-ocr/Dockerfile");
 const api = read("Dockerfile");
+const postgres = read("infra/postgres/Dockerfile");
+const pgbouncer = read("infra/pgbouncer/Dockerfile");
 
 /** Runtime requirements files (the test stage's is not shipped). */
 const runtimeFiles = readdirSync(resolve(ROOT, "infra/ai-ocr"))
@@ -261,6 +264,10 @@ describe("the AI image's models and code", () => {
 describe.each([
   ["infra/ai-ocr/Dockerfile", ai, "runtime"],
   ["Dockerfile", api, "runner"],
+  // The entrypoint hands it to the server as trajetto.image_revision.
+  ["infra/postgres/Dockerfile", postgres, "runtime"],
+  // The entrypoint prints it at every start.
+  ["infra/pgbouncer/Dockerfile", pgbouncer, "runtime"],
 ])("%s carries its commit", (_, dockerfile, last) => {
   it("as APP_COMMIT_SHA, from a GIT_SHA build arg declared after the last RUN", () => {
     const lines = stage(dockerfile, last);
@@ -304,13 +311,15 @@ describe("the API image's build stage", () => {
     expect(generate + 1).toBeLessThan(builder.indexOf("COPY . ."));
   });
 
-  // The seeds are the release step's: only the `migrate` stage copies
-  // release/, back into its build/.
+  // The seeds and the release step's scripts are the release step's: only
+  // the `migrate` stage copies release/, back into its build/. The SQL
+  // directories of the step may hold only a README (.dockerignore drops
+  // Markdown), so they are made to exist for the migrate stage's COPY.
   it("moves the seeds out of build/, in the RUN that built them", () => {
     const builder = stage(api, "builder");
 
     expect(builder[builder.length - 1]).toBe(
-      "RUN yarn build && mkdir release && mv build/seed.js build/import-violation-codes.js release/",
+      "RUN yarn build && mkdir release && mv build/seed.js build/import-violation-codes.js build/prebuild-online-ddl.js build/release-steps.js release/ && mkdir -p prisma/concurrent prisma/post-deploy infra/sql",
     );
     expect(read("tsup.config.ts")).toMatch(
       /seed: "\.\/infra\/scripts\/seed\.ts"/,
@@ -347,7 +356,7 @@ describe("the API image's build stage", () => {
  * - The runner copies the most stable first: a source-only commit re-ships
  *   build/ alone (~1 MB compressed), never node_modules.
  *
- * Both images run before the push (deploy.yml, "Smoke test the API image"):
+ * Both images run before the push (staging.yml, "Smoke test the API image"):
  * the API refusing the empty database, the release image migrating it from
  * scratch with the seeds, and the API's boot on top.
  */
@@ -558,6 +567,9 @@ describe("the release image (trajetto-api-migrate)", () => {
       "COPY --from=builder --chown=nodejs:nodejs /app/prisma.config.ts ./migrate/prisma.config.ts",
       "COPY --from=builder --chown=nodejs:nodejs /app/prisma/schema.prisma ./migrate/prisma/schema.prisma",
       "COPY --from=builder --chown=nodejs:nodejs /app/prisma/migrations ./migrate/prisma/migrations",
+      "COPY --from=builder --chown=nodejs:nodejs /app/prisma/concurrent ./migrate/prisma/concurrent",
+      "COPY --from=builder --chown=nodejs:nodejs /app/prisma/post-deploy ./migrate/prisma/post-deploy",
+      "COPY --from=builder --chown=nodejs:nodejs /app/infra/sql ./migrate/infra/sql",
       "COPY --from=builder --chown=nodejs:nodejs /app/release/ ./build/",
     ]);
     // A later layer would only hide files: nothing runs or deletes here.

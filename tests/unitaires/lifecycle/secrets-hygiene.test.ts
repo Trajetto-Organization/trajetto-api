@@ -4,6 +4,8 @@ import { resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { ACCESS_CODE_ALPHABET } from "@/modules/user/services/driver-enrollment";
+
 /**
  * Secrets stay out of the repository, and a new one is caught (INFRA-21).
  *
@@ -16,6 +18,12 @@ import { describe, expect, it } from "vitest";
  * be added by accident.
  */
 const ROOT = process.cwd();
+
+/**
+ * gitleaks' inline allow comment, put together at run time: spelled out in
+ * this file, it would be one more line for inlineAllowances() to find.
+ */
+const ALLOW_MARKER = ["gitleaks", "allow"].join(":");
 
 function isIgnored(path: string): boolean {
   try {
@@ -99,6 +107,27 @@ describe("the branch CI", () => {
     ).toEqual([]);
   });
 
+  // A value that is public by design but looks like a key to the generic
+  // rule is allowed by gitleaks' inline allow comment on the very line that
+  // fires, so the allowance moves with the line. A .gitleaksignore
+  // fingerprint without its commit (file:rule:line) would pin a line number
+  // instead: the scan turns red as soon as the literal's line lands in a
+  // commit at another number (the file's first commit after a line was
+  // added above it, an edit to that line, a rebase or squash). gitleaks
+  // honours that comment on any line it scans, Markdown and this file
+  // included, and against every rule, a provider's too. So each one is
+  // listed here, whole line and all, wherever it sits: a real secret cannot
+  // be waved through by a comment nobody reviewed, nor slipped onto a line
+  // that was.
+  it("allows each public-by-design value inline, on the line that fires, and nothing else", () => {
+    expect(inlineAllowances()).toEqual([
+      {
+        file: "src/modules/user/services/driver-enrollment.ts",
+        line: `const ACCESS_CODE_ALPHABET = "${ACCESS_CODE_ALPHABET}"; // ${ALLOW_MARKER}`,
+      },
+    ]);
+  });
+
   it("baselines the findings the history already had, by fingerprint", () => {
     const ignore = resolve(ROOT, ".gitleaksignore");
 
@@ -118,6 +147,36 @@ describe("the branch CI", () => {
     }
   });
 });
+
+/**
+ * Every line that carries gitleaks' inline allow comment, in any file git
+ * sees (tracked or not yet committed, never an ignored one), trimmed. No
+ * path is left out: gitleaks scans Markdown and this file too, and the
+ * comment silences every rule on its line.
+ */
+function inlineAllowances(): { file: string; line: string }[] {
+  let hits = "";
+
+  try {
+    hits = execFileSync(
+      "git",
+      ["grep", "--untracked", "-I", "-n", "-F", "-e", ALLOW_MARKER, "--", "."],
+      { cwd: ROOT, encoding: "utf8" },
+    );
+  } catch (error) {
+    // Exit status 1: no match at all.
+    if ((error as { status?: number }).status !== 1) throw error;
+  }
+
+  return hits
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((hit) => {
+      const [, file, line] = /^([^:]+):\d+:(.*)$/.exec(hit) ?? [];
+
+      return { file: file ?? hit, line: (line ?? "").trim() };
+    });
+}
 
 /** The jobs of a workflow by key: from `  <key>:` up to the next job. */
 function jobsOf(workflow: string): Map<string, string> {
@@ -153,41 +212,54 @@ function gitleaksCommand(job: string): string {
 /**
  * main never ran the scan (INFRA-21): ci.yml only triggers on the other
  * branches, so a direct push or a merge that brought a key in built and
- * published an image anyway. deploy.yml runs the same scan — same image,
- * same flags, same .gitleaksignore — and no image is built before it passes.
+ * published an image anyway. Every workflow that scans — the branch CI,
+ * staging and the pull request into main — runs the same scan (same image,
+ * same flags, same .gitleaksignore), and no image is built before it passes.
  */
 describe("the deploy pipeline", () => {
-  const ci = jobsOf(
-    readFileSync(resolve(ROOT, ".github/workflows/ci.yml"), "utf8"),
-  );
-  const deploy = jobsOf(
-    readFileSync(resolve(ROOT, ".github/workflows/deploy.yml"), "utf8"),
-  );
+  const read = (file: string) =>
+    jobsOf(readFileSync(resolve(ROOT, `.github/workflows/${file}`), "utf8"));
+  const ci = read("ci.yml");
 
-  it("scans the whole history exactly as the branch CI does", () => {
-    const scan = deploy.get("secrets") ?? "";
+  it.each(["staging.yml", "pr.yml"])(
+    "%s scans the whole history exactly as the branch CI does",
+    (file) => {
+      const scan = read(file).get("secrets") ?? "";
 
-    expect(scan, "secrets job in deploy.yml").toMatch(/fetch-depth: 0/);
-    expect(gitleaksCommand(scan)).not.toBe("");
-    expect(gitleaksCommand(scan)).toBe(
-      gitleaksCommand(ci.get("secrets") ?? ""),
-    );
-  });
+      expect(scan, `secrets job in ${file}`).toMatch(/fetch-depth: 0/);
+      expect(scan).toMatch(/\n {4}name: Secret scan\r?\n/);
+      expect(gitleaksCommand(scan)).not.toBe("");
+      expect(gitleaksCommand(scan)).toBe(
+        gitleaksCommand(ci.get("secrets") ?? ""),
+      );
+    },
+  );
 
   it("builds no image before the scan passes", () => {
-    // An image that leaves the runner: a build that pushes. The ai-ocr job
+    // An image that leaves the runner: a build that pushes. The AI OCR job
     // builds only its `test` stage (pytest inside the image) and outputs
     // nothing, in parallel with the scan, as `docker build --target test`
     // did before it moved to Buildx for the cache.
-    const builds = [...deploy].filter(
+    const jobs = [
+      "ci.yml",
+      "staging.yml",
+      "pr.yml",
+      "production.yml",
+      "validate.yml",
+    ]
+      .map(read)
+      .flatMap((map) => [...map]);
+    const builds = jobs.filter(
       ([, job]) =>
         /uses: docker\/build-push-action@/.test(job) &&
         /\n\s+push: true\r?\n/.test(job),
     );
 
-    expect(builds.length).toBeGreaterThan(0);
+    expect(builds.map(([name]) => name)).toEqual(["build"]);
 
-    for (const [name, job] of builds)
+    for (const [name, job] of builds) {
       expect(needsOf(job), name).toContain("secrets");
+      expect(needsOf(job), name).toContain("gate");
+    }
   });
 });

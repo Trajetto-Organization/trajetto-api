@@ -6,6 +6,7 @@ import {
   isCredentialFailure,
   providerDetailOf,
   suppressedChannels,
+  throttledProviderOf,
 } from "@/shared/notifications/delivery-diagnostics";
 
 /**
@@ -100,6 +101,34 @@ describe("reading the detail off a thrown error", () => {
   });
 });
 
+/**
+ * Plano-escala F3-15c: a provider's refusal for RATE, which the
+ * provider-throttled alert counts and which, with the provider's rate on,
+ * waits without spending an attempt. Meta's pair limit is one recipient
+ * written to too often, not the platform's pace.
+ */
+describe("a refusal for rate, recognised from the detail", () => {
+  it.each([
+    [{ provider: "whatsapp", httpStatus: 400, errorCode: 130429 }, "whatsapp"],
+    [{ provider: "whatsapp", httpStatus: 429 }, "whatsapp"],
+    [{ provider: "whatsapp", errorCode: "130429" }, "whatsapp"],
+    [{ provider: "email", smtpReply: 451, throttled: true }, "email"],
+    [{ provider: "push", httpStatus: 429 }, "push"],
+  ] as const)("%o is %s's", (detail, provider) => {
+    expect(throttledProviderOf(detail)).toBe(provider);
+  });
+
+  it.each([
+    { provider: "whatsapp", httpStatus: 400, errorCode: 131056 },
+    { provider: "whatsapp", httpStatus: 401, errorCode: 190 },
+    { provider: "email", smtpReply: 452 },
+    { provider: "push", httpStatus: 503 },
+    undefined,
+  ] as const)("not %o", (detail) => {
+    expect(throttledProviderOf(detail)).toBeNull();
+  });
+});
+
 describe("a credential failure, recognised from lastError", () => {
   it.each([
     "[whatsapp http=401 code=190] Session has expired",
@@ -134,6 +163,7 @@ describe("the channels an event left out, and why", () => {
     emailNotificationsEnabled: true,
     whatsappNotificationsEnabled: true,
     hasWhatsAppPhone: true,
+    hasEmail: true,
   };
 
   const content = {
@@ -168,6 +198,23 @@ describe("the channels an event left out, and why", () => {
       suppressedChannels({ ...everything, hasWhatsAppPhone: false }, content),
     ).toEqual([
       { channel: NotificationChannel.WHATSAPP, reason: "no_contact" },
+    ]);
+  });
+
+  // Decision D02 (plan of 02/11/2026): a driver's login may have no e-mail.
+  // That is a missing contact, not something the driver chose.
+  it("tells a missing e-mail apart from an e-mail preference", () => {
+    expect(
+      suppressedChannels({ ...everything, hasEmail: false }, content),
+    ).toEqual([{ channel: NotificationChannel.EMAIL, reason: "no_contact" }]);
+
+    expect(
+      suppressedChannels(
+        { ...everything, hasEmail: false, emailNotificationsEnabled: false },
+        content,
+      ),
+    ).toEqual([
+      { channel: NotificationChannel.EMAIL, reason: "preference_off" },
     ]);
   });
 

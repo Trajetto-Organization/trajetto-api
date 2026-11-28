@@ -12,6 +12,7 @@ import {
   TOWER_DRIVER_REFUSAL,
   resolveOperationsBusiness,
 } from "./operations-viewer";
+import { towerSnapshot, type SnapshotBody } from "./tower-snapshot";
 
 import {
   ENDED_ROUTE_VISIBLE_MS,
@@ -26,7 +27,13 @@ import {
   type TowerVehicleState,
 } from "@/shared/route/control-tower-rules";
 import { operationDay } from "@/shared/route/operation-day-rules";
+import {
+  inheritedFromRunningRoutes,
+  isRouteLeftOpen,
+} from "@/shared/route/route-left-open";
 import { dateOnlyKey, resolveTimeZone } from "@/shared/time/business-day";
+import type { GeofenceOutcome } from "@/shared/delivery/geofence/geofence-rules";
+import type { TenantSnapshotRead } from "@/shared/cache/tenant-snapshot";
 
 interface ControlTowerRequest {
   userId: string;
@@ -34,6 +41,17 @@ interface ControlTowerRequest {
 
   /** The clock. Only tests pass it; the tower always asks about now. */
   now?: Date;
+}
+
+interface ControlTowerSnapshotRequest {
+  userId: string;
+  businessId?: string;
+
+  /** x-trajetto-refresh: a read newer than the copy, if it is 2 s old. */
+  refresh: boolean;
+
+  /** The route's serializer: the tower becomes the body it would send. */
+  body: SnapshotBody<ControlTower>;
 }
 
 interface TowerPosition {
@@ -89,6 +107,29 @@ interface TowerActiveRoute {
   lastSignalAt: string | null;
 
   progress: { resolved: number; total: number };
+
+  /**
+   * Left open (decision D26, plan of 02/11/2026 H3): started before the
+   * company's today or more than 16 h ago. The badge reads "Aberta desde
+   * dd/mm · conclua ou cancele".
+   */
+  stale: boolean;
+
+  /** The departure of a route left open; null for one of today. */
+  openSince: string | null;
+}
+
+/**
+ * What the day's funnel inherited from routes left open (H3): their open
+ * stops are documents "Em rota" today that today's plan never had. The note
+ * reads "inclui N de rotas abertas desde dd/mm".
+ */
+interface TowerInherited {
+  routes: number;
+  deliveries: number;
+
+  /** The oldest departure among them; null when there is none. */
+  since: string | null;
 }
 
 interface TowerEvent {
@@ -108,6 +149,16 @@ interface TowerEvent {
   detail: string | null;
   failure: boolean;
 
+  /**
+   * The geofence record of an arrival, proof or occurrence (plan of
+   * 02/11/2026, E5), named as in the delivery detail: OUTSIDE is the web's
+   * "Fora do raio" flag. Null on a route move and on a record from before
+   * the geofence.
+   */
+  geofence_outcome: GeofenceOutcome | null;
+  distance_m: number | null;
+  accuracy_m: number | null;
+
   occurredAt: string;
 }
 
@@ -118,6 +169,8 @@ interface ControlTower {
 
   positions: TowerPosition[];
   activeRoutes: TowerActiveRoute[];
+
+  inherited: TowerInherited;
 
   funnel: Array<{ status: FunnelStatus; label: string; total: number }>;
   progress: { finished: number; total: number; rate: number | null };
@@ -139,6 +192,12 @@ const POSITION_WINDOW_MS = 12 * 60 * 60 * 1000;
 
 /** How many events the "últimos eventos" widget shows. */
 const EVENT_LIMIT = 15;
+
+/**
+ * The tower of each company, once per TOWER_SNAPSHOT_TTL_MS in this process
+ * (plano-escala F4-11): every open tab of a carrier asks the same thing.
+ */
+const controlTowerSnapshot = towerSnapshot("control-tower");
 
 /**
  * Everything the tower draws, in one request.
@@ -173,12 +232,45 @@ class ControlTowerUseCase {
     businessId,
     now = new Date(),
   }: ControlTowerRequest): Promise<ControlTower> {
-    const resolvedBusinessId = await resolveOperationsBusiness(this.user, {
+    return this.build(await this.resolve(userId, businessId), now);
+  }
+
+  /**
+   * The tower through the company's snapshot (F4-11): the same checks, on
+   * every request and before the snapshot is looked at, then the body of
+   * the company's copy — computed here once per interval, outside this
+   * request, from the company alone.
+   */
+  async executeSnapshot({
+    userId,
+    businessId,
+    refresh,
+    body,
+  }: ControlTowerSnapshotRequest): Promise<TenantSnapshotRead> {
+    const resolvedBusinessId = await this.resolve(userId, businessId);
+
+    return controlTowerSnapshot.read({
+      businessId: resolvedBusinessId,
+      refresh,
+      compute: async () =>
+        body(await this.build(resolvedBusinessId, new Date())),
+    });
+  }
+
+  /** Who may read which company's tower: a manager's own, a MASTER's named one. */
+  private resolve(userId: string, businessId?: string): Promise<string> {
+    return resolveOperationsBusiness(this.user, {
       userId,
       businessId,
       driverRefusal: TOWER_DRIVER_REFUSAL,
     });
+  }
 
+  /** The company's tower at `now`; nothing in it depends on who asked. */
+  private async build(
+    resolvedBusinessId: string,
+    now: Date,
+  ): Promise<ControlTower> {
     // In sequence, not in a Promise.all: each read is indexed and small, and
     // the tower polls every 30 s in every open tab. A pool is shared with the
     // writes of the whole fleet.
@@ -284,8 +376,12 @@ class ControlTowerUseCase {
       lastSignal.set(signal.driverId, signal.recorded_at);
     }
 
+    const leftOpen = (route: TowerRouteWithStops) =>
+      isRouteLeftOpen(route.started_at, timeZone, now);
+
     const activeRoutes = running.map((route) => {
       const progress = routeProgress(route.stops);
+      const stale = leftOpen(route);
 
       return {
         routeId: route.id,
@@ -304,8 +400,19 @@ class ControlTowerUseCase {
           resolved: progress.delivered + progress.failed,
           total: progress.total - progress.cancelled,
         },
+
+        stale,
+        openSince: stale ? (route.started_at?.toISOString() ?? null) : null,
       } satisfies TowerActiveRoute;
     });
+
+    // The same reading the operation summary gives, and the same summary
+    // as the deliveries list's cards, so the three notes never disagree.
+    const inherited: TowerInherited = inheritedFromRunningRoutes(
+      running,
+      timeZone,
+      now,
+    );
 
     // Punctuality is about the day's plan only: tomorrow's routes are not
     // "não saíram" today, and a cancelled route has no departure to judge.
@@ -321,6 +428,7 @@ class ControlTowerUseCase {
 
       positions: placed,
       activeRoutes,
+      inherited,
 
       funnel: buildFunnel(counts),
       progress: dayProgress(counts),
@@ -344,6 +452,10 @@ class ControlTowerUseCase {
         detail: entry.detail,
         failure: entry.failure,
 
+        geofence_outcome: entry.geofence_outcome ?? null,
+        distance_m: entry.distance_m ?? null,
+        accuracy_m: entry.accuracy_m ?? null,
+
         // Listed in the order they reached us, stamped with when they
         // happened: an offline proof shows its real hour (MOB-08).
         occurredAt: entry.occurredAt.toISOString(),
@@ -355,9 +467,11 @@ class ControlTowerUseCase {
 export {
   ControlTowerUseCase,
   EVENT_LIMIT,
+  controlTowerSnapshot,
   POSITION_WINDOW_MS,
   type ControlTower,
   type TowerActiveRoute,
   type TowerEvent,
+  type TowerInherited,
   type TowerPosition,
 };

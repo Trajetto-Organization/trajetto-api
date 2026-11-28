@@ -1,6 +1,6 @@
 import { inject, injectable } from "tsyringe";
 import { Prisma } from "@prisma/client";
-import { ZodError } from "zod";
+import type { ZodError } from "zod";
 
 import { IUserRepository } from "@/modules/user/repositories/IUser-repository";
 import { IOccurrenceTypeRepository } from "@/modules/occurrence-type/repositories/IOccurrence-type-repository";
@@ -13,6 +13,7 @@ import { NotificationService } from "@/shared/services/notification-service";
 
 import { UploadService } from "@/shared/services/upload-service";
 import { OutboxService } from "@/shared/notifications/outbox-service";
+import { validationError } from "@/shared/validation/validation-error";
 
 import database from "@/../infra/database";
 
@@ -37,6 +38,10 @@ import { announceStopSettled } from "@/shared/route/route-realtime";
 
 import { AppError } from "@/shared/errors/AppError";
 import { callerNotFound } from "@/shared/delivery/caller-not-found";
+import { submissionReused } from "@/shared/delivery/submission-reused";
+import { violatesUniqueOn } from "@/shared/delivery/unique-violation";
+import type { GeofenceCheck } from "@/shared/delivery/geofence/geofence-check";
+import { resolveEnabledModules } from "@/modules/user/usecases/get-user/get-user-usecase";
 import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 
 import { WebhookFanOutService } from "@/shared/integration/webhook-fan-out-service";
@@ -48,8 +53,15 @@ import {
 import {
   acceptedAttachments,
   missingRequirements,
+  type MissingRequirement,
   type OccurrenceCategoryKey,
 } from "@/modules/occurrence-type/rules/occurrence-category-rules";
+import {
+  tappedBeforeRequirementsChanged,
+  waivedRequirementsNote,
+} from "./requirement-waiver";
+import { lateProofNote, lateProofVerdict, type LateProof } from "./late-proof";
+import type { LostStop } from "@/modules/route/dtos/route-dto";
 
 import { sendOccurrenceAuthorizationToBusiness } from "@/websocket";
 
@@ -149,6 +161,10 @@ interface ReportOccurrenceRequest {
    * that never moves status, quota or suggestion.
    */
   device_precheck?: DevicePrecheck | null;
+
+  /** E4: the fix's accuracy (metres) and age at the tap, for the geofence. */
+  accuracy?: number | null;
+  positionAgeMs?: number | null;
 }
 
 interface ReportOccurrenceResult {
@@ -172,11 +188,19 @@ interface ReportOccurrenceResult {
 
   /** Decision 14.5: the support ticket the report opened (or already had). */
   ticket?: { id: string; number: number } | null;
+
+  /**
+   * A proof that arrived after the delivery left the driver (K7, decision
+   * D27): APPLIED, accepted as Entregue and flagged; EVIDENCE, kept with no
+   * effect. Either way the tower reviews it — the app says "Enviado para
+   * análise da central". Absent for every other report.
+   */
+  late_proof?: LateProof;
 }
 
 /** A delivered report without its key: the proof's idempotency anchor. */
 function deliveredKeyRequired(): ZodError {
-  return new ZodError([
+  return validationError([
     {
       code: "custom",
       path: ["client_submission_id"],
@@ -214,6 +238,10 @@ class ReportDeliveryOccurrenceUseCase {
     // Decision 14.5. Optional so callers built before the tickets keep working.
     @inject("OccurrenceTicketService")
     private occurrenceTickets?: OccurrenceTicketService,
+    // Plan of 02/11/2026 (E4). Optional for the same reason; the container
+    // always provides it.
+    @inject("GeofenceCheck")
+    private geofence?: GeofenceCheck,
   ) {}
 
   /** The repositories and services the shared occurrence effect writes through. */
@@ -253,6 +281,8 @@ class ReportDeliveryOccurrenceUseCase {
     legacy = false,
     device_precheck,
     capture,
+    accuracy,
+    positionAgeMs,
   }: ReportOccurrenceRequest): Promise<ReportOccurrenceResult> {
     const findUser = await this.user.findUserById(userId);
 
@@ -285,9 +315,19 @@ class ReportDeliveryOccurrenceUseCase {
       throw new DeliveryNotFoundError();
     }
 
-    // Drivers only report on their own deliveries.
+    // Drivers only report on their own deliveries — except the proof of an
+    // attempt a cancellation or a status change took from this driver while
+    // they had no signal (K7, decision D27), weighed once the type is known.
+    let lostStop: LostStop | null = null;
+
     if (findUser.driverId && findDelivery.driverId !== findUser.driverId) {
-      throw new DeliveryNotFoundError();
+      lostStop = await this.route.findLostStop(
+        deliveryId,
+        findUser.driverId,
+        businessId,
+      );
+
+      if (!lostStop) throw new DeliveryNotFoundError();
     }
 
     const findType =
@@ -307,6 +347,10 @@ class ReportDeliveryOccurrenceUseCase {
       findType.category ?? "NOT_DELIVERED";
     const delivered = category === "DELIVERED";
     const byDriver = Boolean(findUser.driverId);
+
+    // Only a proof gets the late path (K7); anything else about a delivery
+    // that is no longer the driver's reads as missing, as before.
+    if (lostStop && !delivered) throw new DeliveryNotFoundError();
 
     if (findType.is_active === false && !legacy) {
       // A proof made offline is not lost because somebody deactivated its
@@ -349,8 +393,12 @@ class ReportDeliveryOccurrenceUseCase {
 
     // The requirements bind the person in the field: a manager on the web
     // records an administrative fact and is not asked for attachments.
+    // What a driver's report went without because the company changed the
+    // requirements after the tap (K2): accepted, and flagged on the trail.
+    let waived: MissingRequirement[] = [];
+
     if (byDriver) {
-      const [missing] = missingRequirements(
+      const missing = missingRequirements(
         {
           category,
           requires_photo: findType.requires_photo === true,
@@ -364,7 +412,18 @@ class ReportDeliveryOccurrenceUseCase {
         },
       );
 
-      if (missing) throw new AppError(missing.message, 400, missing.code);
+      if (missing.length > 0) {
+        if (
+          !tappedBeforeRequirementsChanged(
+            occurredAt,
+            findType.requirements_changed_at,
+          )
+        ) {
+          throw new AppError(missing[0].message, 400, missing[0].code);
+        }
+
+        waived = missing;
+      }
     }
 
     // Decision 6.2: the answers against the form as it is NOW. A phone that
@@ -399,14 +458,17 @@ class ReportDeliveryOccurrenceUseCase {
 
     // A delivery that can no longer become DELIVERED: unless this very
     // submission is what made it so (a twin committed after the pre-check),
-    // the same refusal the proof route always gave (IDEMP-07).
+    // the same refusal the proof route always gave (IDEMP-07) — or the late
+    // proof of an attempt this driver lost while offline (K7, D27).
+    let lateProof: LateProof | null = null;
+
     if (delivered) {
       const transition = canTransitionDelivery(
         findDelivery.status,
         "DELIVERED",
       );
 
-      if (!transition.allowed) {
+      if (!transition.allowed || lostStop) {
         const twin = await this.replayIfRecorded(
           client_submission_id!,
           businessId,
@@ -415,13 +477,53 @@ class ReportDeliveryOccurrenceUseCase {
 
         if (twin) return twin;
 
-        throw new AppError(
-          transition.reason!,
-          400,
-          "INVALID_STATUS_TRANSITION",
+        lostStop ??= await this.route.findLostStop(
+          deliveryId,
+          findUser.driverId!,
+          businessId,
         );
+
+        if (!lostStop) {
+          throw new AppError(
+            transition.reason!,
+            400,
+            "INVALID_STATUS_TRANSITION",
+          );
+        }
+
+        lateProof = lateProofVerdict({
+          occurredAt,
+          lostAt: lostStop.lostAt,
+          deliveryStatus: findDelivery.status,
+          deliveryDriverId: findDelivery.driverId,
+          driverId: findUser.driverId!,
+          asksTheTower: findType.requires_authorization === true,
+          // The lost stop is closed, and a delivery holds one open stop at
+          // most: any open stop now is a new plan's.
+          onAnotherRoute:
+            (await this.delivery.findOpenStopRoute(deliveryId)) !== null,
+        });
       }
     }
+
+    // E4: where the driver was against the company's radius, for the proof
+    // and the occurrence alike, recorded with the report. Under BLOCK a
+    // fresh proof outside it stops here (422 ARRIVAL_OUTSIDE_GEOFENCE); an
+    // occurrence or a queued report is only flagged. A manager on the panel
+    // is not at the address: nothing to weigh. After every replay check, so
+    // a resend never meets a radius changed since.
+    const geofence = byDriver
+      ? await this.geofence?.evaluate({
+          businessId,
+          enabledModules: resolveEnabledModules(findUser),
+          action: delivered ? "PROOF" : "OCCURRENCE",
+          address: findDelivery,
+          position: { latitude, longitude },
+          accuracy: accuracy ?? null,
+          positionAgeMs: positionAgeMs ?? null,
+          occurredAt: occurredAt ?? null,
+        })
+      : undefined;
 
     // Decision 6.3. A type that asks the tower waits for it — unless the
     // author IS the tower: a panel report by someone the queue would let
@@ -435,11 +537,17 @@ class ReportDeliveryOccurrenceUseCase {
       !byDriver &&
       canDecideAuthorizations(findUser as unknown as PermissionPrincipal);
 
-    let authorizationStatus: OccurrenceAuthorizationStatus = !asksTheTower
-      ? "NOT_REQUIRED"
-      : selfAuthorized
-        ? "APPROVED"
-        : "PENDING";
+    // A late proof kept as evidence (K7) has nothing to apply or to ask:
+    // SUPERSEDED, the status of a report whose attempt already ended. One
+    // accepted as Entregue applies as a proof does.
+    let authorizationStatus: OccurrenceAuthorizationStatus =
+      lateProof === "EVIDENCE"
+        ? "SUPERSEDED"
+        : lateProof === "APPLIED" || !asksTheTower
+          ? "NOT_REQUIRED"
+          : selfAuthorized
+            ? "APPROVED"
+            : "PENDING";
 
     // The effect applies now only for these two; a request (PENDING or
     // SUPERSEDED) applies nothing.
@@ -472,8 +580,11 @@ class ReportDeliveryOccurrenceUseCase {
           })
         : null;
 
-    // "On which route" for the feed and the history (TWR-6).
+    // "On which route" for the feed and the history (TWR-6). A late proof
+    // (K7) belongs to the route it was made on, the one it was taken from.
     const openStop = await this.delivery.findOpenStopRoute(deliveryId);
+    const trailRouteId =
+      lateProof && lostStop ? lostStop.routeId : (openStop?.routeId ?? null);
 
     // The row this attempt wrote, if any: a twin found after a failure is
     // another request's only when it is not this one (the rollback removes
@@ -568,12 +679,95 @@ class ReportDeliveryOccurrenceUseCase {
             receipt_photo: receiptPath,
             signature: signaturePath,
             received_by: receivedBy,
+            ...geofence,
           },
           tx,
         );
 
         occurrenceId = created.id;
         attemptedId = created.id;
+
+        // K2: the flag that a report went without requirements switched on
+        // after its tap, beside the report on the trail and in its commit.
+        if (waived.length > 0) {
+          await this.delivery.createDeliveryEvent(
+            {
+              type: "NOTE",
+              deliveryId,
+              actor: "SYSTEM",
+              note: waivedRequirementsNote(findType.name, waived),
+              occurred_at: occurredAt ?? null,
+              occurrenceId,
+              routeId: trailRouteId,
+            },
+            tx,
+          );
+        }
+
+        // K7: the flag of a late proof, accepted or kept as evidence.
+        if (lateProof && lostStop) {
+          await this.delivery.createDeliveryEvent(
+            {
+              type: "NOTE",
+              deliveryId,
+              actor: "SYSTEM",
+              note: lateProofNote(lateProof, lostStop),
+              occurred_at: occurredAt ?? null,
+              occurrenceId,
+              routeId: trailRouteId,
+            },
+            tx,
+          );
+        }
+
+        // Decision 14.5: the report's support ticket, in the same
+        // transaction, last (lock order: route, delivery, occurrence,
+        // ticket). A late proof always opens one (K7): it is the tower's
+        // notice, whatever the category's own rule says.
+        const ticketDriverId = lateProof
+          ? findUser.driverId
+          : findDelivery.driverId;
+
+        const openTicket = async (): Promise<void> => {
+          if (
+            !this.occurrenceTickets ||
+            !ticketDriverId ||
+            !(
+              lateProof ||
+              shouldOpenTicketForOccurrence({
+                authorizationStatus,
+                byDriver,
+                category,
+                isSystem: findType.is_system === true,
+              })
+            )
+          ) {
+            return;
+          }
+
+          const opened = await this.occurrenceTickets.open(
+            {
+              businessId,
+              deliveryId,
+              driverId: ticketDriverId,
+              occurrenceId,
+              occurrenceTypeName: findType.name,
+              recipientName: findDelivery.recipient_name,
+              actor: {
+                kind: byDriver ? "DRIVER_APP" : "USER",
+                id: userId,
+                name: findUser.name,
+              },
+            },
+            tx,
+          );
+
+          openedTicket = {
+            id: opened.ticket.id,
+            number: opened.ticket.number,
+            linked: opened.linked,
+          };
+        };
 
         // A delivery that applies now is the PROOF, which names this
         // occurrence: the fact's event is that one, not an OCCURRENCE too.
@@ -597,13 +791,26 @@ class ReportDeliveryOccurrenceUseCase {
             eventSubmissionId: client_submission_id ?? null,
             devicePrecheck,
             capture,
-            routeId: openStop?.routeId ?? null,
+            routeId: trailRouteId,
+            geofence,
+            // A late proof (K7): the delivery goes back to the driver and
+            // truck of the route it was taken from, who delivered it.
+            owner:
+              lateProof === "APPLIED" && lostStop
+                ? {
+                    driverId: findUser.driverId!,
+                    vehicleId: lostStop.vehicleId,
+                  }
+                : undefined,
             onTicketSuperseded: (ticketId) => supersededTickets.add(ticketId),
             onPlanDropped: (bump) => droppedPlans.push(bump),
           });
 
           nextStatus = "DELIVERED";
           proofApplied = true;
+
+          // Only a late proof opens a ticket on a delivery (K7).
+          await openTicket();
 
           return;
         }
@@ -621,46 +828,13 @@ class ReportDeliveryOccurrenceUseCase {
             longitude: longitude ?? null,
             occurred_at: occurredAt ?? null,
             occurrenceId,
-            routeId: openStop?.routeId ?? null,
+            routeId: trailRouteId,
+            ...geofence,
           },
           tx,
         );
 
-        // Decision 14.5: the report opens its support ticket in the same
-        // transaction, last (lock order: route, delivery, occurrence, ticket).
-        if (
-          this.occurrenceTickets &&
-          findDelivery.driverId &&
-          shouldOpenTicketForOccurrence({
-            authorizationStatus,
-            byDriver,
-            category,
-            isSystem: findType.is_system === true,
-          })
-        ) {
-          const opened = await this.occurrenceTickets.open(
-            {
-              businessId,
-              deliveryId,
-              driverId: findDelivery.driverId,
-              occurrenceId,
-              occurrenceTypeName: findType.name,
-              recipientName: findDelivery.recipient_name,
-              actor: {
-                kind: byDriver ? "DRIVER_APP" : "USER",
-                id: userId,
-                name: findUser.name,
-              },
-            },
-            tx,
-          );
-
-          openedTicket = {
-            id: opened.ticket.id,
-            number: opened.ticket.number,
-            linked: opened.linked,
-          };
-        }
+        await openTicket();
 
         if (pending) {
           // No effect while it waits: no FAILED, no stop, no webhook. Only
@@ -713,6 +887,7 @@ class ReportDeliveryOccurrenceUseCase {
           previousStatus: findDelivery.status,
           nextStatus,
           occurrenceTypeName: findType.name,
+          occurrenceTypeCode: findType.code ?? null,
           blocksDelivery: findType.blocks_delivery === true,
           description: description ?? null,
           photosCount: photoPaths.length,
@@ -741,7 +916,7 @@ class ReportDeliveryOccurrenceUseCase {
       // The panel and the control tower are watching this stop.
       announceStopSettled(businessId, settled);
 
-      await announceDroppedPlans(this.user, businessId, droppedPlans);
+      await announceDroppedPlans(this.user, businessId, droppedPlans, userId);
 
       // The tickets whose request this proof superseded (design §5.2).
       for (const ticketId of supersededTickets) {
@@ -807,6 +982,7 @@ class ReportDeliveryOccurrenceUseCase {
         ticket: openedTicket
           ? { id: openedTicket.id, number: openedTicket.number }
           : null,
+        ...(lateProof && { late_proof: lateProof }),
       };
     } catch (error) {
       // A resend whose twin committed after the pre-check above: its insert
@@ -825,6 +1001,13 @@ class ReportDeliveryOccurrenceUseCase {
         );
 
         if (twin && twin.id !== attemptedId) return twin;
+
+        // Refused by the unique index with no twin of this submission
+        // behind it: another company spent the key (its row is invisible
+        // here). A 409 the app files for review, never a 500 (K13).
+        if (violatesUniqueOn(error, "client_submission_id")) {
+          throw submissionReused();
+        }
       }
 
       if (error instanceof DeliveryStatusConflictError) {
@@ -846,6 +1029,10 @@ class ReportDeliveryOccurrenceUseCase {
    * Where an already recorded submission stands, or null. The occurrence is
    * the anchor; a PROOF event carrying the key (a proof recorded by the
    * legacy route before decision 14.3) is the same delivered submission.
+   *
+   * The key on another delivery, or on an event that is not a PROOF (an
+   * arrival, "a caminho"), is not this submission: 409 SUBMISSION_ID_REUSED
+   * rather than somebody else's result (K13).
    */
   async replayIfRecorded(
     clientSubmissionId: string,
@@ -858,6 +1045,8 @@ class ReportDeliveryOccurrenceUseCase {
     );
 
     if (occurrence) {
+      if (occurrence.deliveryId !== deliveryId) throw submissionReused();
+
       return {
         id: occurrence.id,
         authorization_status: occurrence.authorization_status,
@@ -876,7 +1065,11 @@ class ReportDeliveryOccurrenceUseCase {
       businessId,
     );
 
-    if (event && event.type === "PROOF") {
+    if (event) {
+      if (event.type !== "PROOF" || event.deliveryId !== deliveryId) {
+        throw submissionReused();
+      }
+
       return {
         id: event.id,
         authorization_status: "NOT_REQUIRED",

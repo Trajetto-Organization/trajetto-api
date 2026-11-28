@@ -20,6 +20,7 @@ import { NotificationService } from "@/shared/services/notification-service";
 import { ProfileAccessCannotBeUpdatedByHimselfError } from "../errors/profile-access-cannot-be-updated-by-himself-error";
 import { ProfileAccessBusinessLockedError } from "../errors/profile-access-business-locked-error";
 import { AppError } from "@/shared/errors/AppError";
+import { conflictFromPrisma } from "@/shared/errors/prisma-conflict";
 import { assertTenantAccessToRecord } from "@/modules/middlewares/tenant-authorization";
 import { sendCatalogChangedEvent } from "@/websocket";
 
@@ -128,9 +129,15 @@ class UpdateProfileAccessUseCase {
         return updated;
       });
     } catch (error) {
-      throw new AppError(
-        "Houve um erro ao tentar atualizar o perfil de acesso! Por favor, tente novamente.",
-        500,
+      // Renamed to a name another profile took in between: the lookup's 409.
+      throw (
+        (await conflictFromPrisma(error, {
+          unique: { name: () => new ProfileAccessAlreadyExistsError() },
+        })) ??
+        new AppError(
+          "Houve um erro ao tentar atualizar o perfil de acesso! Por favor, tente novamente.",
+          500,
+        )
       );
     }
 

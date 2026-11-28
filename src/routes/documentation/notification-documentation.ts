@@ -1,6 +1,8 @@
 import { z } from "zod";
+import { responseDateTime } from "./response-date";
 
 import { updateNotificationPreferencesSchema } from "@/schemas/notification-preferences-schema";
+import { readNotificationsByEntitySchema } from "@/schemas/read-notifications-by-entity-schema";
 import { errorResponse } from "./common-responses";
 import { cursorMeta } from "./ndjson";
 
@@ -48,6 +50,7 @@ const notificationSchemas = {
     notificationId: z.string().uuid().describe("ID da notificação"),
   }),
   updatePreferences: updateNotificationPreferencesSchema,
+  readByEntity: readNotificationsByEntitySchema,
 };
 
 const notificationResponses = {
@@ -71,8 +74,8 @@ const notificationResponses = {
     businessId: z.string().nullable(),
     userId: z.string(),
     deliveryId: z.string().nullable(),
-    created_at: z.union([z.string(), z.date()]),
-    updated_at: z.union([z.string(), z.date()]),
+    created_at: responseDateTime(),
+    updated_at: responseDateTime(),
   }),
   notificationMarkedAsRead: z.object({
     message: z.string().default("Notificação marcada como lida!"),
@@ -110,6 +113,15 @@ const allNotificationResponses = {
   allNotificationsMarkedAsRead: z.object({
     message: z.string().describe("Resumo da operação"),
     count: z.number().describe("Quantidade de notificações marcadas"),
+  }),
+  notificationsReadByEntity: z.object({
+    message: z.string().describe("Resumo da operação"),
+    count: z
+      .number()
+      .int()
+      .describe(
+        "Quantas notificações mudaram para lidas agora (0 quando não havia nenhuma: repetir é seguro).",
+      ),
   }),
   pushTokenChanged: z.object({
     message: z.string().describe("Resumo da operação"),

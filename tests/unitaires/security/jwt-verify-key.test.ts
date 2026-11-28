@@ -15,7 +15,7 @@ const SECRET = "a".repeat(48);
  * With a string, jsonwebtoken 9 runs `createPublicKey` on the secret before
  * every verify (and fails), then builds the secret key: measured under load in
  * the production image, that failed parse was ~7% of a replica's CPU, twice per
- * authenticated request (docs/desempenho/carga-2026-10.md).
+ * authenticated request (the load of 07/10/2026, docs/desempenho/README.md).
  */
 describe("hmacVerifyKey", () => {
   it("is a secret KeyObject, built once per secret", () => {

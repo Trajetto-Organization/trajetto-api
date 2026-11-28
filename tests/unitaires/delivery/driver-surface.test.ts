@@ -21,6 +21,8 @@ import { InMemoryRouteRepository } from "@/modules/route/repositories/in-memory/
 
 import { InMemoryOccurrenceTypeRepository } from "@/modules/occurrence-type/repositories/in-memory/in-memory-occurrence-type-repository";
 import { InMemoryVehicleRepository } from "@/modules/vehicle/repositories/in-memory/in-memory-vehicle-repository";
+import { InMemoryBusinessSettingsRepository } from "@/modules/business/repositories/in-memory/in-memory-business-settings-repository";
+import { InMemoryVehicleChecklistRepository } from "@/modules/vehicle-checklist/repositories/in-memory/in-memory-vehicle-checklist-repository";
 
 import type { NotificationService } from "@/shared/services/notification-service";
 import type { UploadService } from "@/shared/services/upload-service";
@@ -34,6 +36,10 @@ import type { Vehicle } from "@/modules/vehicle/dtos/vehicle-dto";
 import { DeliveryNotFoundError } from "@/modules/delivery/usecases/errors/delivery-errors";
 
 import { InMemoryWebhookFanOutService } from "@/shared/integration/in-memory/in-memory-webhook-fan-out-service";
+import {
+  withStatusTrail,
+  withoutCreationLine,
+} from "../../support/status-trail";
 
 // Nothing here asserts on webhooks; the use cases simply require one.
 const webhookStub = new InMemoryWebhookFanOutService();
@@ -234,6 +240,8 @@ describe("driver surface: my-deliveries", () => {
         [],
         [{ id: BUSINESS, timezone: "America/Sao_Paulo" }],
       ),
+      new InMemoryBusinessSettingsRepository(),
+      new InMemoryVehicleChecklistRepository(),
     );
 
     const result = await useCase.execute({
@@ -266,6 +274,8 @@ describe("driver surface: my-deliveries", () => {
         [],
         [{ id: BUSINESS, timezone: "America/Sao_Paulo" }],
       ),
+      new InMemoryBusinessSettingsRepository(),
+      new InMemoryVehicleChecklistRepository(),
     );
 
     await expect(
@@ -282,12 +292,17 @@ function makeStartRoute(repos: ReturnType<typeof makeRepositories>) {
     repos.deliveryRepository,
     repos.vehicleRepository,
     notificationStub,
+    webhookStub.asService(),
   );
 }
 
 describe("driver surface: start route", () => {
+  // The batch departure's SYSTEM lines are asserted below (F2-06).
+  withStatusTrail();
+
   it("moves the driver's pending batch and is idempotent on resend", async () => {
     const repos = makeRepositories();
+    webhookStub.reset();
 
     await seedDelivery(repos.deliveryRepository);
     await seedDelivery(repos.deliveryRepository, {
@@ -321,12 +336,29 @@ describe("driver surface: start route", () => {
     // Another driver's load never moves with this one.
     expect(foreign.status).toBe("PENDING");
 
+    // Each one that left has its line and its webhook (F2-06).
+    const lines = repos.deliveryRepository.events.filter(
+      (event) => event.actor === "SYSTEM" && event.type === "STATUS_CHANGE",
+    );
+
+    expect(lines.map((event) => [event.status_from, event.status_to])).toEqual([
+      ["PENDING", "IN_TRANSIT"],
+      ["PENDING", "IN_TRANSIT"],
+    ]);
+    expect(
+      webhookStub
+        .forTopic("delivery.in_transit")
+        .map((event) => event.payload.delivery_id)
+        .sort(),
+    ).toEqual(lines.map((event) => event.deliveryId).sort());
+
     const resend = await useCase.execute({
       userId: DRIVER_USER_ID,
       businessId: BUSINESS,
     });
 
     expect(resend.started).toBe(0);
+    expect(webhookStub.forTopic("delivery.in_transit")).toHaveLength(2);
   });
 
   it("refuses the departure when no vehicle is linked to the driver", async () => {
@@ -467,9 +499,15 @@ describe("driver surface: arrival", () => {
     await useCase.execute(request);
     await useCase.execute(request);
 
-    expect(repos.deliveryRepository.events).toHaveLength(1);
-    expect(repos.deliveryRepository.events[0].type).toBe("ARRIVAL");
-    expect(repos.deliveryRepository.events[0].latitude).toBe(-22.5);
+    expect(withoutCreationLine(repos.deliveryRepository.events)).toHaveLength(
+      1,
+    );
+    expect(withoutCreationLine(repos.deliveryRepository.events)[0].type).toBe(
+      "ARRIVAL",
+    );
+    expect(
+      withoutCreationLine(repos.deliveryRepository.events)[0].latitude,
+    ).toBe(-22.5);
   });
 
   it("requires the delivery to be in transit", async () => {
@@ -546,7 +584,7 @@ describe("driver surface: proof", () => {
     expect(delivery.delivered_at).toBeInstanceOf(Date);
     expect(delivery.received_by).toBe("Maria Recebedora");
 
-    const [event] = repos.deliveryRepository.events;
+    const [event] = withoutCreationLine(repos.deliveryRepository.events);
     expect(event.type).toBe("PROOF");
     expect(event.photo).toBe(`deliveryPhotos/${BUSINESS}/canhoto.webp`);
     expect(event.signature).toBe(`deliveryPhotos/${BUSINESS}/assinatura.png`);
@@ -555,7 +593,9 @@ describe("driver surface: proof", () => {
     // and the delivery stays proven.
     await useCase.execute(request);
 
-    expect(repos.deliveryRepository.events).toHaveLength(1);
+    expect(withoutCreationLine(repos.deliveryRepository.events)).toHaveLength(
+      1,
+    );
     expect(delivery.status).toBe("DELIVERED");
   });
 
@@ -573,7 +613,9 @@ describe("driver surface: proof", () => {
       }),
     ).rejects.toMatchObject({ code: "INVALID_STATUS_TRANSITION" });
 
-    expect(repos.deliveryRepository.events).toHaveLength(0);
+    expect(withoutCreationLine(repos.deliveryRepository.events)).toHaveLength(
+      0,
+    );
   });
 });
 

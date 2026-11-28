@@ -1,12 +1,27 @@
-import database from "@/../infra/database";
+import database, { readDatabase, replicaDatabase } from "@/../infra/database";
 
 import { Prisma, type PrismaClient } from "@prisma/client";
 
+import { env } from "@/env";
 import { relatedTo, rowsByKey } from "@/shared/database/related-rows";
+import { CURRENT_TIMELINE } from "@/shared/health/cluster-epoch";
+import { countFeedConversion } from "@/shared/integration/feed-metrics";
+import { logger } from "@/shared/logging/logger";
+import { uuid7Floor } from "@/shared/time/uuid7-floor";
+
+import {
+  FeedEpochStaleError,
+  convertedPosition,
+  cursorOf,
+  feedStart,
+  positionAfter,
+  type FeedPosition,
+} from "../commit-order";
 
 import type {
   CursorPage,
   IIntegrationRepository,
+  IntegrationEventListProps,
   IntegrationListProps,
 } from "./IIntegration-repository";
 
@@ -23,6 +38,8 @@ import type { StoredDelivery } from "../usecases/create-delivery/replay-fingerpr
 /** The columns the public delivery shape reads, and no others. */
 const deliverySelect = {
   id: true,
+  // Never published: it signs proof_url (L7).
+  businessId: true,
   code: true,
   invoice_key: true,
   invoice_number: true,
@@ -110,7 +127,29 @@ const routeSelect = {
  * between two rows written in the same millisecond either repeats a document
  * or skips one — and an integration that silently loses a delivery is the
  * worst failure this API can have, because nobody notices for weeks.
+ *
+ * The next page is `id > cursor`, by the value, never Prisma's `cursor`,
+ * which looks the row up and answers an empty page when it is not there.
+ * These lists may read on the standby (plano-escala F4-42), and the page
+ * before may have come from the primary, through another replica: a
+ * standby that has not replayed that row yet would end the walk there,
+ * with every row after it, of any age, left out. By value, the walk goes
+ * on after the row wherever it is (and after a row deleted since).
  */
+/**
+ * Whether a list cursor is an id this API hands out (a lowercase UUID). By
+ * value, `id > cursor` would put any other text before or after every row:
+ * `' OR 1=1 --` sorts before every id and would answer the first page
+ * again. Such a cursor points nowhere, and the page after nowhere is empty,
+ * as it was when the cursor was looked up as a row.
+ */
+const ISSUED_CURSOR =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+function pointsNowhere(cursor: string | undefined): boolean {
+  return cursor !== undefined && cursor !== "" && !ISSUED_CURSOR.test(cursor);
+}
+
 function cursorPage<T extends { id: string }>(
   rows: T[],
   limit: number,
@@ -139,6 +178,7 @@ function cursorPage<T extends { id: string }>(
  */
 function publicEventTopic(event: {
   type: string;
+  status_from?: string | null;
   status_to: string | null;
   occurrence?: {
     authorization_status: string | null;
@@ -153,6 +193,12 @@ function publicEventTopic(event: {
     case "ON_THE_WAY":
       return "delivery.on_the_way";
     case "STATUS_CHANGE":
+      // The line every delivery starts with (F2-06): from nothing is its
+      // creation, the webhook's `delivery.created`, not a `delivery.pending`.
+      if (event.status_from === null && event.status_to === "PENDING") {
+        return "delivery.created";
+      }
+
       return `delivery.${(event.status_to ?? "").toLowerCase()}`;
     case "OCCURRENCE": {
       // Decision 14.3: a delivery request (DELIVERED) is not a problem. Its
@@ -212,8 +258,115 @@ function eventIdFloor(since: Date): string | null {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-0000-0000-000000000000`;
 }
 
+/** The columns the feed reads of an event, in both walks. */
+const EVENT_SELECT = {
+  id: true,
+  type: true,
+  created_at: true,
+  occurred_at: true,
+  status_from: true,
+  status_to: true,
+  received_by: true,
+  note: true,
+
+  delivery: { select: { id: true, code: true, invoice_key: true } },
+  // Whether an occurrence report took effect (see publicEventTopic), and its
+  // type's ERP code (L8).
+  occurrence: {
+    select: {
+      authorization_status: true,
+      category: true,
+      occurrenceType: { select: { code: true } },
+    },
+  },
+} satisfies Prisma.DeliveryEventSelect;
+
+type FeedEvent = Prisma.DeliveryEventGetPayload<{
+  select: typeof EVENT_SELECT;
+}>;
+
+type EventPage = Awaited<ReturnType<IIntegrationRepository["listEvents"]>>;
+
+/**
+ * The page as the integrator reads it. Left-out events are dropped AFTER
+ * the page is cut: the cursor stays the last row read, so the walk never
+ * skips or repeats one, even when a page comes back shorter than the limit.
+ */
+function publishEvents(page: FeedEvent[]): EventPage["data"] {
+  return page.flatMap((event) => {
+    const topic = publicEventTopic(event);
+
+    if (!topic) return [];
+
+    return [
+      {
+        id: event.id,
+
+        // The public name, not the column (see publicEventTopic).
+        topic,
+
+        // What the field promises: when it happened. A proof the driver's app
+        // sent hours later carries the moment it was signed (MOB-08); the
+        // `updated_since` filter stays on created_at, the receipt, so a
+        // late-arriving event is never skipped by a poller already past it.
+        occurred_at: toIso(event.occurred_at ?? event.created_at)!,
+
+        delivery: event.delivery,
+
+        data: {
+          status_from: event.status_from,
+          status_to: event.status_to,
+          received_by: event.received_by,
+          note: event.note,
+
+          // The key the webhook of the same topic carries (L8): what an ERP
+          // matches an occurrence by, since the name can be renamed. Only on
+          // occurrence.reported, as in the webhook; null elsewhere.
+          occurrence_code:
+            topic === "occurrence.reported"
+              ? (event.occurrence?.occurrenceType?.code ?? null)
+              : null,
+        },
+      },
+    ];
+  });
+}
+
+/** The larger of two id floors (uuid text sorts in time order); null: none. */
+function maxId(a: string | null, b: string | null): string | null {
+  if (a === null) return b;
+  if (b === null) return a;
+
+  return a > b ? a : b;
+}
+
 class IntegrationRepository implements IIntegrationRepository {
-  constructor(private prisma = database) {}
+  constructor(
+    private prisma = database,
+    /**
+     * The standby for /integration/v1/events (plano-escala F4-43): the
+     * replica guard's client while it vouches for it, else null. Read only
+     * with INTEGRATION_EVENTS_READ_REPLICA, by the commit walk alone.
+     */
+    private standby: () => PrismaClient | null = replicaDatabase,
+  ) {}
+
+  /**
+   * The heavy reads' bulkhead (plano-escala F3-17), for the LISTS of
+   * /integration/v1/deliveries and /routes (one delivery, one route, the
+   * events and the submissions stay on the primary: an ERP reads them right
+   * after its own write): a pool of its own, 3 connections and 10 s a
+   * statement, so a burst of them waits among itself instead of taking the
+   * connections every other request needs. A repository built on another
+   * client (a test's) reads on that client. A getter, so a module that mocks
+   * infra/database without it only needs it when one of these reads runs.
+   * With DATABASE_REPLICA_URL, readDatabase() sends them to the standby
+   * while the replica guard vouches for it: lists only (plano-escala F4-42,
+   * tests/unitaires/database/read-routing-guard.test.ts).
+   */
+  private get read(): typeof this.prisma {
+    return this.prisma === database ? readDatabase() : this.prisma;
+  }
 
   async listDeliveries({
     businessId,
@@ -222,13 +375,20 @@ class IntegrationRepository implements IIntegrationRepository {
     updated_since,
     status,
   }: IntegrationListProps): Promise<CursorPage<PublicDelivery>> {
-    const rows = await this.prisma.delivery.findMany({
+    if (pointsNowhere(cursor)) return { data: [], next_cursor: null };
+
+    // One server for the page and its stops: the standby may not have the
+    // stops of a delivery the primary just gave.
+    const read = this.read;
+    const rows = await read.delivery.findMany({
       where: {
         businessId,
         ...(status && {
           status: status as Prisma.EnumDeliveryStatusFilter["equals"],
         }),
         ...(updated_since && { updated_at: { gte: new Date(updated_since) } }),
+        // After the cursor by its value (cursorPage says why).
+        ...(cursor && { id: { gt: cursor } }),
       },
 
       select: deliverySelect,
@@ -236,12 +396,11 @@ class IntegrationRepository implements IIntegrationRepository {
 
       // One more than asked, so "is there another page?" costs nothing extra.
       take: limit + 1,
-      ...(cursor && { skip: 1, cursor: { id: cursor } }),
     });
 
     const { page, next_cursor } = cursorPage(rows, limit);
 
-    const data = await withStopRoutes(this.prisma, page);
+    const data = await withStopRoutes(read, page);
 
     return { data: data.map(toPublicDelivery), next_cursor };
   }
@@ -269,20 +428,22 @@ class IntegrationRepository implements IIntegrationRepository {
     updated_since,
     status,
   }: IntegrationListProps): Promise<CursorPage<PublicRoute>> {
-    const rows = await this.prisma.route.findMany({
+    if (pointsNowhere(cursor)) return { data: [], next_cursor: null };
+
+    const rows = await this.read.route.findMany({
       where: {
         businessId,
         ...(status && {
           status: status as Prisma.EnumRouteStatusFilter["equals"],
         }),
         ...(updated_since && { updated_at: { gte: new Date(updated_since) } }),
+        ...(cursor && { id: { gt: cursor } }),
       },
 
       select: routeSelect,
       orderBy: { id: "asc" },
 
       take: limit + 1,
-      ...(cursor && { skip: 1, cursor: { id: cursor } }),
     });
 
     const { page, next_cursor } = cursorPage(rows, limit);
@@ -302,24 +463,30 @@ class IntegrationRepository implements IIntegrationRepository {
     return found ? toPublicRoute(found) : null;
   }
 
-  async listEvents({
-    businessId,
-    limit,
-    cursor,
-    updated_since,
-  }: IntegrationListProps): Promise<
-    CursorPage<{
-      id: string;
-      topic: string;
-      occurred_at: string;
-      delivery: { id: string; code: string | null; invoice_key: string | null };
-      data: Record<string, unknown>;
-    }>
-  > {
+  async listEvents(props: IntegrationEventListProps): Promise<EventPage> {
     // Read from the delivery events themselves rather than from the outbox:
     // the outbox is purged, and an integration that polls a week of history
     // must not find a hole where the cleanup ran.
     //
+    // Commit order only with INTEGRATION_FEED_ORDER=commit (F2-05): the
+    // image before this one cannot read the v2 cursor that walk hands out.
+    return env.INTEGRATION_FEED_ORDER === "commit"
+      ? this.listEventsByCommit(props)
+      : this.listEventsById(props);
+  }
+
+  /**
+   * The walk every release before F2-05 does: by the event's id, with the
+   * id as the cursor. An event whose transaction minted its id first and
+   * committed last lands behind a poller already past it, and is skipped:
+   * the reason for the commit walk below.
+   */
+  private async listEventsById({
+    businessId,
+    limit,
+    position,
+    updated_since,
+  }: IntegrationEventListProps): Promise<EventPage> {
     // The tenant is the event's own column, not `delivery: { businessId }`.
     // Through the relation Postgres either walked the primary key across
     // every tenant's events, joining each to its delivery, or joined all the
@@ -336,62 +503,222 @@ class IntegrationRepository implements IIntegrationRepository {
         ...(idFloor && { id: { gte: idFloor } }),
       },
 
-      select: {
-        id: true,
-        type: true,
-        created_at: true,
-        occurred_at: true,
-        status_from: true,
-        status_to: true,
-        received_by: true,
-        note: true,
-
-        delivery: { select: { id: true, code: true, invoice_key: true } },
-        // Whether an occurrence report took effect (see publicEventTopic).
-        occurrence: { select: { authorization_status: true, category: true } },
-      },
-
+      select: EVENT_SELECT,
       orderBy: { id: "asc" },
 
       take: limit + 1,
-      ...(cursor && { skip: 1, cursor: { id: cursor } }),
+      // By the id, for the legacy cursor and for v2 alike (F2-04).
+      ...(position && { skip: 1, cursor: { id: position.id } }),
     });
 
     const { page, next_cursor } = cursorPage(rows, limit);
 
-    // Left-out events are dropped AFTER the page is cut: the cursor stays the
-    // last row read, so the walk never skips or repeats one, even when a page
-    // comes back shorter than the limit.
-    const published = page.flatMap((event) => {
-      const topic = publicEventTopic(event);
+    return {
+      data: publishEvents(page),
+      next_cursor,
+      // The id walk's cursor: the last row read, or where this page began.
+      resume_cursor: page[page.length - 1]?.id ?? position?.id ?? null,
+    };
+  }
 
-      return topic ? [{ event, topic }] : [];
+  /**
+   * The walk in commit order (plano-escala F2-05): by (txid, id), only
+   * below the oldest transaction still open, from a floor of ids
+   * (commit-order.ts and feed-floor.ts say why none is ever skipped).
+   *
+   * Three short reads: the cluster's epoch with the snapshot's xmin; the
+   * page's keys on the feed's index ("businessId", COALESCE(txid, 0), id);
+   * the page's rows by primary key, through the same select as the id walk.
+   * A conversion (a legacy cursor, or one of another epoch) adds one: the
+   * smallest txid among the events that may be unseen.
+   */
+  private async listEventsByCommit(
+    props: IntegrationEventListProps,
+  ): Promise<EventPage> {
+    // On the standby (plano-escala F4-43), behind its own flag: a page
+    // there is whole, every read of it on the standby, so its horizon is
+    // the standby's own pg_current_snapshot(). Everything below that xmin
+    // has been replayed there (a transaction still open on the primary, or
+    // whose commit the standby has not replayed yet, is at or above it),
+    // so nothing is skipped; a cursor from a fresher primary page only
+    // waits there until the standby passes it, never going back.
+    // tests/E2E/infra/events-on-standby.test.ts interleaves both servers.
+    const standby = env.INTEGRATION_EVENTS_READ_REPLICA ? this.standby() : null;
+
+    if (!standby) return this.walkByCommit(this.prisma, props);
+
+    try {
+      return await this.walkByCommit(standby, props);
+    } catch (error) {
+      // A read the standby cancelled (a conflict with its recovery) or a
+      // standby gone mid-page: the same page from the primary, which has
+      // everything the standby has.
+      logger.warn(
+        { code: (error as { code?: unknown })?.code ?? null },
+        "integration feed: the standby failed the page; served by the primary",
+      );
+
+      return this.walkByCommit(this.prisma, props);
+    }
+  }
+
+  /** One page of the commit walk, every read of it on `client`. */
+  private async walkByCommit(
+    client: PrismaClient,
+    { businessId, limit, position, updated_since }: IntegrationEventListProps,
+  ): Promise<EventPage> {
+    const marginMs = env.FEED_FLOOR_MARGIN_MS;
+
+    // With the epoch, whether its row still describes the cluster: the
+    // same pair the release step and cluster-epoch-stale compare (null
+    // without a row).
+    const [horizon] = await client.$queryRaw<
+      Array<{
+        epoch: number | null;
+        changed_at: Date | null;
+        xmin: string;
+        describes_cluster: boolean | null;
+      }>
+    >`
+      SELECT e."epoch", e."changed_at",
+             (pg_snapshot_xmin(pg_current_snapshot()))::text AS "xmin",
+             (e."system_identifier" = s.system_identifier
+               AND e."timeline" = ${CURRENT_TIMELINE}) AS "describes_cluster"
+      FROM pg_control_system() s
+      CROSS JOIN pg_control_checkpoint() c
+      LEFT JOIN "cluster_epoch" e ON e."id" = 1
+    `;
+
+    // A promote or a PITR the release step has not recorded (the review of
+    // wave 17): the epoch below is the history before, and a cursor of that
+    // history would be read as a position in this one, skipping its events
+    // for good. No page until the step runs (FeedEpochStaleError); on the
+    // standby, listEventsByCommit then asks the primary.
+    if (horizon?.describes_cluster === false) {
+      logger.warn(
+        { businessId, epoch: horizon.epoch },
+        "integration feed: cluster_epoch does not describe the cluster (a promote or a restore before the release step); page refused until the step runs",
+      );
+
+      throw new FeedEpochStaleError();
+    }
+
+    // No epoch row yet (the release step has not run on this database):
+    // epoch 0, which the first epoch (1) converts, at least once. When the
+    // epoch began decides whether another epoch in a cursor is that change
+    // reaching the integrator (paged) or a stray claim (counted only).
+    const epoch = horizon?.epoch ?? 0;
+    const start = feedStart(
+      position,
+      epoch,
+      marginMs,
+      Date.now(),
+      horizon?.changed_at ? horizon.changed_at.getTime() : null,
+    );
+
+    let from: FeedPosition | null =
+      start.kind === "position" ? start.position : null;
+
+    if (start.kind === "convert") {
+      const [smallest] = await client.$queryRaw<Array<{ txid: string | null }>>`
+        SELECT (min(COALESCE("txid", 0)))::text AS "txid"
+        FROM "delivery_event"
+        WHERE "businessId" = ${businessId}::text
+          AND ${
+            "above" in start.scan
+              ? Prisma.sql`"id" > ${start.scan.above}::text`
+              : Prisma.sql`"id" >= ${start.scan.from}::text`
+          }
+      `;
+
+      from = convertedPosition(
+        smallest?.txid == null ? null : BigInt(smallest.txid),
+        BigInt(horizon.xmin),
+        start.floorMs,
+      );
+
+      countFeedConversion(start.reason);
+
+      if (start.reason === "epoch") {
+        logger.warn(
+          {
+            businessId,
+            cursorEpoch: position?.epoch ?? null,
+            epoch,
+            floorMs: start.floorMs,
+          },
+          "integration feed: cursor of another cluster epoch converted from its floor; events since then are sent again",
+        );
+      } else if (start.reason === "stray") {
+        // Not the cluster's doing: info, and no page (feed-metrics.ts).
+        logger.info(
+          {
+            businessId,
+            cursorEpoch: position?.epoch ?? null,
+            epoch,
+            floorMs: start.floorMs,
+          },
+          "integration feed: cursor of another epoch with no recent epoch change behind it (edited, from another environment, or long after a change) converted from its floor",
+        );
+      }
+    }
+
+    const since = updated_since ? new Date(updated_since) : null;
+    const idFloor = maxId(
+      from && from.floorMs > 0 ? uuid7Floor(from.floorMs) : null,
+      since ? eventIdFloor(since) : null,
+    );
+
+    const keys = await client.$queryRaw<
+      Array<{ id: string; txid: string; created_at: Date }>
+    >`
+      SELECT "id", (COALESCE("txid", 0))::text AS "txid", "created_at"
+      FROM "delivery_event"
+      WHERE "businessId" = ${businessId}::text
+        AND COALESCE("txid", 0) < ((pg_snapshot_xmin(pg_current_snapshot()))::text)::bigint
+        ${
+          from
+            ? Prisma.sql`AND (COALESCE("txid", 0), "id") > (${from.txid.toString()}::bigint, ${from.id}::text)`
+            : Prisma.empty
+        }
+        ${idFloor ? Prisma.sql`AND "id" >= ${idFloor}::text` : Prisma.empty}
+        ${since ? Prisma.sql`AND "created_at" >= ${since}` : Prisma.empty}
+      ORDER BY COALESCE("txid", 0), "id"
+      LIMIT ${limit + 1}::int
+    `;
+
+    const pageKeys = keys.slice(0, limit);
+
+    const found = pageKeys.length
+      ? await client.deliveryEvent.findMany({
+          where: { businessId, id: { in: pageKeys.map((key) => key.id) } },
+          select: EVENT_SELECT,
+        })
+      : [];
+
+    const byId = new Map(found.map((event) => [event.id, event]));
+
+    // Back in the walk's order; a key whose row vanished between the two
+    // reads (an event cascading with its delivery) is simply not published.
+    const page = pageKeys.flatMap((key) => {
+      const event = byId.get(key.id);
+
+      return event ? [event] : [];
     });
 
+    const last = pageKeys[pageKeys.length - 1] as
+      (typeof pageKeys)[number] | undefined;
+    const after = last
+      ? positionAfter(
+          { txid: BigInt(last.txid), id: last.id, created_at: last.created_at },
+          marginMs,
+        )
+      : from;
+
     return {
-      data: published.map(({ event, topic }) => ({
-        id: event.id,
-
-        // The public name, not the column (see publicEventTopic).
-        topic,
-
-        // What the field promises: when it happened. A proof the driver's app
-        // sent hours later carries the moment it was signed (MOB-08); the
-        // `updated_since` filter above stays on created_at, the receipt, so a
-        // late-arriving event is never skipped by a poller already past it.
-        occurred_at: toIso(event.occurred_at ?? event.created_at)!,
-
-        delivery: event.delivery,
-
-        data: {
-          status_from: event.status_from,
-          status_to: event.status_to,
-          received_by: event.received_by,
-          note: event.note,
-        },
-      })),
-
-      next_cursor,
+      data: publishEvents(page),
+      next_cursor: keys.length > limit && after ? cursorOf(after, epoch) : null,
+      resume_cursor: after ? cursorOf(after, epoch) : null,
     };
   }
 
@@ -430,6 +757,11 @@ class IntegrationRepository implements IIntegrationRepository {
         scheduled_date: true,
         notes: true,
         kind: true,
+        // The point the body gave is MANUAL; a GEOCODER one came later and is
+        // not compared (replay-fingerprint, plan E1).
+        latitude: true,
+        longitude: true,
+        geo_source: true,
         // Whether an API key made it: the panel's submissions are not replayed.
         apiKeyId: true,
         items: {
@@ -441,6 +773,17 @@ class IntegrationRepository implements IIntegrationRepository {
           },
         },
       },
+    });
+  }
+
+  async findProofLinkTarget(deliveryId: string): Promise<{
+    businessId: string;
+    status: string;
+    created_at: Date;
+  } | null> {
+    return this.prisma.delivery.findUnique({
+      where: { id: deliveryId },
+      select: { businessId: true, status: true, created_at: true },
     });
   }
 }

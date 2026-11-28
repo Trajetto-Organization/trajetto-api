@@ -30,9 +30,11 @@ import {
 import {
   DEFAULT_OCCURRENCE_TYPES,
   DELIVERED_DEFAULT_TYPE_KEY,
+  pauseTypeRequiresNote,
 } from "@/shared/delivery/default-occurrence-types";
 import { OccurrenceTypeLastOfCategoryError } from "../../usecases/errors/occurrence-type-errors";
 import {
+  foreignKeyViolation,
   requireIndex,
   uniqueViolation,
 } from "@/shared/in-memory/prisma-errors";
@@ -107,6 +109,29 @@ class InMemoryOccurrenceTypeRepository implements IOccurrenceTypeRepository {
     return taken!;
   }
 
+  /**
+   * The (businessId, code) unique (plan of 02/11/2026, L8), as Postgres
+   * enforces it: a null code never collides.
+   */
+  private assertCodeFree(
+    businessId: string,
+    code: string | null,
+    exceptId?: string,
+  ): void {
+    if (code === null) return;
+
+    if (
+      this.occurrenceTypes.some(
+        (entry) =>
+          entry.businessId === businessId &&
+          entry.code === code &&
+          entry.id !== exceptId,
+      )
+    ) {
+      throw uniqueViolation(["businessId", "code"]);
+    }
+  }
+
   async createOccurrenceType(
     occurrenceTypeData: CreateOccurrenceTypeProps,
   ): Promise<OccurrenceType> {
@@ -120,6 +145,11 @@ class InMemoryOccurrenceTypeRepository implements IOccurrenceTypeRepository {
     ) {
       throw uniqueViolation(["businessId", "name"]);
     }
+
+    this.assertCodeFree(
+      occurrenceTypeData.businessId,
+      occurrenceTypeData.code ?? null,
+    );
 
     const now = new Date();
 
@@ -372,6 +402,9 @@ class InMemoryOccurrenceTypeRepository implements IOccurrenceTypeRepository {
         name: type.name,
         pause_kind: type.pause_kind!,
         is_default: type.system_key != null,
+        requires_note: pauseTypeRequiresNote({
+          system_key: type.system_key ?? null,
+        }),
       }));
   }
 
@@ -418,6 +451,10 @@ class InMemoryOccurrenceTypeRepository implements IOccurrenceTypeRepository {
 
     const { form_fields, ...rest } = occurrenceTypeData;
 
+    if (rest.code !== undefined) {
+      this.assertCodeFree(current.businessId, rest.code, occurrenceTypeId);
+    }
+
     const filteredData = Object.fromEntries(
       Object.entries(rest).filter(([, value]) => value !== undefined),
     );
@@ -463,6 +500,12 @@ class InMemoryOccurrenceTypeRepository implements IOccurrenceTypeRepository {
       )
     ) {
       throw new OccurrenceTypeLastOfCategoryError(category);
+    }
+
+    // The occurrence and pause keys are RESTRICT: Postgres refuses a type
+    // the history names, whatever the use case checked before.
+    if ((this.occurrenceCounts.get(occurrenceTypeId) ?? 0) > 0) {
+      throw foreignKeyViolation("delivery_occurrence_occurrenceTypeId_fkey");
     }
 
     return this.occurrenceTypes.splice(index, 1)[0];

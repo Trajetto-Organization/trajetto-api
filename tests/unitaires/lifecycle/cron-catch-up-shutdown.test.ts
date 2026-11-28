@@ -43,9 +43,8 @@ type Scheduler = {
 };
 
 async function freshScheduler(): Promise<Scheduler> {
-  const { CronSchedulerService } = await import(
-    "@/shared/services/cron-scheduler-service"
-  );
+  const { CronSchedulerService } =
+    await import("@/shared/services/cron-scheduler-service");
 
   return new (CronSchedulerService as unknown as new () => Scheduler)();
 }

@@ -56,9 +56,8 @@ beforeAll(async () => {
     },
   });
 
-  ({ issueSessionTokenPair } = await import(
-    "@/modules/user/services/session-service"
-  ));
+  ({ issueSessionTokenPair } =
+    await import("@/modules/user/services/session-service"));
 
   ({ app } = await import("@/http"));
   await app.ready();

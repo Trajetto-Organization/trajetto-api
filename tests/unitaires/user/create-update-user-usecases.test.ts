@@ -57,6 +57,8 @@ import { InMemoryUserTokensRepository } from "@/modules/user/repositories/in-mem
 import { InMemoryBusinessRepository } from "@/modules/business/repositories/in-memory/in-memory-business-repository";
 import { InMemoryProfileAccessRepository } from "@/modules/profile-access/repositories/in-memory/in-memory-profile-access-repository";
 import { InMemoryDriverRepository } from "@/modules/driver/repositories/in-memory/in-memory-driver-repository";
+import { InMemoryDriverTrustedDeviceRepository } from "@/modules/user/repositories/in-memory/in-memory-driver-trusted-device-repository";
+import { InMemoryDriverEnrollmentRepository } from "@/modules/user/repositories/in-memory/in-memory-driver-enrollment-repository";
 
 import { CreateUserUseCase } from "@/modules/user/usecases/create-user/create-user-usecase";
 import { UpdateUserUseCase } from "@/modules/user/usecases/update-user/update-user-usecase";
@@ -86,6 +88,8 @@ let tokens: InMemoryUserTokensRepository;
 let businesses: InMemoryBusinessRepository;
 let profiles: InMemoryProfileAccessRepository;
 let drivers: InMemoryDriverRepository;
+let trusted: InMemoryDriverTrustedDeviceRepository;
+let enrollment: InMemoryDriverEnrollmentRepository;
 
 const person = (overrides: Partial<User>) =>
   ({
@@ -110,6 +114,8 @@ beforeEach(() => {
   businesses = new InMemoryBusinessRepository();
   profiles = new InMemoryProfileAccessRepository();
   drivers = new InMemoryDriverRepository();
+  trusted = new InMemoryDriverTrustedDeviceRepository();
+  enrollment = new InMemoryDriverEnrollmentRepository();
 
   users.user.push(
     person({
@@ -187,7 +193,15 @@ const create = () =>
     drivers,
   );
 const update = () =>
-  new UpdateUserUseCase(users, profiles, notifications, drivers, tokens);
+  new UpdateUserUseCase(
+    users,
+    profiles,
+    notifications,
+    drivers,
+    tokens,
+    trusted,
+    enrollment,
+  );
 
 const newUser = (overrides: Record<string, unknown> = {}) => ({
   name: "Maria Prado",
@@ -327,6 +341,37 @@ describe("creating a company user", () => {
     ).rejects.toMatchObject({ statusCode: 409, code: "USER_ALREADY_EXISTS" });
   });
 
+  // Batch of 14/11/2026: two requests that both passed the lookups met the
+  // unique index, and the loser read "Houve um erro… tente novamente" (500).
+  it("answers the race for an e-mail or a driver with the lookup's 409, never a 500", async () => {
+    users.findUserByEmail = async () => null;
+    users.findUserByDriverId = async () => null;
+
+    await expect(
+      create().execute(newUser({ email: "carlos@a.com.br" }) as never, ADMIN),
+    ).rejects.toMatchObject({ statusCode: 409, code: "USER_ALREADY_EXISTS" });
+
+    await create().execute(
+      newUser({
+        email: "joao@a.com.br",
+        profileAccessId: undefined,
+        driverId: DRIVER,
+      }) as never,
+      ADMIN,
+    );
+
+    await expect(
+      create().execute(
+        newUser({
+          email: "joao2@a.com.br",
+          profileAccessId: undefined,
+          driverId: DRIVER,
+        }) as never,
+        ADMIN,
+      ),
+    ).rejects.toMatchObject({ statusCode: 409, code: "DRIVER_ALREADY_LINKED" });
+  });
+
   it("refuses an unknown caller (404) and an unknown company for the MASTER (404)", async () => {
     await expect(
       create().execute(
@@ -395,6 +440,130 @@ describe("editing a company user", () => {
     expect(realtime.securityEvents).toEqual([
       { userId: CLERK, reason: "role_changed" },
     ]);
+  });
+
+  // Wave 2: trust is kept per login. Moved to another driver, the login must
+  // not let the previous driver's phone sign in by the new driver's CPF.
+  describe("a driver login moved to another driver", () => {
+    const LOGIN = "018f3300-0000-7000-8000-0000000000c1";
+    const NEXT_DRIVER = "018f3300-0000-7000-8000-0000000000d3";
+
+    beforeEach(async () => {
+      drivers.drivers.push({
+        id: NEXT_DRIVER,
+        name: "Ana",
+        businessId: CARRIER,
+        status: "ACTIVE",
+      } as Driver);
+      users.user.push(
+        person({
+          id: LOGIN,
+          name: "João",
+          email: null,
+          role: "BUSINESS_USER",
+          businessId: CARRIER,
+          driverId: DRIVER,
+        }),
+      );
+
+      await trusted.trust({
+        userId: LOGIN,
+        deviceHash: "a".repeat(64),
+        source: "qr",
+      });
+      await enrollment.issue({
+        userId: LOGIN,
+        businessId: CARRIER,
+        token: "qr-token-login",
+        code: null,
+        expiresAt: new Date(Date.now() + 10 * 60_000),
+        createdById: ADMIN,
+      });
+    });
+
+    it("drops the previous driver's trusted phones and QR code", async () => {
+      await update().execute(
+        { userId: LOGIN, userData: { driverId: NEXT_DRIVER } } as never,
+        ADMIN,
+      );
+
+      expect(users.user.find((u) => u.id === LOGIN)?.driverId).toBe(
+        NEXT_DRIVER,
+      );
+      expect(await trusted.listForUser(LOGIN)).toEqual([]);
+      expect(await enrollment.findByUserId(LOGIN)).toBeNull();
+    });
+
+    it("keeps them on an edit that leaves the driver alone", async () => {
+      await update().execute(
+        { userId: LOGIN, userData: { name: "João Souza" } } as never,
+        ADMIN,
+      );
+
+      expect(await trusted.listForUser(LOGIN)).toHaveLength(1);
+      expect(await enrollment.findByUserId(LOGIN)).not.toBeNull();
+    });
+
+    // Batch of 14/11/2026: the route waited for a login that was no longer
+    // its driver's. The refusal comes before the phones and the QR code go.
+    it.each([
+      ["to another driver", { driverId: NEXT_DRIVER }],
+      ["to a staff profile", { profileAccessId: PROFILE }],
+    ])(
+      "refuses taking it off a driver with an open route %s, changing nothing",
+      async (_case, userData) => {
+        drivers.routes.push({ driverId: DRIVER, status: "IN_PROGRESS" });
+
+        await expect(
+          update().execute({ userId: LOGIN, userData } as never, ADMIN),
+        ).rejects.toMatchObject({
+          statusCode: 409,
+          code: "DRIVER_HAS_OPEN_ROUTES",
+          message: expect.stringContaining(
+            "Não é possível desvincular este login do motorista",
+          ),
+        });
+
+        expect(users.user.find((u) => u.id === LOGIN)?.driverId).toBe(DRIVER);
+        expect(await trusted.listForUser(LOGIN)).toHaveLength(1);
+        expect(await enrollment.findByUserId(LOGIN)).not.toBeNull();
+        expect(realtime.securityEvents).toEqual([]);
+      },
+    );
+
+    // Decision D-37: what the login did points at the login, so handed to
+    // another driver it would mix two people's work.
+    it("refuses handing a login with history to another driver (409 USER_DRIVER_LOCKED)", async () => {
+      users.authoredRows.push({ userId: LOGIN, kind: "deliveryEvents" });
+
+      await expect(
+        update().execute(
+          { userId: LOGIN, userData: { driverId: NEXT_DRIVER } } as never,
+          ADMIN,
+        ),
+      ).rejects.toMatchObject({
+        statusCode: 409,
+        code: "USER_DRIVER_LOCKED",
+        message: expect.stringContaining("1 evento(s) de entrega"),
+      });
+
+      expect(users.user.find((u) => u.id === LOGIN)?.driverId).toBe(DRIVER);
+      expect(await trusted.listForUser(LOGIN)).toHaveLength(1);
+    });
+
+    it("still unlinks a login with history from its driver when no other takes it", async () => {
+      users.authoredRows.push({ userId: LOGIN, kind: "deliveryEvents" });
+
+      await update().execute(
+        { userId: LOGIN, userData: { profileAccessId: PROFILE } } as never,
+        ADMIN,
+      );
+
+      expect(users.user.find((u) => u.id === LOGIN)).toMatchObject({
+        driverId: null,
+        profileAccessId: PROFILE,
+      });
+    });
   });
 
   it("refuses editing yourself", async () => {
@@ -472,6 +641,21 @@ describe("editing a company user", () => {
         ADMIN,
       ),
     ).rejects.toMatchObject({ statusCode: 409, code: "USER_ALREADY_EXISTS" });
+  });
+
+  it("answers an e-mail taken in between the lookup and the write with the same 409", async () => {
+    users.findUserByEmail = async () => null;
+
+    await expect(
+      update().execute(
+        { userId: CLERK, userData: { email: "admin2@a.com.br" } } as never,
+        ADMIN,
+      ),
+    ).rejects.toMatchObject({ statusCode: 409, code: "USER_ALREADY_EXISTS" });
+
+    expect(users.user.find((u) => u.id === CLERK)?.email).toBe(
+      "carlos@a.com.br",
+    );
   });
 
   it("lets only the MASTER send a password setup link", async () => {

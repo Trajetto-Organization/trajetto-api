@@ -128,11 +128,10 @@ beforeAll(async () => {
 
   // Yesterday's and today's partitions: the day's first minute before the
   // company's midnight may sit in either.
-  const { driverPositionPartitionsJob } = await import(
-    "@/jobs/cron/driver-position-partitions-job"
-  );
+  const { partitionMaintenanceJob } =
+    await import("@/jobs/cron/partition-maintenance-job");
 
-  await driverPositionPartitionsJob.handler();
+  await partitionMaintenanceJob.handler();
 
   for (const [name, repository] of both()) {
     const flush = (pings: AcceptedPing[]) =>
@@ -261,11 +260,12 @@ describe("the trail of the day", () => {
   it.each(both())(
     "%s starts at the company's midnight, and the window is half-open",
     async (_name, repository) => {
-      const day = await repository.listTrail({
+      const { points: day } = await repository.listTrail({
         businessId: CARRIER,
         driverId: carrierDriver,
         from: DAY.start,
         to: DAY.end,
+        max: 400,
       });
 
       // T(-1) is yesterday's; T(0) is today's first. Before the departure a
@@ -279,11 +279,12 @@ describe("the trail of the day", () => {
         [T(50).toISOString(), routeId],
       ]);
 
-      const cut = await repository.listTrail({
+      const { points: cut } = await repository.listTrail({
         businessId: CARRIER,
         driverId: carrierDriver,
         from: T(-1),
         to: T(50),
+        max: 400,
       });
 
       expect(cut.map((point) => point.recorded_at.toISOString())).toEqual([
@@ -304,8 +305,9 @@ describe("the trail of the day", () => {
           driverId: carrierDriver,
           from: T(-60),
           to: DAY.end,
+          max: 400,
         }),
-      ).toEqual([]);
+      ).toEqual({ recorded: 0, points: [] });
     },
   );
 
@@ -315,6 +317,7 @@ describe("the trail of the day", () => {
       driverId: carrierDriver,
       from: T(-60),
       to: DAY.end,
+      max: 400,
     };
 
     const [fromDatabase, fromTwin] = await Promise.all([
@@ -322,8 +325,38 @@ describe("the trail of the day", () => {
       twin.listTrail(window),
     ]);
 
-    expect(fromDatabase).toHaveLength(5);
+    expect(fromDatabase.points).toHaveLength(5);
+    expect(fromDatabase.recorded).toBe(5);
     expect(fromDatabase).toEqual(fromTwin);
+  });
+
+  // Plan of 02/11/2026, G9: the trail is thinned in Postgres, by the same
+  // rule as downsample (evenly by position, first and last kept), and the
+  // true count comes back beside the kept points. The twin keeps the same
+  // ones.
+  it("thins in the database the way the twin does, keeping the ends and the count", async () => {
+    for (const max of [2, 3, 4]) {
+      const window = {
+        businessId: CARRIER,
+        driverId: carrierDriver,
+        from: T(-60),
+        to: DAY.end,
+        max,
+      };
+
+      const [fromDatabase, fromTwin] = await Promise.all([
+        database.listTrail(window),
+        twin.listTrail(window),
+      ]);
+
+      expect(fromDatabase.recorded, String(max)).toBe(5);
+      expect(fromDatabase.points, String(max)).toHaveLength(max);
+      expect(fromDatabase.points[0].recorded_at).toEqual(T(-1));
+      expect(
+        fromDatabase.points[fromDatabase.points.length - 1].recorded_at,
+      ).toEqual(T(50));
+      expect(fromDatabase, String(max)).toEqual(fromTwin);
+    }
   });
 });
 
@@ -342,12 +375,13 @@ describe("the route page's reads (decision 14.7)", () => {
   it.each(both())(
     "%s narrows the trail to one route",
     async (_name, repository) => {
-      const trail = await repository.listTrail({
+      const { points: trail } = await repository.listTrail({
         businessId: CARRIER,
         driverId: carrierDriver,
         routeId,
         from: T(-60),
         to: DAY.end,
+        max: 400,
       });
 
       // The point before the departure carries no route and stays out.
@@ -374,5 +408,101 @@ describe("the route page's reads (decision 14.7)", () => {
     expect(await database.findLast(CARRIER, carrierDriver)).toEqual(
       await twin.findLast(CARRIER, carrierDriver),
     );
+  });
+});
+
+/**
+ * The switch to the lean trail (plano-escala F2-10). The flushes above went
+ * to driver_position_v2; the legacy driver_position holds the days before
+ * the switch, and during the rolling deploy the previous image still writes
+ * there. A batch whose response was lost on an old replica and resent to a
+ * new one is in BOTH tables: the trail reads the two and counts that
+ * instant once, and still shows a point only the legacy table has.
+ */
+describe("the trail across the switch to the lean table", () => {
+  it("writes the lean table and leaves the legacy one alone", async () => {
+    expect(
+      await prisma.driverPosition.count({ where: { driverId: carrierDriver } }),
+    ).toBe(5);
+    expect(
+      await prisma.driverPositionLegacy.count({
+        where: { driverId: carrierDriver },
+      }),
+    ).toBe(0);
+  });
+
+  it("reads both, with no point twice", async () => {
+    // T(45) again, from the old image (a resend across the two), with other
+    // coordinates to tell which one comes back; and T(20), which only the
+    // legacy table has.
+    await prisma.driverPositionLegacy.createMany({
+      data: [
+        {
+          id: randomUUID(),
+          driverId: carrierDriver,
+          businessId: CARRIER,
+          routeId,
+          latitude: -1,
+          longitude: -1,
+          recorded_at: T(45),
+        },
+        {
+          id: randomUUID(),
+          driverId: carrierDriver,
+          businessId: CARRIER,
+          routeId,
+          latitude: coordinate(-23.55, 9),
+          longitude: coordinate(-46.63, 9),
+          recorded_at: T(20),
+        },
+      ],
+    });
+
+    try {
+      const window = {
+        businessId: CARRIER,
+        driverId: carrierDriver,
+        from: T(-60),
+        to: DAY.end,
+        max: 400,
+      };
+      const trail = await database.listTrail(window);
+
+      expect(trail.recorded).toBe(6);
+      expect(
+        trail.points.map((point) => point.recorded_at.toISOString()),
+      ).toEqual(
+        [T(-1), T(0), T(20), T(40), T(45), T(50)].map((at) => at.toISOString()),
+      );
+
+      // The lean table's copy of the instant both have.
+      const both = trail.points.find(
+        (point) => point.recorded_at.getTime() === T(45).getTime(),
+      );
+
+      expect(both?.latitude).toBe(coordinate(-23.55, 2));
+
+      // And the route's page, the company lock and the thinning hold across
+      // the two tables.
+      const route = await database.listTrail({ ...window, routeId });
+
+      expect(
+        route.points.map((point) => point.recorded_at.toISOString()),
+      ).toEqual([T(20), T(40), T(45), T(50)].map((at) => at.toISOString()));
+      expect(
+        await database.listTrail({ ...window, businessId: OTHER }),
+      ).toEqual({ recorded: 0, points: [] });
+
+      const thinned = await database.listTrail({ ...window, max: 3 });
+
+      expect(thinned.recorded).toBe(6);
+      expect(thinned.points).toHaveLength(3);
+      expect(thinned.points[0].recorded_at).toEqual(T(-1));
+      expect(thinned.points[2].recorded_at).toEqual(T(50));
+    } finally {
+      await prisma.driverPositionLegacy.deleteMany({
+        where: { driverId: carrierDriver },
+      });
+    }
   });
 });

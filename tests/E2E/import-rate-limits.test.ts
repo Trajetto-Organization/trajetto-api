@@ -52,9 +52,8 @@ beforeAll(async () => {
     },
   });
 
-  const { issueSessionTokenPair } = await import(
-    "@/modules/user/services/session-service"
-  );
+  const { issueSessionTokenPair } =
+    await import("@/modules/user/services/session-service");
 
   const pair = issueSessionTokenPair(user as never);
 

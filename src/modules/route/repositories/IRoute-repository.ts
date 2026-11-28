@@ -4,9 +4,12 @@ import type {
   AssignmentContext,
   AssignmentPreview,
   AssignmentPreviewProps,
+  CloseWithPendingProps,
   CreateRouteProps,
+  LeftOpenRoute,
+  ListRoutesPage,
   ListRoutesProps,
-  ListRoutesResult,
+  LostStop,
   OpenStopRoute,
   PinnedLocation,
   DetachResult,
@@ -19,9 +22,11 @@ import type {
   RouteStop,
   RouteStopWithDelivery,
   RouteTransition,
+  RouteWindow,
   RouteWithStops,
   UpdateRouteProps,
   VisitedPoint,
+  StopGeofenceFlag,
 } from "../dtos/route-dto";
 import type {
   UnroutedDeliveriesPage,
@@ -140,6 +145,48 @@ interface IRouteRepository {
   ) => Promise<RouteWithStops | null>;
 
   /**
+   * "Encerrar com pendências" (plan of 02/11/2026, K11; decision D26):
+   * IN_PROGRESS → COMPLETED with the reason, under the route's row lock. The
+   * open stops are CANCELLED and their IN_TRANSIT deliveries go back to
+   * PENDING, each with a ROUTE_REMOVED line saying why; plan_version moves
+   * and the vehicle is back. RouteStatusConflictError when the route is not
+   * running (any more), or is another company's.
+   */
+  closeWithPending: (
+    routeId: string,
+    businessId: string,
+    props: CloseWithPendingProps,
+    tx?: Prisma.TransactionClient,
+  ) => Promise<{ route: Route; cancelledStops: number }>;
+
+  /**
+   * Every company's running routes the left-open sweep has not warned about
+   * yet, oldest departure first, with the company's zone (K11). No lock: the
+   * claim is claimLeftOpenAlerts.
+   */
+  listUnalertedRunningRoutes: (limit: number) => Promise<LeftOpenRoute[]>;
+
+  /**
+   * Stamps left_open_alerted_at on those of these routes still running and
+   * not stamped, skipping rows another sweep holds (SKIP LOCKED). The ids
+   * returned are the ones this caller must warn about — exactly once.
+   */
+  claimLeftOpenAlerts: (
+    routeIds: string[],
+    at: Date,
+    tx: Prisma.TransactionClient,
+  ) => Promise<string[]>;
+
+  /**
+   * The route's driver and execution window only, inside the tenant (plan
+   * of 02/11/2026, G9): the trail reads three columns, never the stops.
+   */
+  findRouteWindow: (
+    routeId: string,
+    businessId: string,
+  ) => Promise<RouteWindow | null>;
+
+  /**
    * The route a driver is expected to be working: the one in progress, or the
    * released one for today. Null when there is none.
    */
@@ -192,6 +239,26 @@ interface IRouteRepository {
   ) => Promise<void>;
 
   /**
+   * The route this vehicle of this company is on the street with, other
+   * than `excludeRouteId` — the one row route_active_vehicle_idx allows — or
+   * null.
+   *
+   * Read by the departure before its transaction, so the refusal can name
+   * the plate and the running route instead of the index's bare violation;
+   * and again after the index refused a departure that raced past that
+   * read. The index stays the guarantee: this is only the sentence.
+   *
+   * With the running route's driver: when it is the driver asking (the
+   * second trip of the day on the same truck), the one who is busy is the
+   * driver, and the departure answers ROUTE_DRIVER_BUSY, not the truck's.
+   */
+  findRunningRouteOfVehicle: (
+    vehicleId: string,
+    businessId: string,
+    excludeRouteId: string,
+  ) => Promise<{ code: number; driverId: string } | null>;
+
+  /**
    * The driver's status, read with FOR SHARE inside the caller's route
    * write, or null when the row is not the company's.
    *
@@ -220,7 +287,7 @@ interface IRouteRepository {
     props: AssignmentPreviewProps,
   ) => Promise<AssignmentPreview>;
 
-  listRoutes: (props: ListRoutesProps) => Promise<ListRoutesResult>;
+  listRoutes: (props: ListRoutesProps) => Promise<ListRoutesPage>;
 
   /**
    * Moves a route, but only from `transition.expectedStatus` and only within
@@ -335,13 +402,31 @@ interface IRouteRepository {
   /**
    * Pins (or clears, with null) the delivery's address point (D7). Null when
    * the delivery is not the company's; `locked` when it is DELIVERED or
-   * CANCELLED. Bumps the plan of the editable route holding it.
+   * CANCELLED. Bumps the plan of the route holding it while that route is
+   * planned or released; a running one keeps its version and is answered as
+   * `runningRoute`, for its driver to be told (D23). In the same commit, the
+   * company's open copies of the delivery's previous point follow it
+   * (followSource: moved, or cleared with a null), answered as `followed`;
+   * the pin itself clears the delivery's own link (geo_copied_from).
    */
   pinDeliveryLocation: (
     deliveryId: string,
     businessId: string,
     point: { latitude: number; longitude: number } | null,
   ) => Promise<PinnedLocation | null>;
+
+  /**
+   * After a pin's commit (14/11/2026, decision D-24): the company's other
+   * open deliveries (PENDING, IN_TRANSIT) at the pinned delivery's address
+   * key, still without a point and a source, take the pin as GEOCODER
+   * (address-point-propagation.ts), linked to the pinned delivery as their
+   * root, while it still holds that pin. Never over a point, never another
+   * company's, never the pinned delivery itself. The ids written.
+   */
+  propagateAddressPoint: (
+    deliveryId: string,
+    businessId: string,
+  ) => Promise<string[]>;
 
   /**
    * Which route holds each of these deliveries right now (an open stop),
@@ -357,6 +442,15 @@ interface IRouteRepository {
     routeId: string,
     businessId: string,
   ) => Promise<VisitedPoint[]>;
+
+  /**
+   * Per stop recorded outside the radius on this route, its newest OUTSIDE
+   * arrival, proof or occurrence (E5): the stop card's flag.
+   */
+  listStopGeofence: (
+    routeId: string,
+    businessId: string,
+  ) => Promise<StopGeofenceFlag[]>;
 
   /** PENDING deliveries with no open stop (D3), for the route picker. */
   listUnroutedDeliveries: (
@@ -449,6 +543,18 @@ interface IRouteRepository {
     businessId: string,
     tx: Prisma.TransactionClient,
   ) => Promise<string | null>;
+
+  /**
+   * The latest stop of this delivery on one of this driver's routes that
+   * ended without the delivery (CANCELLED, or FAILED by a status change),
+   * of this company; null when there is none. A proof the driver made
+   * offline before that instant is the late proof of K7 (decision D27).
+   */
+  findLostStop: (
+    deliveryId: string,
+    driverId: string,
+    businessId: string,
+  ) => Promise<LostStop | null>;
 
   /**
    * How many routes reference this driver or this vehicle, of any status.

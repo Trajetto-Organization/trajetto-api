@@ -13,6 +13,8 @@ import { delimiter, join, resolve } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { replicaFileGlobs } from "../../E2E/support/replica-files";
+
 /**
  * coverage-e2e.sh measures the E2E suite in batches that take over an hour.
  * merge-coverage.mjs catches an edit that moves statements, but a function
@@ -30,7 +32,10 @@ const API = resolve(__dirname, "..", "..", "..");
 
 let dir: string;
 
-const scratchTree = (editSrcDuringBatch: boolean) => {
+const scratchTree = (
+  editSrcDuringBatch: boolean,
+  oneAtATime: readonly string[] = ["socket-revocation.test.ts"],
+) => {
   dir = mkdtempSync(join(tmpdir(), "cov-e2e-"));
   mkdirSync(join(dir, "infra", "scripts"), { recursive: true });
   for (const script of ["coverage-e2e.sh", "merge-coverage.mjs"]) {
@@ -44,7 +49,9 @@ const scratchTree = (editSrcDuringBatch: boolean) => {
   mkdirSync(join(dir, "tests", "E2E", "support"), { recursive: true });
   writeFileSync(join(dir, "tests", "E2E", "a.test.ts"), "");
   writeFileSync(join(dir, "tests", "E2E", "b.test.ts"), "");
-  writeFileSync(join(dir, "tests", "E2E", "socket-revocation.test.ts"), "");
+  for (const name of oneAtATime) {
+    writeFileSync(join(dir, "tests", "E2E", name), "");
+  }
   copyFileSync(
     join(API, "tests", "E2E", "support", "replica-files.ts"),
     join(dir, "tests", "E2E", "support", "replica-files.ts"),
@@ -113,5 +120,34 @@ describe("coverage-e2e.sh", () => {
       "tests/E2E/a.test.ts tests/E2E/b.test.ts",
       "tests/E2E/socket-revocation.test.ts",
     ]);
+  });
+
+  /**
+   * Every file `yarn test:e2e` runs one at a time, not only the ones that
+   * start replicas: the cluster-sensitive list (SERIAL_E2E_FILES, F2-13) is
+   * declared on one line, which the script's old pattern never read, so
+   * driver-last-position-hot.test.ts ran beside seven other files and its
+   * HOT ratio fell under the threshold. Driven by replicaFileGlobs(), the
+   * phase vite.config.mts builds, so a list added there is checked here too.
+   */
+  it("runs every file of the one-at-a-time phase alone, after the batches", () => {
+    const oneAtATime = replicaFileGlobs().map((glob) =>
+      glob.replace(/^\*\*\//, ""),
+    );
+
+    expect(oneAtATime).toContain("driver-last-position-hot.test.ts");
+
+    const result = scratchTree(false, oneAtATime);
+
+    expect(result.status, result.stderr).toBe(0);
+
+    const [shared, ...alone] = readFileSync(join(dir, "calls.log"), "utf8")
+      .trim()
+      .split("\n");
+
+    expect(shared).toBe("tests/E2E/a.test.ts tests/E2E/b.test.ts");
+    expect([...alone].sort()).toEqual(
+      oneAtATime.map((name) => `tests/E2E/${name}`).sort(),
+    );
   });
 });

@@ -18,6 +18,7 @@ import {
 import {
   ALL_TOPICS,
   FAMILY_WILDCARDS,
+  PING_TOPIC,
   TOPIC_DESCRIPTIONS,
   TOPIC_FAMILY,
   WEBHOOK_API_VERSION,
@@ -192,8 +193,7 @@ function withoutEchoedDescription(
 function withRequestExample(operation: JsonObject): JsonObject {
   const example = PUBLIC_REQUEST_EXAMPLES[String(operation.operationId)];
   const requestBody = operation.requestBody as
-    | { content?: Record<string, JsonObject> }
-    | undefined;
+    { content?: Record<string, JsonObject> } | undefined;
   const media = requestBody?.content?.["application/json"];
 
   if (example === undefined || !media || media.example !== undefined)
@@ -294,17 +294,31 @@ function buildWebhooks(): JsonObject {
     properties: Record<string, JsonObject>;
   };
 
-  return Object.fromEntries(
-    ALL_TOPICS.map((topic) => {
-      const payload = TOPIC_PAYLOAD[topic];
+  const catalogue = ALL_TOPICS.map((topic) => ({
+    topic,
+    payload: TOPIC_PAYLOAD[topic] as string,
+    summary: TOPIC_DESCRIPTIONS[topic],
+    description: `Tópico \`${topic}\`, da família de ${FAMILY_LABELS[TOPIC_FAMILY[topic]]}. Enviamos um POST ao seu endpoint com o envelope abaixo; \`data\` segue \`${TOPIC_PAYLOAD[topic]}\`. Responda 2xx em até ${WEBHOOK_TIMEOUT_MS / 1000} s.`,
+  }));
 
+  // The test of "Enviar teste" (L1): a request we make, so it is published —
+  // after the catalogue and outside it, since nobody subscribes to it.
+  const ping = {
+    topic: PING_TOPIC,
+    payload: "WebhookPingData",
+    summary: "Evento de teste, enviado pelo botão Enviar teste do painel.",
+    description: `Tópico \`${PING_TOPIC}\`, fora do catálogo: chega só ao endpoint em que alguém apertou Enviar teste, nunca por inscrição nem curinga. Assinado e numerado como um evento real; \`data\` segue \`WebhookPingData\`. Responda 2xx em até ${WEBHOOK_TIMEOUT_MS / 1000} s: o resultado aparece no monitor de envios.`,
+  };
+
+  return Object.fromEntries(
+    [...catalogue, ping].map(({ topic, payload, summary, description }) => {
       return [
         topic,
         {
           post: {
             operationId: `webhook_${topic.replace(/\./g, "_")}`,
-            summary: TOPIC_DESCRIPTIONS[topic],
-            description: `Tópico \`${topic}\`, da família de ${FAMILY_LABELS[TOPIC_FAMILY[topic]]}. Enviamos um POST ao seu endpoint com o envelope abaixo; \`data\` segue \`${payload}\`. Responda 2xx em até ${WEBHOOK_TIMEOUT_MS / 1000} s.`,
+            summary,
+            description,
             parameters: WEBHOOK_HEADERS.map((header) => ({
               name: header.name,
               in: "header",

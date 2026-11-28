@@ -1,8 +1,9 @@
 import { z } from "zod";
+import { fieldError } from "@/shared/validation/field-error";
 
 const updateDeleteShipperSchema = z.object({
   shipperId: z
-    .string({ required_error: "ID do embarcador é obrigatório!" })
+    .string(fieldError({ required: "ID do embarcador é obrigatório!" }))
     .uuid("ID do embarcador é inválido."),
 });
 

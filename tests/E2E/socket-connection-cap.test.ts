@@ -216,3 +216,32 @@ describe("sockets held open by one user", () => {
     open.push(await connectOnce());
   }, 30_000);
 });
+
+/**
+ * The replica's ceiling, beside the user's (plano-escala F5-31): every
+ * socket is a file descriptor, so the replica holds at most the smaller of
+ * SOCKET_MAX_CONNECTIONS and its descriptor limit minus SOCKET_FD_RESERVE,
+ * and says both on /health/metrics and in the ops_sample row, which the
+ * socket-cap-high alert reads.
+ */
+describe("the replica's own ceiling", () => {
+  it("is reported with the sockets it holds", () => {
+    const metrics = io.realtimeMetrics();
+
+    expect(metrics.local_connections).toBeGreaterThanOrEqual(
+      SOCKET_MAX_CONNECTIONS_PER_USER,
+    );
+    expect(metrics.socket_cap).toBeGreaterThan(metrics.local_connections);
+    expect(metrics.socket_cap).toBeLessThanOrEqual(5_000);
+    expect(metrics.fd_limit === null || metrics.fd_limit > 0).toBe(true);
+  });
+
+  it("refuses nobody far from it, whatever the user ceiling did", () => {
+    // The twenty sockets above were refused one past the USER's ceiling,
+    // never the replica's: its refusals stay at zero.
+    expect(io.realtimeMetrics().handshakes.refused.connections).toBe(0);
+    expect(io.realtimeMetrics().handshakes.refused.too_many_connections).toBe(
+      1,
+    );
+  });
+});

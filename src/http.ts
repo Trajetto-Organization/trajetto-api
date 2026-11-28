@@ -1,12 +1,20 @@
 import "reflect-metadata";
 import "./shared";
 // Installs zod's pt-BR default sentences before any schema is parsed.
-import { validationErrorMessage } from "./shared/validation/zod-pt-br";
+import {
+  validationErrorMessage,
+  validationIssueSentences,
+} from "./shared/validation/zod-pt-br";
 
-import fastify, { type FastifyBaseLogger, type FastifyReply } from "fastify";
+import fastify, {
+  type FastifyBaseLogger,
+  type FastifyError,
+  type FastifyReply,
+} from "fastify";
 
 import fastifyRateLimit from "@fastify/rate-limit";
 import fastifyCompress from "@fastify/compress";
+import fastifyUnderPressure from "@fastify/under-pressure";
 
 import fastifyStatic from "@fastify/static";
 
@@ -41,7 +49,6 @@ import {
 
 import {
   hasZodFastifySchemaValidationErrors,
-  serializerCompiler,
   validatorCompiler,
   ZodTypeProvider,
 } from "fastify-type-provider-zod";
@@ -57,13 +64,19 @@ import {
 import { AppError } from "./shared/errors/AppError";
 import { ServiceBusyError } from "./shared/errors/service-busy-error";
 import {
+  prismaConflictFloor,
+  uniqueTargetText,
+} from "./shared/errors/prisma-conflict";
+import {
   completeErrorBody,
   errorAwareSerializerCompiler,
 } from "./shared/errors/error-body";
+import { parsingSerializerCompiler } from "./shared/http/response-serializer";
 import {
   DATABASE_RETRY_AFTER_SECONDS,
   isDatabaseUnavailable,
 } from "./shared/errors/database-unavailable";
+import { databaseBusyAnswer } from "./shared/errors/database-error-map";
 
 import {
   endRequestContext,
@@ -76,6 +89,7 @@ import { clientRateLimitKey, rateLimitExceeded } from "@/config/rate-limit";
 import {
   HTTP_KEEP_ALIVE_TIMEOUT_MS,
   HTTP_REQUEST_TIMEOUT_MS,
+  closeConnectionWhileDraining,
 } from "@/config/http-server";
 import {
   configureIntegrationRateGuard,
@@ -85,8 +99,15 @@ import {
   configureMailCooldown,
   createRedisMailCooldown,
 } from "@/shared/security/mail-cooldown";
+import {
+  configureGeocodingHold,
+  createRedisGeocodingHold,
+} from "@/shared/delivery/geocoding/geocoding-hold";
+import { configureAddressSearch } from "@/modules/address-search/usecases/search-address/search-address-runtime";
+import { configureProofLookupAdmission } from "@/shared/services/proof-location/proof-lookup-admission";
 
 import { enforceRequestedTenant } from "./modules/middlewares/tenant-authorization";
+import { rejectDeepListOffset } from "./shared/pagination/offset-ceiling";
 import { UPLOAD_TYPES, uploadConfig } from "./config/upload";
 
 import { isOriginAllowed } from "./config/cors-origin";
@@ -98,6 +119,16 @@ import {
   clientUpgradeGate,
   clientVersionForLog,
 } from "./shared/http/client-version";
+import { recordHttpResponse } from "./shared/health/http-metrics";
+import {
+  loadSheddingOptions,
+  pressureSignals,
+  sheddingNow,
+} from "./shared/http/load-shedding";
+import { registerSheddingProbe } from "./shared/health/pressure-level";
+import { httpSurfaceHook } from "./shared/http/http-surface";
+import { shedClassOf, type ShedClass } from "./shared/http/shed-classes";
+import { databasePool } from "@/../infra/database";
 
 const app = fastify({
   // The process's one logger (LOG_LEVEL, same format as the workers'). The
@@ -115,6 +146,9 @@ const app = fastify({
   requestTimeout: HTTP_REQUEST_TIMEOUT_MS,
   // Above Traefik's 90 s idle, so the proxy closes first (config/http-server.ts).
   keepAliveTimeout: HTTP_KEEP_ALIVE_TIMEOUT_MS,
+  // A connection renewed every so many requests, so a scaled-up replica gets
+  // its share (config/http-server.ts). 0 is no cap.
+  maxRequestsPerSocket: env.HTTP_MAX_REQUESTS_PER_SOCKET,
 }).withTypeProvider<ZodTypeProvider>();
 
 const serverInstance = app.server;
@@ -123,8 +157,11 @@ app.register(helmet, {
 });
 
 app.setValidatorCompiler(validatorCompiler);
-// A 4xx body is sent as built and always carries a code (error-body.ts).
-app.setSerializerCompiler(errorAwareSerializerCompiler(serializerCompiler));
+// A 4xx body is sent as built and always carries a code (error-body.ts); a
+// success body is parsed by its schema, not encoded (response-serializer.ts).
+app.setSerializerCompiler(
+  errorAwareSerializerCompiler(parsingSerializerCompiler),
+);
 app.addHook("preSerialization", completeErrorBody);
 
 // Enable gzip/deflate/brotli compression for all responses
@@ -165,9 +202,16 @@ if (env.NODE_ENV !== "production") {
     root: path.join(__dirname, "..", "tmp"),
     prefix: "/tmp/",
     decorateReply: false,
-    setHeaders: (res) => {
-      res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
-      res.setHeader("Access-Control-Allow-Origin", "*");
+    // Since @fastify/static 10 this gets the reply, after its own headers.
+    // Up to 9 it got the raw response, which lost to them on writeHead: the
+    // CORS plugin's answer to an allowed origin (with credentials, which a
+    // browser refuses next to "*") must still win over the wildcard.
+    setHeaders: (reply) => {
+      reply.header("Cross-Origin-Resource-Policy", "cross-origin");
+
+      if (!reply.hasHeader("Access-Control-Allow-Origin")) {
+        reply.header("Access-Control-Allow-Origin", "*");
+      }
     },
   });
 }
@@ -261,6 +305,21 @@ configureIntegrationRateGuard(createIntegrationRateGuard(rateLimitRedis));
 // senha"), on the same fail-fast connection (shared/security/mail-cooldown.ts).
 configureMailCooldown(createRedisMailCooldown(rateLimitRedis));
 
+// Whether the address lookups are held (a refusal, the day's quota, the
+// budget spent), for the route read's "Localizando endereço…", on the same
+// fail-fast connection (shared/delivery/geocoding/geocoding-hold.ts).
+configureGeocodingHold(createRedisGeocodingHold(rateLimitRedis));
+
+// The panel's address search: its cache, its day's counts and the
+// provider's gate, on the same fail-fast connection — a search is a
+// request a person waits on (address-search/search-address-runtime.ts).
+configureAddressSearch(rateLimitRedis);
+
+// The proof's reverse lookup: the second reserved to it of the provider's
+// rate and its day, on the same fail-fast connection — the receipt is a
+// request a person waits on (proof-location/proof-lookup-admission.ts).
+configureProofLookupAdmission(rateLimitRedis);
+
 /**
  * The limiter goes FIRST in each route's onRequest, not last.
  *
@@ -308,8 +367,7 @@ app.register(fastifyRateLimit, {
 const moveRateLimiterFirst = async (instance: typeof app) => {
   instance.addHook("onRoute", (routeOptions) => {
     const config = routeOptions.config as
-      | { rateLimit?: { keyGenerator?: unknown } | false }
-      | undefined;
+      { rateLimit?: { keyGenerator?: unknown } | false } | undefined;
 
     if (config?.rateLimit && config.rateLimit.keyGenerator) return;
 
@@ -329,6 +387,30 @@ const moveRateLimiterFirst = async (instance: typeof app) => {
 Object.assign(moveRateLimiterFirst, { [Symbol.for("skip-override")]: true });
 
 app.register(moveRateLimiterFirst);
+
+/**
+ * Load shedding, part 1 (plano-escala F2-24): each route carries its class
+ * in `config.shedClass`, decided here when it is registered
+ * (shared/http/shed-classes.ts) unless the route declares one. A new
+ * object, never the route's own: a config shared by several routes must
+ * not take the class of the first. The plugin itself is registered further
+ * down, after the request id.
+ */
+app.addHook("onRoute", (routeOptions) => {
+  const declared = (
+    routeOptions.config as { shedClass?: ShedClass } | undefined
+  )?.shedClass;
+  const methods = Array.isArray(routeOptions.method)
+    ? routeOptions.method
+    : [routeOptions.method];
+
+  routeOptions.config = {
+    ...routeOptions.config,
+    shedClass:
+      declared ??
+      shedClassOf(String(methods[0]).toUpperCase(), routeOptions.url),
+  };
+});
 
 /*
   Below the limiter, and that is the whole point — see the comment on the
@@ -549,10 +631,61 @@ app.addHook(
   clientUpgradeGate(env.MIN_MOBILE_CONTRACT, env.MOBILE_STORE_URL),
 );
 
+/**
+ * Load shedding, part 2 (plano-escala F2-24, shared/http/load-shedding.ts).
+ *
+ * Fastify keeps hooks and plugins in the order they are written, so the
+ * plugin's onRequest runs here: after the request id (a refusal carries it,
+ * like every other) and the version gate (an old build is still told to
+ * update), and before the routes' own hooks — a shed request costs no
+ * rate-limit round trip, no session lookup and no query. The /docs pages
+ * and the public reference, registered above, are never shed: they are
+ * rate limited and read no table. `SHED_MODE=observe` (the default) never
+ * refuses anything.
+ */
+pressureSignals.pool = databasePool;
+pressureSignals.databaseUrl = process.env.DATABASE_URL;
+
+app.register(fastifyUnderPressure, loadSheddingOptions());
+
+// While the replica refuses requests, the flushes of the positions that do
+// get through are told to wait the most (pressure-level.ts, F2-26).
+registerSheddingProbe(sheddingNow);
+
+// The routes this process's role answers (plano-escala F3-01): a worker, a
+// scheduler or a worker-external only /health*, the realtime role the same
+// (Socket.IO answers before Fastify), the ingest role /health* and the
+// positions. The rest gets the 404 of a missing route. The last root
+// onRequest hook, so a hidden route goes through exactly what a missing one
+// does; not registered at all on api and all, which serve everything.
+if (env.HTTP_SURFACE !== "all") {
+  app.addHook("onRequest", httpSurfaceHook(env.HTTP_SURFACE));
+}
+
+// Every finished response, refusals and 404s included: the status class, the
+// latency per route group and, on POST /route/positions, the app contract
+// (plano-escala F1-09). Constant time, best effort, and never a label built
+// from data (shared/health/http-metrics.ts).
+app.addHook("onResponse", (request, reply, done) => {
+  recordHttpResponse(request, reply);
+  done();
+});
+
+// Once the replica drains, each response ends its keep-alive connection, so
+// Traefik moves to another replica before the listener closes
+// (config/http-server.ts, plano-escala F1-15).
+app.addHook("onSend", closeConnectionWhileDraining);
+
 // Registered before the routes so it applies to every one of them. This runs
 // after body parsing, which `onRequest` (where `ensureAuthenticated` lives)
 // cannot do — without it a `businessId` sent in the body bypasses the check.
 app.addHook("preHandler", enforceRequestedTenant);
+
+// An offset listing past LIST_MAX_OFFSET rows (10,000) answers 400
+// LIST_OFFSET_TOO_DEEP: filter or export instead (plano-escala F2-30,
+// shared/pagination/offset-ceiling.ts). After validation, where `page` and
+// `pageSize` are numbers.
+app.addHook("preHandler", rejectDeepListOffset);
 
 // NUL and lone surrogates crash the query engine (500 at error level) on
 // every route that stores or searches text; refused as a 400 before any
@@ -610,7 +743,27 @@ function sendError(
     .send(JSON.stringify(body));
 }
 
-app.setErrorHandler((error, request, reply) => {
+/**
+ * What was thrown, as the handler below reads it. Fastify hands the handler
+ * the thrown value as is, and types it `unknown` (5.12; 5.2 said
+ * FastifyError): a promise rejected with nothing, or with null, arrives as
+ * `undefined`/`null`, and reading `.code` off it threw inside this handler,
+ * so the client got Fastify's default body — no `code`, no `requestId` —
+ * instead of ours. Objects pass through untouched, so every `instanceof`
+ * below still sees the original; anything else becomes an Error that names
+ * it.
+ */
+function asThrownError(thrown: unknown): FastifyError {
+  if (typeof thrown === "object" && thrown !== null) {
+    return thrown as FastifyError;
+  }
+
+  return new Error(`Non-error thrown: ${String(thrown)}`) as FastifyError;
+}
+
+app.setErrorHandler((thrown, request, reply) => {
+  const error = asThrownError(thrown);
+
   // Raised by the local upload route when the body exceeds its parser limit.
   // In production the equivalent refusal comes from R2, which rejects a PUT
   // whose length does not match the signed `ContentLength`.
@@ -666,17 +819,50 @@ app.setErrorHandler((error, request, reply) => {
     !isBodyTooLarge &&
     isDatabaseUnavailable(error);
 
+  /**
+   * The database is up but busy: a lock wait or a statement ran past its
+   * ceiling (lock_timeout, also on the advisory locks; statement_timeout).
+   * It used to be the 500 below; it is a 503 with a short Retry-After now
+   * (plano-escala U-13, database-error-map.ts).
+   */
+  const databaseBusy =
+    !isAppError && !isValidationError && !isBodyTooLarge && !isDatabaseDown
+      ? databaseBusyAnswer(error)
+      : null;
+
+  /**
+   * A unique index or a foreign key the use case did not map (batch of
+   * 14/11/2026). Both are answers about the data — the loser of a race for
+   * the same e-mail, a delete that met a reference committed after the
+   * count — and used to leave as the English "Internal server error". The
+   * floor is a 409 that names the field and never the other row
+   * (prisma-conflict.ts); the use cases that know better map their own.
+   */
+  const databaseConflict =
+    !isAppError &&
+    !isValidationError &&
+    !isBodyTooLarge &&
+    !isDatabaseDown &&
+    !databaseBusy
+      ? prismaConflictFloor(
+          error,
+          request.method === "DELETE" ? "delete" : "write",
+        )
+      : null;
+
   const statusCode = isBodyTooLarge
     ? 413
     : isValidationError
       ? 400
       : isAppError
         ? error.statusCode
-        : isDatabaseDown
+        : isDatabaseDown || databaseBusy
           ? 503
-          : isClientError
-            ? (error.statusCode as number)
-            : 500;
+          : databaseConflict
+            ? databaseConflict.statusCode
+            : isClientError
+              ? (error.statusCode as number)
+              : 500;
 
   // This custom handler REPLACES the one Fastify installs by default, and the
   // default is what logs errors out of the box. Without an explicit log here
@@ -707,7 +893,36 @@ app.setErrorHandler((error, request, reply) => {
   const isSessionCheckOutage =
     isAppError && error.code === "AUTH_SESSION_UNAVAILABLE";
 
-  if (isDatabaseDown || isSessionCheckOutage) {
+  if (databaseConflict) {
+    // Warn, not error: the request lost a race, the code did not break. The
+    // index names which check the use case is missing.
+    request.log.warn(
+      {
+        ...logContext,
+        code: databaseConflict.code,
+        index: uniqueTargetText(error) || undefined,
+      },
+      "Unmapped database conflict answered as 409",
+    );
+  } else if (databaseBusy) {
+    // A message of its own, so an alert on bugs does not page for
+    // contention. A lock wait that ran out, or a wait for one of
+    // PgBouncer's server connections, is load: warn. A statement that ran
+    // into its ceiling is still worth a look (a plan gone bad, a missing
+    // index), and so is PgBouncer out of client slots: error level
+    // (database-error-map.ts decides).
+    const busyContext = {
+      ...logContext,
+      sqlState: databaseBusy.sqlState,
+      reason: databaseBusy.reason,
+    };
+
+    if (databaseBusy.logLevel === "error") {
+      request.log.error(busyContext, "Database busy while processing request");
+    } else {
+      request.log.warn(busyContext, "Database busy while processing request");
+    }
+  } else if (isDatabaseDown || isSessionCheckOutage) {
     // Still error level — it is ours — but a message of its own, so an alert
     // on bugs does not page for an outage the readiness probe already sees.
     request.log.error(
@@ -723,17 +938,32 @@ app.setErrorHandler((error, request, reply) => {
   }
 
   if (isBodyTooLarge) {
+    // A route with a JSON body of its own size says how to split it (the
+    // public batch, plano-escala U-04); every other one is an upload.
+    const refusal = request.routeOptions.config?.bodyTooLarge;
+
     return sendError(reply, 413, {
-      code: "UPLOAD_FILE_TOO_LARGE",
-      message: "O arquivo excede o limite de tamanho permitido.",
+      code: refusal?.code ?? "UPLOAD_FILE_TOO_LARGE",
+      message:
+        refusal?.message ?? "O arquivo excede o limite de tamanho permitido.",
     });
   }
 
   if (error instanceof ZodError || hasZodFastifySchemaValidationErrors(error)) {
-    const issues =
+    const issues = validationIssueSentences(
       error instanceof ZodError
-        ? error.errors.map(({ message }) => message)
-        : error.validation.map(({ message }) => message);
+        ? error.issues.map(({ code, path, message }) => ({
+            code,
+            path: path.map(String).join("/"),
+            message,
+          }))
+        : error.validation.map(({ keyword, instancePath, message }) => ({
+            code: keyword,
+            path: instancePath.replace(/^\//, ""),
+            // Typed optional by Fastify; zod always writes one.
+            message: message ?? "",
+          })),
+    );
 
     return sendError(reply, 400, {
       code: "VALIDATION_ERROR",
@@ -775,6 +1005,31 @@ app.setErrorHandler((error, request, reply) => {
       {
         code: error.code,
         message: error.message,
+      },
+    );
+  }
+
+  if (databaseConflict) {
+    return sendError(
+      reply.header("x-error-code", databaseConflict.code),
+      databaseConflict.statusCode,
+      { code: databaseConflict.code, message: databaseConflict.message },
+    );
+  }
+
+  if (databaseBusy) {
+    // Postgres rolled the transaction back; nothing is retried here. The
+    // body has the outage's shape (requestId included), so a client that
+    // reads the published 503 needs nothing new to handle it.
+    return sendError(
+      reply
+        .header("retry-after", String(databaseBusy.retryAfterSeconds))
+        .header("x-error-code", databaseBusy.code),
+      503,
+      {
+        code: databaseBusy.code,
+        message: databaseBusy.message,
+        requestId: request.id,
       },
     );
   }
@@ -829,10 +1084,11 @@ app.setErrorHandler((error, request, reply) => {
     return sendError(reply, statusCode, {
       code: "MALFORMED_REQUEST",
 
-      // Fastify's own sentence, which names the actual problem — "Body cannot
-      // be empty when content-type is set to 'application/json'", or the
-      // position where the JSON broke. A generic "requisição inválida" would
-      // leave whoever is integrating with nothing to act on.
+      // Fastify's own sentence, which names the kind of problem — "Body cannot
+      // be empty when content-type is set to 'application/json'", or "Body is
+      // not valid JSON…" (FST_ERR_CTP_INVALID_JSON_BODY, which no longer says
+      // where the JSON broke). A generic "requisição inválida" would leave
+      // whoever is integrating with less to act on.
       message: error.message,
     });
   }

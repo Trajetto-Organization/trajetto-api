@@ -47,7 +47,9 @@ async function createEvent(
       aggregateType: "account-payable",
       aggregateId: randomUUID(),
       businessId: BUSINESS,
-      actorId: RECIPIENT,
+      // Nobody's action: the bill's responsible is told of a bill
+      // somebody else registered (actor-notice.test.ts).
+      actorId: null,
       payload: {
         accountPayableId: randomUUID(),
         businessId: BUSINESS,
@@ -131,9 +133,8 @@ beforeAll(async () => {
     sendMessage: async () => ({ success: true, messageId: "wamid.1" }),
   });
 
-  const pipelineModule = await import(
-    "@/shared/notifications/notification-pipeline-service"
-  );
+  const pipelineModule =
+    await import("@/shared/notifications/notification-pipeline-service");
 
   pipeline = pipelineModule.NotificationPipelineService.getInstance();
 }, 120_000);

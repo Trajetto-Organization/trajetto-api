@@ -20,6 +20,28 @@ import {
 const at = (iso: string) => ({ recorded_at: new Date(iso) });
 
 describe("parsePartitionBound", () => {
+  // plano-escala F2-16: a table partitioned on its uuid v7 id prints
+  // its bounds as ids; read wrong, the job would try to make a month
+  // that exists, and the runway alert would never see the shell.
+  it("reads a uuid v7 bound as the millisecond it starts at, and MINVALUE as the open start", () => {
+    expect(
+      parsePartitionBound(
+        "FOR VALUES FROM ('01a19467-e800-0000-0000-000000000000') TO ('01a22ee6-b000-0000-0000-000000000000')",
+      ),
+    ).toEqual({
+      from: Date.parse("2026-11-01T00:00:00Z"),
+      to: Date.parse("2026-12-01T00:00:00Z"),
+    });
+    expect(
+      parsePartitionBound(
+        "FOR VALUES FROM (MINVALUE) TO ('01a19467-e800-0000-0000-000000000000')",
+      ),
+    ).toEqual({
+      from: -Infinity,
+      to: Date.parse("2026-11-01T00:00:00Z"),
+    });
+  });
+
   it("reads the range pg_get_expr prints for a day partition, in UTC", () => {
     expect(
       parsePartitionBound(

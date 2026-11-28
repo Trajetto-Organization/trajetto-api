@@ -11,9 +11,16 @@ import { surfaces } from "./api.js";
  * same second. So the mix is the point, and the weights come from what the
  * product actually does:
  *
- * - Position pings dominate. Twenty thousand drivers at one flush per thirty
- *   seconds is ~670 writes a second, which the capacity ruler already names as
- *   the heaviest single write on the platform.
+ * - Position pings are the heaviest single write on the platform. The
+ *   capacity ruler puts them at ~333 POST/s, carrying ~1,333 points a
+ *   second, at the 5M step (an estimate: the scale plan sizes it with 30
+ *   deliveries per driver a day, decision D11), against ~3,000 requests a
+ *   second in all at that step (the 5M gate): about 11% of the requests,
+ *   which is the weight below (10 of 83, 12%). The weight was 34 (a third of
+ *   the mix) from the old ruler of ~670 writes a second, twenty thousand
+ *   drivers flushing every thirty seconds; a run before 17/11/2026 measured
+ *   that heavier mix (plano-escala LOAD-03). The positions alone, at the
+ *   ruler's rate, are positions.js.
  * - The driver's list is fetched on every app open and every pull-to-refresh.
  * - The dispatcher's board and the tower are opened by a handful of people per
  *   carrier and then left open, refreshing.
@@ -22,7 +29,7 @@ import { surfaces } from "./api.js";
  *   opened whenever somebody writes.
  */
 const MIX = [
-  { weight: 34, run: (vu) => surfaces.recordPositions(vu) },
+  { weight: 10, run: (vu) => surfaces.recordPositions(vu) },
   { weight: 16, run: (vu) => surfaces.myDeliveries(vu) },
 
   { weight: 12, run: () => surfaces.listDeliveries() },

@@ -180,6 +180,12 @@ describe("the fuel write table", () => {
     });
     expect(refusal.message).toContain("entre a leitura anterior e a seguinte");
     expect(refusal.message).not.toBe(new VehicleMileageInvalidError().message);
+    // 05/11/2026: the same km as a record minutes away is fine, both dated
+    // with the hour (the web sends the day), and a new newest one never
+    // below the odometer.
+    expect(refusal.message).toContain(
+      "Repetir a leitura de outro registro só vale com menos de 30 minutos de diferença entre eles, os dois com hora (não só o dia); se for o mais recente e novo, sem ficar abaixo da quilometragem atual do veículo.",
+    );
   });
 
   it("answers a missing or foreign branch with the gate's 404, alike", async () => {

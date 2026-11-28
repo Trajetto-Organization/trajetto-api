@@ -1,11 +1,12 @@
 import { z } from "zod";
+import { fieldError } from "@/shared/validation/field-error";
 
 const updateDeleteVehicleChecklistSchema = z.object({
   businessId: z
-    .string({ required_error: "ID da empresa é obrigatório!" })
+    .string(fieldError({ required: "ID da empresa é obrigatório!" }))
     .uuid("ID da empresa é inválido."),
   checklistId: z
-    .string({ required_error: "ID do checklist é obrigatório!" })
+    .string(fieldError({ required: "ID do checklist é obrigatório!" }))
     .uuid("ID do checklist é inválido."),
 });
 

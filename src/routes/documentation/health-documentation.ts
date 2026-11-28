@@ -89,7 +89,16 @@ const channelDeliveryMetrics = z.object({
 });
 
 const queueTableBloat = z.object({
-  table: z.string().describe("Physical table name."),
+  table: z
+    .string()
+    .describe(
+      "Table name: the parent, for a queue partitioned by day (its partitions summed).",
+    ),
+  partitions: z
+    .number()
+    .describe(
+      "Physical tables the numbers sum: 1 for a plain table, every partition for a partitioned queue (plano-escala F5-13). 0 when the statistics collector has no line for it.",
+    ),
   n_live_tup: z
     .number()
     .describe("Live tuples estimated by the statistics collector."),
@@ -139,6 +148,248 @@ const providerChannelMetrics = z.object({
     ),
 });
 
+/** Status classes of http-metrics.ts; 429 and 503 also inside 4xx and 5xx. */
+// The panel budget's counters per scope (plano-escala F2-28).
+const budgetScopeCounts = z.object({
+  user: z.number(),
+  tenant: z.number(),
+});
+
+const httpClassCounts = z.object({
+  "2xx": z.number(),
+  "3xx": z.number(),
+  "4xx": z.number(),
+  "5xx": z.number(),
+  "429": z
+    .number()
+    .describe("Das 4xx: as recusas do limitador de requisições."),
+  "503": z
+    .number()
+    .describe("Das 5xx: o banco ou uma dependência recusando (Retry-After)."),
+});
+
+/** One route group on /health/metrics (http-metrics.ts, route-groups.ts). */
+const httpGroupWindow = z.object({
+  requests: z.number(),
+  classes: httpClassCounts,
+  latency_ms: z.object({
+    counts: z
+      .array(z.number())
+      .describe(
+        "Uma contagem por balde de `latency_buckets_ms` e, por último, as acima do maior. Não cumulativas.",
+      ),
+    sum: z
+      .number()
+      .describe("Soma das durações, em ms: a média é sum/requests."),
+  }),
+});
+
+/**
+ * The database's own numbers (database-metrics.ts, plano-escala F1-06).
+ * Every one optional — the previous replica of a rolling deploy does not
+ * send them — and nullable: a part that failed leaves its fields null and
+ * names itself in `collection_errors`.
+ */
+const nullableNumber = () => z.number().nullable();
+
+const databaseMetricsShape = {
+  xid_age: nullableNumber()
+    .optional()
+    .describe(
+      "Idade do xid mais antigo sem congelar entre os bancos do cluster (o wraparound é do cluster). O Postgres para de aceitar escrita perto de 2^31.",
+    ),
+  xid_age_database: nullableNumber()
+    .optional()
+    .describe("A mesma idade, só deste banco."),
+  mxid_age: nullableNumber()
+    .optional()
+    .describe("Idade do multixact mais antigo do cluster."),
+  cache_hit_ratio: nullableNumber()
+    .optional()
+    .describe(
+      "Blocos achados no shared_buffers sobre os lidos, desde o último reset das estatísticas (0 a 1); null antes da primeira leitura.",
+    ),
+  blocks_hit: nullableNumber()
+    .optional()
+    .describe("Contador acumulado de blocos achados na memória."),
+  blocks_read: nullableNumber()
+    .optional()
+    .describe("Contador acumulado de blocos lidos do disco."),
+  oldest_write_xact_seconds: nullableNumber()
+    .optional()
+    .describe(
+      "Há quanto tempo está aberta a transação de ESCRITA mais antiga do cluster (uma sessão com xid); segura o vacuum de todas as tabelas. null sem nenhuma.",
+    ),
+  oldest_snapshot_seconds: nullableNumber()
+    .optional()
+    .describe(
+      "Há quanto tempo está aberta a transação mais antiga que segura um snapshot (backend_xmin), escrita ou leitura.",
+    ),
+  oldest_snapshot_xmin_age: nullableNumber()
+    .optional()
+    .describe("Idade, em transações, do xmin mais antigo das sessões."),
+  stats_cluster_wide: z
+    .boolean()
+    .nullable()
+    .optional()
+    .describe(
+      "Se as duas idades acima enxergam as sessões de todos os usuários (superusuário ou pg_read_all_stats); false = só as do próprio usuário da API.",
+    ),
+  archiver: z
+    .object({
+      archived_count: nullableNumber(),
+      failed_count: nullableNumber(),
+      last_archived_at: z.string().nullable(),
+      last_archived_age_seconds: nullableNumber().describe(
+        "Há quantos segundos o último WAL foi arquivado; null sem nenhum.",
+      ),
+      last_failed_at: z.string().nullable(),
+    })
+    .nullable()
+    .optional()
+    .describe(
+      "pg_stat_archiver: o arquivamento contínuo do WAL (PITR). Com archive_mode=off, tudo fica zerado ou null.",
+    ),
+  hot_tables: z
+    .array(
+      z.object({
+        table: z.string(),
+        partitions: z
+          .number()
+          .describe("Partições somadas; 1 numa tabela sem partição."),
+        n_live_tup: z.number(),
+        n_dead_tup: z.number(),
+        dead_tuple_percent: z.number(),
+        last_autovacuum: z.string().nullable(),
+      }),
+    )
+    .nullable()
+    .optional()
+    .describe(
+      "As tabelas quentes do plano de escala, cada uma pela raiz da partição, com as estimativas do pg_stat_user_tables (nunca uma contagem).",
+    ),
+  parameters: z
+    .record(z.string(), z.string().nullable())
+    .nullable()
+    .optional()
+    .describe(
+      "Parâmetros do servidor sem segredo (shared_buffers, max_wal_size, archive_mode, autovacuum_freeze_max_age…), como o SHOW os mostra. Nunca archive_command.",
+    ),
+  pg_stat_statements: z
+    .enum(["ready", "not_loaded", "missing"])
+    .nullable()
+    .optional()
+    .describe(
+      "ready = a view responde; not_loaded = a extensão existe sem a biblioteca no shared_preload_libraries (a produção até a imagem nova do Postgres, sem alerta); missing = sem a extensão.",
+    ),
+  pg_wal: z
+    .object({
+      readable: z
+        .boolean()
+        .nullable()
+        .describe(
+          "Se o usuário da API pode listar o pg_wal (superusuário ou pg_monitor); null quando a primeira leitura falhou.",
+        ),
+      files: nullableNumber(),
+      bytes: nullableNumber(),
+    })
+    .optional()
+    .describe(
+      "O que o pg_wal ocupa. Um arquivamento parado enche este diretório até o banco parar.",
+    ),
+  sizes: z
+    .object({
+      database_bytes: nullableNumber(),
+      tables: z.array(z.object({ table: z.string(), total_bytes: z.number() })),
+      measured_at: z
+        .string()
+        .describe("Quando foi medido: a cópia vale 5 min em cada réplica."),
+    })
+    .nullable()
+    .optional()
+    .describe(
+      "Tamanho do banco e das tabelas quentes (com índices e TOAST, partições somadas).",
+    ),
+  index_usage: z
+    .object({
+      stats_reset_at: z
+        .string()
+        .nullable()
+        .describe(
+          "Quando as estatísticas deste banco foram zeradas pela última vez (pg_stat_database.stats_reset); null se nunca foram.",
+        ),
+      window_days: nullableNumber().describe(
+        "Dias inteiros que os contadores cobrem; null quando não se sabe (nunca zerados).",
+      ),
+      indexes: z.array(
+        z.object({
+          table: z.string().describe("A tabela quente, pela raiz da partição."),
+          index: z
+            .string()
+            .describe(
+              "O índice, pelo nome do índice do pai numa particionada.",
+            ),
+          scans: z
+            .number()
+            .describe(
+              "Leituras pelo índice desde o último zeramento, somadas nas partições.",
+            ),
+          last_scan_at: z
+            .string()
+            .nullable()
+            .describe(
+              "A última leitura pelo índice (Postgres 16, last_idx_scan); null se nunca, ou num servidor mais antigo.",
+            ),
+          bytes: z.number().describe("Tamanho do índice, partições somadas."),
+          primary: z.boolean(),
+          unique: z.boolean(),
+          foreign_key: z
+            .boolean()
+            .describe(
+              "Uma chave estrangeira da tabela abre o índice (as colunas dela são as primeiras dele): é por ele que o ON DELETE CASCADE do pai e a conferência da remoção do pai andam. Nunca é candidato.",
+            ),
+          unused: z
+            .boolean()
+            .describe(
+              "Candidato a sair: nem chave primária, nem unique, nem índice de chave estrangeira, e sem leitura há 30 dias (a última leitura mais velha que isso, ou nenhuma numa janela de 30 dias ou mais, contada do zeramento das estatísticas, não da criação do índice).",
+            ),
+        }),
+      ),
+      unused: z
+        .array(z.string())
+        .describe("Os nomes dos candidatos, para uma olhada."),
+      measured_at: z
+        .string()
+        .describe("Quando foi lido: a cópia vale 15 min em cada réplica."),
+    })
+    .nullable()
+    .optional()
+    .describe(
+      "O uso de cada índice das tabelas quentes (plano de escala F2-23). Um índice sem leitura custa toda escrita da tabela; o candidato só sai à mão, um por release, com duas leituras deste bloco a 30 dias uma da outra no commit (prisma/concurrent/README.md). Null quando a leitura falhou.",
+    ),
+  sampled_at: z
+    .string()
+    .nullable()
+    .optional()
+    .describe(
+      "Quando as partes que o login do runtime não pode ler (as sessões dos outros roles e o pg_wal) vieram da última amostra do cron (ops_sample, papel cluster, lida no pool de manutenção), e não da leitura ao vivo. Ausente quando tudo é ao vivo, como com o superusuário de hoje.",
+    ),
+  collection_errors: z
+    .array(
+      z.object({
+        part: z.enum(["core", "pg_wal", "sizes", "index_usage"]),
+        code: z
+          .string()
+          .nullable()
+          .describe("O SQLSTATE da recusa; null para outra falha."),
+      }),
+    )
+    .optional()
+    .describe(
+      "As partes desta leitura do banco que falharam; os campos delas ficam null e as outras respondem.",
+    ),
+};
+
 const readinessStatus = z.enum([
   "ok",
   "warning",
@@ -155,6 +406,8 @@ const providerReadiness = z.object({
     "push",
     "storage",
     "ai_ocr",
+    "geocoding",
+    "address_search",
     "proof_certificate",
     "heartbeat",
   ]),
@@ -176,9 +429,12 @@ const providerReadiness = z.object({
   message: z.string().describe("O que está errado e o que fazer, em pt-BR."),
   warnings: z.array(z.string()),
   details: z
-    .record(z.union([z.string(), z.number(), z.boolean(), z.null()]))
+    .record(
+      z.string(),
+      z.union([z.string(), z.number(), z.boolean(), z.null()]),
+    )
     .describe(
-      "Estado sem segredo: domínio do remetente, status de cada template (template:<nome>), validade do certificado…",
+      "Estado sem segredo: domínio do remetente, status de cada template (template:<nome>), validade do certificado, e no LocationIQ protocol, key_source (o nome da variável da chave), today_used, daily_budget, business_daily_limit, paused_reason, paused_until e refused_status…",
     ),
   attempts: z
     .number()
@@ -224,6 +480,119 @@ const healthResponses = {
   }),
   livenessCheck: z.object({
     status: z.literal("alive").describe("Application liveness status"),
+    // Not a secret: the public hostname already says which one it is.
+    environment: z
+      .enum(["development", "staging", "production"])
+      .describe(
+        "O ambiente desta API (`APP_ENV`): `staging` ou `production` nas Applications do Dokploy, `development` fora delas. A web confere no boot que é o mesmo dela.",
+      ),
+  }),
+  rolloutStatus: z.object({
+    commit: z
+      .string()
+      .nullable()
+      .describe(
+        "O commit do build que responde; null num build local, sem commit.",
+      ),
+    release: z.object({
+      pending: z
+        .array(
+          z.object({
+            step: z
+              .string()
+              .describe(
+                "O arquivo do passo: `infra/sql/<nome>.sql` ou `prisma/post-deploy/<nome>.sql`.",
+              ),
+            status: z
+              .enum(["pending", "failed"])
+              .describe(
+                "`pending`: o passo espera um estado (uma capability, um lock); `failed`: a última execução dele falhou.",
+              ),
+            detail: z
+              .string()
+              .nullable()
+              .describe("O que o passo disse no último aviso, ou o erro."),
+            updatedAt: z.string().describe("Quando o passo rodou (ISO)."),
+          }),
+        )
+        .describe(
+          "Passos que fazem o próximo deploy rodar a etapa de release de novo, mesmo sem imagem de migração nova.",
+        ),
+      lastRunAt: z
+        .string()
+        .nullable()
+        .describe(
+          "Quando a etapa de release terminou (ou falhou) pela última vez; null antes da primeira.",
+        ),
+    }),
+    roles: z
+      .object({
+        appEnv: z
+          .string()
+          .describe(
+            "O `APP_ENV` do processo que responde: os processos deste ambiente. Um grupo com outro `appEnv` é um processo de outro ambiente apontado para este banco.",
+          ),
+        liveWindowSeconds: z
+          .number()
+          .int()
+          .describe(
+            "Só contam os processos que gravaram o heartbeat nestes segundos (90).",
+          ),
+        queues: z
+          .array(z.string())
+          .describe(
+            "Todas as filas que este build conhece: cada uma precisa de um processo vivo que a consuma.",
+          ),
+        processes: z
+          .array(
+            z.object({
+              role: z
+                .string()
+                .describe(
+                  "O `PROCESS_ROLE` do processo: `all`, `api`, `worker`, `scheduler`, `realtime`, `worker-external` ou `ingest`.",
+                ),
+              appEnv: z.string().describe("O `APP_ENV` do processo."),
+              commit: z
+                .string()
+                .nullable()
+                .describe(
+                  "O commit do build do processo; null num build local.",
+                ),
+              fingerprint: z
+                .string()
+                .nullable()
+                .describe(
+                  "A impressão da configuração (16 hex: segredos, ambiente, banco e Redis, nunca os valores); null até o processo ler a identidade do banco e do Redis.",
+                ),
+              queues: z
+                .array(z.string())
+                .describe("As filas que o processo consome."),
+              cron: z.boolean().describe("O processo roda o cron."),
+              sockets: z.boolean().describe("O processo aceita sockets."),
+              count: z
+                .number()
+                .int()
+                .describe(
+                  "Quantos processos vivos têm exatamente estes campos.",
+                ),
+            }),
+          )
+          .describe(
+            "Os processos vivos, agrupados pelo que o pipeline compara; nunca o nome da máquina, da réplica ou do nó.",
+          ),
+      })
+      .nullable()
+      .describe(
+        "Os processos vivos (plano de escala F3-31b); null quando o `process_heartbeat` não pôde ser lido (o pipeline pergunta de novo).",
+      ),
+    database: z.object({
+      imageRevision: z
+        .string()
+        .nullable()
+        .describe(
+          "O `SHOW trajetto.image_revision`: o commit da imagem `trajetto-postgres`; null em outra imagem.",
+        ),
+    }),
   }),
   readinessCheck: z.object({
     status: z
@@ -243,12 +612,45 @@ const healthResponses = {
         .number()
         .describe("Postgres max_connections — the hard ceiling for replicas."),
       connection_usage_percent: z.number(),
+      ...databaseMetricsShape,
+      alert_limits: z
+        .object({
+          xid_age: z
+            .number()
+            .describe("xid-age-high: idade do xid acima disto."),
+          archive_lag_seconds: z
+            .number()
+            .describe(
+              "wal-archive-stalled: com o arquivamento ligado, o último segmento arquivado há mais que isto.",
+            ),
+          long_write_xact_seconds: z
+            .number()
+            .describe(
+              "long-write-xact: escrita aberta há mais que isto (LONG_WRITE_XACT_ALERT_SECONDS).",
+            ),
+          pg_wal_bytes: z
+            .number()
+            .describe("pg-wal-high: pg_wal acima disto (PG_WAL_ALERT_GIB)."),
+          pitr_expected: z
+            .boolean()
+            .describe(
+              "pitr-archive-off: com true, archive_mode desligado alerta (PITR_EXPECTED).",
+            ),
+        })
+        .optional()
+        .describe(
+          "Os limites com que o alerta da operação julga os números do banco, como este ambiente os definiu: a tela Sistema fica vermelha onde o alerta dispara. Opcional: a réplica anterior de um rolling deploy não manda.",
+        ),
     }),
     outbox: z.object({
       pending: z
         .number()
         .describe("Events waiting to be claimed — queue depth."),
-      failed: z.number().describe("Events that exhausted their retries."),
+      failed: z
+        .number()
+        .describe(
+          "Events that exhausted their retries and are still kept: FAILED in the queue (30 days) or in its dead letter, not replayed (90 days from the failure).",
+        ),
       oldest_pending_seconds: z
         .number()
         .nullable()
@@ -303,7 +705,7 @@ const healthResponses = {
     queue_tables: z
       .array(queueTableBloat)
       .describe(
-        "Bloat of the queue tables from pg_stat_user_tables. High-churn tables: they are written, claimed and updated on every event.",
+        "Bloat of the queue tables from pg_stat_user_tables, summed over the partitions of a queue partitioned by day. High-churn tables: they are written, claimed and updated on every event.",
       ),
     webhooks: z
       .object({
@@ -390,9 +792,73 @@ const healthResponses = {
             .describe(
               "RUNNING runs whose lease ran out — the replica died mid-run. The hourly catch-up sweep marks them FAILED.",
             ),
+          last_partial: z
+            .boolean()
+            .optional()
+            .describe(
+              "A última execução parou com trabalho por fazer (FAILED com last_error começando por `[partial]`): o catch-up a repete só na janela das parciais (CRON_PARTIAL_RETRY_WINDOW_UTC), até CRON_PARTIAL_RETRIES_PER_DAY vezes por dia.",
+            ),
+          partial_since: z
+            .string()
+            .nullable()
+            .optional()
+            .describe(
+              "A primeira execução parcial desde o último sucesso, quando tudo o que rodou desde então foi parcial; null quando a última não é parcial ou quando uma falha de verdade veio depois do último sucesso (aí o job é julgado pelo último sucesso, como qualquer falha). Com 26 h só de parciais, o alerta dispara.",
+            ),
         }),
       )
       .describe("Every scheduled job and how its runs went."),
+    partitions: z
+      .record(
+        z.string(),
+        z.object({
+          partitions: z
+            .number()
+            .describe("Partições anexadas, uma com DETACH pendente inclusive."),
+          lookahead_days: z
+            .number()
+            .nullable()
+            .describe(
+              "Dias inteiros até o fim da última partição; null sem nenhuma. Sem partição DEFAULT: depois dela, o INSERT é recusado.",
+            ),
+          last_partition_ends_at: z.string().nullable(),
+          oldest_partition_starts_at: z.string().nullable(),
+          retention_days: z
+            .number()
+            .nullable()
+            .describe(
+              "Dias de linhas guardados; as partições mais velhas são destacadas e apagadas pelo job partition-maintenance. null: a tabela é guardada inteira e o job nunca destaca nem apaga partição dela (a casca da trilha das entregas, delivery_event_part).",
+            ),
+          runway_ok: z
+            .boolean()
+            .describe(
+              "Pelo menos 3 dias à frente; abaixo disso, o alerta partition-runway-low.",
+            ),
+          lookahead_ok: z
+            .boolean()
+            .describe(
+              "Pelo menos 5 dias à frente; abaixo disso, o alerta partition-lookahead-low. O job deixa cerca de 7.",
+            ),
+          detach_pending: z
+            .number()
+            .describe(
+              "Partições que um DETACH CONCURRENTLY deixou pela metade; o job termina na noite seguinte.",
+            ),
+          stuck: z
+            .array(z.string())
+            .describe(
+              "Partições que passaram da retenção há mais de 3 dias e continuam anexadas (alerta partition-stuck).",
+            ),
+          owner_ok: z
+            .boolean()
+            .describe(
+              "O role trajetto_partitions é dono do pai e de todas as partições (infra/sql/10-partitions.sql): o job roda como ele, o que um runtime sem superusuário exige.",
+            ),
+        }),
+      )
+      .describe(
+        "Cada tabela particionada do registro (src/shared/database/partitions.ts), pelo nome.",
+      ),
     driver_position: z
       .object({
         partition_runway_days: z
@@ -408,7 +874,9 @@ const healthResponses = {
             "At least 3 days of runway. The nightly job keeps about 7.",
           ),
       })
-      .describe("Partitions of the GPS trail table ahead of today."),
+      .describe(
+        "Partitions of the GPS trail table ahead of today. Alias of partitions.driver_position kept for the web's Sistema screen; read partitions instead.",
+      ),
     runtime: z
       .object({
         replica: z
@@ -454,6 +922,35 @@ const healthResponses = {
           rss_mb: z.number(),
           heap_used_mb: z.number(),
         }),
+        // plano-escala F4-01. Optional: an API that predates it, still
+        // answering during a rolling deploy, sends none.
+        cpu: z
+          .object({
+            user_ms: z
+              .number()
+              .describe("CPU de usuário do processo na janela, em ms."),
+            system_ms: z
+              .number()
+              .describe("CPU de sistema do processo na janela, em ms."),
+            requests: z
+              .number()
+              .describe("Requisições terminadas na janela, fora de /health."),
+            ms_per_request: z
+              .number()
+              .nullable()
+              .describe(
+                "CPU (usuário + sistema) por requisição, em ms; null sem requisição na janela. É o custo que a prova de capacidade divide pelo pico.",
+              ),
+            includes_workers: z
+              .boolean()
+              .describe(
+                "true quando os workers rodam neste processo (WORKERS_ENABLED): o trabalho das filas entra na conta.",
+              ),
+          })
+          .optional()
+          .describe(
+            "CPU por requisição desta réplica, na mesma janela do laço de eventos.",
+          ),
         prisma_pool: z
           .object({
             limit: z
@@ -508,6 +1005,48 @@ const healthResponses = {
       .describe(
         "How often the phone's offline pre-check agreed with the server's reading of the same photo, counted on this replica when the server's verdict is written (decision 14.2). The stored columns are the durable source.",
       ),
+    dashboard_rollup: z
+      .object({
+        mode: z
+          .enum(["off", "shadow", "on"])
+          .describe("DASHBOARD_ROLLUP_MODE of this replica."),
+        windows_compared: z
+          .number()
+          .describe(
+            "Windows of the overview and the trends whose deliveries the shadow compared with the rollup.",
+          ),
+        windows_agreed: z
+          .number()
+          .describe("Compared windows where the rollup gave what was served."),
+        windows_raced: z
+          .number()
+          .describe(
+            "Compared windows that differed from what was served but agreed with a live count read in the same statement: the data moved between the two reads.",
+          ),
+        windows_diverged: z
+          .number()
+          .describe(
+            "Compared windows where the rollup and a live count of the same snapshot disagreed: a stored day is wrong. The gate of DASHBOARD_ROLLUP_MODE=on is 0 here for 7 days, on every replica, and no 'dashboard rollup diverged from the live count' line in the log.",
+          ),
+        views_skipped: z
+          .number()
+          .describe(
+            "Views not compared because another comparison of this replica was running (one at a time).",
+          ),
+        failures: z.number().describe("Comparisons that failed with an error."),
+        on_fallbacks: z
+          .number()
+          .describe(
+            "With on: reads of the rollup that failed and were counted live.",
+          ),
+        last_divergence_at: z
+          .string()
+          .nullable()
+          .describe("When this replica last saw a divergence."),
+      })
+      .describe(
+        "The dashboard's closed days (plano-escala F4-22, decision D52), on this replica since it started: with shadow, how the rollup compared with the live count served; with on, the reads that fell back to the live count.",
+      ),
     proof_signing: z
       .object({
         state: z
@@ -557,18 +1096,69 @@ const healthResponses = {
         adapter: z
           .enum(["redis", "local", "off"])
           .describe(
-            "redis: events cross replicas; off: Socket.IO not started on this process.",
+            "redis: events cross replicas (through the adapter, or through the emitter in a process that takes no sockets); off: Socket.IO not started on this process.",
           ),
         adapter_status: z
           .string()
           .nullable()
           .describe(
-            "ioredis status of the adapter's publisher (ready, reconnecting…).",
+            "ioredis status of the adapter's publisher, or of the emitter's connection (ready, reconnecting…).",
+          ),
+        emitter: z
+          .boolean()
+          .describe(
+            "true in a process that takes no sockets (SOCKETS_ENABLED=false, plano-escala U-07): it publishes through the Redis emitter and subscribes to none of the cluster's frames.",
           ),
         dropped_frames_unreported: z
           .number()
           .describe(
             "Cross-replica frames dropped while Redis was away, not yet logged.",
+          ),
+        socket_cap: z
+          .number()
+          .describe(
+            "The replica's real socket ceiling: SOCKET_MAX_CONNECTIONS, lowered to the process's file descriptor limit minus SOCKET_FD_RESERVE (plano-escala F5-31); 0 when no ceiling applies. The socket-cap-high alert pages at 80% of it.",
+          ),
+        fd_limit: z
+          .number()
+          .nullable()
+          .describe(
+            "The process's soft file descriptor limit, read at boot from /proc/self/limits; null off Linux or when unlimited.",
+          ),
+        handshakes_in_flight: z
+          .number()
+          .describe(
+            "Handshakes in the authentication middleware right now (ceiling SOCKET_HANDSHAKE_MAX_INFLIGHT, plano-escala U-01).",
+          ),
+        handshakes: z
+          .object({
+            window_seconds: z
+              .number()
+              .describe(
+                "Seconds the window covers: up to a minute, when the ops_sample row resets it.",
+              ),
+            handshakes: z
+              .number()
+              .describe(
+                "Handshakes that ran the middleware, admitted or refused.",
+              ),
+            admitted: z.number(),
+            p50_ms: z
+              .number()
+              .nullable()
+              .describe(
+                "Upper bound of the duration bucket holding the median; null with no handshake.",
+              ),
+            p99_ms: z.number().nullable(),
+            max_ms: z.number().nullable(),
+            refused: z
+              .record(z.string(), z.number())
+              .describe(
+                "Refusals by reason, zero-filled: connections and inflight (the replica's ceilings, with retryAfterMs), engine_capacity (past the ceiling, at the upgrade), sockets_disabled (a process whose role takes no sockets: SOCKETS_ENABLED=false), address_budget, rate_limited (the user's budget), too_many_connections (the user's sockets here), unavailable (Postgres or Redis failed) and credential (token, ticket or session). Only credential and address_budget are kept on the address's budget.",
+              ),
+          })
+          .describe(
+            "This replica's socket handshakes since the last ops_sample row (plano-escala U-01).",
           ),
       })
       .describe("WebSocket (Socket.IO) of the replica that answered."),
@@ -591,9 +1181,449 @@ const healthResponses = {
             "Keys thrown away under memory pressure (rate-limit counters, socket state).",
           ),
         uptime_seconds: z.number().nullable(),
+        // The scale plan's measures (F1-07). Optional: an API that predates
+        // them, still answering during a rolling deploy, sends none.
+        ops_per_sec: z
+          .number()
+          .nullable()
+          .optional()
+          .describe(
+            "Operações por segundo (instantaneous_ops_per_sec, a média móvel do próprio Redis).",
+          ),
+        used_cpu_sys_seconds: z
+          .number()
+          .nullable()
+          .optional()
+          .describe(
+            "Segundos de CPU de sistema desde que o servidor subiu; a taxa é a diferença entre duas leituras.",
+          ),
+        used_cpu_user_seconds: z
+          .number()
+          .nullable()
+          .optional()
+          .describe(
+            "Segundos de CPU de usuário desde que o servidor subiu; a taxa é a diferença entre duas leituras.",
+          ),
+        pubsub_channels: z
+          .number()
+          .nullable()
+          .optional()
+          .describe("Canais com assinante (os do adapter do Socket.IO)."),
+        pubsub_patterns: z
+          .number()
+          .nullable()
+          .optional()
+          .describe("Assinaturas por padrão (uma por assinante do adapter)."),
+        total_net_output_bytes: z
+          .number()
+          .nullable()
+          .optional()
+          .describe("Bytes enviados desde que o servidor subiu."),
+        output_kbps: z
+          .number()
+          .nullable()
+          .optional()
+          .describe(
+            "Quanto o Redis envia agora, em kbps (instantaneous_output_kbps).",
+          ),
+        mem_clients_normal_bytes: z
+          .number()
+          .nullable()
+          .optional()
+          .describe("Memória dos buffers dos clientes normais, em bytes."),
+        client_recent_max_output_buffer_bytes: z
+          .number()
+          .nullable()
+          .optional()
+          .describe(
+            "O maior buffer de saída de um cliente nos últimos segundos, em bytes: um assinante lento aparece aqui primeiro.",
+          ),
+        maxmemory_policy: z
+          .string()
+          .nullable()
+          .optional()
+          .describe(
+            "O que o Redis cheio faz: noeviction recusa escritas, allkeys-lru descarta chaves.",
+          ),
+        evicted_clients: z
+          .number()
+          .nullable()
+          .optional()
+          .describe(
+            "Clientes fechados pela memória dos buffers (Redis 7 em diante).",
+          ),
       })
       .describe(
-        "Redis as the API sees it: PING latency and INFO numbers. Never the address.",
+        "Redis as the API sees it: PING latency and INFO numbers. Never the address nor a key; with Redis down, every number is null.",
+      ),
+    // plano-escala F4-36. Optional: an API that predates it, still answering
+    // during a rolling deploy, sends none.
+    pgbouncer: z
+      .object({
+        status: z
+          .enum(["up", "partial", "down"])
+          .describe(
+            "up: toda tarefa do PgBouncer respondeu ao login de estatística; partial: parte delas; down: nenhuma (ou nenhum endereço). Dispara o alerta pgbouncer-down.",
+          ),
+        read_at: z.string().describe("Quando o cron leu os consoles."),
+        sampled_at: z
+          .string()
+          .describe(
+            "O minuto da linha cluster do ops_sample que trouxe a leitura.",
+          ),
+        error: z
+          .string()
+          .nullable()
+          .describe(
+            "Por que nada foi lido (um nome que o DNS não conhece); null quando houve endereço.",
+          ),
+        instances: z
+          .array(
+            z.object({
+              address: z
+                .string()
+                .describe("O endereço da tarefa (tasks.<App Name>)."),
+              status: z.enum(["up", "down"]),
+              error: z
+                .string()
+                .nullable()
+                .describe(
+                  "Por que não respondeu: o código ou as palavras do PgBouncer, nunca a URL.",
+                ),
+              pools: z.array(
+                z.object({
+                  database: z.string(),
+                  user: z.string(),
+                  cl_active: z.number(),
+                  cl_waiting: z
+                    .number()
+                    .describe("Clientes esperando uma conexão de servidor."),
+                  sv_active: z.number(),
+                  sv_idle: z.number(),
+                  sv_used: z.number(),
+                  maxwait_seconds: z
+                    .number()
+                    .describe("A espera do cliente mais antigo, em segundos."),
+                  pool_mode: z.string().nullable(),
+                }),
+              ),
+              databases: z.array(
+                z.object({
+                  name: z.string(),
+                  pool_size: z.number(),
+                  max_connections: z
+                    .number()
+                    .describe("max_db_connections; 0 é sem teto."),
+                  current_connections: z.number(),
+                  paused: z.boolean(),
+                  disabled: z.boolean(),
+                }),
+              ),
+              stats: z.array(
+                z.object({
+                  database: z.string(),
+                  xact_per_second: z.number(),
+                  query_per_second: z.number(),
+                  avg_xact_time_us: z.number(),
+                  avg_query_time_us: z.number(),
+                  avg_wait_time_us: z.number(),
+                }),
+              ),
+            }),
+          )
+          .describe(
+            "Cada tarefa lida, com o SHOW POOLS, SHOW STATS e SHOW DATABASES dela.",
+          ),
+        totals: z.object({
+          instances: z.number(),
+          instances_up: z.number(),
+          cl_active: z.number(),
+          cl_waiting: z.number(),
+          maxwait_seconds: z
+            .number()
+            .describe(
+              "A maior espera por conexão de servidor; a partir de 2 s dispara pgbouncer-clients-waiting.",
+            ),
+          maxwait_pool: z.string().nullable(),
+          server_connections: z.number(),
+          server_usage_percent: z
+            .number()
+            .nullable()
+            .describe(
+              "O banco mais cheio contra o max_db_connections dele; a partir de 80% dispara pgbouncer-server-saturation.",
+            ),
+          server_usage_database: z.string().nullable(),
+          paused_databases: z.number(),
+        }),
+      })
+      .nullable()
+      .optional()
+      .describe(
+        "O PgBouncer (plano de escala, F4-36), lido uma vez por minuto só pelo processo com o cron, pelo login de estatística (só SHOW), e trazido aqui da linha cluster mais nova do ops_sample (até 5 min). null sem PGBOUNCER_STATS_URL na Application que roda o cron, ou com o OPS_SAMPLE_ENABLED=false.",
+      ),
+    // plano-escala F1-09. Optional: an API that predates it, still answering
+    // during a rolling deploy, sends none.
+    http: z
+      .object({
+        window_seconds: z
+          .number()
+          .describe(
+            "Segundos que a janela cobre: até um minuto, quando a linha de ops_sample a zera.",
+          ),
+        requests: z.number(),
+        classes: httpClassCounts,
+        latency_buckets_ms: z
+          .array(z.number())
+          .describe("Limites superiores dos baldes de latência, em ms."),
+        groups: z
+          .object({
+            positions: httpGroupWindow,
+            tower: httpGroupWindow,
+            lists: httpGroupWindow,
+            details: httpGroupWindow,
+            driver_writes: httpGroupWindow,
+            panel_writes: httpGroupWindow,
+            auth: httpGroupWindow,
+            integration: httpGroupWindow,
+            notifications: httpGroupWindow,
+            files: httpGroupWindow,
+            chat: httpGroupWindow,
+            other: httpGroupWindow,
+          })
+          .describe(
+            "Os doze grupos fixos de rota (src/shared/health/route-groups.ts), todos presentes, zerados quando sem requisição.",
+          ),
+        positions_contracts: z
+          .object({
+            window_minutes: z.number(),
+            total: z.number(),
+            by_contract: z
+              .record(z.string(), z.number())
+              .describe(
+                "POST /route/positions por `contract=` do cabeçalho x-trajetto-client-version; `unknown` sem ele, `other` depois de 16 valores. Só contam a sessão de motorista e o 426 do portão de versão: o 401, o 429 do limitador e o usuário que não é motorista ficam de fora, porque o cabeçalho é de quem chama.",
+              ),
+          })
+          .describe(
+            "A adoção do contrato do app nas posições, nos últimos 10 minutos desta réplica.",
+          ),
+      })
+      .optional()
+      .describe(
+        "Requisições HTTP desta réplica: classes de status, latência por grupo de rota e contratos do app nas posições. Por réplica, como `runtime`; as linhas de ops_sample trazem todas.",
+      ),
+    // plano-escala F2-24. Optional: an API that predates it, still answering
+    // during a rolling deploy, sends none.
+    shedding: z
+      .object({
+        window_seconds: z
+          .number()
+          .describe(
+            "Segundos que a janela cobre: até um minuto, quando a linha de ops_sample a zera.",
+          ),
+        mode: z
+          .enum(["observe", "enforce"])
+          .describe(
+            "SHED_MODE: `observe` só conta; `enforce` recusa com 503 SERVICE_BUSY e Retry-After.",
+          ),
+        positions: z
+          .object({
+            mode: z
+              .enum(["auto", "observe", "enforce"])
+              .describe(
+                "SHED_POSITIONS_MODE: `auto` só recusa posições com 90% da janela no contrato 8 ou maior; `observe` nunca; `enforce` sempre que a réplica está ocupada.",
+              ),
+            total: z
+              .number()
+              .describe(
+                "POST /route/positions dos últimos 10 minutos desta réplica (a janela de `http.positions_contracts`).",
+              ),
+            adopted: z
+              .number()
+              .describe(
+                "Desses, os do contrato 8 ou maior, o app que espera o Retry-After.",
+              ),
+            share: z
+              .number()
+              .nullable()
+              .describe(
+                "adopted / total; null sem envio na janela (a porta fica fechada).",
+              ),
+            open: z
+              .boolean()
+              .describe(
+                "Se, com SHED_MODE=enforce, as posições podem ser recusadas agora.",
+              ),
+          })
+          .describe(
+            "A porta das posições (plano de escala F2-25): um app antigo, sem recuo, responde a um 503 reenviando na hora.",
+          ),
+        under_pressure: z
+          .number()
+          .describe(
+            "Requisições que chegaram com a réplica ocupada: laço de eventos acima de 95% ou com mais de 300 ms de atraso, ou mais pedidos esperando conexão do banco do que o pool tem.",
+          ),
+        reasons: z
+          .record(z.string(), z.number())
+          .describe(
+            "O que estava ocupado, por requisição: `elu` (utilização do laço de eventos), `lag` (atraso do laço) e `pool` (fila do pool do banco). Uma requisição pode contar em mais de um.",
+          ),
+        would_shed: z
+          .record(z.string(), z.number())
+          .describe(
+            "Por grupo de rota: o que o enforce teria recusado e passou (o modo observe, e as posições até a adoção do contrato do app).",
+          ),
+        shed: z
+          .record(z.string(), z.number())
+          .describe(
+            "Por grupo de rota: o que foi recusado com 503 SERVICE_BUSY.",
+          ),
+      })
+      .optional()
+      .describe(
+        "Descarte de carga desta réplica (src/shared/http/load-shedding.ts), por réplica, como `http`; as linhas de ops_sample trazem todas.",
+      ),
+    // plano-escala F2-28. Optional: an API that predates it, still answering
+    // during a rolling deploy, sends none.
+    panel_budget: z
+      .object({
+        window_seconds: z
+          .number()
+          .describe(
+            "Segundos que a janela cobre: até um minuto, quando a linha de ops_sample a zera.",
+          ),
+        mode: z
+          .enum(["off", "observe", "enforce"])
+          .describe(
+            "TENANT_PANEL_BUDGET_MODE: `observe` só conta; `enforce` recusa com 429 TENANT_BUSY e Retry-After; `off` não gasta nada.",
+          ),
+        budget_per_minute: z
+          .number()
+          .describe(
+            "TENANT_PANEL_BUDGET_PER_MINUTE: as unidades por minuto de cada empresa.",
+          ),
+        user_share: z
+          .number()
+          .describe(
+            "TENANT_PANEL_USER_SHARE: a fatia de cada pessoa no orçamento da empresa.",
+          ),
+        charged: budgetScopeCounts.describe(
+          "Requisições que gastaram do orçamento: `user` na fatia da pessoa (antes da sessão), `tenant` no da empresa (depois).",
+        ),
+        would_refuse: budgetScopeCounts.describe(
+          "Acima do orçamento e deixadas passar pelo modo observe.",
+        ),
+        refused: budgetScopeCounts.describe("Recusadas com 429 TENANT_BUSY."),
+        unavailable: z
+          .number()
+          .describe(
+            "O Redis não respondeu: passaram sem contar (falha aberta).",
+          ),
+      })
+      .optional()
+      .describe(
+        "O orçamento do painel por empresa (src/shared/integration/panel-budget.ts), por réplica, como `http`; as linhas de ops_sample trazem todas.",
+      ),
+    // plano-escala F1-22. Optional: an API that predates it, still answering
+    // during a rolling deploy, sends none.
+    volume: z
+      .object({
+        approved_gate_monthly: z
+          .number()
+          .describe(
+            "APPROVED_GATE_MONTHLY_DELIVERIES: as entregas por mês que o relatório de portão aprovado mais novo provou que o hardware aguenta.",
+          ),
+        gate_ratio: z
+          .number()
+          .describe(
+            "A parte do portão em que o alerta volume-near-gate dispara (0,7).",
+          ),
+        daily_soft_cap: z
+          .number()
+          .nullable()
+          .describe("PLATFORM_DAILY_DELIVERY_SOFT_CAP; null sem teto diário."),
+        last_24h: z
+          .number()
+          .nullable()
+          .describe(
+            "Entregas criadas nas últimas 24 h, pela soma do quarto de hora mais novo; null sem soma nos últimos 20 min (desconhecido, não zero).",
+          ),
+        last_7d: z
+          .number()
+          .nullable()
+          .describe("Entregas criadas nos últimos 7 dias, pela mesma soma."),
+        projected_monthly: z
+          .number()
+          .nullable()
+          .describe("Os 7 dias projetados para o mês (× 30/7), arredondados."),
+        gate_percent: z
+          .number()
+          .nullable()
+          .describe(
+            "A projeção em porcentagem do portão, arredondada como na mensagem do alerta.",
+          ),
+        since: z
+          .string()
+          .nullable()
+          .describe(
+            "O minuto mais antigo contado nos 7 dias: uma série mais nova que uma semana subestima a projeção.",
+          ),
+        measured_at: z
+          .string()
+          .nullable()
+          .describe("O quarto de hora em que as somas foram feitas."),
+      })
+      .optional()
+      .describe(
+        "A régua de rampa: as entregas criadas contra o portão aprovado, os mesmos números que o alerta volume-near-gate julga. Contagens e o portão, nunca uma empresa. Só avisa: nada recusa entrega.",
+      ),
+    // plano-escala U-15. Optional: an API that predates it, still answering
+    // during a rolling deploy, sends none.
+    memory_budget_ok: z
+      .boolean()
+      .nullable()
+      .optional()
+      .describe(
+        "Se o orçamento de memória da réplica que respondeu fecha (heap + threads da planilha + reserva nativa ≤ memory.max do contêiner); null quando não há teto legível para comparar. false dispara o alerta memory-budget.",
+      ),
+    memory_budget: z
+      .object({
+        mode: z
+          .enum(["warn", "enforce"])
+          .describe(
+            "MEMORY_BUDGET_MODE: warn avisa (log, este campo e o alerta); enforce recusa o boot.",
+          ),
+        checked: z
+          .boolean()
+          .describe("false quando não havia teto legível para comparar."),
+        limit_mb: z
+          .number()
+          .nullable()
+          .describe("O memory.max do contêiner, em MiB; null sem teto."),
+        total_mb: z.number().describe("A soma das partes, em MiB."),
+        heap_mb: z
+          .number()
+          .describe(
+            "O heap principal (--max-old-space-size do NODE_OPTIONS; o limite do V8 sem a flag).",
+          ),
+        spreadsheet_reads: z
+          .number()
+          .describe("SPREADSHEET_READS_PER_PROCESS."),
+        spreadsheet_max_old_mb: z
+          .number()
+          .describe(
+            "O teto de heap de cada thread da planilha (SPREADSHEET_WORKER_MAX_OLD_MB, ou o que o orçamento deixa).",
+          ),
+        cpu_pool_threads: z.number(),
+        cpu_pool_thread_max_old_mb: z.number(),
+        native_mb: z.number().describe("NATIVE_RESERVE_MB."),
+        reason: z
+          .string()
+          .nullable()
+          .describe("Por que não foi conferido; null quando foi."),
+      })
+      .optional()
+      .describe(
+        "As partes do orçamento de memória da réplica que respondeu (plano de escala, U-15), as mesmas que o boot conferiu.",
       ),
   }),
   providerReadiness: z.object({
@@ -675,7 +1705,7 @@ const healthResponses = {
     requeued: z
       .number()
       .describe(
-        "Quantos dos eventos indicados estavam FAILED e voltaram para a fila do outbox.",
+        "Quantos dos eventos indicados voltaram para a fila do outbox: os que ainda estavam FAILED na fila, de volta a PENDING, mais os arquivados que viraram um evento novo.",
       ),
   }),
   deadLetterReplayInvalid: codedRefusal(
@@ -689,7 +1719,11 @@ const healthResponses = {
   deadLetterEvents: z.object({
     data: z.array(
       z.object({
-        id: z.string().describe("domain_outbox_event id."),
+        id: z
+          .string()
+          .describe(
+            "domain_outbox_event id (the original event's, for an archived one).",
+          ),
         topic: z.string(),
         businessId: z
           .string()
@@ -706,9 +1740,18 @@ const healthResponses = {
         failedAt: z
           .string()
           .describe("Last transition — in practice, when it gave up."),
+        archived: z
+          .boolean()
+          .describe(
+            "false: still FAILED in the outbox queue (its first 30 days); a replay puts it back to PENDING. true: moved to outbox_event_dead_letter, kept OUTBOX_FAILED_RETENTION_DAYS (90) from the failure; a replay creates a new event from it.",
+          ),
       }),
     ),
-    total: z.number().describe("Total FAILED outbox events."),
+    total: z
+      .number()
+      .describe(
+        "Total failed outbox events: the live FAILED ones plus the archived ones not replayed yet.",
+      ),
     page: z.number(),
     pageSize: z.number(),
     totalPages: z.number(),
@@ -733,7 +1776,7 @@ const healthSchemas = {
       .min(1, "Informe ao menos um evento.")
       .max(100, "No máximo 100 eventos por vez.")
       .describe(
-        "IDs de domain_outbox_event em FAILED (os de GET /health/dead-letter/events) para expandir de novo. Eventos em qualquer outro estado são ignorados.",
+        "IDs dos eventos que falharam (os de GET /health/dead-letter/events, na fila ou arquivados) para expandir de novo. Ids em qualquer outro estado são ignorados.",
       ),
   }),
   /**

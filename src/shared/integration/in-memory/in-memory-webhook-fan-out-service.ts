@@ -57,6 +57,31 @@ class InMemoryWebhookFanOutService {
     });
   }
 
+  /** One recorded event per payload, as the real batch writes them. */
+  async announceMany(
+    topic: WebhookTopic,
+    businessId: string,
+    payloads: Array<Record<string, unknown>>,
+    tx?: Prisma.TransactionClient,
+  ): Promise<void> {
+    if (payloads.length === 0) return;
+
+    if (this.failNext) {
+      this.failNext = false;
+
+      throw new Error("integration unreachable");
+    }
+
+    for (const payload of payloads) {
+      this.announced.push({
+        topic,
+        businessId,
+        payload,
+        transactional: Boolean(tx),
+      });
+    }
+  }
+
   topics(): WebhookTopic[] {
     return this.announced.map((event) => event.topic);
   }

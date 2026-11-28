@@ -1,10 +1,12 @@
 import "fastify";
 
 import type { BusinessModule } from "@prisma/client";
-import type { ZodTypeAny } from "zod";
+import type { ZodType } from "zod";
 
 import { UserRole } from "@/modules/user/dtos/user-dto";
 import { PermissionKey } from "@/config/permissions";
+import type { AccessClaims } from "@/shared/auth/access-token-once";
+import type { ShedClass } from "@/shared/http/shed-classes";
 
 interface Permission {
   permissionKey: string;
@@ -27,14 +29,53 @@ declare module "fastify" {
    * route accepts. `module` is set by `requireModuleForPlugin`.
    */
   interface FastifyContextConfig {
+    /**
+     * Whether a pressed replica may refuse the route (plano-escala F2-24).
+     * Set for every route at registration (src/http.ts, onRoute) from
+     * shared/http/shed-classes.ts; a route may declare its own.
+     */
+    shedClass?: ShedClass;
+    /**
+     * Units of the company's panel budget one request spends (plano-escala
+     * F2-28, shared/integration/panel-budget.ts); absent, the route's group
+     * decides.
+     */
+    panelCost?: number;
+    /**
+     * Whether ensureAuthenticated may answer from the session cache
+     * (plano-escala F5-23, shared/auth/session-cache.ts, ADR 0015): only
+     * the positions and the tower, and only while SESSION_CACHE_TTL_MS is
+     * on. Absent everywhere else: the session is read on every request.
+     */
+    sessionCache?: boolean;
+    /**
+     * The 413 of a body past the route's own `bodyLimit`, when it is not
+     * the upload one (src/http.ts): the public batch says how to split
+     * (plano-escala U-04). Absent, the upload's sentence.
+     */
+    bodyTooLarge?: { code: string; message: string };
+    /**
+     * A listing that pages only as far as it counts and refuses a deeper
+     * page with its own code and sentence (the webhook monitor,
+     * MONITOR_PAGE_OUT_OF_RANGE): the global offset ceiling
+     * (shared/pagination/offset-ceiling.ts) leaves it alone, and the
+     * document shows this code in place of LIST_OFFSET_TOO_DEEP.
+     */
+    ownOffsetCeiling?: { code: string; message: string };
     openapi?: {
-      body?: ZodTypeAny;
-      headers?: ZodTypeAny;
+      body?: ZodType;
+      headers?: ZodType;
       module?: BusinessModule;
     };
   }
 
   interface FastifyRequest {
+    /**
+     * Who the access token names, from its signature alone, set by the first
+     * check of this request (shared/auth/access-token-once.ts). The session is
+     * not validated yet when the limiter reads it: never authorize by it.
+     */
+    accessClaims?: AccessClaims;
     user: {
       id: string;
       role: UserRole;

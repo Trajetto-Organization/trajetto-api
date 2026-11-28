@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { responseDateTime } from "./response-date";
 
 import { createVehicleSchema } from "@/schemas/create-vehicle-schema";
 
@@ -33,8 +34,6 @@ const vehicleSchemas = {
   searchVehicleCursor: cursorPaginationByBusinessSchema,
 };
 
-const dateLike = z.union([z.string(), z.date()]);
-
 const statusEnum = z
   .enum(["ACTIVE", "INACTIVE", "BLOCKED", "IN_ROUTE"])
   .describe(
@@ -48,19 +47,21 @@ const vehicleListItem = z.object({
   license_plate: z.string().describe("Sempre em maiúsculas."),
   brand: z.string(),
   model: z.string(),
-  acquisition_date: dateLike,
+  acquisition_date: responseDateTime(),
   fleet_type: z.enum(["OWNED", "THIRD_PARTY"]),
   fleet_id: z.string().nullable(),
-  last_maintenance_date: dateLike.nullable(),
+  last_maintenance_date: responseDateTime().nullable(),
   current_mileage: z.number(),
   last_maintenance_mileage: z.number().nullable(),
   maintenance_interval_km: z.number(),
   maintenance_interval_months: z.number().int(),
   renavam: z.string(),
-  manufacturing_year: dateLike.describe(
+  manufacturing_year: responseDateTime().describe(
     "1º de janeiro do ano (UTC); só o ano conta.",
   ),
-  model_year: dateLike.describe("1º de janeiro do ano (UTC); só o ano conta."),
+  model_year: responseDateTime().describe(
+    "1º de janeiro do ano (UTC); só o ano conta.",
+  ),
   km_per_liter: z.number().describe("Até duas casas decimais."),
   number_of_axles: z.number().int(),
   status: statusEnum,
@@ -68,13 +69,37 @@ const vehicleListItem = z.object({
   fuelTypeId: z.string(),
   driverId: z.string().nullable().describe("O motorista responsável (fixo)."),
   branchId: z.string().nullable(),
+  responsibleUserId: z
+    .string()
+    .nullable()
+    .optional()
+    .describe(
+      "O usuário responsável pela frota deste veículo (plano de 02/11/2026, F1); null = os administradores.",
+    ),
   businessId: z.string(),
-  created_at: dateLike,
-  updated_at: dateLike,
+  created_at: responseDateTime(),
+  updated_at: responseDateTime(),
   vehicleType: z.object({ description: z.string() }).nullable(),
   fuelType: z.object({ description: z.string() }).nullable(),
   driver: z.object({ name: z.string(), cnh: z.string() }).nullable(),
-  branch: z.object({ corporate_reason: z.string() }).nullable(),
+  branch: z
+    .object({
+      corporate_reason: z.string(),
+      name: z
+        .string()
+        .optional()
+        .describe(
+          "O nome da filial como os seletores mostram (a razão social).",
+        ),
+    })
+    .nullable(),
+  responsibleUser: z
+    .object({ name: z.string() })
+    .nullable()
+    .optional()
+    .describe(
+      "O nome do responsável pela frota (F1); null = sem responsável (os administradores).",
+    ),
 });
 
 /** One line of the picker search, as a fleet reader receives it. */
@@ -98,11 +123,17 @@ const vehicleSearchItem = vehicleListItem
       .describe(
         "O tipo e a categoria de CNH que ele exige, para a atribuição avisar quando a do motorista não cobre (decisão 8.5).",
       ),
+    fuelType: z
+      .object({ description: z.string() })
+      .nullable()
+      .describe(
+        'O combustível do veículo, que o cartão "Meus veículos" do motorista mostra. Só no cadastro inteiro.',
+      ),
   })
   .partial()
   .required({ id: true, description: true, license_plate: true, status: true })
   .describe(
-    "Quem tem leitura de veículos recebe o cadastro inteiro. Quem só entra pela escrita de Entregas (despacho) recebe apenas id, description, license_plate, brand, model, status, businessId, driverId, vehicleTypeId, driver.name e vehicleType (descrição e CNH exigida).",
+    "Quem tem leitura de veículos recebe o cadastro inteiro, com driver.name, vehicleType e fuelType.description. Quem só entra pela escrita de Entregas (despacho) recebe apenas id, description, license_plate, brand, model, status, businessId, driverId, vehicleTypeId, driver.name e vehicleType (descrição e CNH exigida).",
   );
 
 /** GET /vehicle/list-vehicle `meta.searchMeta`, as summarizeVehicleList builds it. */
@@ -145,7 +176,7 @@ const vehicleResponses = {
     license_plate: z.string().describe("Placa, em maiúsculas"),
     brand: z.string().describe("Marca"),
     model: z.string().describe("Modelo"),
-    acquisition_date: dateLike.describe("Data de aquisição"),
+    acquisition_date: responseDateTime().describe("Data de aquisição"),
     fleet_type: z
       .enum(["OWNED", "THIRD_PARTY"])
       .describe("Frota própria ou terceirizada"),
@@ -154,7 +185,7 @@ const vehicleResponses = {
       .nullable()
       .optional()
       .describe("Identificador na frota"),
-    last_maintenance_date: dateLike
+    last_maintenance_date: responseDateTime()
       .nullable()
       .optional()
       .describe("Data da última manutenção"),
@@ -169,10 +200,12 @@ const vehicleResponses = {
       .number()
       .describe("Intervalo de revisão em meses"),
     renavam: z.string().describe("RENAVAM"),
-    manufacturing_year: dateLike.describe(
+    manufacturing_year: responseDateTime().describe(
       "Ano de fabricação (1º de janeiro, UTC)",
     ),
-    model_year: dateLike.describe("Ano do modelo (1º de janeiro, UTC)"),
+    model_year: responseDateTime().describe(
+      "Ano do modelo (1º de janeiro, UTC)",
+    ),
     km_per_liter: z
       .number()
       .describe("Consumo em km/l, até duas casas decimais"),
@@ -191,26 +224,47 @@ const vehicleResponses = {
       .optional()
       .describe("ID do motorista responsável"),
     branchId: z.string().nullable().optional().describe("ID da filial"),
+    responsibleUserId: z
+      .string()
+      .nullable()
+      .optional()
+      .describe(
+        "ID do usuário responsável pela frota deste veículo, que recebe o alerta de checklist com defeito (plano de 02/11/2026, F1); null = os administradores da empresa",
+      ),
+    responsibleUser: z
+      .object({ name: z.string() })
+      .nullable()
+      .optional()
+      .describe(
+        "O nome do responsável pela frota (F1), para a edição mostrar quem é; null sem responsável",
+      ),
+    branch: z
+      .object({ corporate_reason: z.string(), name: z.string() })
+      .nullable()
+      .optional()
+      .describe(
+        "A filial do veículo; `name` é o nome que os seletores mostram (a razão social), usado pela OS para já trazer a filial (F4); null sem filial",
+      ),
     last_fuel_mileage: z
       .number()
       .nullable()
       .optional()
       .describe("Quilometragem do último abastecimento"),
-    last_fuel_date: dateLike
+    last_fuel_date: responseDateTime()
       .nullable()
       .optional()
       .describe("Data do último abastecimento"),
-    created_at: dateLike.describe("Criado em"),
-    updated_at: dateLike.describe("Atualizado em"),
+    created_at: responseDateTime().describe("Criado em"),
+    updated_at: responseDateTime().describe("Atualizado em"),
   }),
 
   // Every refusal leaves in the handler's shape (`code` + `message`); the
   // descriptions list the codes a client branches on.
   validationError: errorResponse.describe(
-    "VALIDATION_ERROR (campo inválido, ordenação ou filtro fora da lista), BUSINESS_NOT_IDENTIFIED (MASTER sem empresa), VEHICLE_MODEL_YEAR_INVALID, VEHICLE_MILEAGE_READ_ONLY, VEHICLE_MAINTENANCE_MILEAGE_INVALID, VEHICLE_STATUS_DERIVED ou um cadastro relacionado (tipo, combustível, motorista, filial) que não existe nesta empresa.",
+    "VALIDATION_ERROR (campo inválido, ordenação ou filtro fora da lista), BUSINESS_NOT_IDENTIFIED (MASTER sem empresa), VEHICLE_MODEL_YEAR_INVALID, VEHICLE_MILEAGE_READ_ONLY, VEHICLE_MAINTENANCE_MILEAGE_INVALID, VEHICLE_STATUS_DERIVED ou um cadastro relacionado (tipo, combustível, motorista, filial, RESPONSIBLE_USER_NOT_FOUND para o responsável pela frota) que não existe nesta empresa. USER_NOT_ASSIGNABLE: o responsável pela frota escolhido não tem mais acesso (revogado ou removido).",
   ),
   forbidden: errorResponse.describe(
-    "PERMISSION_DENIED (inclui o motorista na listagem da frota) ou VEHICLE_NOT_ASSIGNED_TO_DRIVER (o motorista pediu um veículo que não é o dele nem o da rota liberada ou em andamento).",
+    "PERMISSION_DENIED (inclui o motorista na listagem da frota) ou VEHICLE_NOT_ASSIGNED_TO_DRIVER (o motorista pediu um veículo que não é o dele nem o da rota liberada ou em andamento; na consulta de um veículo, também não é o da rota dele concluída nas últimas 24 horas).",
   ),
   notFound: errorResponse.describe(
     "VEHICLE_NOT_FOUND, BUSINESS_NOT_FOUND ou USER_NOT_FOUND (o usuário da sessão não existe mais). Um veículo de outra empresa responde exatamente como um inexistente.",
@@ -223,7 +277,7 @@ const vehicleResponses = {
     "VEHICLE_PLATE_TAKEN ou VEHICLE_RENAVAM_TAKEN (já existe nesta empresa) e VEHICLE_LIMIT_REACHED (frota contratada cheia).",
   ),
   updateConflict: errorResponse.describe(
-    "VEHICLE_PLATE_TAKEN, VEHICLE_RENAVAM_TAKEN, VEHICLE_LIMIT_REACHED (reativação além do contrato), VEHICLE_IN_ACTIVE_ROUTE (com rota em andamento só é possível bloquear) ou VEHICLE_HAS_OPEN_ROUTES (inativar com rotas planejadas, liberadas ou em andamento; a mensagem traz as contagens).",
+    "VEHICLE_PLATE_TAKEN, VEHICLE_RENAVAM_TAKEN, VEHICLE_LIMIT_REACHED (reativação além do contrato), VEHICLE_IN_ACTIVE_ROUTE (com rota em andamento só é possível bloquear ou desbloquear, que volta para IN_ROUTE) ou VEHICLE_HAS_OPEN_ROUTES (inativar com rotas planejadas, liberadas ou em andamento; a mensagem traz as contagens).",
   ),
   deleteConflict: errorResponse.describe(
     "VEHICLE_IN_USE: multas, abastecimentos, OS, checklists, contas a pagar, entregas ou rotas ainda apontam para o veículo; a mensagem traz a contagem e o que fazer.",

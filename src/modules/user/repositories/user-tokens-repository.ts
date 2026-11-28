@@ -1,8 +1,15 @@
+import { Prisma } from "@prisma/client";
+
 import database from "@/../infra/database";
+import authConfig from "@/config/auth";
+import { deleteInBatches } from "@/shared/database/batch-delete";
 import { hashSingleUseToken } from "@/shared/security/single-use-token";
 import {
   IUsersTokensRepository,
+  MAX_EXPIRED_REFRESH_TOKENS_PER_RUN,
   REFRESH_GRACE_MAX_SIBLINGS,
+  type RefreshTokenPurgeLimits,
+  type RefreshTokenPurgeResult,
 } from "./IUsers-tokens-repository";
 
 import {
@@ -16,7 +23,29 @@ import {
   CreateTwoFactorToken,
   RotateUserRefreshTokenProps,
   RefreshRotation,
+  UserDeviceSession,
+  UserOwnSession,
+  UserSessionFamily,
 } from "../dtos/user-tokens-dto";
+import { groupDeviceSessions } from "../services/device-sessions";
+import { hashDeviceId } from "../services/session-service";
+import { groupOwnSessions, sessionFamilyOf } from "../services/own-sessions";
+
+/**
+ * The longest a session of any client may go unused before its refresh token
+ * lapses. Read from the policies rather than copied, so a new or longer
+ * policy (the driver's device session, D03) widens the push-device purge
+ * with it instead of cutting a live login's pushes.
+ */
+function longestSessionIdleMs(): number {
+  return (
+    Math.max(
+      ...Object.values(authConfig.refresh_policies).map(
+        (policy) => policy.idleSeconds,
+      ),
+    ) * 1000
+  );
+}
 
 class UserTokensRepository implements IUsersTokensRepository {
   constructor(private prisma = database) {}
@@ -27,6 +56,7 @@ class UserTokensRepository implements IUsersTokensRepository {
     userId,
     jti,
     family_id,
+    device_id,
   }: CreateUserRefreshTokenProps): Promise<UserRefreshTokenProps> {
     const createUserRefreshToken = await this.prisma.refreshToken.create({
       data: {
@@ -35,6 +65,7 @@ class UserTokensRepository implements IUsersTokensRepository {
         expires_in,
         jti,
         family_id,
+        device_id: device_id ?? null,
       },
     });
 
@@ -203,19 +234,201 @@ class UserTokensRepository implements IUsersTokensRepository {
     ]);
   }
 
-  async deleteExpiredUserRefreshTokens(now = new Date()): Promise<number> {
-    const result = await this.prisma.refreshToken.deleteMany({
-      where: { expires_in: { lt: now } },
+  async listUserDeviceSessions(
+    userId: string,
+    now = new Date(),
+  ): Promise<UserDeviceSession[]> {
+    // Served by (userId, family_id): a user has a handful of rows.
+    const live = await this.prisma.refreshToken.findMany({
+      where: {
+        userId,
+        device_id: { not: null },
+        revoked_at: null,
+        expires_in: { gt: now },
+      },
+      select: {
+        device_id: true,
+        family_id: true,
+        created_at: true,
+        expires_in: true,
+      },
     });
 
-    return result.count;
+    return groupDeviceSessions(live);
   }
 
-  async deleteOrphanPushTokens(): Promise<number> {
+  async findLoginsSignedInOnDevice(
+    userIds: string[],
+    deviceId: string,
+    now = new Date(),
+  ): Promise<string[]> {
+    // Served by (userId, family_id): a CPF names a few logins, each with a
+    // handful of rows. Asked even with no login, like the trust it backs.
+    const rows = await this.prisma.refreshToken.findMany({
+      where: {
+        userId: { in: userIds },
+        device_id: deviceId,
+        revoked_at: null,
+        expires_in: { gt: now },
+      },
+      select: { userId: true },
+      distinct: ["userId"],
+    });
+
+    return rows.map((row) => row.userId);
+  }
+
+  async revokeUserDeviceSessions(
+    userId: string,
+    deviceHash: string,
+  ): Promise<string[]> {
+    return this.prisma.$transaction(async (transaction) => {
+      // The column holds the id, the caller the hash: a user's phone rows
+      // are a handful, so they are hashed here (served by (userId, …)).
+      const bound = await transaction.refreshToken.findMany({
+        where: { userId, device_id: { not: null } },
+        select: { family_id: true, device_id: true },
+      });
+
+      const familyIds = [
+        ...new Set(
+          bound
+            .filter((row) => hashDeviceId(row.device_id!) === deviceHash)
+            .map((row) => row.family_id),
+        ),
+      ];
+
+      if (familyIds.length === 0) return [];
+
+      // The whole family, every row of it (a session may have older rows
+      // without the phone, from before the column), and its push devices,
+      // as the logout does.
+      await transaction.refreshToken.deleteMany({
+        where: { userId, family_id: { in: familyIds } },
+      });
+      await transaction.pushDeviceToken.deleteMany({
+        where: { userId, session_family_id: { in: familyIds } },
+      });
+
+      return familyIds;
+    });
+  }
+
+  async listUserSessions(
+    userId: string,
+    now = new Date(),
+  ): Promise<UserOwnSession[]> {
+    // Served by (userId, family_id): a person has a handful of rows.
+    const live = await this.prisma.refreshToken.findMany({
+      where: { userId, revoked_at: null, expires_in: { gt: now } },
+      select: {
+        family_id: true,
+        device_id: true,
+        created_at: true,
+        expires_in: true,
+      },
+    });
+
+    if (live.length === 0) return [];
+
+    const pushed = await this.prisma.pushDeviceToken.findMany({
+      where: {
+        userId,
+        session_family_id: {
+          in: [...new Set(live.map((row) => row.family_id))],
+        },
+      },
+      select: { session_family_id: true },
+    });
+
+    return groupOwnSessions(
+      live,
+      new Set(
+        pushed
+          .map((row) => row.session_family_id)
+          .filter((id): id is string => id !== null),
+      ),
+    );
+  }
+
+  async findSessionFamily(
+    userId: string,
+    familyId: string,
+    now = new Date(),
+  ): Promise<UserSessionFamily | null> {
+    const rows = await this.prisma.refreshToken.findMany({
+      where: { userId, family_id: familyId },
+      select: {
+        device_id: true,
+        created_at: true,
+        revoked_at: true,
+        expires_in: true,
+      },
+    });
+
+    return sessionFamilyOf(familyId, rows, now);
+  }
+
+  async revokeUserSession(
+    userId: string,
+    familyId: string,
+  ): Promise<{ ended: boolean; deviceId: string | null }> {
+    return this.prisma.$transaction(async (transaction) => {
+      const now = new Date();
+      const rows = await transaction.refreshToken.findMany({
+        where: { userId, family_id: familyId },
+        select: { device_id: true, revoked_at: true, expires_in: true },
+      });
+
+      // Only a live session ends: one already over (its rows spent or
+      // lapsed, waiting for the purge) changes nothing — not even the trust
+      // of the phone it was on.
+      const live = rows.some(
+        (row) => row.revoked_at === null && row.expires_in > now,
+      );
+
+      if (!live) return { ended: false, deviceId: null };
+
+      // The whole family and its push devices, as the logout does; scoped by
+      // the user, so another person's session id ends nothing.
+      await transaction.refreshToken.deleteMany({
+        where: { userId, family_id: familyId },
+      });
+      await transaction.pushDeviceToken.deleteMany({
+        where: { userId, session_family_id: familyId },
+      });
+
+      return {
+        ended: true,
+        deviceId: rows.find((row) => row.device_id)?.device_id ?? null,
+      };
+    });
+  }
+
+  async deleteExpiredUserRefreshTokens(
+    now = new Date(),
+    {
+      maxRows = MAX_EXPIRED_REFRESH_TOKENS_PER_RUN,
+      deadline = Number.POSITIVE_INFINITY,
+    }: RefreshTokenPurgeLimits = {},
+  ): Promise<RefreshTokenPurgeResult> {
+    // Oldest first over refresh_token (expires_in): each batch stops at its
+    // limit, and every row it meets is expired. A live token is never
+    // matched, whatever the ceiling.
+    return deleteInBatches({
+      table: Prisma.sql`"refresh_token"`,
+      where: Prisma.sql`"expires_in" < ${now}`,
+      orderBy: Prisma.sql`"expires_in"`,
+      maxRows,
+      deadline,
+      client: this.prisma,
+    });
+  }
+
+  async deleteOrphanPushTokens(now = new Date()): Promise<number> {
     // Served by refresh_token (family_id, …): one probe per device row, and
-    // the table has one row per phone. Rows without a family predate the
-    // column and are left alone; the app re-registers them on launch.
-    return this.prisma.$executeRaw`
+    // the table has one row per phone.
+    const ended = await this.prisma.$executeRaw`
       DELETE FROM "push_device_token" AS device
       WHERE device."session_family_id" IS NOT NULL
         AND NOT EXISTS (
@@ -223,6 +436,22 @@ class UserTokensRepository implements IUsersTokensRepository {
           WHERE session."family_id" = device."session_family_id"
         )
     `;
+
+    // Rows without a family predate the column (plan of 02/11/2026, A9):
+    // they had no session to end with, so the delete above never reached
+    // them and they kept receiving the user's pushes for good. The app
+    // registers on every launch, which ties the row to its session and moves
+    // updated_at; a row still without one, unseen for longer than any session
+    // may sit idle, belongs to a login that is certainly over.
+    const unseenSince = new Date(now.getTime() - longestSessionIdleMs());
+
+    const forgotten = await this.prisma.$executeRaw`
+      DELETE FROM "push_device_token"
+      WHERE "session_family_id" IS NULL
+        AND "updated_at" < ${unseenSince}
+    `;
+
+    return ended + forgotten;
   }
 
   async createEmailVerificationToken({

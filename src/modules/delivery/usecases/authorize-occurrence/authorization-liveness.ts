@@ -45,7 +45,12 @@ interface AttemptState {
   driverId: string | null;
   /** The delivery's open stop (PENDING or ARRIVED), at most one. */
   openStop: { routeId: string; created_at: Date } | null;
-  /** A STATUS_CHANGE event (the panel) written after the request. */
+  /**
+   * A STATUS_CHANGE event (the panel, an integration) written after the
+   * request. Not the SYSTEM lines a route writes by itself (F2-06): a
+   * departure after the request keeps it on the same stop and attempt, and a
+   * route ending already ended it through the stop.
+   */
   statusChangedSince: boolean;
 }
 

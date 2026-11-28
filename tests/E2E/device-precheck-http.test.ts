@@ -93,9 +93,7 @@ const odometerPrecheck = (overrides: Record<string, unknown> = {}) =>
 async function storedPhoto(
   businessId: string,
   folder:
-    | "deliveryPhotos"
-    | "odometerPhotos"
-    | "checklistPhotos" = "deliveryPhotos",
+    "deliveryPhotos" | "odometerPhotos" | "checklistPhotos" = "deliveryPhotos",
 ): Promise<string> {
   const key = `${folder}/${businessId}/${Date.now()}-test-${randomUUID()}.jpg`;
 

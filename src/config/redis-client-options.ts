@@ -27,7 +27,9 @@ type RedisRole =
   | "socket-handshake"
   | "socket-ticket"
   | "socket-pub"
-  | "socket-sub";
+  | "socket-sub"
+  | "geocoding-budget"
+  | "provider-rate";
 
 const KEEP_ALIVE_MS = 10_000;
 const SOCKET_TIMEOUT_MS = 5_000;
@@ -91,6 +93,43 @@ function redisClientOptions(role: RedisRole): RedisOptions {
       return {
         connectionName: "trajetto-socket-sub",
         maxRetriesPerRequest: null,
+        socketTimeout: SOCKET_TIMEOUT_MS,
+        keepAlive: KEEP_ALIVE_MS,
+        lazyConnect: false,
+      };
+
+    case "geocoding-budget":
+      // The geocoding's daily budget, pause and per-second slot (plan of
+      // 02/11/2026, E1; shared/delivery/geocoding/geocoding-runtime.ts): one
+      // connection per process, opened on the first lookup — the minute's
+      // job or the lookup after a commit — and never in a request's path
+      // (the lookup runs after the answer). The offline queue lets the
+      // first command wait for the fresh connection; the budget and the
+      // gate fail CLOSED on any error, so a slow Redis only puts the
+      // lookups off.
+      return {
+        connectionName: "trajetto-geocoding-budget",
+        maxRetriesPerRequest: 1,
+        enableOfflineQueue: true,
+        commandTimeout: 1_000,
+        socketTimeout: SOCKET_TIMEOUT_MS,
+        keepAlive: KEEP_ALIVE_MS,
+        lazyConnect: false,
+      };
+
+    case "provider-rate":
+      // The providers' rate bucket (plano-escala F3-15c;
+      // shared/notifications/provider-rate-bucket.ts): one connection per
+      // process, opened by the first send of a provider whose rate is on,
+      // never otherwise. It sits before a send, never in a request's path.
+      // The offline queue lets the first command wait for the fresh
+      // connection; half a second bounds a hung Redis, and past it the
+      // process paces by its own share of the rate instead.
+      return {
+        connectionName: "trajetto-provider-rate",
+        maxRetriesPerRequest: 1,
+        enableOfflineQueue: true,
+        commandTimeout: 500,
         socketTimeout: SOCKET_TIMEOUT_MS,
         keepAlive: KEEP_ALIVE_MS,
         lazyConnect: false,

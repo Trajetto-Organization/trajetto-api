@@ -464,4 +464,315 @@ describe("the published request example", () => {
     expect(replayed.headers["idempotent-replayed"]).toBe("true");
     expect(replayed.json().id).toBe(created.json().id);
   });
+
+  it("cancels a pending delivery (200) and answers the repeat as a replay (L9)", async () => {
+    const operation =
+      document.paths["/integration/v1/deliveries/{id}/cancel"].post;
+    const example = operation.requestBody.content["application/json"].example;
+    const published = operation.responses["200"].content["application/json"];
+
+    expect(example, "o documento publica um exemplo de corpo").toBeDefined();
+
+    const shipper = await prisma.shipper.create({
+      data: { name: "Embarcador do cancelamento", businessId: CARRIER },
+    });
+    const delivery = await prisma.delivery.create({
+      data: {
+        recipient_name: "Mercado Bom Preço Ltda",
+        street: "Rua das Flores",
+        city: "Campinas",
+        uf: "SP",
+        businessId: CARRIER,
+        shipperId: shipper.id,
+      },
+    });
+
+    // A key holding only the cancel scope, as the reference says it needs.
+    const send = () =>
+      app.inject({
+        method: "POST",
+        url: `/integration/v1/deliveries/${delivery.id}/cancel`,
+        headers: {
+          authorization: `Bearer ${keys.get("only:deliveries:cancel")}`,
+          "content-type": "application/json",
+        },
+        payload: JSON.stringify(example),
+      });
+
+    const cancelled = await send();
+
+    expect(cancelled.statusCode, cancelled.body).toBe(200);
+    expect(cancelled.headers["idempotent-replayed"]).toBe("false");
+    expect(violations(cancelled.json(), published.schema)).toEqual([]);
+
+    // The published example has exactly the keys the API sends.
+    expect(Object.keys(cancelled.json()).sort()).toEqual(
+      Object.keys(published.example).sort(),
+    );
+    expect(cancelled.json()).toMatchObject({
+      id: delivery.id,
+      status: "CANCELLED",
+      status_label: "Cancelada",
+    });
+
+    const replayed = await send();
+
+    expect(replayed.statusCode, replayed.body).toBe(200);
+    expect(replayed.headers["idempotent-replayed"]).toBe("true");
+    expect(replayed.json().id).toBe(delivery.id);
+  });
+});
+
+/**
+ * The published examples against what the API really answers (plan of
+ * 02/11/2026, L10: "act as an external developer reading /integration/docs").
+ *
+ * An integrator copies the example of a response into a fixture, a mock or a
+ * typed model. response-examples.test.ts holds each example to the schema it
+ * illustrates; this holds it to the BODY — same keys at every level, in both
+ * directions, and the same JSON type wherever both sides carry a value — for
+ * every keyed read and the catalogue, over rows that exercise every nested
+ * object (a delivery on a route, a route with driver and stops, an event of
+ * each kind). A field added to the API and forgotten in the example, or an
+ * example field the API never sends, fails here.
+ */
+describe("the published response examples", () => {
+  const SHIPPER = "018f5000-0000-7000-8000-0000000d0e01";
+  const DRIVER = "018f5000-0000-7000-8000-0000000d0e02";
+  const USER = "018f5000-0000-7000-8000-0000000d0e03";
+
+  const seeded = { delivery: "", route: "" };
+
+  beforeAll(async () => {
+    await prisma.shipper.create({
+      data: { id: SHIPPER, name: "Embarcador", businessId: CARRIER },
+    });
+
+    await prisma.driver.create({
+      data: {
+        id: DRIVER,
+        name: "João da Silva",
+        birth_date: new Date("1990-01-01"),
+        cnh: `${DRIVER}-cnh`,
+        cpf: `${DRIVER}-cpf`,
+        rg: `${DRIVER}-rg`,
+        cep: "01001000",
+        city: "São Paulo",
+        uf: "SP",
+        street: "Rua",
+        address_number: "1",
+        status: "ACTIVE",
+        contract_type: "OWNED",
+        businessId: CARRIER,
+      },
+    });
+
+    await prisma.user.create({
+      data: {
+        id: USER,
+        name: "Operadora",
+        email: `${USER}@exemplo.com.br`,
+        password: "nao-usado",
+        role: "BUSINESS_ADMIN",
+        businessId: CARRIER,
+      },
+    });
+
+    const delivery = await prisma.delivery.create({
+      data: {
+        code: "PED-10452",
+        recipient_name: "Mercado Bom Preço Ltda",
+        city: "Campinas",
+        uf: "SP",
+        street: "Rua das Flores",
+        status: "DELIVERED",
+        delivered_at: new Date(),
+        received_by: "Maria Souza",
+        businessId: CARRIER,
+        shipperId: SHIPPER,
+      },
+    });
+
+    seeded.delivery = delivery.id;
+
+    const route = await prisma.route.create({
+      data: {
+        code: 318,
+        name: "Campinas — manhã",
+        status: "IN_PROGRESS",
+        scheduled_date: new Date("2026-09-24"),
+        businessId: CARRIER,
+        driverId: DRIVER,
+        stops: {
+          create: {
+            sequence: 1,
+            status: "COMPLETED",
+            deliveryId: delivery.id,
+          },
+        },
+      },
+    });
+
+    seeded.route = route.id;
+
+    const type = await prisma.occurrenceType.create({
+      data: { name: "Cliente ausente", code: "AUS-01", businessId: CARRIER },
+    });
+
+    const occurrence = await prisma.deliveryOccurrence.create({
+      data: {
+        deliveryId: delivery.id,
+        businessId: CARRIER,
+        occurrenceTypeId: type.id,
+        reportedById: USER,
+      },
+    });
+
+    for (const event of [
+      {
+        type: "STATUS_CHANGE",
+        status_from: "IN_TRANSIT",
+        status_to: "DELIVERED",
+      },
+      { type: "PROOF", received_by: "Maria Souza" },
+      { type: "OCCURRENCE", occurrenceId: occurrence.id },
+    ] as const) {
+      await prisma.deliveryEvent.create({
+        data: { ...event, deliveryId: delivery.id, businessId: CARRIER },
+      });
+    }
+  }, 60_000);
+
+  type Json = unknown;
+
+  /** Where two bodies differ in shape: keys, nesting and JSON types. */
+  function shapeDifferences(example: Json, real: Json, at = "$"): string[] {
+    if (example === null || real === null) return [];
+
+    if (Array.isArray(example) || Array.isArray(real)) {
+      if (!Array.isArray(example) || !Array.isArray(real)) {
+        return [`${at}: lista de um lado só`];
+      }
+
+      if (example.length === 0 || real.length === 0) return [];
+
+      // Every real item against the example's first, and every example item
+      // against the first real one: an extra key on either side shows.
+      return [
+        ...real.flatMap((item, index) =>
+          shapeDifferences(example[0], item, `${at}[${index}]`),
+        ),
+        ...example
+          .slice(1)
+          .flatMap((item, index) =>
+            shapeDifferences(item, real[0], `${at}[exemplo ${index + 1}]`),
+          ),
+      ];
+    }
+
+    if (typeof example === "object" || typeof real === "object") {
+      if (typeof example !== "object" || typeof real !== "object") {
+        return [`${at}: objeto de um lado só`];
+      }
+
+      const left = example as Record<string, Json>;
+      const right = real as Record<string, Json>;
+
+      return [
+        ...Object.keys(left)
+          .filter((key) => !(key in right))
+          .map((key) => `${at}.${key}: está no exemplo, a API não envia`),
+        ...Object.keys(right)
+          .filter((key) => !(key in left))
+          .map((key) => `${at}.${key}: a API envia, o exemplo não mostra`),
+        ...Object.keys(left)
+          .filter((key) => key in right)
+          .flatMap((key) =>
+            shapeDifferences(left[key], right[key], `${at}.${key}`),
+          ),
+      ];
+    }
+
+    return typeof example === typeof real
+      ? []
+      : [`${at}: ${typeof example} no exemplo, ${typeof real} na API`];
+  }
+
+  function exampleOf(operation: Record<string, any>): Json {
+    const content = operation.responses["200"]?.content?.["application/json"];
+
+    return content?.example ?? content?.examples?.[0];
+  }
+
+  it("match the body of every keyed read and the catalogue", async () => {
+    const targets = [
+      ...keyedReads().map((read) => ({
+        name: read.name,
+        operation: read.operation,
+        url: urlOf(
+          read.path,
+          read.path.includes("/routes/") ? seeded.route : seeded.delivery,
+        ),
+      })),
+      {
+        name: "GET /integration/v1/catalogue",
+        operation: document.paths["/integration/v1/catalogue"].get,
+        url: "/integration/v1/catalogue",
+      },
+    ];
+
+    expect(targets.length).toBeGreaterThanOrEqual(6);
+
+    for (const target of targets) {
+      const example = exampleOf(target.operation);
+
+      expect(
+        example,
+        `${target.name}: o documento publica um exemplo`,
+      ).toBeDefined();
+
+      const response = await call(target.url, keys.get("all"));
+
+      expect(response.statusCode, `${target.name}: ${response.body}`).toBe(200);
+
+      const body = response.json();
+
+      // Something to compare: a list that came back empty proves nothing.
+      if (Array.isArray(body.data)) {
+        expect(body.data.length, target.name).toBeGreaterThan(0);
+      }
+
+      expect(shapeDifferences(example, body), target.name).toEqual([]);
+    }
+  });
+
+  it("show the event kinds an integrator meets, with the occurrence code", async () => {
+    const body = (await call("/integration/v1/events", keys.get("all"))).json();
+    const example = exampleOf(document.paths["/integration/v1/events"].get) as {
+      data: Array<{ topic: string; data: Record<string, Json> }>;
+    };
+
+    const events = body.data as Array<{
+      topic: string;
+      data: Record<string, Json>;
+    }>;
+
+    expect(events.map((event) => event.topic)).toEqual(
+      expect.arrayContaining([
+        "delivery.delivered",
+        "proof.registered",
+        "occurrence.reported",
+      ]),
+    );
+
+    // The code an ERP matches an occurrence by (L8), where the example says.
+    expect(
+      events.find((event) => event.topic === "occurrence.reported")?.data
+        .occurrence_code,
+    ).toBe("AUS-01");
+    expect(
+      example.data.find((event) => event.topic === "occurrence.reported")?.data
+        .occurrence_code,
+    ).toEqual(expect.any(String));
+  });
 });

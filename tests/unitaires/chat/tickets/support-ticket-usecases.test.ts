@@ -485,6 +485,142 @@ describe("OpenSupportTicketUseCase", () => {
       }),
     ).rejects.toMatchObject({ statusCode: 403, code: "PERMISSION_DENIED" });
   });
+
+  it("opens the subject the driver named even during a route; without one, the route's", async () => {
+    const ROUTE = "018f5200-0000-7000-8000-0000000000c9";
+
+    chat.routes.push({
+      id: ROUTE,
+      businessId: A,
+      driverId: DRIVER,
+      code: 3,
+      name: "Zona Sul",
+      status: "IN_PROGRESS",
+      started_at: new Date(),
+      created_at: new Date(),
+    });
+
+    const named = await open().execute({
+      userId: DRIVER_USER,
+      idempotencyKey: KEY_1,
+      subject: "  Documentos  do veículo ",
+    });
+
+    expect(named).toMatchObject({
+      created: true,
+      data: { kind: "DRIVER", subject: "Documentos do veículo" },
+    });
+
+    // An app before the title still gets the route's ticket on a route.
+    const untitled = await open().execute({
+      userId: DRIVER_USER,
+      idempotencyKey: KEY_2,
+    });
+
+    expect(untitled).toMatchObject({
+      created: true,
+      data: {
+        kind: "ROUTE",
+        subject: "Rota 3 · Zona Sul",
+        route: { id: ROUTE, code: 3, status: "IN_PROGRESS" },
+      },
+    });
+  });
+
+  it("answers the driver's still-empty subject of the same title instead of another, and opens a new one once it has a message", async () => {
+    const first = await open().execute({
+      userId: DRIVER_USER,
+      idempotencyKey: KEY_1,
+      subject: "Pagamento",
+    });
+
+    vi.mocked(sendSupportTicketEvent).mockClear();
+
+    // A second tap (another key), case aside: the same empty subject, and
+    // the tower is not rung again.
+    const again = await open().execute({
+      userId: DRIVER_USER,
+      idempotencyKey: KEY_2,
+      subject: "pagamento",
+    });
+
+    expect(again).toMatchObject({
+      created: false,
+      data: { id: first.data.id },
+    });
+    expect(tickets.tickets).toHaveLength(1);
+    expect(vi.mocked(sendSupportTicketEvent)).not.toHaveBeenCalled();
+
+    // Another driver's empty subject of the same title is never his.
+    const hers = await open().execute({
+      userId: DRIVER_2_USER,
+      idempotencyKey: KEY_3,
+      subject: "Pagamento",
+    });
+
+    expect(hers.created).toBe(true);
+    expect(hers.data.id).not.toBe(first.data.id);
+
+    await send().execute({
+      userId: DRIVER_USER,
+      ticketId: first.data.id,
+      kind: "TEXT",
+      body: "O vale não caiu.",
+    } as never);
+
+    const later = await open().execute({
+      userId: DRIVER_USER,
+      idempotencyKey: "018f5200-0000-7000-8000-00000000f004",
+      subject: "Pagamento",
+    });
+
+    expect(later.created).toBe(true);
+    expect(later.data.id).not.toBe(first.data.id);
+  });
+
+  it("no longer piles up the untitled subjects of an older app while they are empty", async () => {
+    const first = await open().execute({
+      userId: DRIVER_USER,
+      idempotencyKey: KEY_1,
+    });
+    const second = await open().execute({
+      userId: DRIVER_USER,
+      idempotencyKey: KEY_2,
+    });
+
+    expect(first).toMatchObject({
+      created: true,
+      data: { subject: "Conversa com João Motorista" },
+    });
+    expect(second).toMatchObject({
+      created: false,
+      data: { id: first.data.id },
+    });
+
+    // With a first message the request opens its own ticket: a retry finds
+    // it by its key, never another one.
+    const withMessage = await open().execute({
+      userId: DRIVER_USER,
+      idempotencyKey: KEY_3,
+      message: { kind: "TEXT", body: "Bom dia" },
+    });
+
+    expect(withMessage.created).toBe(true);
+    expect(withMessage.data.id).not.toBe(first.data.id);
+    expect(withMessage.message).toMatchObject({ body: "Bom dia" });
+
+    const retried = await open().execute({
+      userId: DRIVER_USER,
+      idempotencyKey: KEY_3,
+      message: { kind: "TEXT", body: "Bom dia" },
+    });
+
+    expect(retried).toMatchObject({
+      created: false,
+      data: { id: withMessage.data.id },
+    });
+    expect(tickets.tickets).toHaveLength(2);
+  });
 });
 
 describe("AssignSupportTicketUseCase", () => {
@@ -913,7 +1049,29 @@ describe("ReopenSupportTicketUseCase", () => {
 describe("reading tickets", () => {
   const get = () =>
     new GetSupportTicketUseCase(users, tickets, {} as never, uploadStub);
-  const list = () => new ListSupportTicketsUseCase(users, tickets);
+  // Company A runs on Manaus time (H6).
+  const businesses = {
+    findBusinessById: async (id: string) =>
+      id === A ? { id, timezone: "America/Manaus" } : null,
+  };
+  const list = () =>
+    new ListSupportTicketsUseCase(users, tickets, businesses as never);
+
+  it("answers the company's zone beside the tickets, for the Atendimentos tab (H6)", async () => {
+    // Red before: no zone, so the tab printed the hours on the browser's
+    // clock while the route detail used the company's.
+    await generalTicket();
+
+    const listed = await list().execute({
+      userId: OPERATOR,
+      status: "OPEN",
+      scope: "ALL",
+      page: 1,
+      pageSize: 20,
+    });
+
+    expect(listed.meta).toEqual({ timeZone: "America/Manaus" });
+  });
 
   it("tells the operator, the read-only profile and the driver what each may do", async () => {
     const ticket = await generalTicket();

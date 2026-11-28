@@ -86,7 +86,7 @@ async function refusal(promise: Promise<unknown>): Promise<string> {
   } catch (error) {
     if (error instanceof AppError) return `${error.statusCode} ${error.code}`;
     if (error instanceof ZodError)
-      return `400 VALIDATION_ERROR: ${error.errors.map((e) => e.message).join(" | ")}`;
+      return `400 VALIDATION_ERROR: ${error.issues.map((e) => e.message).join(" | ")}`;
     throw error;
   }
 
@@ -290,6 +290,34 @@ describe("editing a type", () => {
     expect(byKey("delivered_default").is_active).toBe(false);
   });
 
+  it("stamps requirements_changed_at when an attachment requirement changes, and only then (K2)", async () => {
+    const absent = await create({ name: "Cliente ausente" });
+
+    expect(absent.requirements_changed_at ?? null).toBeNull();
+
+    // The form resends every field: an unchanged flag is not a change.
+    const renamed = await update(absent.id!, {
+      name: "Cliente ausente (portaria)",
+      requires_photo: false,
+    });
+
+    expect(renamed.requirements_changed_at ?? null).toBeNull();
+
+    const before = Date.now();
+    const tightened = await update(absent.id!, { requires_signature: true });
+
+    expect(tightened.requirements_changed_at).toBeInstanceOf(Date);
+    expect(tightened.requirements_changed_at!.getTime()).toBeGreaterThanOrEqual(
+      before,
+    );
+
+    const photo = await update(absent.id!, { requires_photo: true });
+
+    expect(photo.requirements_changed_at!.getTime()).toBeGreaterThanOrEqual(
+      tightened.requirements_changed_at!.getTime(),
+    );
+  });
+
   it("stamps deactivated_at when a type goes off and clears it when it comes back", async () => {
     const created = await create({ name: "Cliente ausente" });
 
@@ -318,6 +346,20 @@ describe("deleting a type", () => {
     types.occurrenceCounts.set(snack.id!, 2);
 
     expect(await refusal(remove(snack.id!))).toBe("409 OCCURRENCE_TYPE_IN_USE");
+  });
+
+  it("answers a report written after the in-use check with the same 409, not a 500 (K16)", async () => {
+    // The check said unused; a report committed before the DELETE, and the
+    // foreign key (RESTRICT) refused it with P2003.
+    const absent = await create({ name: "Cliente ausente" });
+
+    types.occurrenceCounts.set(absent.id!, 1);
+    types.isOccurrenceTypeInUse = async () => false;
+
+    expect(await refusal(remove(absent.id!))).toBe(
+      "409 OCCURRENCE_TYPE_IN_USE",
+    );
+    expect(types.occurrenceTypes.some((t) => t.id === absent.id)).toBe(true);
   });
 
   it("refuses deleting the last active delivery or pause type, as deactivating it", async () => {
@@ -415,6 +457,22 @@ describe("the driver's lists", () => {
       ["Descanso", "REST"],
       ["Outra pausa", "OTHER"],
       ["Refeição", "MEAL"],
+    ]);
+  });
+
+  it("says only the generic 'Outra pausa' asks for a reason, renamed too (owner, 09/11/2026)", async () => {
+    await create({ name: "Banheiro", category: "PAUSE", pause_kind: "OTHER" });
+    await update(byKey("pause_other")!.id!, { name: "Parada diversa" });
+
+    const pauses = await types.listActivePauseTypes(BUSINESS);
+
+    expect(
+      pauses.map((type) => [type.name, type.pause_kind, type.requires_note]),
+    ).toEqual([
+      ["Banheiro", "OTHER", false],
+      ["Descanso", "REST", false],
+      ["Parada diversa", "OTHER", true],
+      ["Refeição", "MEAL", false],
     ]);
   });
 });

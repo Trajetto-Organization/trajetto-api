@@ -471,15 +471,13 @@ function twins(): Implementations {
   });
 
   imports.imports.push(
-    ...IMPORTS.map(
-      (row): ImportRecord => ({
-        ...row,
-        report: reportOf(row),
-        reversed_at: row.status === "REVERSED" ? at(10) : null,
-        businessId: BUSINESS,
-        performedById: USER,
-      }),
-    ),
+    ...IMPORTS.map((row): ImportRecord => ({
+      ...row,
+      report: reportOf(row),
+      reversed_at: row.status === "REVERSED" ? at(10) : null,
+      businessId: BUSINESS,
+      performedById: USER,
+    })),
     {
       ...OTHER_IMPORT,
       report: reportOf(OTHER_IMPORT),
@@ -971,6 +969,23 @@ describe.each(["prisma", "in-memory"] as const)(
 
         expect(namesOf(searched.data)).toEqual(["Confirmado", "Atraso"]);
         expect(searched.used).toBe(1);
+      });
+
+      // Batch of 14/11/2026: the lookup the use cases ask before a write was
+      // exact, so "atraso" passed next to "Atraso". It ignores case now, in
+      // the company only, and a LIKE wildcard is a literal.
+      it("finds a name whatever its case, only in the company, wildcards literal", async () => {
+        const { reasons } = repos();
+
+        expect(
+          (await reasons.findStatusChangeReasonByName(BUSINESS, "ATRASO"))?.id,
+        ).toBe(REASONS[0].id);
+        expect(
+          await reasons.findStatusChangeReasonByName(OTHER, "atraso"),
+        ).toBeNull();
+        expect(
+          await reasons.findStatusChangeReasonByName(BUSINESS, "atras_"),
+        ).toBeNull();
       });
     });
 

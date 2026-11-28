@@ -2,7 +2,7 @@
 /**
  * Runs the release step — `prisma migrate deploy` plus the idempotent seeds —
  * on the Dokploy Application trajetto-api-migrate, and waits until it
- * FINISHED: applied, or failed. deploy.yml runs it before the API rolls out,
+ * FINISHED: applied, or failed. The deploy action runs it before the API rolls out,
  * on staging and on the promote, only when the database has not applied
  * this release image yet.
  *
@@ -26,6 +26,9 @@
  *      signal), one replica, and no `stop-first` update order (it stops a
  *      migration still running when a second deploy arrives). Anything off
  *      fails here, before the database is touched, saying what to change.
+ *   1b. On the single VPS, the other environment's release step first: while
+ *      Dokploy still deploys it, or its task has not reached `Running`, this
+ *      one waits (U-11).
  *   2. The service's tasks before the deploy: docker.getServiceContainersByAppName,
  *      the list behind the panel's Logs tab. Dokploy answers an empty list
  *      on any stderr from `docker service ps`, so an empty one is read three
@@ -51,8 +54,13 @@
  *   DOKPLOY_APP_LABEL         its name in messages (default trajetto-api-migrate)
  *   RELEASE_IMAGE             the image the Application must run, e.g.
  *                             ghcr.io/trajetto-organization/trajetto-api-migrate:staging
- *   RELEASE_TIMEOUT_SECONDS   how long to wait for the outcome (default 1800)
+ *   RELEASE_TIMEOUT_SECONDS   how long the whole step may take, the wait on the
+ *                             other environment included (default 1800, at
+ *                             most 3600)
  *   RELEASE_POLL_SECONDS      interval between reads of the tasks (default 5)
+ *   RELEASE_SERIALIZE_WITH_APPLICATION_ID
+ *                             the OTHER environment's release Application:
+ *                             wait while it migrates (waitForTheOtherRelease)
  *   ...and the DOKPLOY_* knobs of dokploy-deploy.mjs, handed over to it.
  */
 import { spawnSync } from "node:child_process";
@@ -115,7 +123,57 @@ function baseUrl(raw) {
 const BASE = baseUrl(env.DOKPLOY_URL);
 const APPLICATION_ID = env.DOKPLOY_APPLICATION_ID;
 const IMAGE = env.RELEASE_IMAGE.trim().toLowerCase();
-const TIMEOUT_MS = Number(env.RELEASE_TIMEOUT_SECONDS || 1800) * 1000;
+/**
+ * The ceiling of RELEASE_TIMEOUT_SECONDS. The deploy job has 120 min
+ * (staging.yml, production.yml), and after this step it still moves the
+ * tags, deploys the AI and the API (with their retries) and checks the
+ * rollout: a longer wait let GitHub kill the job halfway through those,
+ * which must never be cut, with the API's and the AI's tags apart. A
+ * build that needs more runs outside the pipeline (Deploy on
+ * trajetto-api-migrate in the panel, docs/deploy.md).
+ */
+const MAX_RELEASE_TIMEOUT_SECONDS = 3600;
+
+/**
+ * The patience for the whole step, from the environment's variable
+ * RELEASE_TIMEOUT_SECONDS (vars of the GitHub environment, through the
+ * deploy action; F2-01): a release with a long prisma/concurrent build
+ * needs more than the default 30 min. ONE budget for the wait on the other
+ * environment's release and for this one's outcome. Not a positive number:
+ * the default, with a warning (a typo must not turn the wait into zero);
+ * above the ceiling: the ceiling, with a warning.
+ */
+function releaseTimeoutMs(raw) {
+  if (raw === undefined || raw.trim() === "") return 1800 * 1000;
+
+  const seconds = Number(raw);
+
+  if (Number.isFinite(seconds) && seconds > MAX_RELEASE_TIMEOUT_SECONDS) {
+    console.log(
+      `::warning::RELEASE_TIMEOUT_SECONDS="${raw}" passa do teto de ${MAX_RELEASE_TIMEOUT_SECONDS} s (o job do deploy tem 120 min, e a IA, a API e a conferência do rollout ainda vêm depois desta etapa); vale ${MAX_RELEASE_TIMEOUT_SECONDS}.`,
+    );
+
+    return MAX_RELEASE_TIMEOUT_SECONDS * 1000;
+  }
+
+  if (Number.isFinite(seconds) && seconds > 0) return seconds * 1000;
+
+  console.log(
+    `::warning::RELEASE_TIMEOUT_SECONDS="${raw}" não é um número positivo de segundos; vale o padrão, 1800.`,
+  );
+
+  return 1800 * 1000;
+}
+
+const TIMEOUT_MS = releaseTimeoutMs(env.RELEASE_TIMEOUT_SECONDS);
+
+/**
+ * The least of the budget this step's own release must still have when
+ * the wait on the other environment ends: that wait gives up this much
+ * before the budget does, so this run never starts a release only to give
+ * up on it at once.
+ */
+const MIN_OWN_WINDOW_MS = Math.min(120_000, TIMEOUT_MS / 2);
 const POLL_MS = Number(env.RELEASE_POLL_SECONDS || 5) * 1000;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -270,6 +328,190 @@ function outcome(fresh) {
 
 const LOGS = `O log da migration está no Dokploy: Application ${LABEL} → Logs (o Swarm guarda o da tarefa que falhou).`;
 
+/**
+ * A task that has not reached `Running` yet: Swarm's states before it, the
+ * image pull (`Preparing`) and the migration itself (`Starting`, until the
+ * image's healthcheck sees the marker) included.
+ */
+const IN_FLIGHT = new Set([
+  "New",
+  "Allocated",
+  "Pending",
+  "Assigned",
+  "Accepted",
+  "Preparing",
+  "Ready",
+  "Starting",
+]);
+
+/**
+ * A Dokploy deployment `running` for longer than this is taken as stuck (a
+ * Dokploy restart leaves them so), not as a release in progress: the same
+ * patience dokploy-deploy.mjs gives one attempt by default.
+ */
+const STUCK_DEPLOYMENT_MS = 15 * 60 * 1000;
+
+/**
+ * What the other environment's release Application is doing right now: the
+ * reasons to wait (empty when it is idle), and the warnings to print once.
+ * Throws when Dokploy cannot say.
+ */
+async function otherReleaseActivity(otherId, otherName) {
+  const busy = [];
+  const warnings = [];
+
+  for (const task of await tasks(otherName)) {
+    if (IN_FLIGHT.has(task.status)) busy.push(`tarefa ${task.currentState}`);
+  }
+
+  const deployments = await get(
+    `/api/deployment.all?applicationId=${encodeURIComponent(otherId)}`,
+  );
+
+  if (!Array.isArray(deployments)) {
+    throw new Error("resposta inesperada de deployment.all (não é uma lista)");
+  }
+
+  for (const deployment of deployments) {
+    if (deployment?.status !== "running") continue;
+
+    const createdAt = Date.parse(String(deployment.createdAt ?? ""));
+
+    if (
+      Number.isFinite(createdAt) &&
+      Date.now() - createdAt < STUCK_DEPLOYMENT_MS
+    ) {
+      busy.push("deploy em andamento no Dokploy (baixando a imagem)");
+    } else {
+      warnings.push(
+        `::warning::O deployment ${redact(deployment.deploymentId ?? "?")} de ${otherName} está 'running' no Dokploy há mais de ${STUCK_DEPLOYMENT_MS / 60_000} min (ou sem data): tomado como travado, não como uma etapa em andamento.`,
+      );
+    }
+  }
+
+  return { busy, warnings };
+}
+
+/**
+ * One release step at a time on the VPS (plano-escala U-11): while the
+ * OTHER environment's release Application (RELEASE_SERIALIZE_WITH_APPLICATION_ID,
+ * a variable of the GitHub environment) is releasing, this one waits before
+ * deploying its own. Staging and production share one host until staging
+ * moves to its own server, and the memory plan counts one migrate at a time
+ * (plano-escala-execucao, section 3).
+ *
+ * "Releasing" is the whole span, not only the migration: a Dokploy
+ * deployment of it still `running` (Dokploy pulls the image before it
+ * updates the service, and the tasks show nothing new meanwhile), and any
+ * task before `Running` (`Preparing` while Swarm pulls, then `Starting`
+ * while it migrates). Watching `Starting` alone let a release that was
+ * still pulling slip past the check, and both then migrated at once.
+ *
+ * Both environments check each other, and the check runs right before this
+ * one's own deploy; two runs that read each other within the same second
+ * can still both go, since Dokploy offers no lock to take. A rare overlap
+ * costs memory for a few minutes, never data: each step works on its own
+ * database.
+ *
+ * Unset: nothing to wait for. Unreadable (a wrong id, Dokploy not
+ * answering): a warning, and the step goes ahead as before — the
+ * serialization guards memory, not data. Still releasing at the deadline:
+ * this run fails before touching the database, saying which Application
+ * holds it.
+ *
+ * Returns how long it waited, which the budget of this release's own
+ * outcome loses (RELEASE_TIMEOUT_SECONDS is one budget for both).
+ */
+async function waitForTheOtherRelease() {
+  const other = (env.RELEASE_SERIALIZE_WITH_APPLICATION_ID ?? "").trim();
+
+  if (!other) return 0;
+
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(other)) {
+    console.log(
+      "::warning::RELEASE_SERIALIZE_WITH_APPLICATION_ID tem formato inesperado (copie o id da URL da trajetto-api-migrate do outro ambiente); a etapa segue sem esperar.",
+    );
+    return 0;
+  }
+
+  if (other === APPLICATION_ID) {
+    console.log(
+      `::warning::RELEASE_SERIALIZE_WITH_APPLICATION_ID aponta para a própria ${LABEL} deste ambiente; ela deve ser a do OUTRO ambiente. A etapa segue sem esperar.`,
+    );
+    return 0;
+  }
+
+  let otherName;
+
+  try {
+    const app = await get(
+      `/api/application.one?applicationId=${encodeURIComponent(other)}`,
+    );
+
+    otherName = String(app?.appName ?? "");
+  } catch (error) {
+    console.log(
+      `::warning::Não foi possível ler a trajetto-api-migrate do outro ambiente (${redact(error.message)}); a etapa segue sem esperar por ela.`,
+    );
+    return 0;
+  }
+
+  if (!/^[a-zA-Z0-9.\-_]+$/.test(otherName)) {
+    console.log(
+      "::warning::O Dokploy não informou o appName da trajetto-api-migrate do outro ambiente; a etapa segue sem esperar por ela.",
+    );
+    return 0;
+  }
+
+  const started = Date.now();
+  let announced = false;
+  const warned = new Set();
+
+  for (;;) {
+    let activity;
+
+    try {
+      activity = await otherReleaseActivity(other, otherName);
+    } catch (error) {
+      console.log(
+        `::warning::Falha ao ler o estado de ${otherName} (${redact(error.message)}); a etapa segue sem esperar.`,
+      );
+      return Date.now() - started;
+    }
+
+    for (const warning of activity.warnings) {
+      if (!warned.has(warning)) console.log(warning);
+      warned.add(warning);
+    }
+
+    const seconds = Math.round((Date.now() - started) / 1000);
+
+    if (activity.busy.length === 0) {
+      if (announced) {
+        summary(
+          `Migrations: esperou ~${seconds}s a etapa de release do outro ambiente (${otherName}) terminar; uma por vez na VPS.`,
+        );
+      }
+      return Date.now() - started;
+    }
+
+    if (!announced) {
+      console.log(
+        `[release] A etapa de release do outro ambiente (${otherName}) está rodando (${activity.busy.join("; ")}): esperando ela terminar antes de começar esta (uma migração por vez na VPS).`,
+      );
+      announced = true;
+    }
+
+    if (Date.now() - started >= TIMEOUT_MS - MIN_OWN_WINDOW_MS) {
+      fail(
+        `A etapa de release do outro ambiente (${otherName}) segue rodando há ${seconds}s (${activity.busy.join("; ")}): esta não começou, e nada foi migrado nem implantado. Acompanhe a ${otherName} no Dokploy (Logs) e rode de novo quando ela terminar; para não esperar, apague a variável RELEASE_SERIALIZE_WITH_APPLICATION_ID do environment do GitHub.`,
+      );
+    }
+
+    await sleep(POLL_MS);
+  }
+}
+
 async function main() {
   let app;
 
@@ -286,6 +528,11 @@ async function main() {
   const wrong = misconfiguration(app ?? {});
 
   if (wrong) fail(`Etapa de release não rodou: ${wrong} Nada foi migrado.`);
+
+  // One budget for both waits: what the other environment took, this
+  // release's outcome no longer has. (The deploy call in between keeps the
+  // bounds of dokploy-deploy.mjs, as every service's deploy does.)
+  const ownBudgetMs = TIMEOUT_MS - (await waitForTheOtherRelease());
 
   const appName = app.appName;
   let current = [];
@@ -371,7 +618,7 @@ async function main() {
   let last = { kind: "waiting", task: null };
   let lastSeen = "";
 
-  while (Date.now() - started < TIMEOUT_MS) {
+  while (Date.now() - started < ownBudgetMs) {
     let fresh;
 
     try {
@@ -420,8 +667,8 @@ async function main() {
 
   fail(
     last.task
-      ? `A etapa de release de ${LABEL} não terminou em ${TIMEOUT_MS / 1000}s (a tarefa está ${last.task.currentState}). Ela segue no servidor — uma migration nunca é interrompida no meio; a API não foi implantada. Acompanhe em Logs; quando terminar, o próximo run a encontra aplicada ou a roda de novo.`
-      : `O Dokploy aceitou o deploy de ${LABEL}, mas nenhuma tarefa nova apareceu em ${TIMEOUT_MS / 1000}s. A API não foi implantada. Confira a Application no painel (Logs, e se o serviço existe).`,
+      ? `A etapa de release de ${LABEL} não terminou no prazo (RELEASE_TIMEOUT_SECONDS, ${TIMEOUT_MS / 1000}s no total, a espera pela do outro ambiente incluída; a tarefa está ${last.task.currentState}). Ela segue no servidor — uma migration nunca é interrompida no meio; a API não foi implantada. Acompanhe em Logs; quando terminar, o próximo run a encontra aplicada ou a roda de novo.`
+      : `O Dokploy aceitou o deploy de ${LABEL}, mas nenhuma tarefa nova apareceu no prazo (${TIMEOUT_MS / 1000}s no total). A API não foi implantada. Confira a Application no painel (Logs, e se o serviço existe).`,
   );
 }
 

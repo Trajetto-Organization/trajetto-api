@@ -1,6 +1,8 @@
 import { Prisma } from "@prisma/client";
 
 import database from "@/../infra/database";
+import { destinationHostOf } from "@/shared/integration/webhook-dispatch-rules";
+import { deleteQueueRowsOfWebhookEndpoint } from "@/shared/notifications/queue-row-cleanup";
 
 import type {
   CreateWebhookEndpointData,
@@ -39,6 +41,9 @@ class WebhookEndpointRepository implements IWebhookEndpointRepository {
         data: {
           name: data.name,
           url: data.url,
+          // With the URL, always: the dispatcher's cap per destination host
+          // groups the endpoints by it (plano-escala F3-14).
+          destination_host: destinationHostOf(data.url),
           secret: data.secret,
           topics: data.topics,
           headers: headersValue(data.headers),
@@ -60,6 +65,7 @@ class WebhookEndpointRepository implements IWebhookEndpointRepository {
       data: {
         name: data.name,
         url: data.url,
+        destination_host: destinationHostOf(data.url),
         topics: data.topics,
 
         // Omitted keeps what is stored: the web form has no headers field,
@@ -81,10 +87,15 @@ class WebhookEndpointRepository implements IWebhookEndpointRepository {
   async find(
     id: string,
     businessId: string,
-  ): Promise<{ id: string; name: string; is_active: boolean } | null> {
+  ): Promise<{
+    id: string;
+    name: string;
+    is_active: boolean;
+    disabled_at: Date | null;
+  } | null> {
     return this.prisma.webhookEndpoint.findFirst({
       where: { id, businessId },
-      select: { id: true, name: true, is_active: true },
+      select: { id: true, name: true, is_active: true, disabled_at: true },
     });
   }
 
@@ -145,11 +156,19 @@ class WebhookEndpointRepository implements IWebhookEndpointRepository {
   }
 
   async delete(id: string, businessId: string): Promise<boolean> {
-    const { count } = await this.prisma.webhookEndpoint.deleteMany({
-      where: { id, businessId },
-    });
+    // Its webhook deliveries first, in the same transaction: the cascade
+    // that takes them today leaves with wave 10 (queue-row-cleanup.ts).
+    // Both statements filter by the company, so another company's id
+    // deletes nothing.
+    return this.prisma.$transaction(async (tx) => {
+      await deleteQueueRowsOfWebhookEndpoint(tx, id, businessId);
 
-    return count > 0;
+      const { count } = await tx.webhookEndpoint.deleteMany({
+        where: { id, businessId },
+      });
+
+      return count > 0;
+    });
   }
 }
 

@@ -76,7 +76,7 @@ async function branchRoutes(app: FastifyInstance) {
         tags: ["branch"],
         summary: "Lista as filiais da empresa",
         description:
-          "Filiais de uma empresa numa tabela paginada. Ordena no servidor (`sort`/`order`) e filtra por situação (`status`: active, inactive) e UF (um ou mais valores separados por vírgula), além da busca livre (ID, razão social, nome fantasia, endereço, CNAE, código ERP, responsável, e-mail e os dígitos de CNPJ, CEP e telefone). A primeira linha (`meta`) traz o total do filtro e, em `searchMeta`, os cartões (total, ativas, com código ERP, com nome fantasia) e as opções dos filtros com as contagens — calculados sobre a empresa inteira, nunca sobre a página. O MASTER informa `businessId`.",
+          "Filiais de uma empresa numa tabela paginada. Ordena no servidor (`sort`/`order`) e filtra por situação (`status`: active, inactive) e UF (um ou mais valores separados por vírgula), além da busca livre (ID, razão social, nome fantasia, endereço, CNAE, código ERP, responsável, e-mail e os dígitos de CNPJ, CEP e telefone). A primeira linha (`meta`) traz o total do filtro e, em `searchMeta`, os cartões (total, ativas, com código ERP, com nome fantasia) e as opções dos filtros com as contagens — calculados sobre a empresa inteira, nunca sobre a página. Cada linha traz `is_head_office`: true na matriz, que a tela mostra só para leitura. O MASTER informa `businessId`.",
         querystring: branchSchemas.listBranch,
         response: {
           200: ndjsonList(
@@ -128,7 +128,7 @@ async function branchRoutes(app: FastifyInstance) {
         tags: ["branch"],
         summary: "Atualiza uma filial",
         description:
-          "Atualiza só os campos enviados (um campo ausente fica como está). A filial precisa ser da empresa do caminho — filial não muda de empresa, nem pelo MASTER; a de outra empresa responde 404. As regras de unicidade são as do cadastro. Avisa as outras telas pelo evento `catalogChanged`.",
+          "Atualiza só os campos enviados (um campo ausente fica como está). A filial precisa ser da empresa do caminho — filial não muda de empresa, nem pelo MASTER; a de outra empresa responde 404. As regras de unicidade são as do cadastro. A matriz (a filial com o CNPJ da empresa) espelha o cadastro da empresa, que a reescreve a cada edição em Empresas: mudar qualquer dado dela por aqui responde 409 BRANCH_HEAD_OFFICE_READ_ONLY (reenviar os mesmos valores não é mudança). Avisa as outras telas pelo evento `catalogChanged`.",
         params: branchSchemas.updateDeleteBranch,
         body: branchSchemas.updateBranch,
         response: {
@@ -154,7 +154,7 @@ async function branchRoutes(app: FastifyInstance) {
         tags: ["branch"],
         summary: "Pede a exclusão de uma filial (envia o código)",
         description:
-          "Primeiro passo da exclusão em duas etapas. Confere que a filial pode ser excluída (sem vínculos) e envia um código de 6 dígitos ao e-mail de quem pediu, válido por 5 minutos. Use a rota DELETE com o código para excluir.",
+          "Primeiro passo da exclusão em duas etapas. Confere que a filial pode ser excluída (não é a matriz e não tem vínculos) e envia um código de 6 dígitos ao e-mail de quem pediu, válido por 5 minutos. A matriz (a filial com o CNPJ da empresa) nunca é excluída: responde 409 BRANCH_HEAD_OFFICE_NOT_DELETABLE sem enviar código; desativá-la continua permitido. Use a rota DELETE com o código para excluir.",
         params: branchSchemas.updateDeleteBranch,
         response: {
           200: branchResponses.branchDeletionCodeSent,
@@ -180,7 +180,7 @@ async function branchRoutes(app: FastifyInstance) {
         tags: ["branch"],
         summary: "Confirma a exclusão de uma filial (com o código)",
         description:
-          "Segundo passo da exclusão. Valida o código de 6 dígitos recebido por e-mail e exclui a filial. Depois, os demais administradores da empresa recebem um aviso por e-mail, com a hora no fuso da empresa. Avisa as outras telas pelo evento `catalogChanged`.",
+          "Segundo passo da exclusão. Valida o código de 6 dígitos recebido por e-mail e exclui a filial. A matriz é recusada (409 BRANCH_HEAD_OFFICE_NOT_DELETABLE) antes do código, e nada é excluído. Depois, os demais administradores da empresa recebem um aviso por e-mail, com a hora no fuso da empresa. Avisa as outras telas pelo evento `catalogChanged`.",
         params: branchSchemas.updateDeleteBranch,
         body: branchSchemas.confirmDeletionCode,
         response: {
@@ -210,7 +210,7 @@ async function branchRoutes(app: FastifyInstance) {
         tags: ["branch"],
         summary: "Ativa ou inativa uma filial",
         description:
-          "Inverte a situação da filial. Filial inativa sai dos seletores. Se o status mudou enquanto a tela estava aberta, nada é gravado (409 TOGGLE_CONFLICT). Avisa as outras telas pelo evento `catalogChanged`.",
+          "Inverte a situação da filial. Filial inativa sai dos seletores e seus motoristas não entram no aplicativo (vale também para a matriz, que pode ser desativada mas não excluída); por isso, desativar uma filial cujos motoristas têm rota planejada, liberada ou em andamento é recusado (409 DRIVER_HAS_OPEN_ROUTES, com as contagens; reativar nunca é recusado). Se o status mudou enquanto a tela estava aberta, nada é gravado (409 TOGGLE_CONFLICT). Avisa as outras telas pelo evento `catalogChanged`.",
         params: branchSchemas.updateDeleteBranch,
         response: {
           200: branchResponses.branchToggled,

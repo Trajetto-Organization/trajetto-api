@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { APP_BOOT_TIMEOUT_MS } from "../../support/app-boot";
 
 import { DATABASE_RETRY_AFTER_SECONDS } from "@/shared/errors/database-unavailable";
+import { SERVICE_BUSY_RETRY_AFTER_SECONDS } from "@/shared/errors/database-error-map";
 import {
   API_SCOPES,
   BUSINESS_API_RATE_PER_MINUTE,
@@ -218,12 +219,21 @@ describe("what every answer carries", () => {
     for (const { id, operation } of keyed()) {
       const schema = jsonSchema(operation.responses["503"]);
 
+      // SERVICE_BUSY: a lock wait or a statement past its ceiling, in the
+      // outage's shape (plano-escala U-13).
       expect(schema?.properties?.code?.enum, id).toEqual([
         "SERVICE_UNAVAILABLE",
+        "SERVICE_BUSY",
       ]);
       expect(schema?.required, id).toContain("requestId");
       expect(operation.responses["503"].description, id).toContain(
         `${DATABASE_RETRY_AFTER_SECONDS} s`,
+      );
+      expect(operation.responses["503"].description, id).toContain(
+        `SERVICE_BUSY: o banco de dados está ocupado`,
+      );
+      expect(operation.responses["503"].description, id).toContain(
+        `${SERVICE_BUSY_RETRY_AFTER_SECONDS} s`,
       );
     }
   });
@@ -241,7 +251,10 @@ describe("what every answer carries", () => {
 
 describe("the webhooks", () => {
   it("are published as the requests we make, one per topic", () => {
-    expect(Object.keys(document.webhooks)).toEqual(ALL_TOPICS);
+    // The catalogue first, in its order (the test ping follows, see below).
+    expect(Object.keys(document.webhooks).slice(0, ALL_TOPICS.length)).toEqual(
+      ALL_TOPICS,
+    );
 
     for (const topic of ALL_TOPICS) {
       const post = document.webhooks[topic].post;
@@ -267,6 +280,27 @@ describe("the webhooks", () => {
         topic,
       ).toBeDefined();
     }
+  });
+
+  it("publishes the test ping too, after the catalogue, with its own data", () => {
+    // Plan of 02/11/2026 (L1): "Enviar teste" posts a `ping`. It is a request
+    // we make, so a receiver built from this document must expect it — but it
+    // stays out of the catalogue, so nobody can subscribe to it.
+    expect(Object.keys(document.webhooks)).toEqual([...ALL_TOPICS, "ping"]);
+
+    const body =
+      document.webhooks.ping.post.requestBody.content["application/json"]
+        .schema;
+
+    expect(body.properties.topic.enum).toEqual(["ping"]);
+    expect(body.properties.data.$ref).toBe(
+      "#/components/schemas/WebhookPingData",
+    );
+    expect(
+      Object.keys(
+        document.components.schemas.WebhookPingData.properties as Json,
+      ),
+    ).toEqual(["endpoint_id", "message"]);
   });
 });
 
@@ -331,7 +365,11 @@ describe("the introduction", () => {
   it("states the order of the lists and the incremental sync recipe", () => {
     expect(description()).toMatch(/ordem do `id`, crescente/);
     expect(description()).toContain("UUID v7");
-    expect(description()).toMatch(/instante em que a varredura COMEÇA/);
+    // The recipe of F2-05: the first page's sync_watermark, and the
+    // feed's resume_cursor, with the duplicates deduplicated by id.
+    expect(description()).toMatch(/`sync_watermark` da PRIMEIRA página/);
+    expect(description()).toMatch(/guarde\s+o `resume_cursor`/);
+    expect(description()).toMatch(/deduplique pelo `id` do evento/);
     expect(description()).toMatch(/deduplique pelo `id`/i);
   });
 

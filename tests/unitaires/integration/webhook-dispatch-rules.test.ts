@@ -5,11 +5,14 @@ import {
   REPLAY_WINDOW_DAYS,
   RESPONSE_BODY_LIMIT,
   WEBHOOK_CONCURRENCY,
+  WEBHOOK_ENDPOINT_GLOBAL_CONCURRENCY,
   WEBHOOK_LEASE_SECONDS,
+  WEBHOOK_PER_ENDPOINT_CONCURRENCY,
   WEBHOOK_RETRY_DELAYS_MS,
   WEBHOOK_TIMEOUT_MS,
   assertWebhookLeaseInvariant,
-  inFairPool,
+  destinationHostOf,
+  endpointShare,
   isWebhookPermanent,
   isWebhookSuccess,
   nextWebhookDelayMs,
@@ -156,90 +159,81 @@ describe("the replay window", () => {
   });
 });
 
-describe("the fair pool", () => {
-  const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
-
-  it("never runs more than the limit at once, nor more than perKey per key", async () => {
-    let running = 0;
-    let peak = 0;
-    const peakByKey = new Map<string, number>();
-    const runningByKey = new Map<string, number>();
-
-    const items = Array.from({ length: 30 }, (_, index) => ({
-      key: index % 3 === 0 ? "slow" : `fast-${index % 4}`,
-    }));
-
-    await inFairPool(
-      items,
-      { concurrency: 5, perKey: 2, keyOf: (item) => item.key },
-      async (item) => {
-        running += 1;
-        runningByKey.set(item.key, (runningByKey.get(item.key) ?? 0) + 1);
-        peak = Math.max(peak, running);
-        peakByKey.set(
-          item.key,
-          Math.max(peakByKey.get(item.key) ?? 0, runningByKey.get(item.key)!),
-        );
-
-        await sleep(item.key === "slow" ? 20 : 2);
-
-        running -= 1;
-        runningByKey.set(item.key, runningByKey.get(item.key)! - 1);
-      },
-    );
-
-    expect(peak).toBeLessThanOrEqual(5);
-    expect(Math.max(...peakByKey.values())).toBeLessThanOrEqual(2);
-  });
-
-  it("keeps the other slots moving while one key is slow", async () => {
-    const finished: string[] = [];
-
-    const items = [
-      ...Array.from({ length: 6 }, () => ({ key: "slow" })),
-      ...Array.from({ length: 6 }, (_, index) => ({ key: `fast-${index}` })),
-    ];
-
-    await inFairPool(
-      items,
-      { concurrency: 5, perKey: 2, keyOf: (item) => item.key },
-      async (item) => {
-        await sleep(item.key === "slow" ? 40 : 1);
-        finished.push(item.key);
-      },
-    );
-
-    // In waves, the fast ones would have waited for the slow ones in front.
-    const firstSlow = finished.indexOf("slow");
-    const fastBeforeIt = finished.slice(0, firstSlow).length;
-
-    expect(fastBeforeIt).toBe(6);
-  });
-
-  it("finishes the rest when one piece of work throws", async () => {
-    const done: number[] = [];
-
-    await inFairPool(
-      [1, 2, 3],
-      { concurrency: 2, perKey: 2, keyOf: () => "k" },
-      async (item) => {
-        if (item === 2) throw new Error("boom");
-        done.push(item);
-      },
-    );
-
-    expect(done.sort()).toEqual([1, 3]);
-  });
-});
-
 describe("the lease, with the per-endpoint lane", () => {
   it("still covers one endpoint's whole share at its reduced concurrency", () => {
-    // 10 rows of one endpoint, 2 at a time, 10 s each: 50 s, inside 120 s.
+    // 10 rows of one endpoint, 2 at a time, 10 s each, behind the call of a
+    // claim before (the continuous pool, F3-07): 60 s, inside 120 s.
     expect(() => assertWebhookLeaseInvariant(20)).not.toThrow();
+
+    // One call at a time per endpoint, the lowest the variable takes:
+    // 10 rounds plus the one before, 110 s, still inside.
+    expect(() =>
+      assertWebhookLeaseInvariant(20, 5, 10_000, 120, 10, 1),
+    ).not.toThrow();
 
     // A lane so narrow it cannot finish its share within the lease is refused.
     expect(() =>
       assertWebhookLeaseInvariant(20, 5, 10_000, 120, 20, 1),
     ).toThrow(/lease invariant/);
+  });
+});
+
+/**
+ * The global cap per endpoint (plano-escala F3-13): what one capped claim
+ * may take of an endpoint, whatever the other dispatchers hold.
+ */
+describe("an endpoint's share of a capped claim", () => {
+  it("is what the global cap leaves after the rows in flight in every process", () => {
+    expect(endpointShare(0, 4, 2)).toBe(2);
+    expect(endpointShare(3, 4, 2)).toBe(1);
+    expect(endpointShare(4, 4, 2)).toBe(0);
+  });
+
+  it("is never negative, even past the cap (an older image's claim)", () => {
+    expect(endpointShare(6, 4, 2)).toBe(0);
+  });
+
+  it("never claims past what this process may send to the endpoint at once", () => {
+    // A row claimed past the process's own cap would wait in its pool,
+    // holding a unit of the cap the other dispatchers could send with.
+    expect(endpointShare(0, 16, 2)).toBe(2);
+    expect(endpointShare(0, 16, 32, 10)).toBe(10);
+  });
+
+  it("starts at what production's two api replicas already send to one endpoint", () => {
+    // Two replicas at 2 calls each: nothing changes until a dispatcher is
+    // added (decision D8).
+    expect(WEBHOOK_ENDPOINT_GLOBAL_CONCURRENCY).toBe(
+      2 * WEBHOOK_PER_ENDPOINT_CONCURRENCY,
+    );
+  });
+});
+
+/**
+ * The host the cap per destination host groups endpoints by (plano-escala
+ * F3-14): one server however its URL is spelled.
+ */
+describe("an endpoint's destination host", () => {
+  it("is the URL's host, lower case, without port, user, path or trailing dot", () => {
+    expect(destinationHostOf("https://Api.Example.com/hook")).toBe(
+      "api.example.com",
+    );
+    expect(
+      destinationHostOf("https://user:senha@api.example.com:8443/x?y=1#z"),
+    ).toBe("api.example.com");
+    expect(destinationHostOf("https://api.example.com./hook")).toBe(
+      "api.example.com",
+    );
+  });
+
+  it("keeps an IPv6 literal in brackets, as the backfill does", () => {
+    expect(destinationHostOf("https://[2001:db8::1]:443/h")).toBe(
+      "[2001:db8::1]",
+    );
+  });
+
+  it("is none for a URL that does not parse: no group, no host cap", () => {
+    expect(destinationHostOf("não é uma url")).toBeNull();
+    expect(destinationHostOf("")).toBeNull();
   });
 });

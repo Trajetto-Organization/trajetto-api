@@ -6,8 +6,8 @@
       "secret": "whsec_79a141ed20e358894b2f4a9e75f04edab054432c1bd54c8622cf6bc290df06fb",
       "previous_secrets": [],
       "timestamp": 1790690580,
-      "body": "{\"id\":\"01a0e5c2-7f00-7000-8000-000000000001\",\"sequence\":48213,\"topic\":\"delivery.delivered\",\"created_at\":\"2026-09-29T14:02:58.000Z\",\"data\":{\"delivery_id\":\"01a0e5c2-7f00-7000-8000-0000000000aa\",\"code\":\"PED-10452\",\"invoice_key\":\"35260912345678000195550010000104521000104529\",\"invoice_number\":\"10452\",\"status\":\"DELIVERED\",\"recipient_name\":\"Padaria São João Ltda\",\"city\":\"São Paulo\",\"uf\":\"SP\",\"occurred_at\":\"2026-09-29T13:33:00.000Z\"}}",
-      "header": "t=1790690580,v1=6c8242defe2506768332cb27dd61e02a411770a1c3561b4b812dbcabd7a5c0c5"
+      "body": "{\"id\":\"01a0e5c2-7f00-7000-8000-000000000001\",\"sequence\":48213,\"topic\":\"delivery.delivered\",\"created_at\":\"2026-09-29T14:02:58.000Z\",\"data\":{\"delivery_id\":\"01a0e5c2-7f00-7000-8000-0000000000aa\",\"code\":\"PED-10452\",\"invoice_key\":\"35260912345678000195550010000104521000104529\",\"invoice_number\":\"10452\",\"status\":\"DELIVERED\",\"recipient_name\":\"Padaria São João Ltda\",\"city\":\"São Paulo\",\"uf\":\"SP\",\"occurred_at\":\"2026-09-29T13:33:00.000Z\",\"proof_url\":\"https://api.intrajetto.com/public/delivery-proof/01a0e5c2-7f00-7000-8000-0000000000aa.6hxqW6E3UpshyEykxrfVJRmC1dPyCKEnZOazGgZyhg8\"}}",
+      "header": "t=1790690580,v1=9a67ff1dab868d1614523d6756e4e80e34a111bfe7cfc6cd78e44be6c86c08b3"
     },
     {
       "name": "rotação: segredo atual e o anterior",

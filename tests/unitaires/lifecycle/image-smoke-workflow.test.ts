@@ -9,24 +9,24 @@ import { hasShell, run, sandbox, type Sandbox } from "./support/shell-harness";
  * The AI image runs before it is pushed (§14/§19: smoke test of the final
  * image).
  *
- * The `ai-ocr` job runs pytest in the `test` stage, never the runtime stage
+ * The `AI OCR` job runs pytest in the `test` stage, never the runtime stage
  * that ships: the first run of the shipped image was the staging deploy.
- * build-and-push now loads that image into the runner, starts it offline
- * with a read-only root, waits for its own HEALTHCHECK (both OCR profiles
- * loaded and read warmup.jpg), checks the commit it reports, and only then
- * pushes — the same build, from the builder's cache. A reused image skips
+ * The Build job (staging.yml) now loads that image into the runner, starts
+ * it offline with a read-only root, waits for its own HEALTHCHECK (both OCR
+ * profiles loaded and read warmup.jpg), checks the commit it reports, and
+ * only then pushes — the same build, from the builder's cache. A reused image skips
  * both steps: it passed them when it was built.
  *
  * The step's `run:` block is executed with docker, openssl, sleep and seq
  * stubbed: a list of canned container states stands in for the daemon.
  */
 const workflow = readFileSync(
-  resolve(process.cwd(), ".github", "workflows", "deploy.yml"),
+  resolve(process.cwd(), ".github", "workflows", "staging.yml"),
   "utf8",
 ).replace(/\r\n/g, "\n");
 
 const job = (() => {
-  const start = workflow.indexOf("\n  build-and-push:");
+  const start = workflow.indexOf("\n  build:");
   const rest = workflow.slice(start + 1);
   const next = rest.slice(1).search(/\n {2}[\w-]+:\n/);
 
@@ -88,7 +88,7 @@ function runBlock(name: string): string {
   return body.join("\n");
 }
 
-describe("the AI image's smoke test, in build-and-push", () => {
+describe("the AI image's smoke test, in the Build job", () => {
   it("runs after the metadata and before the push, only when the image is built", () => {
     const names = steps.map((step) => step.name);
 
@@ -284,11 +284,11 @@ describe.skipIf(!hasShell("bash"))(
  * pushes publish the same builds.
  */
 const API_SMOKE_BUILD = "Build the API image for the smoke test";
-const RELEASE_SOURCE = "Is there a release image for this source already?";
+const RELEASE_SOURCE = "Look up the release image for this source";
 const RELEASE_SMOKE_BUILD = "Build the release image for the smoke test";
 const RELEASE_SMOKE_PULL = "Pull the reused release image for the smoke test";
 const API_SMOKE = "Smoke test the API image";
-const API_PUSH = "Build and push Docker image";
+const API_PUSH = "Build and push the API image";
 const RELEASE_PUSH = "Build and push the release image";
 const RELEASE_TAG = "Tag the reused release image for this commit";
 
@@ -309,7 +309,7 @@ function stepEnv(name: string): Record<string, string> {
   return values;
 }
 
-describe("the API image's smoke test, in build-and-push", () => {
+describe("the API image's smoke test, in the Build job", () => {
   it("runs after the metadata and before the pushes, on every build", () => {
     const names = steps.map((step) => step.name);
     const order = [
@@ -401,7 +401,7 @@ describe("the API image's smoke test, in build-and-push", () => {
     const env = stepEnv(API_SMOKE);
 
     expect(script).toContain('docker network create --internal "$net"');
-    // The majors production and the `test` job run.
+    // The majors production and the E2E jobs run.
     expect(env.POSTGRES_IMAGE).toMatch(
       /^postgres:16-alpine@sha256:[0-9a-f]{64}$/,
     );

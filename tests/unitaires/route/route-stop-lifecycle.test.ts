@@ -37,6 +37,7 @@ import type { CreateDeliveryProps } from "@/modules/delivery/dtos/delivery-dto";
 import type { OccurrenceType } from "@/modules/occurrence-type/dtos/occurrence-type-dto";
 
 import { InMemoryWebhookFanOutService } from "@/shared/integration/in-memory/in-memory-webhook-fan-out-service";
+import { withoutCreationLine } from "../../support/status-trail";
 
 /**
  * The route and the deliveries on it, as one moving thing.
@@ -242,6 +243,7 @@ function makeContext() {
       routeRepository,
       userRepository,
       driverRepository,
+      vehicleRepository,
       notificationService,
       outboxStub,
       webhookStub.asService(),
@@ -322,6 +324,7 @@ function makeContext() {
       deliveryRepository,
       vehicleRepository,
       notificationService,
+      webhookStub.asService(),
     ),
   };
 }
@@ -545,7 +548,9 @@ describe("proving an address the driver never announced arriving at", () => {
     // The stop only moves from PENDING, so the time the driver actually got
     // there survives. Two ARRIVAL events, one arrival time.
     expect(stopFor(delivery)[0].arrived_at).toBe(firstArrival);
-    expect(context.deliveryRepository.events).toHaveLength(2);
+    expect(withoutCreationLine(context.deliveryRepository.events)).toHaveLength(
+      2,
+    );
   });
 
   it("records the arrival once however often the outbox resends it", async () => {
@@ -565,7 +570,9 @@ describe("proving an address the driver never announced arriving at", () => {
     await context.arrival.execute(request);
     await context.arrival.execute(request);
 
-    expect(context.deliveryRepository.events).toHaveLength(1);
+    expect(withoutCreationLine(context.deliveryRepository.events)).toHaveLength(
+      1,
+    );
     expect(stopFor(delivery)[0].status).toBe("ARRIVED");
   });
 });
@@ -643,7 +650,57 @@ describe("the panel resolving an address the driver never reached", () => {
 
     expect(deliveryFor(cancelled).status).toBe("CANCELLED");
     expect(stopFor(cancelled)[0].status).toBe("CANCELLED");
+
+    // Nothing on it was worked: a route whose every stop was called off is
+    // Cancelada, not Concluída (K8, decision D32). It still closes — the
+    // truck comes back and the driver can leave again.
+    expect(routeFor(route).status).toBe("CANCELLED");
+    expect(routeFor(route).cancellation_reason).toBe(
+      "Todas as paradas canceladas",
+    );
+  });
+
+  it("closes as Concluída when one stop was worked and the rest called off", async () => {
+    const delivered = await seedDelivery(A, "Recebeu");
+    const cancelled = await seedDelivery(A, "Desistiu");
+    const route = await runningRoute([delivered, cancelled]);
+
+    await context.proof.execute({
+      userId: DRIVER_USER_A,
+      businessId: A,
+      deliveryId: delivered,
+      client_submission_id: submission(),
+      photo: "canhoto.jpg",
+    });
+
+    await context.setStatus.execute({
+      userId: DISPATCHER_A,
+      businessId: A,
+      deliveryId: cancelled,
+      status: "CANCELLED",
+      reasonId: REASON,
+    });
+
     expect(routeFor(route).status).toBe("COMPLETED");
+    expect(routeFor(route).cancellation_reason ?? null).toBeNull();
+  });
+
+  it("gives the truck back when the route closes as Cancelada", async () => {
+    const cancelled = await seedDelivery(A, "Desistiu");
+
+    await runningRoute([cancelled]);
+
+    expect(context.vehicleRepository.vehicles[0].status).toBe("IN_ROUTE");
+
+    await context.setStatus.execute({
+      userId: DISPATCHER_A,
+      businessId: A,
+      deliveryId: cancelled,
+      status: "CANCELLED",
+      reasonId: REASON,
+    });
+
+    expect(context.vehicleRepository.vehicles[0].status).toBe("ACTIVE");
   });
 
   it("completes the stop when the office marks the delivery delivered", async () => {
@@ -819,6 +876,45 @@ describe("cancelling a route that already left", () => {
     expect(deliveryFor(pending).status).toBe("PENDING");
     expect(deliveryFor(pending).driverId).toBeNull();
     expect(deliveryFor(pending).vehicleId).toBeNull();
+  });
+
+  it("tells each returned delivery's timeline why it is Pendente again (K8)", async () => {
+    // The status moved back without a trace: the timeline said "Em rota",
+    // then nothing, and the delivery was Pendente. Support had no answer.
+    const delivered = await seedDelivery(A, "Já entregue");
+    const pending = await seedDelivery(A, "Não visitada");
+
+    const route = await runningRoute([delivered, pending]);
+
+    await context.proof.execute({
+      userId: DRIVER_USER_A,
+      businessId: A,
+      deliveryId: delivered,
+      client_submission_id: submission(),
+      photo: "canhoto.jpg",
+    });
+
+    await context.cancel.execute({
+      userId: DISPATCHER_A,
+      businessId: A,
+      routeId: route,
+      reason: "Caminhão quebrou na marginal",
+    });
+
+    const removed = context.routeRepository.events.filter(
+      (event) => event.type === "ROUTE_REMOVED",
+    );
+
+    // Only the delivery that left the route: the proven one stays on it.
+    expect(removed).toEqual([
+      expect.objectContaining({
+        deliveryId: pending,
+        routeId: route,
+        businessId: A,
+        reportedById: DISPATCHER_A,
+        note: `Rota ${routeFor(route).code} cancelada: Caminhão quebrou na marginal`,
+      }),
+    ]);
   });
 
   it("lets the returned delivery go straight onto another route", async () => {
@@ -1386,6 +1482,24 @@ describe("what the customers' systems are told when a route ends", () => {
   });
 
   it("announces it when the panel resolves the last address", async () => {
+    const delivery = await seedDelivery(A, "Recebido no balcão");
+    const route = await runningRoute([delivery]);
+
+    await context.setStatus.execute({
+      userId: DISPATCHER_A,
+      businessId: A,
+      deliveryId: delivery,
+      status: "DELIVERED",
+      received_by: "Recebido no balcão",
+      reasonId: REASON,
+    });
+
+    expect(routeFor(route).status).toBe("COMPLETED");
+    expect(closures()).toHaveLength(1);
+    expect(closures()[0].payload.route_id).toBe(route);
+  });
+
+  it("announces a route whose every stop was called off as cancelled, not completed (K8)", async () => {
     const delivery = await seedDelivery(A, "Desistiu");
     const route = await runningRoute([delivery]);
 
@@ -1397,9 +1511,14 @@ describe("what the customers' systems are told when a route ends", () => {
       reasonId: REASON,
     });
 
-    expect(routeFor(route).status).toBe("COMPLETED");
-    expect(closures()).toHaveLength(1);
-    expect(closures()[0].payload.route_id).toBe(route);
+    const cancellations = context.webhookStub.forTopic("route.cancelled");
+
+    expect(closures()).toHaveLength(0);
+    expect(cancellations).toHaveLength(1);
+    expect(cancellations[0].payload).toMatchObject({
+      route_id: route,
+      status: "CANCELLED",
+    });
   });
 
   it("says nothing while the route still has an address to work", async () => {

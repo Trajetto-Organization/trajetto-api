@@ -23,10 +23,8 @@ const updateVehicleSchema = vehicleFieldsSchema
      */
     status: z
       .enum(["ACTIVE", "INACTIVE", "BLOCKED", "IN_ROUTE"], {
-        errorMap: () => ({
-          message:
-            "Status inválido. Deve ser ACTIVE, INACTIVE, BLOCKED ou IN_ROUTE.",
-        }),
+        error:
+          "Status inválido. Deve ser ACTIVE, INACTIVE, BLOCKED ou IN_ROUTE.",
       })
       .optional(),
     // Only a MASTER may correct the odometer (the use case enforces it), and

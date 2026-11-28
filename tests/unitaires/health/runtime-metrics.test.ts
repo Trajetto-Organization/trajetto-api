@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { createRuntimeMetrics } from "@/shared/health/runtime-metrics";
 
@@ -73,10 +73,23 @@ describe("createRuntimeMetrics", () => {
       const first = metrics.rotate();
       expect(first.event_loop.lag_max_ms).toBeGreaterThanOrEqual(100);
 
-      await sleep(80);
+      // Read in the same tick as the rotate: the delay monitor's timer runs
+      // on this event loop, so no sample can land in between, and the stall
+      // can only be there if the rotate kept it. Not a bound on the next
+      // milliseconds: "the next 80 ms stay under 100 ms" failed at 101.91 ms
+      // in a full parallel run on 03/11/2026, because the machine held the
+      // process, with nothing wrong in the code.
+      const fresh = metrics.snapshot();
+      expect(fresh.event_loop.lag_max_ms).toBeNull();
+      expect(fresh.event_loop.lag_p99_ms).toBeNull();
 
-      const second = metrics.snapshot();
-      expect(second.event_loop.lag_max_ms ?? 0).toBeLessThan(100);
+      // And the new window keeps measuring: a rotate must not switch the
+      // monitor off. Waits for the state (the first sample comes within a
+      // few timer ticks), with a cap generous for that and under the test's.
+      await vi.waitFor(
+        () => expect(metrics.snapshot().event_loop.lag_max_ms).not.toBeNull(),
+        { timeout: 2_000, interval: 20 },
+      );
     } finally {
       metrics.stop();
     }

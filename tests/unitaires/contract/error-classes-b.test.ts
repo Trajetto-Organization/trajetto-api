@@ -171,16 +171,10 @@ describe("I–Z domain errors carry an honest status and a code", () => {
 
     return Promise.all([
       import("@/modules/user/usecases/errors/resource-not-found-error"),
-      import(
-        "@/modules/notification/usecases/errors/notification-not-authorized-error"
-      ),
+      import("@/modules/notification/usecases/errors/notification-not-authorized-error"),
       import("@/modules/quote/usecases/errors/quote-already-finalized-error"),
-      import(
-        "@/modules/whatsapp/usecases/errors/whatsapp-phone-already-in-use-error"
-      ),
-      import(
-        "@/modules/profile-access/usecases/errors/profile-access-in-use-error"
-      ),
+      import("@/modules/whatsapp/usecases/errors/whatsapp-phone-already-in-use-error"),
+      import("@/modules/profile-access/usecases/errors/profile-access-in-use-error"),
       import("@/modules/user/usecases/errors/user-invalid-credentials-error"),
     ]).then(([user, notification, quote, whatsapp, profile, credentials]) => {
       cases.push(
@@ -220,9 +214,8 @@ describe("I–Z domain errors carry an honest status and a code", () => {
   });
 
   it("answers a delivery route that is missing or not the caller's with its own code, never the unknown-endpoint one", async () => {
-    const { RouteNotFoundError } = await import(
-      "@/modules/route/usecases/errors/route-errors"
-    );
+    const { RouteNotFoundError } =
+      await import("@/modules/route/usecases/errors/route-errors");
 
     const error = new RouteNotFoundError();
 
@@ -239,12 +232,8 @@ describe("I–Z domain errors carry an honest status and a code", () => {
       { UserProfileNotMatchBusinessError },
       { PermissionBusinessError },
     ] = await Promise.all([
-      import(
-        "@/modules/user/usecases/errors/user-profile-access-not-found-error"
-      ),
-      import(
-        "@/modules/user/usecases/errors/user-profile-not-match-business-error"
-      ),
+      import("@/modules/user/usecases/errors/user-profile-access-not-found-error"),
+      import("@/modules/user/usecases/errors/user-profile-not-match-business-error"),
       import("@/modules/permission/usecases/errors/permission-business-error"),
     ]);
 

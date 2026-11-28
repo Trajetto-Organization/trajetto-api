@@ -20,14 +20,14 @@ const MAX_BUCKETS = 1_000;
 /**
  * [from, to) cut at the company's day or month boundaries.
  *
- * The dashboard used to label every row in SQL — two AT TIME ZONE, a
- * date_trunc and a to_char per row — and group by the label. On a tenant with
- * 300k deliveries that was ~300 ms per page view, a quarter of the database
- * CPU of the load test (docs/desempenho/carga-2026-10.md). The boundaries are
- * computed here instead and the table is read once, each row filed by
- * width_bucket over these boundaries (dashboard-repository countArm). The
- * labels are the same: a row belongs to the bucket whose [start, end) holds it, and
- * start/end are the zone's own midnights.
+ * The dashboard used to label every row in SQL — two AT TIME ZONE, a date_trunc
+ * and a to_char per row — and group by the label. On a tenant with 300k
+ * deliveries that was ~300 ms per page view, a quarter of the database CPU of
+ * the load test (the load of 07/10/2026, docs/desempenho/README.md). The
+ * boundaries are computed here instead and the table is read once, each row
+ * filed by width_bucket over these boundaries (dashboard-repository countArm).
+ * The labels are the same: a row belongs to the bucket whose [start, end) holds
+ * it, and start/end are the zone's own midnights.
  */
 function periodBuckets(
   from: Date,

@@ -1,4 +1,7 @@
 import { AppError } from "@/shared/errors/AppError";
+import { vehicleUnavailableReason } from "@/shared/route/route-rules";
+
+import type { OutOfOperationStatus } from "@/shared/vehicle/vehicle-rules";
 
 /**
  * A delivery route that does not exist, or belongs to another company or
@@ -45,18 +48,29 @@ class RouteStatusConflictError extends Error {
 }
 
 /**
- * Raised by the partial unique index `route_active_vehicle_idx`.
+ * Raised by the partial unique index `route_active_vehicle_idx`, and by the
+ * departure's own read before it (findRunningRouteOfVehicle).
  *
  * Planning two routes for the same vehicle is allowed on purpose — a
  * dispatcher lays out the whole week. What cannot happen is the second
  * departure: the truck is on one road.
+ *
+ * Worded for the driver, who is the one reading it: the app cannot choose
+ * another vehicle ("escolha outro veículo" told them to do the impossible).
+ * With the plate and the running route's number when the caller knows them;
+ * never the other driver's name, which the driver's app does not show.
  */
 class RouteVehicleBusyError extends Error {
-  constructor() {
+  constructor(plate?: string | null, runningCode?: number | null) {
     super(
-      "Este veículo já está em outra rota em andamento. Encerre a rota atual " +
-        "ou escolha outro veículo.",
+      plate && runningCode
+        ? `O veículo ${plate} ainda está na Rota ${runningCode}, em andamento. ` +
+            "Esta rota só pode sair quando aquela terminar. Se precisar de " +
+            "outro veículo, fale com o despachante."
+        : "O veículo desta rota ainda está em outra rota em andamento. " +
+            "Aguarde ela terminar ou fale com o despachante.",
     );
+    this.name = "RouteVehicleBusyError";
   }
 }
 
@@ -87,16 +101,25 @@ class RouteDriverBusyError extends Error {
  * The message names the situation rather than the constraint, because the
  * dispatcher's next move depends on it: the delivery is not "invalid", it is
  * somewhere else.
+ *
+ * It carries the deliveries the write tried, not a count of them: the index
+ * names none, and the count of the whole selection said "30 das entregas já
+ * estão em outra rota em andamento" when one was, on a route that had not
+ * even left (audit of 25/11/2026). The use cases read the deliveries' open
+ * stops again after the rollback and name them (alreadyOnRouteAfterRace);
+ * this message is the answer when that read finds nothing, so it claims no
+ * count and no state — the index holds for any open stop, planned, released
+ * or running.
  */
 class DeliveryAlreadyOnRouteError extends Error {
-  constructor(count: number) {
+  readonly deliveryIds: readonly string[];
+
+  constructor(deliveryIds: readonly string[] = []) {
     super(
-      count === 1
-        ? "Uma das entregas já está em outra rota em andamento. Atualize a " +
-            "lista e tente novamente."
-        : `${count} das entregas já estão em outra rota em andamento. ` +
-            "Atualize a lista e tente novamente.",
+      "Uma ou mais entregas entraram em outra rota aberta enquanto você " +
+        "montava esta. Atualize a lista e tente novamente.",
     );
+    this.deliveryIds = deliveryIds;
   }
 }
 
@@ -126,11 +149,18 @@ class RouteDriverInactiveError extends Error {
   }
 }
 
+/**
+ * A vehicle out of operation (INACTIVE or BLOCKED) chosen for a route. With
+ * the plate and the state, the sentence names them (vehicleUnavailableReason,
+ * the one the release and the departure use as well).
+ */
 class RouteVehicleUnavailableError extends Error {
-  constructor() {
+  constructor(plate?: string | null, status?: OutOfOperationStatus | null) {
     super(
-      "O veículo selecionado está inativo ou bloqueado e não pode receber " +
-        "uma rota.",
+      plate && status
+        ? vehicleUnavailableReason(plate, status, "assign")
+        : "O veículo selecionado está inativo ou bloqueado e não pode receber " +
+            "uma rota.",
     );
   }
 }
@@ -200,7 +230,64 @@ class RouteStopsLimitError extends Error {
   }
 }
 
+/**
+ * The company asks for the route's checklist and the record branch it would
+ * be filed under resolves to nothing (contract C1 of 03/11/2026): the
+ * vehicle has no branch, the driver has none, and the company has no single
+ * active branch to fall back on. Refused at the release (and on a crew
+ * change of a released route) because the driver would otherwise find out
+ * at the truck, with the checklist refused and the route unable to start.
+ * The plate and the name tell the dispatcher which record to complete.
+ */
+class RouteBranchRequiredError extends AppError {
+  constructor(plate: string | null, driverName: string | null) {
+    super(
+      "O checklist desta empresa exige filial: defina a filial " +
+        `${plate ? `do veículo ${plate}` : "do veículo da rota"} ou ` +
+        `${driverName ? `do motorista ${driverName}` : "do motorista da rota"}.`,
+      409,
+      "ROUTE_BRANCH_REQUIRED",
+    );
+    this.name = "RouteBranchRequiredError";
+  }
+}
+
+/**
+ * No ACTIVE record branch resolves, and the vehicle or the driver names one
+ * that is switched off: the driver's checklist skips it, finds nothing after
+ * it (no active driver branch, no single active one in the company) and is
+ * refused, so the route would never start. Deactivating a branch only checks
+ * its drivers' open routes, so a truck can keep pointing at one. Same code
+ * as the blank case (ROUTE_BRANCH_REQUIRED): the web and the app show the
+ * message as it comes; the sentence names the branch so the dispatcher knows
+ * what to fix. With an active branch to fall back on, nothing is refused
+ * (wave 3.7).
+ */
+class RouteBranchInactiveError extends AppError {
+  constructor(
+    branchName: string,
+    holder:
+      { kind: "vehicle"; plate: string } | { kind: "driver"; name: string },
+  ) {
+    const of =
+      holder.kind === "vehicle"
+        ? `do veículo ${holder.plate}`
+        : `do motorista ${holder.name}`;
+    const record = holder.kind === "vehicle" ? "do veículo" : "do motorista";
+
+    super(
+      `O checklist desta empresa exige filial ativa: a filial ${branchName} ${of} está inativa. ` +
+        `Reative a filial ou troque a filial ${record}.`,
+      409,
+      "ROUTE_BRANCH_REQUIRED",
+    );
+    this.name = "RouteBranchInactiveError";
+  }
+}
+
 export {
+  RouteBranchInactiveError,
+  RouteBranchRequiredError,
   RoutePlanStaleError,
   RouteStopsLimitError,
   RouteCodeTakenError,

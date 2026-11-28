@@ -7,7 +7,6 @@ import {
 
 import { FuelTypeNotFoundError } from "./fuel-type-not-found-error";
 import { FuelTypeNotBelongBusinessError } from "./fuel-type-not-belong-business-error";
-import { FuelTypeAlreadyExistsError } from "./fuel-type-already-exists-error";
 import { FuelTypeHasAssociatedVehiclesError } from "./fuel-type-has-associated-vehicles-error";
 import { FuelTypeHasAssociatedFuelError } from "./fuel-type-has-associated-fuel-error";
 
@@ -19,7 +18,8 @@ import { FuelTypeHasAssociatedFuelError } from "./fuel-type-has-associated-fuel-
  * same BusinessNotFoundError as 404 BUSINESS_NOT_FOUND.
  *
  * The fuel type is in the PATH here, so a missing or foreign one is a 404,
- * alike (on the fuel routes it is a link in the body: 400).
+ * alike (on the fuel routes it is a link in the body: 400). The name taken
+ * (FUEL_TYPE_ALREADY_EXISTS) is an AppError and needs no row.
  */
 const FUEL_TYPE_ERRORS: FuelHttpError[] = [
   [FuelTypeNotFoundError, 404, "FUEL_TYPE_NOT_FOUND"],
@@ -29,7 +29,6 @@ const FUEL_TYPE_ERRORS: FuelHttpError[] = [
     "FUEL_TYPE_NOT_FOUND",
     new FuelTypeNotFoundError().message,
   ],
-  [FuelTypeAlreadyExistsError, 409, "FUEL_TYPE_ALREADY_EXISTS"],
   // Still in use: a conflict with the data, with the count in the sentence.
   [FuelTypeHasAssociatedVehiclesError, 409, "FUEL_TYPE_IN_USE"],
   [FuelTypeHasAssociatedFuelError, 409, "FUEL_TYPE_IN_USE"],

@@ -1,15 +1,21 @@
-import { z, ZodError } from "zod";
+import { z } from "zod";
 
-import { createDeliverySchema } from "@/schemas/create-delivery-schema";
+import {
+  createDeliverySchema,
+  MAX_DELIVERY_ITEMS,
+  TOO_MANY_DELIVERY_ITEMS,
+} from "@/schemas/create-delivery-schema";
 import { isValidCnpj } from "@/shared/delivery/cnpj";
+import { refineAddressPointPair } from "@/shared/delivery/address-coordinates";
+import { validationError } from "@/shared/validation/validation-error";
 
 /**
  * The body of POST /integration/v1/deliveries (decision 5.10).
  *
  * The manual create's fields, with the manual create's rules — the SAME zod
  * definitions, not copies — so a delivery that the panel refuses the API
- * refuses too, with the same sentence. Only two things differ, and both are
- * about who is on the other side:
+ * refuses too, with the same sentence. Only three things differ, the first
+ * two about who is on the other side:
  *
  *   - the shipper can be named by CNPJ. An ERP knows its shippers by the NF-e
  *     issuer's CNPJ; our shipper id is something no public endpoint hands out.
@@ -17,6 +23,10 @@ import { isValidCnpj } from "@/shared/delivery/cnpj";
  *     item. A person cannot misspell a form field; an integration can, and
  *     `adress_number` silently ignored is an address nobody notices is
  *     missing until the driver is lost.
+ *   - the recipient's e-mail is one address (recipientEmailField, from the
+ *     createDeliverySchema object). The panel's body takes the list an
+ *     import stored (panelRecipientEmailField, on createDeliveryBodySchema)
+ *     so the form can save it back; the public contract stays as published.
  */
 const manualFields = createDeliverySchema.omit({
   shipperId: true,
@@ -31,13 +41,10 @@ const manualFields = createDeliverySchema.omit({
  */
 const manualItemList = createDeliverySchema.shape.items.unwrap();
 
-const itemLimit = manualItemList._def.maxLength;
-
-const strictItemList = z.array(manualItemList.element.strict());
-
-const itemList = itemLimit
-  ? strictItemList.max(itemLimit.value, itemLimit.message)
-  : strictItemList;
+// The limit first: zod 4 refuses a longer list before parsing any item.
+const itemList = z
+  .array(manualItemList.element.strict())
+  .max(MAX_DELIVERY_ITEMS, TOO_MANY_DELIVERY_ITEMS);
 
 /**
  * "" (or blanks) is an absent field, as on the manual create: ERPs serialise
@@ -48,10 +55,12 @@ function isBlank(value: unknown): boolean {
   return typeof value === "string" && value.trim() === "";
 }
 
+// No sentence of their own for a wrong type: the parse's ("esperado texto,
+// recebido número.") is the one published, as with every field here.
 const shipperIdField = z.preprocess(
   (value) => (isBlank(value) ? null : value),
   z
-    .string({ invalid_type_error: "deve ser um texto." })
+    .string()
     .uuid("deve ser o id (UUID) de um embarcador da sua empresa.")
     .nullish(),
 );
@@ -63,7 +72,7 @@ const shipperCnpjField = z.preprocess(
     return typeof value === "string" ? value.replace(/\D/g, "") : value;
   },
   z
-    .string({ invalid_type_error: "deve ser um texto com o CNPJ." })
+    .string()
     .length(14, "O CNPJ do embarcador deve ter 14 dígitos.")
     // The same check digits the shipper form applies (decision 5.7).
     .refine(isValidCnpj, "O CNPJ do embarcador não é válido.")
@@ -108,6 +117,10 @@ const createIntegrationDeliverySchema = z
   })
   .strict()
   .superRefine((body, ctx) => {
+    // The panel's pair rule (plan of 02/11/2026, E1): both coordinates of
+    // the address point, or neither.
+    refineAddressPointPair(body, ctx);
+
     const named = [body.shipper_id, body.shipper_cnpj].filter(
       (value) => value !== undefined && value !== null,
     ).length;
@@ -131,13 +144,87 @@ type CreateIntegrationDeliveryBody = z.infer<
 const TYPE_NAMES: Record<string, string> = {
   string: "texto",
   number: "número",
-  integer: "número inteiro",
+  int: "número inteiro",
   boolean: "verdadeiro ou falso",
   array: "lista",
   object: "objeto",
   null: "null",
   date: "data",
 };
+
+/** What was sent, in zod 3's words: zod 4's issue keeps the value, not its type. */
+function receivedType(input: unknown): string {
+  if (input === null) return "null";
+  if (Array.isArray(input)) return "array";
+  if (input instanceof Date) return "date";
+  if (typeof input === "number" && Number.isNaN(input)) return "nan";
+
+  return typeof input;
+}
+
+const typeName = (type: string): string => TYPE_NAMES[type] ?? type;
+
+/** "campo não reconhecido: x." — shared with the public cancel's body. */
+function unrecognizedFieldsMessage(keys: string[]): string {
+  return `${keys.length === 1 ? "campo não reconhecido" : "campos não reconhecidos"}: ${keys.join(", ")}. Confira os nomes na documentação.`;
+}
+
+/** What the sentences below read of an issue, raw or final. */
+interface SentIssue {
+  code: string;
+  path?: readonly PropertyKey[];
+  input?: unknown;
+  expected?: string;
+  format?: string;
+  values?: readonly unknown[];
+}
+
+/**
+ * The integration's sentence for a missing field or a value of the wrong
+ * type, worked out from the value sent: "campo obrigatório.", "esperado
+ * texto, recebido número.". Nothing for a check's own refusal — `.int()`
+ * reports a wrong type too, with a `format` — nor for any other issue.
+ */
+function wrongValueSentence(issue: SentIssue): string | undefined {
+  if (issue.code === "invalid_type" && issue.format === undefined) {
+    // The body itself: nothing, or something that is not an object.
+    if ((issue.path ?? []).length === 0) {
+      return "envie um objeto JSON com os campos da entrega.";
+    }
+
+    if (issue.input === undefined) return "campo obrigatório.";
+
+    // 1e999 in the JSON: zod 4 refuses Infinity as a wrong type.
+    if (
+      issue.expected === "number" &&
+      typeof issue.input === "number" &&
+      !Number.isNaN(issue.input)
+    ) {
+      return `esperado número finito, recebido ${issue.input}.`;
+    }
+
+    return `esperado ${typeName(issue.expected ?? "")}, recebido ${typeName(receivedType(issue.input))}.`;
+  }
+
+  if (issue.code === "invalid_value") {
+    // zod 4 reports a missing enum as a value off the list.
+    if (issue.input === undefined) return "campo obrigatório.";
+
+    // ...and one that is not even a text with the same code: zod 3 called
+    // it a wrong type, naming the list.
+    const values = issue.values ?? [];
+
+    if (
+      typeof issue.input !== "string" &&
+      values.length > 0 &&
+      values.every((value) => typeof value === "string")
+    ) {
+      return `esperado ${values.map((value) => `'${String(value)}'`).join(" | ")}, recebido ${typeName(receivedType(issue.input))}.`;
+    }
+  }
+
+  return undefined;
+}
 
 /**
  * Portuguese for the sentences zod would otherwise write in English.
@@ -147,33 +234,18 @@ const TYPE_NAMES: Record<string, string> = {
  * is the generic "Required" and "Expected string, received number" — which,
  * without the field in front, told an integrator nothing at all.
  */
-const integrationErrorMap: z.ZodErrorMap = (issue, ctx) => {
-  if (issue.code === z.ZodIssueCode.invalid_type) {
-    // The body itself: nothing, or something that is not an object.
-    if (issue.path.length === 0) {
-      return { message: "envie um objeto JSON com os campos da entrega." };
-    }
-
-    if (issue.received === "undefined")
-      return { message: "campo obrigatório." };
-
-    return {
-      message: `esperado ${TYPE_NAMES[issue.expected] ?? issue.expected}, recebido ${TYPE_NAMES[issue.received] ?? issue.received}.`,
-    };
+const integrationErrorMap: z.core.$ZodErrorMap = (issue) => {
+  if (issue.code === "unrecognized_keys") {
+    return unrecognizedFieldsMessage(issue.keys);
   }
 
-  if (issue.code === z.ZodIssueCode.unrecognized_keys) {
-    return {
-      message: `${issue.keys.length === 1 ? "campo não reconhecido" : "campos não reconhecidos"}: ${issue.keys.join(", ")}. Confira os nomes na documentação.`,
-    };
-  }
-
-  return { message: ctx.defaultError };
+  // The pt-BR default (zod-pt-br.ts) for the rest.
+  return wrongValueSentence(issue);
 };
 
 /** `items.0.description`, or "corpo" for the body itself. */
-function issuePath(path: Array<string | number>): string {
-  return path.length === 0 ? "corpo" : path.join(".");
+function issuePath(path: readonly PropertyKey[]): string {
+  return path.length === 0 ? "corpo" : path.map(String).join(".");
 }
 
 /**
@@ -182,20 +254,31 @@ function issuePath(path: Array<string | number>): string {
  * about. The handler publishes `issues` as sentences only; "O CEP deve ter 8
  * dígitos" is enough on a form, where the red field is right there, and not
  * enough in an ERP's log.
+ *
+ * A wrong type and a missing field are said as published since the first
+ * release. zod 3 let this parse's map speak before a field's own sentence
+ * for them (`invalid_type_error`, `required_error`), so "A latitude deve ser
+ * um número." never reached an integrator: "latitude: esperado número,
+ * recebido texto." did. zod 4 asks the field first, so the sentence is worked
+ * out again from the value sent (`reportInput`), and the value is dropped
+ * before the error leaves: the handler logs the error.
  */
 function parseIntegrationDeliveryBody(
   body: unknown,
 ): CreateIntegrationDeliveryBody {
   const parsed = createIntegrationDeliverySchema.safeParse(body, {
-    errorMap: integrationErrorMap,
+    error: integrationErrorMap,
+    reportInput: true,
   });
 
   if (parsed.success) return parsed.data;
 
-  throw new ZodError(
-    parsed.error.issues.map((issue) => ({
+  throw validationError(
+    parsed.error.issues.map(({ input, ...issue }) => ({
       ...issue,
-      message: `${issuePath(issue.path)}: ${issue.message}`,
+      message: `${issuePath(issue.path)}: ${
+        wrongValueSentence({ ...issue, input }) ?? issue.message
+      }`,
     })),
   );
 }
@@ -203,6 +286,8 @@ function parseIntegrationDeliveryBody(
 export {
   createIntegrationDeliverySchema,
   integrationErrorMap,
+  issuePath,
   parseIntegrationDeliveryBody,
+  unrecognizedFieldsMessage,
 };
 export type { CreateIntegrationDeliveryBody };

@@ -74,8 +74,7 @@ describe("426 CLIENT_UPGRADE_REQUIRED in the document", () => {
     expect(serialized).toContain("x-trajetto-client-version");
 
     const schema = response.content?.["application/json"]?.schema as
-      | { properties?: Record<string, unknown>; required?: string[] }
-      | undefined;
+      { properties?: Record<string, unknown>; required?: string[] } | undefined;
 
     expect(Object.keys(schema?.properties ?? {})).toEqual(
       expect.arrayContaining(["code", "message", "minContract", "storeUrl"]),

@@ -20,8 +20,9 @@ class SaveMessageTemplateController {
       businessId,
       topic: body.topic,
       channel: body.channel,
-      subject: body.subject ?? null,
-      body: body.body,
+      // WhatsApp carries neither (B3): only the switch is saved.
+      subject: body.channel === "WHATSAPP" ? null : (body.subject ?? null),
+      body: body.channel === "WHATSAPP" ? null : (body.body ?? null),
       is_active: body.is_active,
     });
 

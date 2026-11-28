@@ -30,7 +30,11 @@ interface ApiUsageRow {
   apiKey: { id: string; name: string; prefix: string } | null;
 }
 
-/** What authenticating a call needs: the hash to compare and the company gates. */
+/**
+ * What authenticating a call needs: the hash to compare and the company gates
+ * — whether it is active and its Entregas entitlement row, read with the key
+ * in ONE query (plan of 02/11/2026, L5) instead of a second lookup per call.
+ */
 interface ApiKeyCredential {
   id: string;
   name: string;
@@ -40,7 +44,12 @@ interface ApiKeyCredential {
   rate_limit_per_minute: number;
   revoked_at: Date | null;
   businessId: string;
-  business: { is_active: boolean; timezone: string };
+  business: {
+    is_active: boolean;
+    timezone: string;
+    /** Only the DELIVERIES row, when there is one; empty = not hired. */
+    entitlements: Array<{ module: string; enabled: boolean }>;
+  };
 }
 
 interface ListApiUsageProps {

@@ -14,8 +14,18 @@ import {
   ShipperInactiveError,
 } from "@/modules/shipper/usecases/errors/shipper-errors";
 
-import { parseNFeXml, NFeParseError } from "@/shared/delivery/nfe-parser";
+import {
+  NFeParseError,
+  type NFeParsedData,
+} from "@/shared/delivery/nfe-parser";
+import { parseNFeOffThread } from "@/shared/cpu-pool";
+import {
+  readRecipientEmails,
+  recipientEmailNotice,
+  storedRecipientEmail,
+} from "@/shared/delivery/recipient-email";
 import { AppError } from "@/shared/errors/AppError";
+import { ServiceBusyError } from "@/shared/errors/service-busy-error";
 import { assertDispatcher } from "@/shared/delivery/dispatcher-guard";
 import { assertTenantAccess } from "@/modules/middlewares/tenant-authorization";
 
@@ -30,9 +40,11 @@ import type {
 } from "@/modules/import/dtos/import-dto";
 import database from "@/../infra/database";
 import type { Shipper } from "@/modules/shipper/dtos/shipper-dto";
+import { issuerShipperName } from "@/shared/delivery/issuer-shipper-name";
 import { IImportRepository } from "@/modules/import/repositories/IImport-repository";
 import { WebhookFanOutService } from "@/shared/integration/webhook-fan-out-service";
 import { deliveryEventPayload } from "@/shared/integration/announce";
+import { countDeliveriesCreated } from "@/shared/health/volume-gauge";
 import { sendCatalogChangedEvent } from "@/websocket";
 import { logger } from "@/shared/logging/logger";
 
@@ -96,8 +108,10 @@ function reportOf(results: ImportResultItem[]): ImportReport {
     outcome: result.outcome,
     recipient_name: result.recipient_name,
     reference: result.invoice_key ?? result.filename,
+    // An imported file has a message only when its note left something out
+    // (the recipient's e-mail).
     message:
-      result.outcome === "imported"
+      result.outcome === "imported" && !result.message
         ? null
         : `${result.filename}: ${result.message ?? ""}`.trim(),
   }));
@@ -110,6 +124,15 @@ function reportOf(results: ImportResultItem[]): ImportReport {
     rows,
     routes: [],
   };
+}
+
+/** The issuer's name belongs to another CNPJ and cannot be told apart. */
+function issuerNameTaken(issuerName: string): AppError {
+  return new AppError(
+    `Já existe um embarcador chamado ${issuerName} com outro CNPJ. Selecione o embarcador manualmente ao importar.`,
+    400,
+    "NFE_ISSUER_NAME_TAKEN",
+  );
 }
 
 /**
@@ -132,6 +155,32 @@ function reportOf(results: ImportResultItem[]): ImportReport {
  *   spreadsheet: the record exists before the first delivery, each delivery
  *   carries its id, and the upload can be reversed.
  */
+/** A file's parse: the NF-e, or why it is not one. */
+type ParsedFile =
+  { ok: true; parsed: NFeParsedData } | { ok: false; message: string };
+
+/**
+ * One file's parse. The parser's refusal (or any failure of the parser on
+ * that file) makes it an invalid file of the report; the pool's own
+ * refusal (busy, a thread that did not answer) goes up, a 503 for the
+ * whole upload.
+ */
+async function parseFile(file: ImportFile): Promise<ParsedFile> {
+  try {
+    return { ok: true, parsed: await parseNFeOffThread(file.content) };
+  } catch (error) {
+    if (error instanceof ServiceBusyError) throw error;
+
+    return {
+      ok: false,
+      message:
+        error instanceof NFeParseError
+          ? error.message
+          : "Não foi possível interpretar o arquivo.",
+    };
+  }
+}
+
 @injectable()
 class ImportDeliveryXmlUseCase {
   constructor(
@@ -192,6 +241,13 @@ class ImportDeliveryXmlUseCase {
       }
     }
 
+    // Every file parsed first, on the CPU pool (plano-escala F3-29), one at
+    // a time: 25 NF-e no longer hold the replica's event loop, and a pool
+    // that is full refuses the upload (503) before anything is written.
+    const parsedFiles: ParsedFile[] = [];
+
+    for (const file of files) parsedFiles.push(await parseFile(file));
+
     // Opened before the first delivery, so each one carries the upload's id
     // from birth and a process dying mid-way leaves an upload the operator
     // can still reverse (closed by the abandoned-import sweep).
@@ -214,6 +270,7 @@ class ImportDeliveryXmlUseCase {
         results.push(
           await this.importSingleFile({
             file,
+            parsedFile: parsedFiles[index],
             businessId,
             importId: record.id,
             forcedShipperId: shipperId,
@@ -297,6 +354,7 @@ class ImportDeliveryXmlUseCase {
 
   private async importSingleFile({
     file,
+    parsedFile,
     businessId,
     importId,
     forcedShipperId,
@@ -304,28 +362,24 @@ class ImportDeliveryXmlUseCase {
     createdShippers,
   }: {
     file: ImportFile;
+    parsedFile: ParsedFile;
     businessId: string;
     importId: string;
     forcedShipperId?: string;
     scheduled_date?: Date | null;
     createdShippers: string[];
   }): Promise<ImportResultItem> {
-    let parsed;
-
-    try {
-      parsed = parseNFeXml(file.content);
-    } catch (error) {
+    if (!parsedFile.ok) {
       return {
         filename: file.filename,
         outcome: "invalid",
         invoice_key: null,
         recipient_name: null,
-        message:
-          error instanceof NFeParseError
-            ? error.message
-            : "Não foi possível interpretar o arquivo.",
+        message: parsedFile.message,
       };
     }
+
+    const { parsed } = parsedFile;
 
     const existing = await this.delivery.findDeliveryByInvoiceKey(
       businessId,
@@ -367,6 +421,10 @@ class ImportDeliveryXmlUseCase {
       };
     }
 
+    // dest/email as a list, each entry checked like the manual create's
+    // (recipient-email.ts): what is not an address never reaches a send.
+    const recipientEmails = readRecipientEmails(parsed.recipient_email);
+
     try {
       // The row and its `delivery.created` in one commit, per file — so one
       // bad file still never sinks the batch. The import is the main way
@@ -382,7 +440,7 @@ class ImportDeliveryXmlUseCase {
             invoice_number: parsed.invoice_number,
             recipient_name: parsed.recipient_name,
             recipient_document: parsed.recipient_document,
-            recipient_email: parsed.recipient_email,
+            recipient_email: storedRecipientEmail(recipientEmails),
             recipient_telephone: parsed.recipient_telephone,
             cep: parsed.cep,
             city: parsed.city,
@@ -411,12 +469,17 @@ class ImportDeliveryXmlUseCase {
         );
       });
 
+      // After the commit: a file whose transaction rolled back is not counted.
+      countDeliveriesCreated();
+
       return {
         filename: file.filename,
         outcome: "imported",
         invoice_key: parsed.invoice_key,
         recipient_name: parsed.recipient_name,
-        message: null,
+        // Imported all the same; the note says which e-mail was left out of
+        // the customer notices.
+        message: recipientEmailNotice(recipientEmails),
       };
     } catch (error) {
       // P2002 = the unique (businessId, invoice_key) fired: another replica
@@ -458,7 +521,9 @@ class ImportDeliveryXmlUseCase {
    * CNPJ (the stable identity, unique per company); by name only when the
    * registered shipper has no CNPJ — a matriz and a filial share the
    * corporate name and must not be merged. Created when the carrier has
-   * never received cargo from it before. A deactivated match refuses the
+   * never received cargo from it before — when the name already belongs to
+   * another CNPJ (the matriz, for a filial's note), as "Name (0002-90)"
+   * (issuerShipperName, decision D-36). A deactivated match refuses the
    * note: creating another would clash with its name and bypass the decision
    * to deactivate it.
    */
@@ -492,15 +557,21 @@ class ImportDeliveryXmlUseCase {
       );
     }
 
+    const name = await this.nameForNewIssuer(
+      businessId,
+      issuerName,
+      issuerCnpj,
+    );
+
     try {
       const created = await this.shipper.createShipper({
         businessId,
-        name: issuerName,
+        name,
         corporate_reason: issuerLegalName,
         cnpj: issuerCnpj,
       });
 
-      createdShippers.push(issuerName);
+      createdShippers.push(name);
       return created.id as string;
     } catch (error) {
       if (
@@ -521,13 +592,39 @@ class ImportDeliveryXmlUseCase {
 
       if (winner) return this.usable(winner);
 
-      // The name is taken by a shipper with ANOTHER CNPJ.
-      throw new AppError(
-        `Já existe um embarcador chamado ${issuerName} com outro CNPJ. Selecione o embarcador manualmente ao importar.`,
-        400,
-        "NFE_ISSUER_NAME_TAKEN",
-      );
+      // The name was taken in between by a shipper with ANOTHER CNPJ.
+      throw issuerNameTaken(issuerName);
     }
+  }
+
+  /**
+   * The issuer's name, or — when a shipper with another CNPJ already has it
+   * (findIssuerShipper found no match, so any holder of the name is another
+   * identity) — the name with the CNPJ's branch suffix. Read without
+   * minding case, as the name lookups are: the unique index alone would let
+   * "MAGAZINE X" in next to "Magazine X". When there is no CNPJ to tell
+   * them apart, or the suffixed name is taken too, the note is refused as
+   * before.
+   */
+  private async nameForNewIssuer(
+    businessId: string,
+    issuerName: string,
+    issuerCnpj: string | null,
+  ): Promise<string> {
+    const holder = await this.shipper.findShipperByName(businessId, issuerName);
+
+    if (!holder) return issuerName;
+
+    const branchName = issuerShipperName(issuerName, issuerCnpj);
+
+    if (
+      !branchName ||
+      (await this.shipper.findShipperByName(businessId, branchName))
+    ) {
+      throw issuerNameTaken(issuerName);
+    }
+
+    return branchName;
   }
 
   private async findIssuerShipper(

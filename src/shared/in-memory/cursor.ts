@@ -28,6 +28,26 @@ function afterCursor<T extends { id?: string | null }>(
   return ordered.filter((row) => compare(row, cursorRow) >= 0).slice(1);
 }
 
+/**
+ * A keyset by value over an ordered list, for the twins of the lists that
+ * page with `id < cursor` / `id > cursor` instead of Prisma's cursor (the
+ * standby's lists, plano-escala F4-42): the rows strictly after the
+ * cursor's id in the list's order, whether or not that row exists.
+ *
+ * `compare` must order by the id alone, as those lists do.
+ */
+function afterPosition<T extends { id?: string | null }>(
+  ordered: T[],
+  cursor: string | null | undefined,
+  compare: (a: T, b: T) => number,
+): T[] {
+  if (!cursor) return ordered;
+
+  const position = { id: cursor } as T;
+
+  return ordered.filter((row) => compare(row, position) > 0);
+}
+
 /** created_at desc, id desc: the order of every "newest first" picker. */
 function newestFirst<
   T extends { created_at?: Date | string | null; id?: string | null },
@@ -51,4 +71,4 @@ function byNameThenId<T extends { name: string; id?: string | null }>(
   );
 }
 
-export { afterCursor, byNameThenId, newestFirst };
+export { afterCursor, afterPosition, byNameThenId, newestFirst };

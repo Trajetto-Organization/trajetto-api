@@ -126,16 +126,34 @@ async function seedDelivery(
 }
 
 /**
- * This file's rows only: E2E files run in parallel. Deliveries go with their
- * events, tied receipts with their deliveries; the untied Meta and Expo ones
- * are this file's own (delivery-provider-truth writes the Resend ones).
+ * This file's rows only. Each queue by hand, as the purge does since the
+ * contraction (F5-06): no cascade from an event to its deliveries nor from a
+ * delivery to its receipts. The untied Meta and Expo receipts are this
+ * file's own (delivery-provider-truth writes the Resend ones).
  */
 async function cleanTables(): Promise<void> {
+  const events = await prisma.domainOutboxEvent.findMany({
+    where: { businessId: BUSINESS },
+    select: { id: true },
+  });
+  const deliveries = await prisma.notificationDelivery.findMany({
+    where: { outboxEventId: { in: events.map((row) => row.id) } },
+    select: { id: true },
+  });
+
+  await prisma.notificationProviderReceipt.deleteMany({
+    where: {
+      OR: [
+        { deliveryId: { in: deliveries.map((row) => row.id) } },
+        { deliveryId: null, provider: { in: ["meta", "expo"] } },
+      ],
+    },
+  });
+  await prisma.notificationDelivery.deleteMany({
+    where: { id: { in: deliveries.map((row) => row.id) } },
+  });
   await prisma.domainOutboxEvent.deleteMany({
     where: { businessId: BUSINESS },
-  });
-  await prisma.notificationProviderReceipt.deleteMany({
-    where: { deliveryId: null, provider: { in: ["meta", "expo"] } },
   });
   await prisma.pushDeviceToken.deleteMany({ where: { userId: USER } });
 }
@@ -466,7 +484,9 @@ describe("what the pipeline hands the providers", () => {
         aggregateType: "account-payable",
         aggregateId: randomUUID(),
         businessId: BUSINESS,
-        actorId: USER,
+        // Nobody's action: the bill's responsible is told of a bill
+        // somebody else registered (actor-notice.test.ts).
+        actorId: null,
         payload: {
           accountPayableId: randomUUID(),
           businessId: BUSINESS,
@@ -518,7 +538,9 @@ describe("what the pipeline hands the providers", () => {
         aggregateType: "account-payable",
         aggregateId: randomUUID(),
         businessId: BUSINESS,
-        actorId: USER,
+        // Nobody's action: the bill's responsible is told of a bill
+        // somebody else registered (actor-notice.test.ts).
+        actorId: null,
         payload: {
           accountPayableId: randomUUID(),
           businessId: BUSINESS,
@@ -579,9 +601,8 @@ describe("what the pipeline hands the providers", () => {
       ),
     );
 
-    const { checkPushReceiptsJob } = await import(
-      "@/jobs/cron/check-push-receipts-job"
-    );
+    const { checkPushReceiptsJob } =
+      await import("@/jobs/cron/check-push-receipts-job");
 
     await checkPushReceiptsJob.handler();
 
@@ -630,9 +651,8 @@ describe("the ledger's retention", () => {
       },
     });
 
-    const { cleanupNotificationPipelineJob } = await import(
-      "@/jobs/cron/cleanup-notification-pipeline-job"
-    );
+    const { cleanupNotificationPipelineJob } =
+      await import("@/jobs/cron/cleanup-notification-pipeline-job");
 
     await cleanupNotificationPipelineJob.handler();
 

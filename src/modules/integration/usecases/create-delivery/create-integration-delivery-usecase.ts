@@ -19,9 +19,14 @@ import { WebhookFanOutService } from "@/shared/integration/webhook-fan-out-servi
 import { NotificationService } from "@/shared/services/notification-service";
 import { deliveryEventPayload } from "@/shared/integration/announce";
 import type { PublicDelivery } from "@/shared/integration/public-shapes";
+import { countDeliveriesCreated } from "@/shared/health/volume-gauge";
 
 import { isUniqueViolation } from "@/shared/http/idempotency-key";
 import { violatesUniqueOn } from "@/shared/delivery/unique-violation";
+import {
+  geocodeSoon,
+  unlocatedDeliveryIds,
+} from "@/shared/delivery/geocoding/geocode-soon";
 
 import type { CreateIntegrationDeliveryBody } from "@/schemas/create-integration-delivery-schema";
 
@@ -67,10 +72,11 @@ interface CreateIntegrationDeliveryResult {
  * index (of what an API key created, never of a panel submission), and the
  * row and its `delivery.created` in one transaction.
  *
- * What marks the origin is the row's `apiKeyId`. The panel's create writes
- * no DeliveryEvent (there is no "created" event type), and neither does this:
- * a NOTE would surface in the event feed as `delivery.note`, a fact that did
- * not happen.
+ * What marks the origin is the row's `apiKeyId`. The repository's create
+ * writes the trail's first line, a STATUS_CHANGE from nothing to PENDING by
+ * this key (F2-06), which the event feed shows as `delivery.created`; this
+ * use case writes no other event (a NOTE would surface as `delivery.note`,
+ * a fact that did not happen).
  */
 @injectable()
 class CreateIntegrationDeliveryUseCase {
@@ -139,7 +145,7 @@ class CreateIntegrationDeliveryUseCase {
       apiKeyId,
     };
 
-    let created: { id: string; recipient_name: string };
+    let created: { id: string; recipient_name: string; unlocated: string[] };
 
     try {
       // The row and the event that announces it commit together, as on the
@@ -155,7 +161,11 @@ class CreateIntegrationDeliveryUseCase {
           tx,
         );
 
-        return { id: row.id!, recipient_name: row.recipient_name };
+        return {
+          id: row.id!,
+          recipient_name: row.recipient_name,
+          unlocated: unlocatedDeliveryIds([row]),
+        };
       });
     } catch (error) {
       if (!isUniqueViolation(error)) throw error;
@@ -180,6 +190,10 @@ class CreateIntegrationDeliveryUseCase {
       throw error;
     }
 
+    // After the commit, and only for the row this request created: a twin's
+    // replay above returned before here.
+    countDeliveriesCreated();
+
     // The same entry the panel writes, with the key as the actor: no user
     // acted, so performedBy stays null and the description names the key.
     // After the commit and never awaited, like the panel's: an audit write
@@ -193,6 +207,11 @@ class CreateIntegrationDeliveryUseCase {
       performedBy: null,
       businessId,
     });
+
+    // The address point now rather than at the next minute's job, as the
+    // panel's create does (E1): after the commit, never awaited. A point the
+    // integrator sent needs none.
+    geocodeSoon(businessId, created.unlocated);
 
     return {
       replayed: false,

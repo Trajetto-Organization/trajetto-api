@@ -9,9 +9,11 @@ import {
   GetFuelByIdAndBusinessProps,
   SearchFuelByVehicleWithCursorProps,
   CursorPaginatedFuel,
+  RouteFuelSummary,
 } from "../dtos/fuel-dto";
 
 import type { FuelListFilters } from "../usecases/list-fuel/fuel-list";
+import type { RefuelNearby } from "../usecases/fuel-rules";
 
 /** How a refueling is placed on its vehicle's timeline. */
 interface FuelPlacement {
@@ -21,6 +23,17 @@ interface FuelPlacement {
    * Absent: the default zone.
    */
   timeZone?: string;
+}
+
+/** How a new refueling is written: placed, and its alerts decided. */
+interface FuelCreation extends FuelPlacement {
+  /**
+   * The driver's reason when they confirmed a second refuelling of the
+   * vehicle within 30 minutes (confirmedRecentReason, fuel-rules.ts); null
+   * or absent when not confirmed. Stored only when the transaction finds
+   * that other refuelling (recentRefuelAlert).
+   */
+  recentRefuelReason?: string | null;
 }
 
 /** When an edit changes a refueling's reading, date or vehicle. */
@@ -41,13 +54,27 @@ interface IFuelRepository {
   /**
    * The refueling, placed by its date (placeReading, fuel-rules.ts): between
    * the readings around it, the vehicle untouched; as the newest, ahead of
-   * the odometer, which follows it.
+   * the odometer, which follows it; at the km of a neighbouring record less
+   * than 30 minutes away, the vehicle untouched. Its alerts are decided in
+   * the same serializable transaction (recentRefuelAlert): another
+   * refuelling of the vehicle within 30 minutes of its date, either side,
+   * flags it, also when both are sent at once.
    */
   createFuelWithMileage: (
     fuelData: CreateFuelProps,
     afterCreate?: (tx: Prisma.TransactionClient, fuel: Fuel) => Promise<void>,
-    placement?: FuelPlacement,
+    creation?: FuelCreation,
   ) => Promise<{ fuel: Fuel; created: boolean }>;
+  /**
+   * The vehicle's refuellings dated less than 30 minutes from `at`, either
+   * side, inside the company (recentRefuelWindow), oldest first, at most
+   * RECENT_REFUEL_CANDIDATE_LIMIT: what findRecentRefuel picks from.
+   */
+  findRefuelsNear: (
+    businessId: string,
+    vehicleId: string,
+    at: Date,
+  ) => Promise<RefuelNearby[]>;
   findBySubmissionId: (
     businessId: string,
     clientSubmissionId: string,
@@ -60,7 +87,9 @@ interface IFuelRepository {
    * The edit and, when its reading, date or vehicle changes, the odometer,
    * decided in one transaction by placeReading (fuel-rules.ts) at `at`, the
    * refueling itself left out. A vehicle the refueling leaves gets back the
-   * odometer it set (the highest reading left).
+   * odometer it set (the highest reading left). An edit that moves the date
+   * or the vehicle measures RECENT_REFUEL again (recheckedRecentRefuel),
+   * keeping the driver's reason.
    */
   updateFuelAndMileage: (
     update: UpdateFuel,
@@ -97,7 +126,16 @@ interface IFuelRepository {
     props: SearchFuelByVehicleWithCursorProps,
   ) => Promise<CursorPaginatedFuel>;
   countFuelForExport: (filters: FuelListFilters) => Promise<number>;
+
+  /**
+   * The refuellings made on a route, oldest first, inside the company (plan
+   * of 02/11/2026, F3): what the route detail lists.
+   */
+  listRouteFuels: (
+    businessId: string,
+    routeId: string,
+  ) => Promise<RouteFuelSummary[]>;
 }
 
 export { IFuelRepository };
-export type { FuelMileageUpdate, FuelPlacement };
+export type { FuelCreation, FuelMileageUpdate, FuelPlacement };

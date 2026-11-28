@@ -9,6 +9,8 @@ import { BranchErpCodeAlreadyExistsError } from "@/modules/branch/usecases/error
 import { CreateDriverUseCase } from "@/modules/driver/usecases/create-driver/create-driver-usecase";
 import { createPrismaClient } from "@/shared/database/database-client";
 
+import { validCpf } from "../support/valid-cpf";
+
 /**
  * Identifiers that belong to one carrier, not to the platform.
  *
@@ -74,7 +76,9 @@ function driverData(businessId: string, rg: string) {
     name: "Motorista",
     birth_date: new Date("1990-01-01"),
     cnh: digits(11),
-    cpf: digits(11),
+    // A valid CPF, as the route would demand; this path calls the use
+    // case directly, which does not check it. Random digits make the base.
+    cpf: validCpf(digits(9)),
     rg,
     cep: "01001000",
     city: "São Paulo",

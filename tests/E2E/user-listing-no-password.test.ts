@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 
 import type { RouteOptions } from "fastify";
-import type { ZodTypeAny } from "zod";
+import type { ZodType } from "zod";
 
 import { sign } from "jsonwebtoken";
 import auth from "@/config/auth";
@@ -36,10 +36,9 @@ let masterToken = "";
 // The routes as registered, to read the line each one documents.
 const registered = new Map<string, RouteOptions>();
 
-function documentedLine(url: string): ZodTypeAny {
+function documentedLine(url: string): ZodType {
   const response = registered.get(url)?.schema?.response as
-    | Record<string, unknown>
-    | undefined;
+    Record<string, unknown> | undefined;
 
   const doc = ndjsonDocFor(response?.[200]);
 

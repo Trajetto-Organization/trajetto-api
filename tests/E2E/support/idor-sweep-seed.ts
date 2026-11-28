@@ -112,6 +112,20 @@ async function seedSweepCarrier(
   });
   ids.userId = user.id;
 
+  // A live session of that user (wave 2: DELETE /user/me/sessions/:id names
+  // one by its family id).
+  const sessionId = randomUUID();
+  await prisma.refreshToken.create({
+    data: {
+      userId: user.id,
+      token_hash: randomUUID(),
+      jti: randomUUID(),
+      family_id: sessionId,
+      expires_in: new Date(Date.now() + 24 * 60 * 60 * 1000),
+    },
+  });
+  ids.sessionId = sessionId;
+
   const supplier = await prisma.supplier.create({
     data: { name: `${tag} fornecedor`, cnpj: digits(14), businessId },
   });
@@ -506,10 +520,13 @@ async function seedSweepCarrier(
       name: `${tag} chave`,
       prefix: key.prefix,
       token_hash: key.tokenHash,
+      // Every grantable scope, so each keyed route reaches its id lookup
+      // (L9: the cancel too) instead of stopping at MISSING_API_SCOPE.
       scopes: [
         "routes:read",
         "deliveries:read",
         "deliveries:write",
+        "deliveries:cancel",
         "events:read",
       ],
       businessId,

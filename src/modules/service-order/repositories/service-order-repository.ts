@@ -10,9 +10,12 @@ import {
   SearchServiceOrderByVehicleWithCursorProps,
   ServiceOrderListQuery,
   DeleteServiceOrderResult,
+  ServiceOrderDetail,
+  SearchDriverServiceOrdersProps,
+  CursorPaginatedServiceOrderDetail,
 } from "../dtos/service-order-dto";
 
-import database from "@/../infra/database";
+import database, { readDatabase } from "@/../infra/database";
 import { Prisma } from "@prisma/client";
 
 import { buildSearchOr } from "@/shared/pagination/search-or";
@@ -31,8 +34,66 @@ import {
   type ExportKey,
 } from "@/shared/pagination/export-keyset";
 
+/**
+ * What the detail, "Minhas OS" and a vehicle's history read of an order
+ * (wave 3): its columns and the names of its links, never the related rows
+ * whole (a user row holds a password hash). The use case cuts it further
+ * for a driver.
+ */
+const SERVICE_ORDER_DETAIL_SELECT = {
+  id: true,
+  date: true,
+  completion_date: true,
+  maintenance_type: true,
+  total_amount: true,
+  description: true,
+  current_mileage_at_service: true,
+  maintenance_interval_km_at_service: true,
+  last_maintenance_mileage_at_service: true,
+  new_mileage_after_service: true,
+  latitude: true,
+  longitude: true,
+  created_from: true,
+  businessId: true,
+  vehicleId: true,
+  responsibleUserId: true,
+  branchId: true,
+  supplierId: true,
+  created_at: true,
+  updated_at: true,
+  vehicle: { select: { id: true, license_plate: true, description: true } },
+  responsibleUser: { select: { id: true, name: true } },
+  branch: { select: { id: true, corporate_reason: true } },
+  supplier: { select: { id: true, name: true } },
+  parts: {
+    select: {
+      id: true,
+      quantity: true,
+      unit_price: true,
+      discount_percentage: true,
+      part: { select: { description: true } },
+    },
+    orderBy: [{ created_at: "asc" }, { id: "asc" }],
+  },
+} satisfies Prisma.ServiceOrderSelect;
+
 class ServiceOrderRepository implements IServiceOrderRepository {
   constructor(private prisma = database) {}
+
+  /**
+   * The heavy reads' bulkhead (plano-escala F3-17), for the export: a pool of
+   * its own, 3 connections and 10 s a statement, so a burst of them waits
+   * among itself instead of taking the connections every other request needs.
+   * A repository built on another client (a test's) reads on that client. A
+   * getter, so a module that mocks infra/database without it only needs it
+   * when one of these reads runs.
+   * With DATABASE_REPLICA_URL, readDatabase() sends them to the standby
+   * while the replica guard vouches for it: lists only (plano-escala F4-42,
+   * tests/unitaires/database/read-routing-guard.test.ts).
+   */
+  private get read(): typeof this.prisma {
+    return this.prisma === database ? readDatabase() : this.prisma;
+  }
 
   // `tx` lets the use case create the order and its outbox event atomically.
   async createServiceOrder(
@@ -390,53 +451,39 @@ class ServiceOrderRepository implements IServiceOrderRepository {
     cursor,
     vehicleId,
     businessId,
-  }: SearchServiceOrderByVehicleWithCursorProps): Promise<CursorPaginatedServiceOrder> {
+    search,
+  }: SearchServiceOrderByVehicleWithCursorProps): Promise<CursorPaginatedServiceOrderDetail> {
+    const term = search?.trim();
+
     const items = await this.prisma.serviceOrder.findMany({
-      where: { vehicleId, businessId },
+      where: {
+        vehicleId,
+        businessId,
+        // Only what the driver's view shows: no supplier, total or part
+        // price, or a driver could find an order by a value it hides.
+        ...(term &&
+          buildSearchOr<Prisma.ServiceOrderWhereInput>([
+            { id: { contains: term, mode: "insensitive" } },
+            { description: { contains: term, mode: "insensitive" } },
+            {
+              responsibleUser: {
+                name: { contains: term, mode: "insensitive" },
+              },
+            },
+            {
+              branch: {
+                corporate_reason: { contains: term, mode: "insensitive" },
+              },
+            },
+          ])),
+      },
       take: limit + 1,
       ...(cursor && { cursor: { id: cursor }, skip: 1 }),
       orderBy: [{ created_at: "desc" }, { id: "desc" }],
-      include: {
-        vehicle: {
-          select: {
-            id: true,
-            license_plate: true,
-            description: true,
-            brand: true,
-            model: true,
-          },
-        },
-        responsibleUser: {
-          select: {
-            id: true,
-            name: true,
-          },
-        },
-        branch: {
-          select: {
-            id: true,
-            corporate_reason: true,
-          },
-        },
-        supplier: {
-          select: {
-            id: true,
-            name: true,
-          },
-        },
-        parts: {
-          select: {
-            id: true,
-            quantity: true,
-            unit_price: true,
-            part: {
-              select: {
-                description: true,
-              },
-            },
-          },
-        },
-      },
+      // The detail's select, not `include`: every column of the row went
+      // out (the location audit, the submission key), and the use case then
+      // cuts it per reader like the detail.
+      select: SERVICE_ORDER_DETAIL_SELECT,
     });
 
     const hasMore = items.length > limit;
@@ -458,7 +505,7 @@ class ServiceOrderRepository implements IServiceOrderRepository {
 
     // Keyset batches in creation order (export-keyset.ts).
     while (true) {
-      const serviceOrders: any = await this.prisma.serviceOrder.findMany({
+      const serviceOrders: any = await this.read.serviceOrder.findMany({
         where: exportBatchWhere(whereCondition, after),
         include: {
           business: { select: { corporate_reason: true } },
@@ -530,9 +577,60 @@ class ServiceOrderRepository implements IServiceOrderRepository {
   async countServiceOrderForExport(
     query: ServiceOrderListQuery,
   ): Promise<number> {
-    return this.prisma.serviceOrder.count({
+    return this.read.serviceOrder.count({
       where: serviceOrderListWhere(query),
     });
+  }
+
+  async findServiceOrderDetail(
+    serviceOrderId: string,
+    businessId: string,
+  ): Promise<ServiceOrderDetail | null> {
+    // The company in the where, not compared afterwards: another company's
+    // order is never read at all.
+    return this.prisma.serviceOrder.findFirst({
+      where: { id: serviceOrderId, businessId },
+      select: SERVICE_ORDER_DETAIL_SELECT,
+    });
+  }
+
+  async searchServiceOrdersOfDriverWithCursor({
+    limit = 10,
+    cursor,
+    businessId,
+    userId,
+    scope,
+    vehicleIds,
+  }: SearchDriverServiceOrdersProps): Promise<CursorPaginatedServiceOrderDetail> {
+    // No vehicle to operate, no section: `IN ()` would be a query for nothing.
+    if (scope === "vehicle" && vehicleIds.length === 0) {
+      return { data: [], nextCursor: null, hasMore: false };
+    }
+
+    const where: Prisma.ServiceOrderWhereInput =
+      scope === "assigned"
+        ? { businessId, responsibleUserId: userId }
+        : {
+            businessId,
+            vehicleId: { in: vehicleIds },
+            responsibleUserId: { not: userId },
+          };
+
+    const items = await this.prisma.serviceOrder.findMany({
+      where,
+      take: limit + 1,
+      ...(cursor && { cursor: { id: cursor }, skip: 1 }),
+      // The id breaks created_at ties, so a page boundary never repeats a row.
+      orderBy: [{ created_at: "desc" }, { id: "desc" }],
+      select: SERVICE_ORDER_DETAIL_SELECT,
+    });
+
+    const hasMore = items.length > limit;
+
+    const data = hasMore ? items.slice(0, limit) : items;
+    const nextCursor = hasMore ? (data[data.length - 1]?.id ?? null) : null;
+
+    return { data, nextCursor, hasMore };
   }
 }
 

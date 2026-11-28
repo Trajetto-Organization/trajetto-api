@@ -8,6 +8,12 @@ import {
   RecipientRenderContext,
   RenderContext,
 } from "../notification-types";
+import type { RenderedWhatsApp } from "../whatsapp-templates";
+import {
+  actorLabel,
+  formatLimitValue,
+  limitKindLabel,
+} from "../whatsapp-parameters";
 
 import { User } from "@/modules/user/dtos/user-dto";
 
@@ -30,6 +36,12 @@ import { User } from "@/modules/user/dtos/user-dto";
  *
  * The actor is deliberately not notified: they confirmed a dialog two seconds
  * ago. Their record is the activity entry, which is searchable and permanent.
+ *
+ * Category ACCOUNT, the "Conta" row both audiences have (14/11/2026, decision
+ * D-47). It was SYSTEM, a row no role is shown, so the e-mail always went
+ * out with no switch to stop it and the WhatsApp followed only the general
+ * card. `mandatory` keeps the bell and the phone; e-mail and WhatsApp follow
+ * the person's choice in "Conta", no migration needed.
  */
 
 /**
@@ -55,6 +67,11 @@ function moduleLabel(module: string): string {
 
 function limitLabel(limit: string): string {
   return LIMIT_LABELS[limit] ?? limit;
+}
+
+/** "Nome (e-mail)", or the name alone for an account without an e-mail. */
+function actorWithEmail(actor: { name: string; email: string | null }): string {
+  return actor.email ? `${actor.name} (${actor.email})` : actor.name;
 }
 
 /**
@@ -101,7 +118,7 @@ function isMaster(recipient: RecipientRenderContext): boolean {
 
 const businessModuleChangedPolicy: NotificationPolicyEntry<BusinessModuleChangedPayload> =
   {
-    category: NotificationCategory.SYSTEM,
+    category: NotificationCategory.ACCOUNT,
 
     // Losing a whole module is not the kind of thing a preference should be
     // able to silence — for the admin it explains a menu that vanished, for
@@ -124,7 +141,7 @@ const businessModuleChangedPolicy: NotificationPolicyEntry<BusinessModuleChanged
         return {
           type: "business-plan",
           title: `Módulo ${verb}: ${payload.businessName}`,
-          message: `${payload.actor.name} (${payload.actor.email}) ${verb} o módulo ${label} da empresa ${payload.businessName}.`,
+          message: `${actorWithEmail(payload.actor)} ${verb} o módulo ${label} da empresa ${payload.businessName}.`,
           link: `${ctx.baseUrl}/admin/business?search=${payload.businessId}&page=1`,
           entityId: payload.businessId,
         };
@@ -143,19 +160,35 @@ const businessModuleChangedPolicy: NotificationPolicyEntry<BusinessModuleChanged
       };
     },
 
-    renderWhatsApp(payload) {
-      const label = moduleLabel(payload.module);
-      const verb = payload.enabled ? "habilitado" : "desabilitado";
+    /**
+     * Two audiences, two templates (B1). The other masters get the alarm
+     * with who did it; the company's admins get the change "pelo Suporte
+     * Trajetto" — never the master's name or e-mail, which this render used
+     * to send them.
+     */
+    renderWhatsApp(payload, recipient): RenderedWhatsApp {
+      // An unknown module goes out as the variable's fallback, never as the
+      // raw enum.
+      const label = MODULE_LABELS[payload.module] ?? null;
 
-      return [
-        `${payload.enabled ? "✅" : "🚫"} *Módulo ${verb}*`,
-        `Empresa: *${payload.businessName}*`,
-        `Módulo: *${label}*`,
-        `Por: *${payload.actor.name}* (${payload.actor.email})`,
-        payload.enabled
-          ? `As telas do módulo já estão disponíveis.`
-          : `Nenhum dado foi apagado — ao reabilitar, tudo volta como estava.`,
-      ].join("\n");
+      if (isMaster(recipient)) {
+        return {
+          template: "trajetto_modulo_plano",
+          parameters: [
+            payload.businessName,
+            label,
+            payload.enabled ? "Habilitado" : "Desabilitado",
+            actorLabel(payload.actor),
+          ],
+        };
+      }
+
+      return {
+        template: payload.enabled
+          ? "trajetto_modulo_habilitado_empresa"
+          : "trajetto_modulo_desabilitado_empresa",
+        parameters: [payload.businessName, label],
+      };
     },
 
     renderActivity(payload) {
@@ -182,7 +215,7 @@ const businessModuleChangedPolicy: NotificationPolicyEntry<BusinessModuleChanged
 
 const businessLimitChangedPolicy: NotificationPolicyEntry<BusinessLimitChangedPayload> =
   {
-    category: NotificationCategory.SYSTEM,
+    category: NotificationCategory.ACCOUNT,
     mandatory: true,
 
     async resolveRecipients(payload, deps) {
@@ -201,7 +234,7 @@ const businessLimitChangedPolicy: NotificationPolicyEntry<BusinessLimitChangedPa
         return {
           type: "business-plan",
           title: `${label} alterado: ${payload.businessName}`,
-          message: `${payload.actor.name} (${payload.actor.email}) alterou o ${label.toLowerCase()} da empresa ${payload.businessName} de ${movement}.`,
+          message: `${actorWithEmail(payload.actor)} alterou o ${label.toLowerCase()} da empresa ${payload.businessName} de ${movement}.`,
           link: `${ctx.baseUrl}/admin/business?search=${payload.businessId}&page=1`,
           entityId: payload.businessId,
         };
@@ -216,15 +249,29 @@ const businessLimitChangedPolicy: NotificationPolicyEntry<BusinessLimitChangedPa
       };
     },
 
-    renderWhatsApp(payload) {
-      const label = limitLabel(payload.limit);
+    /** Same split as the module's: masters see who; admins never do. */
+    renderWhatsApp(payload, recipient): RenderedWhatsApp {
+      const kind = limitKindLabel(payload.limit);
+      const before = formatLimitValue(payload.limit, payload.previousValue);
+      const after = formatLimitValue(payload.limit, payload.newValue);
 
-      return [
-        `📈 *${label} alterado*`,
-        `Empresa: *${payload.businessName}*`,
-        `De *${payload.previousValue}* para *${payload.newValue}*`,
-        `Por: *${payload.actor.name}* (${payload.actor.email})`,
-      ].join("\n");
+      if (isMaster(recipient)) {
+        return {
+          template: "trajetto_limite_plano",
+          parameters: [
+            payload.businessName,
+            kind,
+            before,
+            after,
+            actorLabel(payload.actor),
+          ],
+        };
+      }
+
+      return {
+        template: "trajetto_limite_plano_empresa",
+        parameters: [payload.businessName, kind, before, after],
+      };
     },
 
     renderActivity(payload) {

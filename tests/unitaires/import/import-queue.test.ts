@@ -10,9 +10,16 @@ import {
   IMPORT_HANDBACK_WRITE_MS,
   IMPORT_STOP_GRACE_MS,
   ImportQueue,
+  drainOptionsFrom,
 } from "@/modules/import/services/import-queue";
 import { ServiceBusyError } from "@/shared/errors/service-busy-error";
 import { WEBHOOK_TIMEOUT_MS } from "@/shared/integration/webhook-dispatch-rules";
+import {
+  DEFAULT_STOP_GRACE_PERIOD_MS,
+  MAX_STOP_GRACE_PERIOD_MS,
+  MIN_STOP_GRACE_PERIOD_MS,
+  planShutdown,
+} from "@/shared/lifecycle/shutdown-plan";
 
 import { clearLogged, logged } from "../../support/log-capture";
 
@@ -433,44 +440,64 @@ describe("the import queue, when the replica shuts down", () => {
     }
   });
 
-  it("ends inside the shutdown watchdog with the workers' deadline still to come", async () => {
-    vi.useFakeTimers();
+  // The shutdown plan (plano-escala F1-14) sizes the import step from the
+  // stop grace: Docker's default 10 s, the 40 s the Application is meant to
+  // have, and both ends of what the variable accepts.
+  it.each([
+    MIN_STOP_GRACE_PERIOD_MS,
+    DEFAULT_STOP_GRACE_PERIOD_MS,
+    40_000,
+    MAX_STOP_GRACE_PERIOD_MS,
+  ])(
+    "ends inside the shutdown watchdog with the workers' deadline still to come (grace %i ms)",
+    async (graceMs) => {
+      vi.useFakeTimers();
 
-    try {
-      const queue = new ImportQueue(1, 3);
+      try {
+        const queue = new ImportQueue(1, 3);
 
-      // The worst case: stuck in one call, and its hand-back never written.
-      queue.reserve().submit({
-        importId: "stuck",
-        run: () => new Promise<void>(() => {}),
-        heartbeat: async () => {},
-        abandon: () => new Promise<void>(() => {}),
-      });
+        // The worst case: stuck in one call, and its hand-back never written.
+        queue.reserve().submit({
+          importId: "stuck",
+          run: () => new Promise<void>(() => {}),
+          heartbeat: async () => {},
+          abandon: () => new Promise<void>(() => {}),
+        });
 
-      // server.ts: IMPORT_DRAIN_GRACE_MS (15 s in production) and the 35 s
-      // SHUTDOWN_TIMEOUT_MS; the slowest worker is the webhook dispatcher,
-      // a call timeout plus 2 s (webhook-dispatch-service.ts).
-      const graceMs = 15_000;
-      const watchdogMs = 35_000;
-      const workersMs = WEBHOOK_TIMEOUT_MS + 2_000;
+        const plan = planShutdown(graceMs);
 
-      const startedAt = Date.now();
-      const drain: { endedAfterMs: number | null } = { endedAfterMs: null };
+        const startedAt = Date.now();
+        const drain: { endedAfterMs: number | null } = { endedAfterMs: null };
 
-      void queue
-        .drain({ graceMs })
-        .then(() => (drain.endedAfterMs = Date.now() - startedAt));
+        void queue
+          .drain(drainOptionsFrom(plan))
+          .then(() => (drain.endedAfterMs = Date.now() - startedAt));
 
-      await vi.advanceTimersByTimeAsync(watchdogMs);
+        await vi.advanceTimersByTimeAsync(plan.timeoutMs);
 
-      expect(drain.endedAfterMs).toBe(
-        graceMs + IMPORT_STOP_GRACE_MS + IMPORT_HANDBACK_WRITE_MS,
-      );
-      expect((drain.endedAfterMs ?? Infinity) + workersMs).toBeLessThan(
-        watchdogMs,
-      );
-    } finally {
-      vi.useRealTimers();
-    }
+        expect(drain.endedAfterMs).toBe(
+          plan.importGraceMs + plan.importStopGraceMs + plan.importHandBackMs,
+        );
+        expect((drain.endedAfterMs ?? Infinity) + plan.workersMs).toBeLessThan(
+          plan.timeoutMs,
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("keeps, with the 40 s grace, the deadlines the queue was tuned against", () => {
+    // 15 s of grace, then 5 s to stop and 2 s for the hand-backs; the
+    // slowest worker after it is the webhook dispatcher, a call timeout plus
+    // 2 s (webhook-dispatch-service.ts).
+    const plan = planShutdown(40_000);
+
+    expect(drainOptionsFrom(plan)).toEqual({
+      graceMs: 15_000,
+      stopGraceMs: IMPORT_STOP_GRACE_MS,
+      handBackMs: IMPORT_HANDBACK_WRITE_MS,
+    });
+    expect(plan.workersMs).toBe(WEBHOOK_TIMEOUT_MS + 2_000);
   });
 });
