@@ -19,7 +19,7 @@
 # tag names its Alpine minor: the runtime base below must be the same one,
 # because this binary is built against that minor's musl and libstdc++
 # (tests/unitaires/lifecycle/image-layers.test.ts holds the two together).
-FROM node:22.21.1-alpine3.23@sha256:0340fa682d72068edf603c305bfbc10e23219fb0e40df58d9ea4d6f33a9798bf AS node
+FROM node:22.23.5-alpine3.23@sha256:6868d4695b947ee120bffaa463fecd68cde370d7bfec92955e7c8ac576b4f475 AS node
 
 # ================================
 # Stage: The node binary, as a reproducible tree
@@ -52,7 +52,7 @@ RUN mkdir -p /out/usr/local/bin \
 # compressed). On Prisma 7.10.1, whose CLI is larger, the same base with the
 # prune below gives 431 MB unpacked and 114.8 MB compressed (measured
 # 28/10/2026, docs/deploy.md).
-FROM alpine:3.23.7@sha256:ff7f0c727dd796aa36787bfcd9a64bf35a6ce72a73451b3359fde849b6703d63 AS base
+FROM alpine:3.24.4@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf AS base
 
 # First, and `--link`: a layer of its own that does not depend on the
 # Alpine one below, so an Alpine patch bump leaves this layer's digest as it
